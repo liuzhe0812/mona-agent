@@ -20,28 +20,73 @@ from mona.development.executors.codex import CodexExecutor
 from mona.development.executors.codex_policy import prepare_codex_work_profile
 from mona.development.executors.discovery import discover_executors
 from mona.development.executors.host_tools import WORK_TOOL, WorkToolCall
-from mona.development.executors.rpc import RpcError
+from mona.development.executors.rpc import RemoteRpcError, RpcError
 from mona.development.executors.sdk import SDKExecutor
 from mona.development.executors.sdk_policy import prepare_sdk_profile
+from mona.development.input_content import MAX_NATIVE_TEXT_CHARS
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.providers.capabilities import ModelCapabilities
 
+_ERROR_MESSAGES = {
+    "server_overloaded": "当前模型繁忙，暂时无法响应。请稍后重试或选择其他模型。",
+    "usage_limit_exceeded": "当前账号已达到使用额度。请稍后再试，或在模型设置中查看额度。",
+    "authentication_required": "该模型账号需要登录。请在模型设置中完成登录后重试。",
+    "context_window_exceeded": "当前会话超过所选模型可处理的容量。请新建会话或选择更大容量的模型。",
+    "native_account_check_failed": "模型账号状态检查未能完成，尚未开始本次生成。请稍后重试，或在模型设置中检查连接。",
+}
 
-def native_history_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+
+def _native_history_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep message boundaries and image pixels; history never replays operations."""
-    blocks = [{"type": "text", "text": "以下是 Mona 已保存的会话。历史工具调用及结果仅供参考，不要重新执行。继续处理最后的用户请求。"}]
+    blocks = []
+    text = ["以下是 Mona 已保存的会话。历史工具调用及结果仅供参考，不要重新执行。继续处理最后的用户请求。"]
+
+    def flush_text():
+        if text:
+            blocks.append({"type": "text", "text": "\n\n".join(text)})
+            text.clear()
+
     for message in messages:
         if message.get("role") in {"system", "developer"}:
             continue
         header = {key: message[key] for key in ("role", "name", "tool_call_id", "tool_calls") if key in message}
         content = message.get("content")
         if isinstance(content, list):
-            blocks.append({"type": "text", "text": json.dumps(header, ensure_ascii=False)})
+            text.append(json.dumps(header, ensure_ascii=False))
             for block in content:
-                if block.get("type") in {"text", "image_url"}:
+                if block.get("type") == "text":
+                    text.append(block["text"])
+                elif block.get("type") == "image_url":
+                    flush_text()
                     blocks.append(block)
         else:
-            blocks.append({"type": "text", "text": json.dumps({**header, "content": content}, ensure_ascii=False)})
+            text.append(json.dumps({**header, "content": content}, ensure_ascii=False))
+    flush_text()
+    return blocks
+
+
+def native_history_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fit older tool text to transport limits without changing saved history."""
+    blocks = _native_history_blocks(messages)
+    if sum(len(block.get("text", "")) for block in blocks) <= MAX_NATIVE_TEXT_CHARS:
+        return blocks
+    last_user = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=0)
+    history = list(messages)
+    omitted = "[Older tool text omitted to fit input limits. The full result remains saved. Read the current project/files before relying on it; do not replay historical operations.]"
+    for index, message in enumerate(messages[:last_user]):
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and len(content) > 4096:
+            reduced = omitted
+        elif isinstance(content, list) and sum(len(item.get("text", "")) for item in content) > 4096:
+            reduced = [{**item, "text": omitted} if item.get("type") == "text" else item for item in content]
+        else:
+            continue
+        history[index] = {**message, "content": reduced}
+        blocks = _native_history_blocks(history)
+        if sum(len(block.get("text", "")) for block in blocks) <= MAX_NATIVE_TEXT_CHARS:
+            break
     return blocks
 
 
@@ -65,6 +110,7 @@ class NativeWorkProvider(LLMProvider):
         self._reported_usage: dict[str, int] = {}
         self._context_usage: dict[str, Any] = {}
         self._done = False
+        self._turn_progress = False
         self._message_count = 0
         self._catalog_path: Path | None = None
         self._definitions = ""
@@ -75,12 +121,18 @@ class NativeWorkProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self.config.agents.defaults.native_model or ""
 
+    @staticmethod
+    def _strip_image_content(messages, *, model_supports_vision=None):
+        # A failed native turn cannot be safely replayed by removing its images.
+        return None
+
     def for_turn(self, workspace: Path | None):
         provider = NativeWorkProvider(self.config, workspace or self.workspace)
         provider.generation = self.generation
         return provider
 
     async def _host_tool(self, binding, turn_id: str, arguments: dict) -> dict:
+        self._turn_progress = True
         call = WorkToolCall.model_validate(arguments)
         request = ToolCallRequest(id=f"call_{uuid4().hex}", name=call.tool, arguments=call.arguments)
         future = asyncio.get_running_loop().create_future()
@@ -160,6 +212,7 @@ class NativeWorkProvider(LLMProvider):
         if self._done:
             await self.aclose()
             self._done = False
+            self._turn_progress = False
             self._texts.clear()
             self._usage.clear()
             self._reported_usage.clear()
@@ -205,17 +258,26 @@ class NativeWorkProvider(LLMProvider):
                     delta = text[len(previous):] if text.startswith(previous) else text if not previous else ""
                     self._texts[item] = text
                 if delta:
+                    self._turn_progress = True
                     parts.append(delta)
                     if on_content_delta:
                         await on_content_delta(delta)
-            elif event.type == "reasoning.delta" and on_thinking_delta:
-                await on_thinking_delta(payload.get("delta") or "")
+            elif event.type == "reasoning.delta":
+                delta = payload.get("delta") or ""
+                if delta:
+                    self._turn_progress = True
+                    if on_thinking_delta:
+                        await on_thinking_delta(delta)
             elif event.type == "usage.updated":
                 self._update_usage(payload)
             elif event.type == "run.completed":
                 self._done = True
                 return self._response("".join(parts))
-            elif event.type in {"run.failed", "run.unknown", "run.interrupted", "policy.violation"}:
+            elif event.type == "run.failed":
+                self._done = True
+                code = payload.get("errorCode") or "native_turn_failed"
+                raise RpcError(code, _ERROR_MESSAGES.get(code, "模型响应未完成，请核对会话结果后重试或选择其他模型。"))
+            elif event.type in {"run.unknown", "run.interrupted", "policy.violation"}:
                 raise RpcError("native_turn_incomplete", "模型响应未完成，请核对会话后重试。", outcome_unknown=True)
 
     async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7,
@@ -230,10 +292,18 @@ class NativeWorkProvider(LLMProvider):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("Work native model response failed for {}: {}", self.executor.value,
-                           getattr(exc, "code", type(exc).__name__))
-            return LLMResponse(content="模型响应未完成，请在模型设置中检查连接后重试。", finish_reason="error",
-                               error_code=getattr(exc, "code", "native_response_failed"), error_should_retry=False)
+            code = getattr(exc, "code", "native_response_failed")
+            method = exc.rpc_method if isinstance(exc, RemoteRpcError) else None
+            rpc_code = exc.rpc_code if isinstance(exc, RemoteRpcError) else None
+            if self.executor == ExecutorId.CODEX and method == "account/read" and self._binding is None:
+                code = "native_account_check_failed"
+            logger.warning("Work native model response failed for {}: {} ({}, method={}, rpc_code={})",
+                           self.executor.value, code, type(exc).__name__, method, rpc_code)
+            content = _ERROR_MESSAGES.get(code, "模型响应未完成，请核对会话结果后重试或选择其他模型。")
+            if code == "server_overloaded" and self._turn_progress:
+                content = "当前模型繁忙，响应已中断。请核对会话结果后稍后继续，或选择其他模型。"
+            return LLMResponse(content=content, finish_reason="error", error_code=code,
+                               error_should_retry=self._done and code == "server_overloaded" and not self._turn_progress)
 
     async def aclose(self) -> None:
         for future in self._pending.values():

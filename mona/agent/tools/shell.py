@@ -348,7 +348,9 @@ class ExecTool(Tool):
                     )
             elif ProjectEnvironmentManager.requested_runtimes(prepared.command):
                 active_workspace = self._active_workspace()
-                project = await ProjectEnvironmentManager(get_managed_runtimes_dir()).prepare(
+                project = await ProjectEnvironmentManager(
+                    get_managed_runtimes_dir(), timeout_seconds=prepared.timeout,
+                ).prepare(
                     prepared.command,
                     cwd=Path(prepared.cwd),
                     workspace_root=(active_workspace or Path(prepared.cwd)),

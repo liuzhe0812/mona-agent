@@ -16,6 +16,7 @@ import pytest
 
 from mona.config.schema import Config, _resolve_tool_config_refs
 from mona.development.contracts import ExecutorId, RunStatus
+from mona.development.executors.base import DispatchReceipt
 from mona.development.executors.codex import CodexExecutor
 from mona.development.executors.codex_policy import CodexProfile
 from mona.development.runtime import DevelopmentRuntime
@@ -277,6 +278,52 @@ async def test_native_steering_is_idempotent_on_target_run(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_native_guided_follow_up_rejection_replays_without_redispatch(tmp_path, monkeypatch):
+    runtime, project, _root, host = await setup(tmp_path)
+    session = runtime.store.create_session(project.id, ExecutorId.CODEX)
+    run_id = None
+    steer_calls = []
+    content = "保留这条排队消息，明确拒绝后仍可恢复。"
+    try:
+        started = await runtime.submit(session.id, "guide_rejected_parent", "hold")
+        run_id = started["run"]["id"]
+        run = await wait_run_state(runtime, run_id, RunStatus.RUNNING)
+        queued = await runtime.submit(session.id, "guide_rejected_input", content, intent="follow_up")
+        assert queued["queued"]
+        item = runtime.store.get_input(queued["input"]["id"])
+        assert item.intent == "follow_up" and item.state.value == "pending"
+        original_revision = item.revision
+
+        async def reject_steering(binding, input_id, message):
+            steer_calls.append((binding.id, input_id, message))
+            return DispatchReceipt(input_id=input_id, outcome="rejected", native_turn_id=run.native_turn_id)
+
+        monkeypatch.setattr(host, "steer", reject_steering)
+        for _ in range(2):
+            with pytest.raises(DevelopmentError) as error:
+                await runtime.guide_input(session.id, item.id, original_revision, run.id)
+            assert error.value.code == "native_steering_rejected"
+
+        saved = runtime.store.get_input(item.id)
+        assert saved.id == item.id and saved.message_id == item.message_id and saved.run_id == run.id
+        assert saved.intent == "steering" and saved.requested_intent == "follow_up"
+        assert saved.state.value == "rejected" and saved.revision > original_revision
+        transcript = runtime.sessions.get_or_create(session.transcript_key)
+        message = next(m for m in transcript.messages if m.get("id") == item.message_id)
+        assert message["content"] == content
+        assert message["_input_source"]["content"] == content
+        assert steer_calls == [(runtime.store.get_run(run.id).binding_id, item.id, content)]
+        assert len(runtime.store.list_runs(session.id)) == 1
+    finally:
+        if run_id is not None:
+            current = runtime.store.get_run(run_id)
+            if current.status not in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.UNKNOWN}:
+                await runtime.interrupt(session.id, run_id)
+                await settle(runtime)
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_native_steering_rejects_stale_or_wrong_target_without_dispatch(tmp_path):
     runtime, project, root, _ = await setup(tmp_path)
     session = runtime.store.create_session(project.id, ExecutorId.CODEX)
@@ -368,6 +415,44 @@ async def test_native_steering_unknown_is_saved_and_retry_does_not_resend(tmp_pa
         repeated = await runtime.submit(session.id, request_id, "steer_no_ack", intent="steering",
                                         target_run_id=run.id)
         assert repeated["reused"] and repeated["input"]["state"] == "unknown"
+        assert len(runtime.store.list_runs(session.id)) == 1
+        calls = trace(root)
+        assert len([call for call in calls if call.get("method") == "turn/start"]) == 1
+        assert len([call for call in calls if call.get("method") == "turn/steer"]) == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_native_guided_follow_up_unknown_retry_keeps_original_input_without_redispatch(tmp_path):
+    runtime, project, root, _ = await setup(tmp_path)
+    session = runtime.store.create_session(project.id, ExecutorId.CODEX)
+    run_id = None
+    request_id = "guide_lost_ack_input"
+    content = "steer_no_ack"
+    try:
+        started = await runtime.submit(session.id, "guide_unknown_parent", "hold")
+        run_id = started["run"]["id"]
+        run = await wait_run_state(runtime, run_id, RunStatus.RUNNING)
+        host = runtime.native.hosts[(project.id, ExecutorId.CODEX)]
+        assert host._client is not None
+        host._client._timeout = 0.1
+
+        queued = await runtime.submit(session.id, request_id, content, intent="follow_up")
+        assert queued["queued"] and queued["input"]["id"] == request_id
+        original_revision = queued["input"]["revision"]
+        with pytest.raises(DevelopmentError) as error:
+            await runtime.guide_input(session.id, request_id, original_revision, run.id)
+        assert error.value.code == "native_steering_unknown"
+
+        saved = runtime.store.get_input(request_id)
+        assert saved.state.value == "unknown" and saved.intent == "steering" and saved.run_id == run.id
+        transcript = runtime.sessions.get_or_create(session.transcript_key)
+        message = next(m for m in transcript.messages if m.get("id") == saved.message_id)
+        assert message["content"] == content and message["_input_source"]["content"] == content
+        repeated = await runtime.guide_input(session.id, request_id, original_revision, run.id)
+        assert repeated["reused"] and repeated["input"]["id"] == request_id
+        assert repeated["input"]["state"] == "unknown"
         assert len(runtime.store.list_runs(session.id)) == 1
         calls = trace(root)
         assert len([call for call in calls if call.get("method") == "turn/start"]) == 1

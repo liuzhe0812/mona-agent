@@ -11,6 +11,7 @@ from mona.utils.helpers import detect_image_mime
 MessageContent = str | list[dict]
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_NATIVE_FRAME_BYTES = 16 * 1024 * 1024
+MAX_NATIVE_TEXT_CHARS = 200_000
 
 
 def encoded_content(content: MessageContent) -> str:
@@ -19,7 +20,7 @@ def encoded_content(content: MessageContent) -> str:
 
 def validate_content(content: MessageContent) -> None:
     if isinstance(content, str):
-        if content.strip() and len(content) <= 200_000:
+        if content.strip() and len(content) <= MAX_NATIVE_TEXT_CHARS:
             return
     elif isinstance(content, list) and 1 <= len(content) <= 33:
         image_bytes = text_chars = 0
@@ -45,7 +46,7 @@ def validate_content(content: MessageContent) -> None:
             else:
                 break
         else:
-            if image_bytes <= MAX_IMAGE_BYTES and text_chars <= 200_000 and (image_bytes or text_chars):
+            if image_bytes <= MAX_IMAGE_BYTES and text_chars <= MAX_NATIVE_TEXT_CHARS and (image_bytes or text_chars):
                 return
     raise DevelopmentError("invalid_input_content", "输入内容无效或超过大小限制，请减少附件后重试。")
 

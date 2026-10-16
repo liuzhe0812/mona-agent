@@ -41,7 +41,7 @@ PLATFORM_PYTHON_PROFILES: dict[str, tuple[str, ...]] = {
         "cairosvg==2.9.0",
         "curl-cffi==0.16.2",
         "ebooklib==0.20",
-        "edge-tts==7.2.8",
+        "edge-tts==7.3.1",
         "pymupdf==1.28.2",
         "flask==3.1.3",
         "mammoth==1.12.1",

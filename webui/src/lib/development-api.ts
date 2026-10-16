@@ -27,6 +27,7 @@ export interface DevMessage {
   name?: string; toolCallId?: string | null; toolCalls: ToolCall[]; queued: boolean; timestamp?: string; authorId?: ExecutorId;
 }
 export interface DevInput { id: string; messageId: string; runId: string; state: string; revision: number; intent?: "steering" | "follow_up";
+  createdAt?: string; requestedIntent?: "steering" | "follow_up";
   source?: (DevelopmentSendAttachments & { content: string }) | null; }
 export interface DevEvent { id: string; sequence: number; type: string; runId: string | null; timestamp?: string; payload: Record<string, unknown> }
 export interface DevDecision { id: string; sessionId: string; runId: string; kind: "permission" | "question";
@@ -60,6 +61,11 @@ export interface MessageSlice { messageId: string; content: string; sha256: stri
 export interface DevNativeBinding { id: string; turnHistory: boolean; steering?: boolean; hostSubagents?: boolean; replacesBindingId: string | null; replacementReason: "history_missing" | "user_requested" | "collaboration_updated" | null }
 export interface DevPlan { runId: string; explanation?: string; issue?: string; plan: { step: string; status: "pending" | "in_progress" | "completed" }[] }
 export interface DevBrowserBinding { id: string; tabId: string; origin: string }
+export interface DevBackgroundCommand {
+  id: string; command: string; cwd: string; startedAt: string; elapsedSeconds: number;
+  status: "running" | "exited" | "terminated" | "timed_out"; exitCode: number | null;
+}
+export interface DevBackgroundCommandOutput extends DevBackgroundCommand { output: string; truncated: boolean }
 export interface DevSnapshot {
   watchVersion?: string; moreEvents?: boolean;
   session: DevSession; messages: DevMessage[]; before: number | null; messageCount: number;
@@ -69,6 +75,7 @@ export interface DevSnapshot {
   nativeBinding?: DevNativeBinding | null;
   plan?: DevPlan | null;
   browserBinding?: DevBrowserBinding | null;
+  backgroundCommands?: DevBackgroundCommand[];
 }
 export interface DevModel { id: string; label: string; provider?: string; providerLabel?: string; model?: string; preset?: boolean;
   engine?: "mona" | "codex" | "claude";
@@ -229,6 +236,10 @@ export const developmentApi = {
   recover: (sessionId: string, runId: string) => request<DevRun>(`/sessions/${id(sessionId)}/runs/${id(runId)}/recover`, "POST"),
   reconnect: (sessionId: string, revision: number, bindingId: string) => request<DevSession>(`/sessions/${id(sessionId)}/reconnect`, "POST", { revision, bindingId }),
   message: (sessionId: string, messageId: string, offset = 0, sha?: string) => request<MessageSlice>(`/sessions/${id(sessionId)}/messages/${id(messageId)}?offset=${offset}${sha ? `&sha256=${id(sha)}` : ""}`),
+  commandOutput: (sessionId: string, commandId: string, signal?: AbortSignal) =>
+    request<DevBackgroundCommandOutput>(`/sessions/${id(sessionId)}/commands/${id(commandId)}`, "GET", undefined, signal),
+  stopCommand: (sessionId: string, commandId: string) =>
+    request<DevBackgroundCommandOutput>(`/sessions/${id(sessionId)}/commands/${id(commandId)}/stop`, "POST"),
   projects: () => request<DevProject[]>("/projects"),
   openProject: (path: string) => request<DevProject>("/projects", "POST", { path }),
   sessions: (projectId: string) => request<DevSession[]>(`/projects/${id(projectId)}/sessions`),
@@ -251,6 +262,8 @@ export const developmentApi = {
   }),
   interrupt: (sessionId: string, runId: string) => request<DevRun>(`/sessions/${id(sessionId)}/runs/${id(runId)}/interrupt`, "POST"),
   cancelInput: (sessionId: string, inputId: string) => request(`/sessions/${id(sessionId)}/inputs/${id(inputId)}`, "DELETE"),
+  guideInput: (sessionId: string, inputId: string, revision: number, targetRunId: string) =>
+    request<{ input: DevInput; queued: boolean; reused?: boolean }>(`/sessions/${id(sessionId)}/inputs/${id(inputId)}/guide`, "POST", { revision, targetRunId }),
   directory: (projectId: string, path = "", offset = 0) => request<{ entries: DirectoryEntry[]; nextOffset: number | null; total: number }>(`/projects/${id(projectId)}/directory?path=${id(path)}&offset=${offset}`),
   file: (projectId: string, path: string) => request<FileDocument>(`/projects/${id(projectId)}/file?path=${id(path)}`),
   saveFile: (projectId: string, file: FileDocument, content: string) => request<FileDocument>(`/projects/${id(projectId)}/file`, "PUT", { path: file.path, expectedSha256: file.sha256, content }),

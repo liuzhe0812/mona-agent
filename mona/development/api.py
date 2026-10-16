@@ -141,6 +141,11 @@ class SendBody(Contract):
     document_names: list[str] = Field(default_factory=list, max_length=16)
 
 
+class GuideInputBody(Contract):
+    revision: int = Field(ge=0)
+    target_run_id: Identifier
+
+
 class SaveBody(Contract):
     path: str = Field(min_length=1, max_length=4096)
     content: str = Field(max_length=1_048_576)
@@ -179,6 +184,8 @@ async def development_auth(request: web.Request, handler):
     if request.method == "OPTIONS":
         return await handler(request)
     if not is_valid_services_token(request.headers.get(SERVICES_TOKEN_HEADER)):
+        if request.path == PREFIX + "/work-model-source":
+            logger.warning("Work model selection rejected: unauthorized")
         return web.json_response({"error": {"code": "unauthorized", "message": "开发服务认证失败，请重新连接 Mona。"}}, status=401)
     try:
         return await handler(request)
@@ -187,14 +194,20 @@ async def development_auth(request: web.Request, handler):
     except ConflictError as exc:
         return web.json_response({"error": {"code": exc.code, "message": str(exc)}}, status=409)
     except RpcError as exc:
+        if request.path == PREFIX + "/work-model-source":
+            logger.warning("Work model selection rejected: {}", exc.code)
         known = NATIVE_ERRORS.get(exc.code)
         message = f"{known[1]}{known[2]}" if known else "原生执行者连接或协议检查未完成，请检查执行者设置。"
         if exc.outcome_unknown:
             message = "原生执行结果暂时无法确认，原任务仍保留；没有自动重新执行。"
         return web.json_response({"error": {"code": exc.code, "message": message}}, status=503 if exc.outcome_unknown else 422)
     except DevelopmentError as exc:
+        if request.path == PREFIX + "/work-model-source":
+            logger.warning("Work model selection rejected: {}", exc.code)
         return web.json_response({"error": {"code": exc.code, "message": str(exc)}}, status=422)
     except (ValidationError, ValueError, TypeError):
+        if request.path == PREFIX + "/work-model-source":
+            logger.warning("Work model selection rejected: invalid_request")
         return web.json_response({"error": {"code": "invalid_request", "message": "请求内容无效，请检查项目、会话和输入参数。"}}, status=400)
     except FileNotFoundError:
         return web.json_response({"error": {"code": "path_missing", "message": "文件或目录不存在，请刷新工作区。"}}, status=404)
@@ -248,6 +261,15 @@ async def select_work_model_source(request):
                    if item["id"] == body.executor.value), None)
     if not source or not source["available"]:
         raise DevelopmentError("executor_unavailable", "此模型来源不可用，请在模型设置中检查连接。")
+    if (source["probe"].get("authentication") != "ready"
+            or not any(item["id"] == body.model for item in source["models"])):
+        probe = await runtime.native.probe(None, body.executor)
+        if probe.get("errorCode") and probe["errorCode"] != "authentication_required":
+            raise RpcError(probe["errorCode"], "模型来源检查未完成。")
+        source = next((item for item in await asyncio.to_thread(runtime.native.describe)
+                       if item["id"] == body.executor.value), None)
+        if not source or not source["available"]:
+            raise DevelopmentError("executor_unavailable", "此模型来源不可用，请在模型设置中检查连接。")
     if source["probe"].get("authentication") != "ready":
         raise DevelopmentError("authentication_required", "请先在模型设置中连接此账号。")
     choice = next((item for item in source["models"] if item["id"] == body.model), None)
@@ -455,6 +477,28 @@ async def read_message(request):
     return web.json_response(result)
 
 
+async def background_command(request):
+    runtime = get_runtime(request)
+    session = runtime.store.get_session(request.match_info["session_id"])
+    stopping = request.method == "POST"
+    if stopping and session.readonly:
+        raise DevelopmentError("readonly_session", "只读会话不能停止命令。")
+    tools = runtime.tools.get(session.id)
+    if tools is None or tools.session_key != session.transcript_key:
+        raise NotFoundError()
+    try:
+        manager = tools.exec_sessions
+        command_id = request.match_info["command_id"]
+        result = await manager.stop(command_id) if stopping else await manager.inspect(command_id)
+    except KeyError:
+        raise NotFoundError() from None
+    except RuntimeError:
+        if not stopping:
+            raise
+        raise ConflictError("未确认命令已停止，请核对当前运行状态。") from None
+    return web.json_response(result)
+
+
 async def snapshot(request):
     before = request.query.get("before")
     limit, after = int(request.query.get("limit", "100")), int(request.query.get("after", "0"))
@@ -499,6 +543,12 @@ async def close_unknown(request):
 async def cancel_input(request):
     await get_runtime(request).cancel_input(request.match_info["session_id"], request.match_info["input_id"])
     return web.json_response({"ok": True})
+
+
+async def guide_input(request):
+    body = await _body(request, GuideInputBody)
+    return web.json_response(await get_runtime(request).guide_input(
+        request.match_info["session_id"], request.match_info["input_id"], body.revision, body.target_run_id))
 
 
 async def view(request):
@@ -582,6 +632,8 @@ def register_development_routes(app: web.Application) -> None:
     app.router.add_post(PREFIX + "/sessions/{session_id}/runs/{run_id}/recover", recover_native)
     app.router.add_post(PREFIX + "/sessions/{session_id}/runs/{run_id}/close-unknown", close_unknown)
     app.router.add_get(PREFIX + "/sessions/{session_id}/messages/{message_id}", read_message)
+    app.router.add_get(PREFIX + "/sessions/{session_id}/commands/{command_id}", background_command)
+    app.router.add_post(PREFIX + "/sessions/{session_id}/commands/{command_id}/stop", background_command)
     for method in ("GET", "POST"):
         app.router.add_route(method, PREFIX + "/projects", projects)
         app.router.add_route(method, PREFIX + "/projects/{project_id}/sessions", sessions)
@@ -592,6 +644,7 @@ def register_development_routes(app: web.Application) -> None:
     app.router.add_post(PREFIX + "/sessions/{session_id}/send", send)
     app.router.add_post(PREFIX + "/sessions/{session_id}/runs/{run_id}/interrupt", interrupt)
     app.router.add_delete(PREFIX + "/sessions/{session_id}/inputs/{input_id}", cancel_input)
+    app.router.add_post(PREFIX + "/sessions/{session_id}/inputs/{input_id}/guide", guide_input)
     app.router.add_get(PREFIX + "/views/{view_id}", view)
     app.router.add_put(PREFIX + "/views/{view_id}", view)
     app.router.add_get(PREFIX + "/projects/{project_id}/{section:directory|file|git|diff|context}", workspace)

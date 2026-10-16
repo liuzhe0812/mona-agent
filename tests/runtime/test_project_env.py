@@ -134,7 +134,7 @@ async def test_missing_project_venv_is_created_from_mona_python(
     assert result.python is not None
     assert result.python.is_file()
     assert result.python.parent.parent == project / ".venv"
-    assert runner.commands[0][1:3] == ["-m", "venv"]
+    assert runner.commands[0][1:4] == ["-I", "-m", "venv"]
     assert not (runtime_root / "skill-envs").exists()
 
 

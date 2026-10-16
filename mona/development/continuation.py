@@ -112,7 +112,8 @@ class CodingContinuation:
                 self.runtime.store.transition_input(item.id, item.revision, InputState.RESERVED)
                 result.append({"role": "user", "content": copy.deepcopy(row["content"]),
                     "id": stable_id("message", self.run.id, "steering", item.id),
-                    "_steering_input_id": item.id, "source_kind": "steering"})
+                    "_steering_input_id": item.id, "source_kind": "steering",
+                    **{key: copy.deepcopy(row[key]) for key in ("_display_content", "_display_media") if key in row}})
             return result
 
     async def prepare(self, messages: list[dict], *, force: bool = False) -> list[dict]:

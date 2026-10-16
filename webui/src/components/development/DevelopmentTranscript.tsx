@@ -25,6 +25,8 @@ import type { ConversationRow } from "./zcode/types";
 import { VirtualTimeline, type TimelineNavigation } from "./zcode/VirtualTimeline";
 import { ChatLoading } from "./zcode/chat-loading";
 import { shouldShowTurnChatLoading } from "./zcode/chatLoadingVisibility";
+import { ConversationPendingGuideList } from "./zcode/ConversationPendingGuideList";
+import type { QueueItem } from "./zcode/queueTypes";
 import { DevelopmentStreamContext, useDevelopmentStreamContext } from "./DevelopmentStreamContext";
 import { isSubagentTool, readSubagentTask } from "./SubagentTranscriptRow";
 import { useSubagentTasks } from "./subagent-tasks";
@@ -73,9 +75,10 @@ function toolActivity(call: ToolCall, result: DevMessage | undefined, running: b
     state: result ? "returned" : running || ended ? "pending" : "waiting", truncated: !!result?.truncated };
 }
 
-const MessageRow = memo(function MessageRow({ message, sessionId, streaming = false, onUseAnswer, copyText, hideActions = false, forkable = false, onFork, onForkError }: {
+const MessageRow = memo(function MessageRow({ message, sessionId, streaming = false, onUseAnswer, copyText, hideActions = false, forkable = false, onFork, onForkError, userInputStatus }: {
   message: DevMessage; sessionId: string; streaming?: boolean; onUseAnswer?: (text: string) => void; copyText?: string; hideActions?: boolean;
   forkable?: boolean; onFork?: (messageId: string, requestId: string) => Promise<void>; onForkError?: (cause: unknown) => void;
+  userInputStatus?: string;
 }) {
   const { intl, locale } = useZCodeIntl();
   const timeLabel = message.timestamp ? formatMessageTimeLabel(Date.parse(message.timestamp), locale, intl) : null;
@@ -89,9 +92,9 @@ const MessageRow = memo(function MessageRow({ message, sessionId, streaming = fa
   const user = message.role === "user";
   return <article className="group/answer min-w-0 w-full" data-message-id={message.id}>
     <div className={cn("space-y-2", user && "ml-auto w-fit max-w-full rounded-lg bg-muted/60 px-4 py-3")}>
-      {(message.queued || onUseAnswer) && <div className="flex items-center justify-between gap-2 text-caption text-muted-foreground">
-        <span>{message.queued ? "后续消息" : ""}</span>
-        {onUseAnswer && message.role === "assistant" && <Button variant="ghost" size="sm" className="h-6 text-caption" onClick={() => onUseAnswer(message.content)}>加入主会话</Button>}
+      {userInputStatus && <div className="text-ui-sm text-foreground-subtle">{userInputStatus}</div>}
+      {onUseAnswer && message.role === "assistant" && <div className="flex items-center justify-end gap-2 text-caption text-muted-foreground">
+        <Button variant="ghost" size="sm" className="h-6 text-caption" onClick={() => onUseAnswer(message.content)}>加入主会话</Button>
       </div>}
       {!streaming && message.content.length > 1200 && user ? <details className="group/message">
         <summary aria-label="长消息详情" className="flex cursor-pointer list-none items-start gap-2 text-ui [&::-webkit-details-marker]:hidden">
@@ -185,13 +188,14 @@ function WorkSegment({ segment, run, showHeader }: { segment: ConversationTurnWo
   </Collapsible>;
 }
 
-export function DevelopmentTranscript({ messages, events, runs, sessionId, visible = true, showRunHeaders = false, onUseAnswer, live, scrollRef, followingRef, navigationRef, onLayoutScroll, restoringRef,
+export function DevelopmentTranscript({ messages, events, runs, sessionId, visible = true, showRunHeaders = false, onUseAnswer, live, scrollRef, followingRef, navigationRef, onLayoutScroll, restoringRef, pendingGuides = [],
   canFork = false, onFork, onForkError, forkSource, onReturnToForkSource }: {
   messages: DevMessage[]; events: DevEvent[]; runs: DevRun[]; sessionId: string; showRunHeaders?: boolean; onUseAnswer?: (text: string) => void;
   live?: { runId: string; content: string } | null;
   scrollRef?: RefObject<HTMLDivElement | null>; followingRef?: RefObject<boolean>; navigationRef?: RefObject<TimelineNavigation | null>;
   onLayoutScroll?: (element: HTMLDivElement) => void;
   restoringRef?: RefObject<boolean>; visible?: boolean;
+  pendingGuides?: readonly QueueItem[];
   canFork?: boolean; onFork?: (messageId: string, requestId: string) => Promise<void>; onForkError?: (cause: unknown) => void;
   forkSource?: DevSessionForkSource | null; onReturnToForkSource?: (sourceSessionId: string) => void;
 }) {
@@ -207,7 +211,7 @@ export function DevelopmentTranscript({ messages, events, runs, sessionId, visib
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [hasRunningUnit]);
-  const paired = useMemo(() => pairTranscriptTools(messages), [messages]);
+  const paired = useMemo(() => pairTranscriptTools(messages.filter((message) => !message.queued)), [messages]);
   const hintedTasks = useMemo(() => [
     ...paired.messages.flatMap((message) => message.toolCalls.filter((call) => isSubagentTool(call.function.name)).flatMap((call) => {
       const task = readSubagentTask(paired.results.get(callKey(message.runId, call.id))?.content);
@@ -297,5 +301,10 @@ export function DevelopmentTranscript({ messages, events, runs, sessionId, visib
   return <DevelopmentStreamContext.Provider value={streamHost}><ZCodeSurface><div className="@container/conversation text-foreground">
     {scrollRef ? <VirtualTimeline key={sessionId} units={units} scrollRef={scrollRef} followingRef={followingRef ?? fallbackFollowing} navigationRef={navigationRef} onLayoutScroll={onLayoutScroll} restoringRef={restoringRef} />
       : <div>{units.map((unit) => unit.content)}</div>}
+    {pendingGuides.length > 0 && <div className={cn("relative mx-auto w-full px-4 @md/conversation:px-6 pb-5", getConversationContentWidthClassName({ centeredEmptyLayout: false, statusPanelLayout: "none" }))}>
+      <ConversationPendingGuideList items={pendingGuides} turnId={runs[0]?.id ?? "pending-guide"} context={{ renderUserInput: (row, status) =>
+        <MessageRow sessionId={sessionId} userInputStatus={status} message={{ id: row.entityId, role: "user", content: row.text,
+          runId: row.turnId, sourceKind: "steering", timestamp: row.createdAt, media: row.attachments, toolCalls: [], queued: false, truncated: false }} /> }} />
+    </div>}
   </div></ZCodeSurface></DevelopmentStreamContext.Provider>;
 }

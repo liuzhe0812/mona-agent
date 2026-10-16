@@ -17,6 +17,7 @@ import { DevelopmentStreamPreview } from "./DevelopmentStreamPreview";
 import { DevelopmentPane } from "./DevelopmentPane";
 import { DevelopmentReview } from "./DevelopmentReview";
 import { DevelopmentActivity } from "./DevelopmentActivity";
+import { DevelopmentCommandOutput } from "./DevelopmentCommandOutput";
 import { DevelopmentSubagentTasks } from "./DevelopmentSubagentTasks";
 import { DevelopmentSubagentDetail } from "./DevelopmentSubagentDetail";
 import { EMPTY_SIDE, useDevelopmentStore, type WorkTab } from "./store";
@@ -129,16 +130,21 @@ export function DevelopmentSidebar({ project, session, executors, visible, brows
           </div>
           <div className={cn("absolute inset-0 flex min-h-0 flex-col", side.tab !== "terminal" && "hidden")}>
             <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1">
-              <Button variant="ghost" size="sm" aria-pressed={terminalMode === "agent"} onClick={() => setTerminalMode("agent")}>执行记录</Button>
+              <Button variant="ghost" size="sm" aria-pressed={terminalMode === "agent"} onClick={() => { setTerminalMode("agent"); useDevelopmentStore.getState().setSide(session.id, { backgroundCommandId: undefined }); }}>执行记录</Button>
               <Button variant="ghost" size="sm" aria-pressed={terminalMode === "user"} onClick={() => setTerminalMode("user")}>手动终端</Button>
-              {terminal && <Button variant="ghost" size="sm" className="ml-auto" disabled={terminal.status === "closing"} onClick={() => void stopDevelopmentTerminal(session.id)}>结束终端</Button>}
+              {terminal && terminalMode === "user" && <Button variant="ghost" size="sm" className="ml-auto" disabled={terminal.status === "closing"} onClick={() => void stopDevelopmentTerminal(session.id)}>结束终端</Button>}
             </div>
-            <div className={cn("min-h-0 flex-1 overflow-auto p-3", terminalMode !== "agent" && "hidden")}>
+            <div className={cn("min-h-0 flex-1", side.backgroundCommandId ? "flex flex-col" : "overflow-auto p-3", terminalMode !== "agent" && "hidden")}>
+              {side.backgroundCommandId ? <DevelopmentCommandOutput key={`${session.id}:${side.backgroundCommandId}`}
+                sessionId={session.id} commandId={side.backgroundCommandId} readonly={current.readonly}
+                visible={visible && side.expanded && side.tab === "terminal" && terminalMode === "agent"}
+                onBack={() => useDevelopmentStore.getState().setSide(session.id, { backgroundCommandId: undefined })} /> : <>
               {(snapshot?.messages ?? []).filter((m) => m.role === "tool" && ["exec", "write_stdin", "list_exec_sessions"].includes(m.name ?? "")).map((m) => <details key={m.id} open className="mb-3 text-caption"><summary className="cursor-pointer text-muted-foreground">{m.name}</summary><pre className="mt-2 whitespace-pre-wrap break-words font-mono">{m.content}</pre></details>)}
               <DevelopmentActivity events={snapshot?.events ?? []} runId={run?.id} runStatus={run?.status} />
               {snapshotError && <div role="alert" className="space-y-2 text-caption text-destructive"><p>执行记录暂未更新：{snapshotError}</p><Button variant="outline" size="sm" onClick={() => refreshDevelopmentSession(session.id)}>重新读取执行记录</Button></div>}
               {!snapshot && !snapshotError && <p role="status" className="text-caption text-muted-foreground">正在读取执行记录…</p>}
               {snapshot && !snapshotError && !snapshot.messages.some((m) => m.role === "tool" && m.name === "exec") && !snapshot.events.some((e) => e.type === "command.completed" || e.type === "tool.completed") && <p className="text-caption text-muted-foreground">当前会话还没有命令执行结果。</p>}
+              </>}
             </div>
             <div className={cn("min-h-0 flex-1", terminalMode !== "user" && "hidden")}>
               <DevelopmentLocalTerminal sessionId={session.id} directory={project.rootPath} visible={visible && side.tab === "terminal" && terminalMode === "user"} />

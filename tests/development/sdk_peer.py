@@ -6,6 +6,7 @@ code. Only vendor SDK calls are substituted; this is not vendor acceptance.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -100,15 +101,18 @@ class Client:
         if "mona_work" in self.options.mcp_servers:
             assert self.options.tools == []
             assert self.options.allowed_tools == ["mcp__mona_work__mona_tool"]
-            assert isinstance(self.options.system_prompt, str)
         elif self.options.mcp_servers:
             assert self.options.allowed_tools == ["mcp__mona_development__development_collaboration"]
         assert self.options.env == {} and self.options.permission_mode == "default"
         assert "Skill" in self.options.disallowed_tools
         self.owner = asyncio.current_task()
         system = self.options.system_prompt
-        if isinstance(system, dict):
-            system = system
+        prompt_file = system.get("path") if isinstance(system, dict) and system.get("type") == "file" else (
+            self.options.extra_args.get("system-prompt-file") if "mona_work" in self.options.mcp_servers else None)
+        if prompt_file:
+            prompt_text = Path(prompt_file).read_text(encoding="utf-8")
+            system = {"type": "file", "sha256": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
+                      "length": len(prompt_text)}
         elif hasattr(system, "append"):
             system = system.append
         trace({"method": "connect", "localOAuth": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),

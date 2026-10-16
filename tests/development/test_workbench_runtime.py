@@ -1,11 +1,15 @@
 import asyncio
 import copy
+import secrets
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from mona.config.schema import Config, _resolve_tool_config_refs
-from mona.development.contracts import ExecutorId, RunStatus
+from mona.development.api import RUNTIME_KEY, register_development_routes
+from mona.development.contracts import ExecutorId, InputState, RunStatus
 from mona.development.runtime import DevelopmentRuntime
 from mona.development.store import ConflictError, DevelopmentError, DevelopmentStore
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -65,6 +69,229 @@ async def wait_done(runtime, session_id):
                 return runs
             await asyncio.sleep(0.02)
     return await asyncio.wait_for(wait(), 15)
+
+
+@pytest.mark.asyncio
+async def test_queued_input_guided_during_tool_execution_reaches_same_run_once(tmp_path, monkeypatch):
+    model_gate, tool_entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    model = Model([
+        LLMResponse("", tool_calls=[ToolCallRequest("read-once", "read_file", {"path": "AGENTS.md"})]),
+        LLMResponse("Guidance handled."),
+    ], model_gate)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    try:
+        first = await runtime.submit(session.id, "request_original", "ORIGINAL_REQUEST")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        reader = runtime.tools[session.id].registry.get("read_file")
+        execute = reader.execute
+
+        async def gated_execute(**params):
+            tool_entered.set()
+            await release.wait()
+            return await execute(**params)
+
+        monkeypatch.setattr(reader, "execute", gated_execute)
+        model_gate.set()
+        await asyncio.wait_for(tool_entered.wait(), 3)
+        await runtime.submit(session.id, "request_queued", "GUIDE_DURING_TOOL")
+        submitted = await runtime.guide_input(session.id, "request_queued", 0, first["run"]["id"])
+        repeated = await runtime.guide_input(session.id, "request_queued", 0, first["run"]["id"])
+        assert submitted["input"]["id"] == repeated["input"]["id"] == "request_queued"
+        assert repeated["reused"]
+        assert submitted["input"]["state"] == "pending"
+        assert len(model.requests) == 1
+        assert runtime.snapshot(session.id)["pendingInputs"][0]["intent"] == "steering"
+        assert next(m for m in runtime.snapshot(session.id)["messages"] if m["content"] == "GUIDE_DURING_TOOL")["queued"]
+
+        release.set()
+        runs = await wait_done(runtime, session.id)
+        assert len(runs) == 1 and runs[0].id == first["run"]["id"]
+        assert runs[0].status == RunStatus.SUCCEEDED
+        assert len(model.requests) == 2
+        assert sum(m.get("role") == "user" and m.get("content") == "GUIDE_DURING_TOOL"
+                   for m in model.requests[1]["messages"]) == 1
+        assert runtime.store.get_input("request_queued").state == InputState.CONSUMED
+        final = runtime.snapshot(session.id)
+        assert not final["pendingInputs"]
+        assert sum(m["content"] == "GUIDE_DURING_TOOL" for m in final["messages"]) == 1
+        assert sum(m["role"] == "tool" for m in final["messages"]) == 1
+        retry = await runtime.submit(session.id, "request_queued", "GUIDE_DURING_TOOL")
+        assert retry["reused"] and len(model.requests) == 2
+    finally:
+        release.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_before_guidance_dispatch_keeps_the_same_input_in_a_paused_queue(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    model = Model(gate=gate)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    try:
+        first = await runtime.submit(session.id, "request_one", "1")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        await runtime.submit(session.id, "request_two", "2")
+        await runtime.guide_input(session.id, "request_two", 0, first["run"]["id"])
+        before_stop = runtime.snapshot(session.id)
+        second = next(m for m in before_stop["messages"] if m["content"] == "2")
+        assert second["queued"]
+        assert before_stop["pendingInputs"][0]["intent"] == "steering"
+
+        await runtime.interrupt(session.id, first["run"]["id"])
+        pending = runtime.store.get_input("request_two")
+        assert pending.state == InputState.PENDING and pending.intent == "follow_up"
+        stopped = runtime.snapshot(session.id)
+        assert [i["id"] for i in stopped["pendingInputs"]] == ["request_two"]
+        assert [m["content"] for m in stopped["messages"] if m["role"] == "user" and not m["queued"]] == ["1"]
+        retry = await runtime.submit(session.id, "request_two", "2")
+        assert retry["reused"] and retry["input"]["state"] == "pending"
+        assert len(model.requests) == 1
+        assert len(runtime.store.list_runs(session.id)) == 1
+    finally:
+        gate.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_paused_guide_can_be_delivered_to_a_new_active_run(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    model = Model(gate=gate)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    try:
+        first = await runtime.submit(session.id, "request_one", "1")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        await runtime.submit(session.id, "request_two", "2")
+        await runtime.guide_input(session.id, "request_two", 0, first["run"]["id"])
+        await runtime.interrupt(session.id, first["run"]["id"])
+        paused = runtime.store.get_input("request_two")
+        model.entered.clear()
+        current = await runtime.submit(session.id, "request_three", "3")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        guided = await runtime.guide_input(session.id, paused.id, paused.revision, current["run"]["id"])
+        assert guided["input"]["id"] == paused.id
+        assert [item.id for item in runtime.store.list_inputs(current["run"]["id"])] == [paused.id]
+        assert not runtime.store.list_inputs(first["run"]["id"])
+
+        gate.set()
+        await wait_done(runtime, session.id)
+        assert runtime.store.get_input(paused.id).state == InputState.CONSUMED
+        assert len(model.requests) == 3
+        assert sum(m.get("content") == "2" for m in model.requests[-1]["messages"]) == 1
+        assert not runtime.snapshot(session.id)["pendingInputs"]
+    finally:
+        gate.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_guide_api_preserves_queue_identity_and_reuses_the_receipt(tmp_path, monkeypatch):
+    token = secrets.token_hex(32)
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", token)
+    gate = asyncio.Event()
+    model = Model(gate=gate)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    app = web.Application()
+    app[RUNTIME_KEY] = runtime
+    register_development_routes(app)
+    async with TestClient(TestServer(app)) as client:
+        first = await runtime.submit(session.id, "request_one", "1")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        queued = await runtime.submit(session.id, "request_two", "2")
+        path = f"/api/development/sessions/{session.id}/inputs/request_two/guide"
+        body = {"revision": 0, "targetRunId": first["run"]["id"]}
+        headers = {"X-Mona-Token": token}
+        async with client.post(path, json=body, headers=headers) as response:
+            assert response.status == 200
+            guided = await response.json()
+        assert guided["input"]["id"] == queued["input"]["id"]
+        assert guided["input"]["messageId"] == queued["input"]["messageId"]
+        assert guided["input"]["intent"] == "steering"
+        async with client.post(path, json=body, headers=headers) as response:
+            assert response.status == 200
+            assert (await response.json())["reused"]
+        assert len(runtime.store.list_inputs(first["run"]["id"])) == 1
+        gate.set()
+        await wait_done(runtime, session.id)
+        assert sum(m.get("content") == "2" for m in model.requests[-1]["messages"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_interrupted_dispatched_guidance_does_not_return_as_a_pending_input(tmp_path, monkeypatch):
+    gate, guide_dispatched = asyncio.Event(), asyncio.Event()
+    model = Model(gate=gate)
+    chat = model.chat
+
+    async def paused_chat(*args, **kwargs):
+        response = await chat(*args, **kwargs)
+        if len(model.requests) == 2:
+            guide_dispatched.set()
+            await asyncio.Event().wait()
+        return response
+
+    monkeypatch.setattr(model, "chat", paused_chat)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    try:
+        first = await runtime.submit(session.id, "request_original", "ORIGINAL_REQUEST")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        await runtime.submit(session.id, "request_queued", "GUIDANCE_BEFORE_STOP")
+        await runtime.guide_input(session.id, "request_queued", 0, first["run"]["id"])
+        gate.set()
+        await asyncio.wait_for(guide_dispatched.wait(), 3)
+        await runtime.interrupt(session.id, first["run"]["id"])
+
+        assert runtime.store.get_input("request_queued").state == InputState.UNKNOWN
+        snapshot = runtime.snapshot(session.id)
+        assert snapshot["pendingInputs"] == []
+        guided = [m for m in snapshot["messages"] if m["content"] == "GUIDANCE_BEFORE_STOP"]
+        assert len(guided) == 1 and not guided[0]["queued"] and guided[0]["sourceKind"] == "steering"
+        assert len(model.requests) == 2
+        assert len(runtime.store.list_runs(session.id)) == 1
+    finally:
+        gate.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_guide_keeps_the_original_queue_item_and_input_source(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    model = Model(gate=gate)
+    runtime, _, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    try:
+        first = await runtime.submit(session.id, "request_one", "1")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        queued = await runtime.submit(session.id, "request_two", "2")
+        with pytest.raises(ConflictError):
+            await runtime.guide_input(session.id, "request_two", 99, first["run"]["id"])
+        preserved = runtime.store.get_input("request_two")
+        assert preserved.state == InputState.PENDING and preserved.intent == "follow_up"
+        assert preserved.message_id == queued["input"]["messageId"]
+        assert runtime.snapshot(session.id)["pendingInputs"][0]["source"]["content"] == "2"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_guided_attachment_keeps_display_text_and_model_content_separate(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    model = Model(gate=gate)
+    runtime, _, session, root = make_runtime(tmp_path, monkeypatch, model)
+    runtime.attachment_root = root
+    (root / "requirements.txt").write_text("ATTACHMENT_BODY_SENTINEL", encoding="utf-8")
+    try:
+        first = await runtime.submit(session.id, "request_one", "1")
+        await asyncio.wait_for(model.entered.wait(), 3)
+        await runtime.submit(session.id, "request_attachment", "检查要求",
+                             doc_paths=["requirements.txt"], document_names=["需求.txt"])
+        queued_display = next(m["content"] for m in runtime.snapshot(session.id)["messages"] if m["queued"])
+        await runtime.guide_input(session.id, "request_attachment", 0, first["run"]["id"])
+        gate.set()
+        await wait_done(runtime, session.id)
+        guided = next(m for m in runtime.snapshot(session.id)["messages"] if m["sourceKind"] == "steering")
+        assert guided["content"] == queued_display
+        assert "需求.txt" in guided["content"] and "ATTACHMENT_BODY_SENTINEL" not in guided["content"]
+        assert "ATTACHMENT_BODY_SENTINEL" in str(model.requests[1]["messages"])
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

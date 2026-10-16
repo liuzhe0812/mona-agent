@@ -218,6 +218,20 @@ describe("ModelEngineProgramDialog", () => {
     await waitFor(() => expect(prepare).toHaveBeenCalledWith("codex", "codex@2.0.0", false));
   });
 
+  it("refreshes the release before updating instead of submitting the stale displayed version", async () => {
+    const running: EngineInstallJob = { id: "latest-release", state: "running", stage: "downloading", downloadedBytes: 0, totalBytes: 1024 };
+    const prepare = vi.spyOn(developmentApi, "prepareExecutor").mockResolvedValue({ installed: false, job: running });
+    vi.spyOn(developmentApi, "executorInstall").mockResolvedValue(running);
+    const { engineResources } = renderDialog(managedResource);
+    engineResources.mockResolvedValue({ components: [{ ...managedResource, packRef: "codex@3.0.0", version: "3.0.0" }], catalogAvailable: true });
+
+    fireEvent.click(await screen.findByRole("button", { name: "更新", exact: true }));
+
+    await waitFor(() => expect(engineResources).toHaveBeenCalledWith("codex", true));
+    await waitFor(() => expect(prepare).toHaveBeenCalledWith("codex", "codex@3.0.0", false));
+    expect(prepare).not.toHaveBeenCalledWith("codex", managedResource.packRef, false);
+  });
+
   it("shows pending and failed official-version lookup states", async () => {
     let resolveLookup: ((value: { components: EngineResource[]; catalogAvailable: boolean }) => void) | undefined;
     vi.spyOn(developmentApi, "executorSettings").mockResolvedValue(settings);

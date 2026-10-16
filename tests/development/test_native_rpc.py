@@ -116,7 +116,8 @@ async def test_remote_errors_do_not_expose_native_diagnostics(tmp_path):
         with pytest.raises(RemoteRpcError) as error:
             await client.request("error")
         assert error.value.rpc_code == -32000
-        assert "private" not in str(error.value)
+        assert error.value.rpc_method == "error"
+        assert "private" not in f"{error.value!s} {vars(error.value)!r}"
     finally:
         await client.close()
 

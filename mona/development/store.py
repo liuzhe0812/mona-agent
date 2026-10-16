@@ -146,7 +146,8 @@ class DevelopmentStore:
         if isinstance(value, Run):
             db.execute("UPDATE runs SET payload=?, status=? WHERE id=?", (value.model_dump_json(), value.status.value, value.id))
         elif isinstance(value, RunInput):
-            db.execute("UPDATE inputs SET payload=?, state=? WHERE id=?", (value.model_dump_json(), value.state.value, value.id))
+            db.execute("UPDATE inputs SET payload=?, state=?, run_id=? WHERE id=?",
+                       (value.model_dump_json(), value.state.value, value.run_id, value.id))
         else:
             db.execute(f"UPDATE {table} SET payload=? WHERE id=?", (value.model_dump_json(), value.id))
 
@@ -945,7 +946,17 @@ class DevelopmentStore:
     def _cancel_unapplied_steering(self, db, session, run) -> None:
         for row in db.execute("SELECT payload FROM inputs WHERE run_id=? AND state='pending'", (run.id,)).fetchall():
             value = RunInput.model_validate_json(row[0])
-            if value.intent != "steering" or value.follow_up_allowed:
+            if value.intent != "steering":
+                continue
+            if value.follow_up_allowed:
+                # ZCode fallbackPendingGuidesToQueue：保留原输入；仅成功轮次允许自动续接。
+                value.requested_intent = value.requested_intent or value.intent
+                value.intent = "follow_up"
+                value.revision += 1
+                self._save(db, value)
+                self._event(db, session, "input.deferred", {"inputId": value.id,
+                    "reason": "guide.turnInterrupted" if run.status == RunStatus.INTERRUPTED else "turn_finished_before_steering",
+                    "admittedDelivery": "queue"}, run)
                 continue
             value.state = InputState.CANCELLED
             value.revision += 1
@@ -995,6 +1006,26 @@ class DevelopmentStore:
             db.execute("INSERT INTO inputs VALUES(?,?,?,?,?)", (value.id, value.session_id, value.run_id, value.state.value, value.model_dump_json()))
             session = self._get(db, DevelopmentSession, value.session_id)
             self._event(db, session, "input.queued", {"inputId": value.id}, run)
+            return value
+
+    def guide_input(self, session_id: str, input_id: str, expected_revision: int, target_run_id: str) -> RunInput:
+        with self._connection(write=True) as db:
+            value = self._get(db, RunInput, input_id)
+            run = self._get(db, Run, target_run_id)
+            if value.session_id != session_id or run.session_id != session_id:
+                raise ConflictError("消息不属于当前会话。")
+            self._revision(value.revision, expected_revision)
+            if value.state != InputState.PENDING or not value.follow_up_allowed:
+                raise ConflictError("消息已开始派发或状态待核对，原输入已保留。")
+            if run.status not in {RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.WAITING_USER}:
+                raise ConflictError("目标轮次已结束或变化，消息仍保留在队列。")
+            value.requested_intent = value.requested_intent or value.intent
+            value.intent = "steering"
+            value.run_id = run.id
+            value.revision += 1
+            self._save(db, value)
+            session = self._get(db, DevelopmentSession, session_id)
+            self._event(db, session, "input.guided", {"inputId": value.id, "revision": value.revision}, run)
             return value
 
     def transition_input(self, input_id: str, expected_revision: int, state: InputState) -> RunInput:

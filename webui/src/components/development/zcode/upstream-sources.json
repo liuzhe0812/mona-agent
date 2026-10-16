@@ -101,5 +101,17 @@
   {
     "source": "packages/ui/src/previewPanePatchFallbackContent.tsx",
     "sha256": "9ccd7d474c867f9d6635c2f9498f7c6e8b3cf281701036d16191663cb3c704f4"
+  },
+  {
+    "source": "packages/ui/src/v4/pendingGuideProjection.ts",
+    "sha256": "93d206baa6636f0a02c9a645c026e5a201c7457036c4129889bc8a638300ff15",
+    "adaptedInto": "webui/src/components/development/zcode/pendingGuideProjection.ts",
+    "changes": "QueueItem and QueueState imports use the Mona host types; projection behavior is unchanged."
+  },
+  {
+    "source": "packages/ui/src/v4/ConversationPendingGuideList.tsx",
+    "sha256": "1eee028e6bd1c32b9fc66dbd7e0e135b0a5bc85d83a97c2598773fbe67c186da",
+    "adaptedInto": "webui/src/components/development/zcode/ConversationPendingGuideList.tsx",
+    "changes": "Queue row and render context use Mona host types, intl uses the ZCode primitive hook, and ConversationTurnRow is replaced by the host renderUserInput callback."
   }
 ]

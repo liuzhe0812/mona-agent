@@ -5,6 +5,7 @@ Vendor responses are explicit protocol/SDK peers, not live account/model accepta
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import json
 import sys
@@ -542,8 +543,66 @@ async def test_work_callback_can_wait_without_the_code_timeout():
     assert result["content"][0]["text"] == "runner result"
 
 
-@pytest.mark.parametrize("executor", [ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
-def test_sdk_work_options_use_only_the_full_prompt_and_work_tool(tmp_path, monkeypatch, executor):
+@pytest.mark.asyncio
+async def test_sdk_executor_sends_work_prompt_and_routes_tool_result(tmp_path, monkeypatch):
+    from mona.development.executors.sdk import call_in_turn as original_call
+
+    root = (tmp_path / "work").resolve()
+    root.mkdir()
+    prompt = _long_work_prompt()
+    profile = prepare_sdk_profile(ExecutorId.CLAUDE, Path(sys.executable), tmp_path / "native", root)
+    monkeypatch.setattr("mona.development.executors.sdk.sdk_version", lambda _executor: "test-peer")
+    monkeypatch.setattr("mona.development.executors.sdk.worker_command",
+        lambda: (sys.executable, "-u", str(Path(__file__).with_name("sdk_peer.py").resolve())))
+    observed_timeouts = []
+
+    async def tracked_call(*args, timeout_s=90):
+        observed_timeouts.append(timeout_s)
+        return await original_call(*args, timeout_s=timeout_s)
+
+    monkeypatch.setattr("mona.development.executors.sdk.call_in_turn", tracked_call)
+    calls = []
+
+    async def run_tool(binding, turn_id, arguments):
+        calls.append((binding.native_session_id, turn_id, arguments))
+        await asyncio.sleep(0.03)
+        return {"content": [{"type": "text", "text": "AUTHORIZED_RUNNER_RESULT"}], "isError": False}
+
+    host = SDKExecutor(profile, tool_handler=run_tool)
+    context = ProjectContext("work", root, (), (), (), "rules", "skills")
+    session = DevelopmentSession(project_id="work", executor=ExecutorId.CLAUDE)
+    prompt_file = None
+    try:
+        binding = await host.create_session(SessionStart(session, context, work_prompt=prompt))
+        config_dir = Path(profile.environment["CLAUDE_CONFIG_DIR"])
+        prompt_files = list(config_dir.glob(".mona-work-prompt-*.txt"))
+        assert len(prompt_files) == 1
+        prompt_file = prompt_files[0]
+        assert hashlib.sha256(prompt_file.read_bytes()).hexdigest() == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+        async def collect_events():
+            collected = []
+            async for event in host.events(binding):
+                collected.append(event)
+                if event.type in {"run.completed", "run.failed", "run.unknown"}:
+                    return collected
+            return collected
+
+        event_task = asyncio.create_task(collect_events())
+        receipt = await host.send(binding, "work_input", "work_tool")
+        assert receipt.outcome == "accepted"
+        terminal = await asyncio.wait_for(event_task, 5)
+        assert terminal and terminal[-1].type == "run.completed"
+        assert calls and calls[0][1] == receipt.native_turn_id
+        assert calls[0][2] == {"tool": "read_file", "arguments": {"path": "manual.txt"}}
+        assert observed_timeouts == [None]
+        await host.close_runtime(binding)
+        assert not prompt_file.exists()
+    finally:
+        await host.shutdown()
+
+
+def _sdk_worker_peer(monkeypatch):
     import sdk_peer
 
     from mona.development.executors import sdk_worker
@@ -565,29 +624,70 @@ def test_sdk_work_options_use_only_the_full_prompt_and_work_tool(tmp_path, monke
     monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda name, *args:
                         module if name in {"claude_agent_sdk", "codebuddy_agent_sdk"}
                         else original_import(name, *args))
-    prompt = "FULL WORK SYSTEM PROMPT"
-    start = {"executor": executor.value, "cwd": str(tmp_path), "executable": "test-only",
+    return sdk_worker, sdk_peer
+
+
+def _work_start(tmp_path, monkeypatch, executor, prompt):
+    managed_home = tmp_path / "managed-home"
+    workspace = tmp_path / "workspace"
+    managed_home.mkdir()
+    workspace.mkdir()
+    config_dir = managed_home / (".claude" if executor == ExecutorId.CLAUDE else ".codebuddy")
+    monkeypatch.setenv("HOME", str(managed_home))
+    monkeypatch.setenv("USERPROFILE", str(managed_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(managed_home / ".claude"))
+    monkeypatch.setenv("CODEBUDDY_CONFIG_DIR", str(managed_home / ".codebuddy"))
+    start = {"executor": executor.value, "cwd": str(workspace), "executable": "test-only",
         "nativeSessionId": "test-session", "readonly": False, "isSubagent": False, "context": "CODE_CONTEXT",
         "model": None, "resume": False, "hostCollaboration": False, "workPrompt": prompt,
         "permissionMode": "ask", "effort": None}
-    worker = sdk_worker.Worker()
-    worker.build_options(start)
-    assert worker.options.system_prompt == prompt
-    assert worker.options.tools == []
-    assert worker.options.allowed_tools == [SDK_WORK_TOOL]
-    assert "mcp__*" not in worker.options.disallowed_tools
-    assert set(worker.options.mcp_servers) == {WORK_SERVER}
-    server_tool = worker.options.mcp_servers[WORK_SERVER]["instance"][WORK_TOOL]
-    assert server_tool.description == WORK_DESCRIPTION
-    assert server_tool.input_schema == WorkToolCall.model_json_schema()
+    return start, managed_home, workspace, config_dir
 
-    worker.start = start
-    worker.active = "turn"
-    worker.projector.begin("turn")
-    allowed = asyncio.run(worker.permission(SDK_WORK_TOOL, {"tool": "read_file", "arguments": {}}, None))
-    denied = asyncio.run(worker.permission("Bash", {"command": "echo side effect"}, None))
-    assert isinstance(allowed, sdk_peer.Allow)
-    assert isinstance(denied, sdk_peer.Deny)
+
+def _long_work_prompt():
+    return "完整提示词\r\n" + "p" * 40_000
+
+
+@pytest.mark.parametrize("executor", [ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
+def test_sdk_work_prompt_is_spooled_under_managed_config_home(tmp_path, monkeypatch, executor):
+    sdk_worker, sdk_peer = _sdk_worker_peer(monkeypatch)
+    prompt = _long_work_prompt()
+    expected_digest = hashlib.sha256(prompt.encode("utf-8")).digest()
+    start, managed_home, workspace, config_dir = _work_start(tmp_path, monkeypatch, executor, prompt)
+    worker = sdk_worker.Worker()
+    prompt_file = None
+    try:
+        worker.build_options(start)
+        prompt_file = worker._work_prompt_file
+        assert len(prompt) > 32767
+        assert prompt_file is not None and prompt_file.is_absolute()
+        assert prompt_file.parent == config_dir.resolve(strict=True)
+        assert prompt_file.is_relative_to(managed_home.resolve(strict=True))
+        assert not prompt_file.is_relative_to(workspace.resolve(strict=True))
+        assert hashlib.sha256(prompt_file.read_bytes()).digest() == expected_digest
+        if executor == ExecutorId.CLAUDE:
+            assert worker.options.system_prompt == {"type": "file", "path": str(prompt_file)}
+        else:
+            assert worker.options.system_prompt is None
+            assert worker.options.extra_args["system-prompt-file"] == str(prompt_file)
+        assert worker.options.tools == []
+        assert worker.options.allowed_tools == [SDK_WORK_TOOL]
+        assert "mcp__*" not in worker.options.disallowed_tools
+        assert set(worker.options.mcp_servers) == {WORK_SERVER}
+        server_tool = worker.options.mcp_servers[WORK_SERVER]["instance"][WORK_TOOL]
+        assert server_tool.description == WORK_DESCRIPTION
+        assert server_tool.input_schema == WorkToolCall.model_json_schema()
+
+        worker.start = start
+        worker.active = "turn"
+        worker.projector.begin("turn")
+        allowed = asyncio.run(worker.permission(SDK_WORK_TOOL, {"tool": "read_file", "arguments": {}}, None))
+        denied = asyncio.run(worker.permission("Bash", {"command": "echo side effect"}, None))
+        assert isinstance(allowed, sdk_peer.Allow)
+        assert isinstance(denied, sdk_peer.Deny)
+    finally:
+        worker._cleanup_work_prompt_file()
+    assert prompt_file is not None and not prompt_file.exists()
 
 
 def _sdk_without_tools_option(monkeypatch):
@@ -618,18 +718,31 @@ def _sdk_without_tools_option(monkeypatch):
     return sdk_worker
 
 
-def test_codebuddy_without_tools_option_uses_empty_cli_tools(tmp_path, monkeypatch):
+def test_codebuddy_without_tools_option_uses_file_prompt_and_empty_cli_tools(tmp_path, monkeypatch):
     sdk_worker = _sdk_without_tools_option(monkeypatch)
-    start = {"executor": ExecutorId.CODEBUDDY.value, "cwd": str(tmp_path), "executable": "test-only",
-        "nativeSessionId": "test-session", "readonly": False, "isSubagent": False, "context": "CODE_CONTEXT",
-        "model": None, "resume": False, "hostCollaboration": False, "workPrompt": "WORK PROMPT",
-        "permissionMode": "ask", "effort": None}
+    prompt = _long_work_prompt()
+    expected_digest = hashlib.sha256(prompt.encode("utf-8")).digest()
+    start, managed_home, workspace, config_dir = _work_start(
+        tmp_path, monkeypatch, ExecutorId.CODEBUDDY, prompt)
     worker = sdk_worker.Worker()
-    worker.build_options(start)
-    assert worker.options.extra_args["tools"] == ""
-    assert worker.options.kwargs["allowed_tools"] == [SDK_WORK_TOOL]
-    assert "tools" not in worker.options.kwargs
-    assert worker.options.kwargs["system_prompt"] == "WORK PROMPT"
+    prompt_file = None
+    try:
+        worker.build_options(start)
+        prompt_file = worker._work_prompt_file
+        assert len(prompt) > 32767
+        assert prompt_file is not None and prompt_file.is_absolute()
+        assert prompt_file.parent == config_dir.resolve(strict=True)
+        assert prompt_file.is_relative_to(managed_home.resolve(strict=True))
+        assert not prompt_file.is_relative_to(workspace.resolve(strict=True))
+        assert hashlib.sha256(prompt_file.read_bytes()).digest() == expected_digest
+        assert worker.options.extra_args["system-prompt-file"] == str(prompt_file)
+        assert worker.options.extra_args["tools"] == ""
+        assert worker.options.kwargs["allowed_tools"] == [SDK_WORK_TOOL]
+        assert "tools" not in worker.options.kwargs
+        assert worker.options.kwargs["system_prompt"] is None
+    finally:
+        worker._cleanup_work_prompt_file()
+    assert prompt_file is not None and not prompt_file.exists()
 
 
 def test_claude_without_tools_option_fails_closed_for_work(tmp_path, monkeypatch):
@@ -639,7 +752,73 @@ def test_claude_without_tools_option_fails_closed_for_work(tmp_path, monkeypatch
         "model": None, "resume": False, "hostCollaboration": False, "workPrompt": "WORK PROMPT",
         "permissionMode": "ask", "effort": None}
     with pytest.raises(ValueError, match="sdk_isolation_unsupported"):
-        sdk_worker.Worker().build_options(start)
+        worker = sdk_worker.Worker()
+        worker.build_options(start)
+    assert worker._work_prompt_file is None
+
+
+def test_sdk_work_prompt_rejects_config_directory_outside_managed_home(tmp_path, monkeypatch):
+    sdk_worker, _sdk_peer = _sdk_worker_peer(monkeypatch)
+    prompt = _long_work_prompt()
+    start, _managed_home, _workspace, _config_dir = _work_start(
+        tmp_path, monkeypatch, ExecutorId.CODEBUDDY, prompt)
+    outside_config = tmp_path / "outside-config"
+    monkeypatch.setenv("CODEBUDDY_CONFIG_DIR", str(outside_config))
+
+    worker = sdk_worker.Worker()
+    with pytest.raises(ValueError, match="sdk_isolation_unsupported"):
+        worker.build_options(start)
+
+    assert worker._work_prompt_file is None
+    assert not outside_config.exists()
+
+
+@pytest.mark.parametrize("failure", ["startup", "cancel"])
+@pytest.mark.asyncio
+async def test_sdk_work_prompt_file_is_removed_after_startup_failure_or_cancellation(
+        tmp_path, monkeypatch, failure):
+    sdk_worker, sdk_peer = _sdk_worker_peer(monkeypatch)
+    prompt = _long_work_prompt()
+    start, _managed_home, workspace, _config_dir = _work_start(
+        tmp_path, monkeypatch, ExecutorId.CLAUDE, prompt)
+    monkeypatch.chdir(workspace)
+    worker = sdk_worker.Worker()
+    worker.ready = asyncio.get_running_loop().create_future()
+    connect_entered = asyncio.Event()
+    prompt_files = []
+    disconnect_calls = []
+    original_disconnect = sdk_peer.Client.disconnect
+
+    async def connect(self, prompt=None):
+        self.owner = asyncio.current_task()
+        prompt_files.append(worker._work_prompt_file)
+        connect_entered.set()
+        if failure == "startup":
+            raise RuntimeError("test connection failed")
+        await asyncio.Event().wait()
+
+    async def disconnect(self):
+        assert worker._work_prompt_file is not None
+        assert worker._work_prompt_file.exists()
+        disconnect_calls.append(True)
+        await original_disconnect(self)
+
+    monkeypatch.setattr(sdk_peer.Client, "connect", connect)
+    monkeypatch.setattr(sdk_peer.Client, "disconnect", disconnect)
+    owner = asyncio.create_task(worker.own_client(start))
+    await connect_entered.wait()
+    prompt_file = prompt_files[0]
+    assert prompt_file is not None
+    if failure == "cancel":
+        assert prompt_file.exists()
+        owner.cancel()
+    await owner
+
+    assert not prompt_file.exists()
+    assert disconnect_calls == [True]
+    error = worker.ready.exception()
+    assert isinstance(error, RuntimeError)
+    assert str(error) == ("test connection failed" if failure == "startup" else "sdk_start_cancelled")
 
 
 def test_sdk_event_projector_allows_only_the_work_mcp_tool():
@@ -654,47 +833,34 @@ def test_sdk_event_projector_allows_only_the_work_mcp_tool():
             "id": "wrong-call", "name": SDK_HOST_TOOL, "input": {"action": "presets"}}]})
 
 
-@pytest.mark.asyncio
-async def test_sdk_executor_sends_work_prompt_and_routes_tool_result(tmp_path, monkeypatch):
-    from mona.development.executors.sdk import call_in_turn as original_call
+def test_codebuddy_03264_transport_passes_file_path_without_prompt_argument(tmp_path, monkeypatch):
+    from codebuddy_agent_sdk.transport.subprocess import SubprocessTransport
 
-    root = (tmp_path / "work").resolve()
-    root.mkdir()
-    prompt = "FULL WORK SYSTEM PROMPT"
-    profile = prepare_sdk_profile(ExecutorId.CLAUDE, Path(sys.executable), tmp_path / "native", root)
-    monkeypatch.setattr("mona.development.executors.sdk.sdk_version", lambda _executor: "test-peer")
-    monkeypatch.setattr("mona.development.executors.sdk.worker_command",
-        lambda: (sys.executable, "-u", str(Path(__file__).with_name("sdk_peer.py").resolve())))
-    observed_timeouts = []
-    async def tracked_call(*args, timeout_s=90):
-        observed_timeouts.append(timeout_s)
-        return await original_call(*args, timeout_s=timeout_s)
-    monkeypatch.setattr("mona.development.executors.sdk.call_in_turn", tracked_call)
-    calls = []
-    async def run_tool(binding, turn_id, arguments):
-        calls.append((binding.native_session_id, turn_id, arguments))
-        await asyncio.sleep(0.03)
-        return {"content": [{"type": "text", "text": "AUTHORIZED_RUNNER_RESULT"}], "isError": False}
+    from mona.development.executors import sdk_worker
 
-    host = SDKExecutor(profile, tool_handler=run_tool)
-    context = ProjectContext("work", root, (), (), (), "rules", "skills")
-    session = DevelopmentSession(project_id="work", executor=ExecutorId.CLAUDE)
+    prompt = _long_work_prompt()
+    expected_digest = hashlib.sha256(prompt.encode("utf-8")).digest()
+    start, managed_home, workspace, config_dir = _work_start(
+        tmp_path, monkeypatch, ExecutorId.CODEBUDDY, prompt)
+    worker = sdk_worker.Worker()
+    prompt_file = None
     try:
-        binding = await host.create_session(SessionStart(session, context, work_prompt=prompt))
-        async def collect_events():
-            collected = []
-            async for event in host.events(binding):
-                collected.append(event)
-                if event.type in {"run.completed", "run.failed", "run.unknown"}:
-                    return collected
-            return collected
-        event_task = asyncio.create_task(collect_events())
-        receipt = await host.send(binding, "work_input", "work_tool")
-        assert receipt.outcome == "accepted"
-        terminal = await asyncio.wait_for(event_task, 5)
-        assert terminal and terminal[-1].type == "run.completed"
-        assert calls and calls[0][1] == receipt.native_turn_id
-        assert calls[0][2] == {"tool": "read_file", "arguments": {"path": "manual.txt"}}
-        assert observed_timeouts == [None]
+        worker.build_options(start)
+        prompt_file = worker._work_prompt_file
+        assert prompt_file is not None
+        assert hashlib.sha256(prompt_file.read_bytes()).digest() == expected_digest
+        assert worker.options.system_prompt is None
+        args = SubprocessTransport(options=worker.options)._build_args()
+        prompt_flag = args.index("--system-prompt-file")
+        assert args[prompt_flag + 1] == str(prompt_file)
+        assert args.count("--system-prompt-file") == 1
+        assert "--system-prompt" not in args and "--append-system-prompt" not in args
+        command_chars = sum(len(arg.encode("utf-16-le")) // 2 + 1
+                            for arg in [str(worker.options.codebuddy_code_path), *args]) + 1
+        assert command_chars < 32767
+        assert prompt_file.parent == config_dir.resolve(strict=True)
+        assert prompt_file.is_relative_to(managed_home.resolve(strict=True))
+        assert not prompt_file.is_relative_to(workspace.resolve(strict=True))
     finally:
-        await host.shutdown()
+        worker._cleanup_work_prompt_file()
+    assert prompt_file is not None and not prompt_file.exists()

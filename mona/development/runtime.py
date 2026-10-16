@@ -303,6 +303,7 @@ class DevelopmentRuntime:
                 "eventCursor": events[-1]["sequence"] if events else after,
                 "watchVersion": self.updates.version, "moreEvents": len(events) == 100,
                 "live": self.live.get(session.id),
+                "backgroundCommands": self.tools[session.id].exec_sessions.describe() if session.id in self.tools else [],
                 "plan": self.store.latest_plan(session.id),
                 "browserBinding": preview.model_dump(mode="json", by_alias=True) if preview else None,
                 "nativeBinding": {"id": binding.id, "turnHistory": binding.capabilities.turn_history, "steering": binding.capabilities.steering,
@@ -313,7 +314,7 @@ class DevelopmentRuntime:
                     "source": copy.deepcopy(next((m.get("_input_source") for m in transcript.messages if m.get("id") == item.message_id), None))}
                     for r in self.store.list_runs(session.id, 20) for item in self.store.list_inputs(r.id)
                     if item.state in {InputState.PENDING, InputState.RESERVED, InputState.UNKNOWN}
-                    and not any(m.get("id") == item.message_id and m.get("_runtime_input") for m in transcript.messages)]}
+                    and not any(m.get("id") == item.message_id and (m.get("_runtime_input") or m.get("_input_delivered")) for m in transcript.messages)]}
 
     async def submit(self, session_id: str, request_id: str, content: str, *, intent: str = "follow_up",
                      expected_revision: int | None = None, doc_paths: list[str] | None = None,
@@ -348,7 +349,7 @@ class DevelopmentRuntime:
             except NotFoundError:
                 previous_input = None
             if previous_input:
-                if (previous_input.session_id != session_id or previous_input.intent != intent
+                if (previous_input.session_id != session_id or (previous_input.requested_intent or previous_input.intent) != intent
                         or previous_input.follow_up_allowed != follow_up_allowed):
                     raise ConflictError("相同请求标识不能更换会话或发送方式。")
                 if target_run_id is not None and previous_input.run_id != target_run_id:
@@ -384,7 +385,7 @@ class DevelopmentRuntime:
                                            input_intent=intent, _display_content=display_content, _input_source=input_source)
                     self.sessions.save(transcript, fsync=True)
                 queued = self.store.enqueue_input(RunInput(id=request_id, session_id=session_id,
-                    run_id=active.id, message_id=message_id, intent=intent, follow_up_allowed=follow_up_allowed))
+                    run_id=active.id, message_id=message_id, intent=intent, requested_intent=intent, follow_up_allowed=follow_up_allowed))
                 if intent == "steering" and session.executor != ExecutorId.MONA:
                     accepted = await self.native.service.steer(queued, content)
                     return {"input": accepted.model_dump(mode="json", by_alias=True), "queued": False}
@@ -636,6 +637,7 @@ class DevelopmentRuntime:
                 self.tools[session.id] = tools
             else:
                 tools.configure_exec(coding.exec)
+            tools.exec_sessions.on_change = self.updates.notify
             extensions = {}
             if not session.readonly and "plan" in coding.extensions:
                 extensions["plan"] = DevelopmentPlanTool(self.store, run.id)
@@ -749,6 +751,35 @@ class DevelopmentRuntime:
             if latest.state == InputState.RESERVED:
                 self.store.transition_input(latest.id, latest.revision, InputState.UNKNOWN)
             raise
+
+    async def guide_input(self, session_id: str, input_id: str, expected_revision: int, target_run_id: str) -> dict:
+        async with self._lock(session_id):
+            item = self.store.get_input(input_id)
+            if item.session_id != session_id:
+                raise ConflictError("消息不属于当前会话。")
+            if item.intent == "steering":
+                if item.run_id != target_run_id:
+                    raise ConflictError("引导目标已变化，原请求未重复发送。")
+                if item.state == InputState.REJECTED:
+                    raise DevelopmentError("native_steering_rejected", "本次引导未被接受，消息已保留，请核对当前任务。")
+                return {"input": item.model_dump(mode="json", by_alias=True), "queued": item.state == InputState.PENDING, "reused": True}
+            run = self.store.get_run(target_run_id)
+            if run.session_id != session_id:
+                raise ConflictError("引导目标不属于当前会话。")
+            session = self.store.get_session(session_id)
+            transcript = self.sessions.get_or_create(session.transcript_key)
+            message = next((m for m in transcript.messages if m.get("id") == item.message_id), None)
+            if message is None:
+                raise DevelopmentError("missing_queued_input", "排队消息正文缺失，原输入未删除。")
+            if run.executor != ExecutorId.MONA:
+                if run.executor.value not in self.config_loader().development.enabled_engines:
+                    raise DevelopmentError("engine_disabled", "此模型来源已停用，原消息仍保留在队列。")
+                self.native.service.check_steering(run)
+            # 与 ZCode 的准入顺序一致：保留同一输入，确认目标后原子变更投递方式。
+            guided = self.store.guide_input(session_id, input_id, expected_revision, target_run_id)
+            if run.executor != ExecutorId.MONA:
+                guided = await self.native.service.steer(guided, message["content"])
+            return {"input": guided.model_dump(mode="json", by_alias=True), "queued": guided.state == InputState.PENDING}
 
     async def cancel_input(self, session_id: str, input_id: str) -> None:
         async with self._lock(session_id):

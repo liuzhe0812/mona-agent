@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import types
 import uuid
 from contextlib import suppress
@@ -123,6 +124,8 @@ class Worker:
         self.tasks: set[asyncio.Task] = set()
         self.auth_owner: asyncio.Task | None = None
         self.auth_ready: asyncio.Future | None = None
+        self._work_prompt_file: Path | None = None
+        self._work_prompt_root: Path | None = None
 
     def write(self, value: dict) -> None:
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -130,6 +133,67 @@ class Worker:
             raise ValueError("worker_frame_too_large")
         self.output.write(text + "\n")
         self.output.flush()
+
+    def _create_work_prompt_file(self, executor: ExecutorId, prompt: str) -> Path:
+        config_variable = "CLAUDE_CONFIG_DIR" if executor == ExecutorId.CLAUDE else "CODEBUDDY_CONFIG_DIR"
+        config_value = os.environ.get(config_variable)
+        home_value = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        created: Path | None = None
+        try:
+            if not config_value or not home_value:
+                raise ValueError("missing_managed_prompt_directory")
+            managed_home = Path(home_value).resolve(strict=True)
+            config_candidate = Path(config_value).expanduser()
+            if not config_candidate.is_absolute():
+                raise ValueError("relative_managed_prompt_directory")
+            config_root = config_candidate.resolve(strict=False)
+            if config_root == managed_home or not config_root.is_relative_to(managed_home):
+                raise ValueError("managed_prompt_directory_outside_home")
+            config_root.mkdir(parents=True, exist_ok=True)
+            config_root = config_root.resolve(strict=True)
+            if (config_root == managed_home or not config_root.is_relative_to(managed_home)
+                    or not config_root.is_dir()):
+                raise ValueError("managed_prompt_directory_outside_home")
+            with tempfile.NamedTemporaryFile(mode="wb", prefix=".mona-work-prompt-", suffix=".txt",
+                                             dir=config_root, delete=False) as stream:
+                created = Path(stream.name)
+                stream.write(prompt.encode("utf-8"))
+                stream.flush()
+            path = created.resolve(strict=True)
+            if path.parent != config_root or not path.is_relative_to(config_root):
+                raise ValueError("work_prompt_file_outside_home")
+            self._work_prompt_file, self._work_prompt_root = path, config_root
+            return path
+        except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+            if created is not None:
+                try:
+                    created.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    raise ValueError("sdk_isolation_unsupported") from cleanup_error
+            raise ValueError("sdk_isolation_unsupported") from exc
+
+    def _cleanup_work_prompt_file(self) -> None:
+        path, root = self._work_prompt_file, self._work_prompt_root
+        if path is None:
+            self._work_prompt_root = None
+            return
+        try:
+            resolved = path.resolve(strict=True)
+        except FileNotFoundError:
+            self._work_prompt_file = self._work_prompt_root = None
+            return
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("sdk_isolation_unsupported") from exc
+        if root is None or resolved != path or resolved.parent != root or not resolved.is_relative_to(root):
+            raise ValueError("sdk_isolation_unsupported")
+        try:
+            resolved.unlink()
+        except FileNotFoundError:
+            self._work_prompt_file = self._work_prompt_root = None
+            return
+        except OSError as exc:
+            raise ValueError("sdk_isolation_unsupported") from exc
+        self._work_prompt_file = self._work_prompt_root = None
 
     async def ask(self, method: str, params: dict) -> Any:
         self.next_request += 1
@@ -303,6 +367,7 @@ class Worker:
             raise ValueError("invalid_worker_options")
         if work_mode and executor == ExecutorId.CLAUDE and "tools" not in fields:
             raise ValueError("sdk_isolation_unsupported")
+        work_prompt_file = self._create_work_prompt_file(executor, start["workPrompt"]) if work_mode else None
         host_tools = start.get("hostCollaboration") is True and not start["readonly"] and start.get("isSubagent") is not True
         system_prompt_append = start["context"] if not work_mode else start["workPrompt"]
         if host_tools:
@@ -334,7 +399,7 @@ class Worker:
                 raise ValueError("sdk_isolation_unsupported")
             options.update({"cli_path": start["executable"], "strict_mcp_config": True,
                 "settings": json.dumps(settings), "plugins": [],
-                "system_prompt": start["workPrompt"] if work_mode else {
+                "system_prompt": {"type": "file", "path": str(work_prompt_file)} if work_mode else {
                     "type": "preset", "preset": "claude_code", "append": system_prompt_append}})
             if "skills" in fields:
                 options["skills"] = []
@@ -348,7 +413,7 @@ class Worker:
             if "codebuddy_code_path" not in fields:
                 raise ValueError("sdk_cli_path_unsupported")
             options["codebuddy_code_path"] = start["executable"]
-            options["system_prompt"] = start["workPrompt"] if work_mode else sdk.AppendSystemPrompt(append=system_prompt_append)
+            options["system_prompt"] = None if work_mode else sdk.AppendSystemPrompt(append=system_prompt_append)
             # Official CodeBuddy supports custom session IDs; unsupported native
             # versions reject startup instead of silently using another identity.
             options["extra_args"] = {"strict-mcp-config": None, "settings": json.dumps(settings)}
@@ -364,6 +429,10 @@ class Worker:
             tool = sdk.tool(WORK_TOOL, WORK_DESCRIPTION, WorkToolCall.model_json_schema())(call_work_tool)
             options["mcp_servers"] = {WORK_SERVER: sdk.create_sdk_mcp_server(name=WORK_SERVER, version="1.0.0", tools=[tool])}
             options["allowed_tools"] = [SDK_WORK_TOOL]
+            if work_prompt_file is None:
+                raise ValueError("sdk_isolation_unsupported")
+            if executor == ExecutorId.CODEBUDDY:
+                options["extra_args"]["system-prompt-file"] = str(work_prompt_file)
             if "tools" in fields:
                 options["tools"] = []
             else:
@@ -443,6 +512,7 @@ class Worker:
             if self.client:
                 with suppress(Exception, asyncio.CancelledError):
                     await self.client.disconnect()
+            self._cleanup_work_prompt_file()
 
     async def receive(self) -> None:
         try:

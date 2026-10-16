@@ -14,7 +14,12 @@ from typing import Any
 
 from mona.agent.runner import AgentRunSpec
 from mona.agent.tools.context import PROJECT_WORKSPACE_META, RequestContext
-from mona.agent.tools.exec_session import ExecSessionManager, ListExecSessionsTool, WriteStdinTool
+from mona.agent.tools.exec_session import (
+    DEFAULT_YIELD_MS,
+    ExecSessionManager,
+    ListExecSessionsTool,
+    WriteStdinTool,
+)
 from mona.agent.tools.file_state import FileStates
 from mona.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
@@ -119,8 +124,25 @@ class _ProjectExec(ExecTool):
     sandbox_runner = None
 
     @property
+    def description(self) -> str:
+        return (
+            "Execute a command in the current project. Short commands return their output and exit code. "
+            "Commands still running after yield_time_ms (default 1000 ms) return a session_id; "
+            "use write_stdin to read output, send input, or terminate that same process. "
+            "For dev servers, check readiness and continue the task instead of waiting for the server to exit. "
+            "The command timeout still applies (default 60 seconds, max 600). "
+            "Python/Node commands use the project's .venv and node_modules. "
+            "Prefer file and search tools for inspection and file changes."
+        )
+
+    @property
     def parameters(self):
         schema = copy.deepcopy(super().parameters)
+        schema["properties"]["yield_time_ms"].update({
+            "default": DEFAULT_YIELD_MS,
+            "description": "Milliseconds to wait before returning output (default 1000, max 30000). "
+                "A still-running command returns a session_id for write_stdin, even when this field is omitted.",
+        })
         schema["properties"].update({
             "sandbox_permissions": {"type": "string", "enum": ["danger-full-access"],
                 "description": "After a sandbox denial, inspect prior effects and request approval to retry this exact "
@@ -141,6 +163,9 @@ class _ProjectExec(ExecTool):
         return self.sandbox_runner.diagnostics(exit_code, stderr)
 
     async def execute(self, **kwargs: Any) -> str:
+        if kwargs.get("yield_time_ms") is None:
+            kwargs["yield_time_ms"] = DEFAULT_YIELD_MS
+
         async def invoke() -> str:
             token = set_current_workspace(Path(self.working_dir))
             self.set_context(RequestContext(channel="development", chat_id=self.owner_session_key,
@@ -178,7 +203,7 @@ class CodingTools:
         self.session_key = session_key
         self.readonly = readonly
         self.file_states = FileStates()
-        self.exec_sessions = _ProjectExecSessions()
+        self.exec_sessions = _ProjectExecSessions(observe_output=True)
         self.registry = _CodingRegistry()
         file_args = {"workspace": self.root, "allowed_dir": self.root, "file_states": self.file_states}
         self.registry.register(_ProjectRead(**file_args))

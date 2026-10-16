@@ -314,7 +314,11 @@ export function ModelEngineProgramDialog({ open, onOpenChange, executor, onChang
     setStatus("");
     setFailure(null);
     try {
-      const result = await developmentApi.prepareExecutor(executor, resource.packRef, repair);
+      const available = await refreshResources(epoch);
+      if (!current()) return;
+      const latest = available.components.find((item) => item.executor === executor);
+      if (!latest?.packRef || latest.catalogError) throw new Error("engine_release_unavailable");
+      const result = await developmentApi.prepareExecutor(executor, latest.packRef, repair);
       if (!current()) return;
       if (result.job) {
         setJobs((currentJobs) => ({ ...currentJobs, [key]: result.job! }));

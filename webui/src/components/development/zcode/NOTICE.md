@@ -26,6 +26,20 @@ attribution and the Material Icon Theme MIT notice are retained with their copie
 
 The subdirectories retain their detailed source manifests and adaptation notes.
 
+## Pending guide queue
+
+These UI files are directly adapted from the ZCode UI package, distributed under
+Apache-2.0. The project-level `LICENSE` is retained above.
+
+- `packages/ui/src/v4/pendingGuideProjection.ts` — SHA-256
+  `93d206baa6636f0a02c9a645c026e5a201c7457036c4129889bc8a638300ff15`.
+  Only host type imports are redirected; admitted-delivery projection behavior
+  is unchanged.
+- `packages/ui/src/v4/ConversationPendingGuideList.tsx` — SHA-256
+  `1eee028e6bd1c32b9fc66dbd7e0e135b0a5bc85d83a97c2598773fbe67c186da`.
+  Host queue/render types and intl imports are adapted, and Mona's
+  `renderUserInput` callback replaces ZCode's `ConversationTurnRow` component.
+
 ## Host boundary
 
 Mona maps its stable run/message/item IDs and tool names into the source row

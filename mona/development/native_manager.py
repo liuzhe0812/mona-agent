@@ -120,7 +120,7 @@ class NativeExecutorManager:
             current = known if known and supported else diagnostic.model_dump(mode="json", by_alias=True)
             enabled = probe.executor.value in config.enabled_engines
             result.append({"id": probe.executor.value, "name": _NAMES[probe.executor], "available": supported and enabled,
-                "programAvailable": supported, "enabled": enabled,
+                "programAvailable": probe.state == "detected", "enabled": enabled,
                 "reason": current["reason"] if enabled else "此模型来源已停用，账号和模型配置仍保留。",
                 "nextAction": current.get("nextAction", "") if enabled else "在模型设置中启用此来源。",
                 "detection": probe.state, "executable": probe.executable, "probe": current,

@@ -21,6 +21,37 @@ def _nonnegative_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+_CODEX_ERROR_CODES = {
+    "serverOverloaded": "server_overloaded",
+    "server_overloaded": "server_overloaded",
+    "usageLimitExceeded": "usage_limit_exceeded",
+    "usage_limit_exceeded": "usage_limit_exceeded",
+    "unauthorized": "authentication_required",
+    "contextWindowExceeded": "context_window_exceeded",
+    "context_window_exceeded": "context_window_exceeded",
+}
+
+
+def _codex_error_code(error: Any) -> str:
+    if not isinstance(error, dict):
+        return "native_turn_failed"
+    fields = [name for name in ("codexErrorInfo", "codex_error_info") if name in error]
+    if len(fields) != 1:
+        return "native_turn_failed"
+    info = error[fields[0]]
+    if isinstance(info, dict):
+        if len(info) != 1:
+            return "native_turn_failed"
+        tag, details = next(iter(info.items()))
+        if details is not None and not isinstance(details, dict):
+            return "native_turn_failed"
+    elif isinstance(info, str):
+        tag = info
+    else:
+        return "native_turn_failed"
+    return _CODEX_ERROR_CODES.get(tag, "native_turn_failed") if isinstance(tag, str) else "native_turn_failed"
+
+
 def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bool = False,
                           work_tools: bool = False) -> NativeEvent | None:
     turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
@@ -34,8 +65,11 @@ def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bo
         kind = "run.started" if method.endswith("started") else {
             "completed": "run.completed", "interrupted": "run.interrupted", "failed": "run.failed",
         }.get(status, "run.unknown")
+        error = turn.get("error")
+        error_code = (_codex_error_code(error) if error is not None else
+                      "native_turn_failed" if method == "turn/completed" and status == "failed" else None)
         return NativeEvent(native_turn_id=turn_id, type=kind,
-                           payload={"status": status, "errorCode": "native_turn_failed" if turn.get("error") else None})
+                           payload={"status": status, "errorCode": error_code})
     if method == "item/agentMessage/delta":
         return NativeEvent(native_turn_id=turn_id, type="agent.message.delta",
                            payload={"itemId": item_id, "delta": params.get("delta", "")})

@@ -263,6 +263,7 @@ class RunInput(Contract):
     run_id: Identifier
     message_id: Identifier
     intent: Literal["steering", "follow_up"] = "follow_up"
+    requested_intent: Literal["steering", "follow_up"] | None = None
     follow_up_allowed: bool = True
     state: InputState = InputState.PENDING
     revision: int = Field(default=0, ge=0)

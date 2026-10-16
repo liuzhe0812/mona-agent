@@ -1,3 +1,5 @@
+import pytest
+
 from mona.development.executors.codex_events import normalize_codex_event, thread_id
 
 
@@ -72,6 +74,84 @@ def test_unknown_terminal_status_not_reported_completed_and_bad_owner_ignored():
     event = normalize_codex_event("turn/completed", {"threadId": "t", "turn": {"id": "r", "status": "newStatus"}})
     assert event.type == "run.unknown"
     assert thread_id("thread/started", {"thread": "invalid"}) is None
+
+
+@pytest.mark.parametrize("message", [
+    "Selected model is at capacity. Please try a different model.",
+    "Provider wording changed; the structured error remains authoritative.",
+])
+@pytest.mark.parametrize(("error_info", "expected"), [
+    ({"codexErrorInfo": "serverOverloaded"}, "server_overloaded"),
+    ({"codexErrorInfo": "usageLimitExceeded"}, "usage_limit_exceeded"),
+    ({"codexErrorInfo": "unauthorized"}, "authentication_required"),
+    ({"codexErrorInfo": "contextWindowExceeded"}, "context_window_exceeded"),
+    ({"codex_error_info": "server_overloaded"}, "server_overloaded"),
+    ({"codex_error_info": "usage_limit_exceeded"}, "usage_limit_exceeded"),
+    ({"codex_error_info": "unauthorized"}, "authentication_required"),
+    ({"codex_error_info": "context_window_exceeded"}, "context_window_exceeded"),
+    ({"codexErrorInfo": {"serverOverloaded": {}}}, "server_overloaded"),
+    ({"codexErrorInfo": {"usage_limit_exceeded": {}}}, "usage_limit_exceeded"),
+    ({"codex_error_info": {"unauthorized": {}}}, "authentication_required"),
+    ({"codex_error_info": {"contextWindowExceeded": {}}}, "context_window_exceeded"),
+])
+def test_failed_turn_maps_only_explicit_codex_error_tags_without_exposing_details(error_info, expected, message):
+    event = normalize_codex_event("turn/completed", {"threadId": "t", "turn": {
+        "id": "r", "status": "failed", "error": {
+            **error_info, "message": message, "additionalDetails": "PRIVATE_ADDITIONAL_DETAILS",
+        },
+    }})
+
+    assert event.type == "run.failed"
+    assert event.payload == {"status": "failed", "errorCode": expected}
+    assert message not in str(event)
+    assert "PRIVATE_ADDITIONAL_DETAILS" not in str(event)
+
+
+@pytest.mark.parametrize("error", [
+    {"codexErrorInfo": "futureErrorVariant"},
+    {"codex_error_info": "future_error_variant"},
+    {"codexErrorInfo": {"serverOverloaded": {}, "unauthorized": {}}},
+    {"codex_error_info": {"future_error_variant": {}}},
+    {"codexErrorInfo": {"serverOverloaded": "malformed"}},
+    {"codexErrorInfo": ["serverOverloaded"]},
+    {"codexErrorInfo": "serverOverloaded", "codex_error_info": "unauthorized"},
+    "malformed PRIVATE_ERROR_MESSAGE payload",
+])
+def test_unknown_or_malformed_failed_turn_error_is_generic_and_private(error):
+    if isinstance(error, dict):
+        error = {**error, "message": "PRIVATE_ERROR_MESSAGE", "additionalDetails": "PRIVATE_ADDITIONAL_DETAILS"}
+    event = normalize_codex_event("turn/completed", {"threadId": "t", "turn": {
+        "id": "r", "status": "failed", "error": error,
+    }})
+
+    assert event.type == "run.failed"
+    assert event.payload == {"status": "failed", "errorCode": "native_turn_failed"}
+    assert "PRIVATE_ERROR_MESSAGE" not in str(event)
+    assert "PRIVATE_ADDITIONAL_DETAILS" not in str(event)
+    assert "futureErrorVariant" not in str(event)
+    assert "future_error_variant" not in str(event)
+
+
+def test_failed_turn_without_error_details_uses_generic_failure_code():
+    event = normalize_codex_event("turn/completed", {"threadId": "t", "turn": {
+        "id": "r", "status": "failed",
+    }})
+
+    assert event.type == "run.failed"
+    assert event.payload == {"status": "failed", "errorCode": "native_turn_failed"}
+
+
+@pytest.mark.parametrize("will_retry", [True, False])
+def test_independent_codex_error_notification_waits_for_terminal_turn(will_retry):
+    notification = normalize_codex_event("error", {"threadId": "t", "turnId": "r", "willRetry": will_retry,
+        "error": {"message": "Selected model is at capacity.", "codexErrorInfo": "serverOverloaded"}})
+    assert notification is None
+
+    completed = normalize_codex_event("turn/completed", {"threadId": "t", "turn": {
+        "id": "r", "status": "failed", "error": {"codexErrorInfo": "serverOverloaded"},
+    }})
+    assert completed.type == "run.failed"
+    assert completed.payload["errorCode"] == "server_overloaded"
 
 
 def test_codex_public_summary_delta_keeps_summary_part_identity():

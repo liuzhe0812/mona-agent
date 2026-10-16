@@ -1,15 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 import i18n from "@/i18n";
 import type { MonaClient } from "@/lib/mona-client";
 import { ClientProvider } from "@/providers/ClientProvider";
 import type { DevSession, DevSnapshot } from "@/lib/development-api";
 
-const api = vi.hoisted(() => ({ send: vi.fn(), interrupt: vi.fn(), cancelInput: vi.fn(), decide: vi.fn() }));
+const api = vi.hoisted(() => ({ send: vi.fn(), interrupt: vi.fn(), cancelInput: vi.fn(), guideInput: vi.fn(), decide: vi.fn() }));
 vi.mock("@/lib/development-api", async (original) => ({ ...await original<typeof import("@/lib/development-api")>(), developmentApi: api }));
 vi.mock("./DevelopmentTranscript", () => ({ DevelopmentTranscript: () => null }));
-vi.mock("./DevelopmentHeader", () => ({ DevelopmentHeader: ({ statusContent }: { statusContent: ReactNode }) => <header>{statusContent}</header> }));
+vi.mock("./DevelopmentHeader", () => ({ DevelopmentHeader: ({ hasStatus, onOpenStatus }: { hasStatus: boolean; onOpenStatus: () => void }) => <header>{hasStatus && <button onClick={onOpenStatus}>待处理事项</button>}</header> }));
 vi.mock("./useDevelopmentSession", () => ({
   useDevelopmentSession: (id: string) => useDevelopmentStore((state) => state.snapshots[id]),
   refreshDevelopmentSession: vi.fn(),
@@ -48,6 +47,15 @@ beforeEach(() => {
   vi.clearAllMocks(); localStorage.clear();
   useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
   api.send.mockResolvedValue({ queued: false }); api.interrupt.mockResolvedValue({}); api.cancelInput.mockResolvedValue({});
+  api.guideInput.mockImplementation(async (sessionId, inputId, revision, targetRunId) => {
+    const state = useDevelopmentStore.getState();
+    const current = state.snapshots[sessionId];
+    const queued = current?.pendingInputs.find((item) => item.id === inputId);
+    if (!current || !queued) throw new Error("missing queued input");
+    const input = { ...queued, runId: targetRunId, intent: "steering", revision: revision + 1 };
+    state.setSnapshot(sessionId, { ...current, pendingInputs: current.pendingInputs.map((item) => item.id === inputId ? input : item) });
+    return { input, queued: false };
+  });
 });
 afterEach(cleanup);
 
@@ -89,12 +97,30 @@ describe("development uses the shared composer", () => {
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(session.id, expect.any(String), "引用 src/app.ts"));
     await waitFor(() => expect(input).toHaveValue(""));
   });
-  it("queues while running and uses the same stop-button interaction", async () => {
-    mount({ ...snapshot(), runs: [run] });
+  it("queues while running and guides only after the queued action is selected", async () => {
+    const value = { ...snapshot(), runs: [run] };
+    api.send.mockImplementationOnce(async (_sessionId, requestId, content) => {
+      const input = { id: requestId, messageId: "queued_message", runId: run.id, state: "pending", intent: "follow_up", revision: 0 };
+      useDevelopmentStore.getState().setSnapshot(session.id, { ...value, pendingInputs: [input], messageCount: 1,
+        messages: [{ id: input.messageId, role: "user", content, toolCalls: [], queued: true, truncated: false }] });
+      return { input, queued: true };
+    });
+    mount(value);
     const input = screen.getByRole("textbox", { name: "开发任务输入" });
     fireEvent.change(input, { target: { value: "下一项工作" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(session.id, expect.any(String), "下一项工作", "follow_up"));
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(screen.getByRole("listitem")).toHaveTextContent("下一项工作");
+    expect(api.send).toHaveBeenCalledOnce();
+    const queued = useDevelopmentStore.getState().snapshots[session.id].pendingInputs[0];
+    fireEvent.click(screen.getByRole("button", { name: /引导到当前任务|Append to current task/ }));
+    await waitFor(() => expect(api.guideInput).toHaveBeenCalledWith(session.id, queued.id, queued.revision, run.id));
+    await waitFor(() => expect(screen.queryByRole("listitem")).toBeNull());
+    const guided = useDevelopmentStore.getState().snapshots[session.id].pendingInputs[0];
+    expect(guided).toMatchObject({ id: queued.id, messageId: queued.messageId, runId: run.id, intent: "steering" });
+    expect(api.send).toHaveBeenCalledOnce();
+    expect(api.cancelInput).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "运行中消息处理方式" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "中断当前轮次" }));
     await waitFor(() => expect(api.interrupt).toHaveBeenCalledWith(session.id, run.id));
@@ -166,32 +192,34 @@ describe("development uses the shared composer", () => {
         source: { content: "检查要求", docPaths: ["uploads/spec.txt"], documentNames: ["需求.txt"] } }] };
     mount(value);
     fireEvent.click(screen.getByRole("button", { name: /引导到当前任务|Append to current task/ }));
-    await waitFor(() => expect(api.send).toHaveBeenCalledWith(session.id, expect.any(String), "检查要求", "steering",
-      { docPaths: ["uploads/spec.txt"], documentNames: ["需求.txt"] }, run.id));
-    expect(api.cancelInput).toHaveBeenCalledOnce();
-    expect(api.cancelInput.mock.invocationCallOrder[0]).toBeLessThan(api.send.mock.invocationCallOrder[0]);
-    expect(useDevelopmentStore.getState().snapshots[session.id].pendingInputs).toEqual([]);
+    await waitFor(() => expect(api.guideInput).toHaveBeenCalledWith(session.id, "queued_input", 0, run.id));
+    const guided = useDevelopmentStore.getState().snapshots[session.id].pendingInputs[0];
+    expect(guided).toMatchObject({ id: "queued_input", messageId: "queued_message", runId: run.id, intent: "steering",
+      source: { content: "检查要求", docPaths: ["uploads/spec.txt"], documentNames: ["需求.txt"] } });
+    expect(api.guideInput).toHaveBeenCalledOnce();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.cancelInput).not.toHaveBeenCalled();
   });
-  it("keeps an unconfirmed native guide request across remount and checks the same identity", async () => {
-    api.send.mockResolvedValue({ input: { state: "unknown" }, queued: false });
+  it("keeps an unknown native guide result on the original queued input without retrying", async () => {
+    api.guideInput.mockResolvedValueOnce({ input: { id: "queued_input", state: "unknown" }, queued: false });
     const value: DevSnapshot = { ...snapshot(), session: { ...session, executor: "codex" }, runs: [{ ...run, executor: "codex" }],
       nativeBinding: { id: "binding", steering: true, turnHistory: true, replacesBindingId: null, replacementReason: null },
       messages: [{ id: "queued_message", role: "user", content: "不要改变范围", toolCalls: [], queued: true, truncated: false }],
       pendingInputs: [{ id: "queued_input", messageId: "queued_message", runId: run.id, state: "pending", revision: 0 }] };
     const first = mount(value);
     fireEvent.click(screen.getByRole("button", { name: /引导到当前任务|Append to current task/ }));
-    await screen.findByText("未确认引导消息是否送达，请核对原任务。原输入已保留。");
-    const request = useDevelopmentStore.getState().sends[session.id];
-    expect(request).toMatchObject({ uncertain: true, intent: "steering", targetRunId: run.id });
+    await screen.findByText("引导结果待核对，原消息已保留，不会重复发送。");
+    expect(api.guideInput).toHaveBeenCalledWith(session.id, "queued_input", 0, run.id);
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.cancelInput).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    expect(screen.getByRole("textbox", { name: "开发任务输入" })).toHaveValue("不要改变范围");
+    expect(screen.getByRole("listitem")).toHaveTextContent("不要改变范围");
     first.unmount();
-    mount({ ...value, pendingInputs: [] });
-    expect(api.send).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "核对发送" }));
-    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(2));
-    expect(api.send.mock.calls[1][1]).toBe(request.id);
-    expect(api.send.mock.calls[1][5]).toBe(run.id);
+    mount(value);
+    expect(api.guideInput).toHaveBeenCalledOnce();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.cancelInput).not.toHaveBeenCalled();
+    expect(screen.getByRole("listitem")).toHaveTextContent("不要改变范围");
   });
   it("places sandbox approval at the input area and preserves the composer draft until the request is resolved", async () => {
     useDevelopmentStore.getState().setDraft(session.id, "稍后继续");
@@ -218,6 +246,7 @@ describe("development uses the shared composer", () => {
     expect(input).toHaveValue("保留草稿");
     const request = api.send.mock.calls[0][1];
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    fireEvent.click(screen.getByRole("button", { name: "待处理事项" }));
     fireEvent.click(await screen.findByRole("button", { name: "核对发送" }));
     await waitFor(() => expect(api.send).toHaveBeenCalledTimes(2));
     expect(api.send.mock.calls[1][1]).toBe(request);

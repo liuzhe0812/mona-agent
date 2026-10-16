@@ -8,7 +8,7 @@ import type { StreamPreviewSource } from "./DevelopmentStreamContext";
 
 export type WorkTab = "review" | "terminal" | "browser" | "workspace" | "sidechat" | "subagents" | "agent";
 export interface ProjectView { sessionId: string | null }
-export interface SideState { expanded: boolean; tab: WorkTab | "overview"; maximized: boolean; openTabs: WorkTab[]; overviewOpen?: boolean; agentSessionId?: string; approvalDecisionId?: string; terminalMode?: "user" | "agent"; deviceSize?: { width: number; height: number } }
+export interface SideState { expanded: boolean; tab: WorkTab | "overview"; maximized: boolean; openTabs: WorkTab[]; overviewOpen?: boolean; agentSessionId?: string; approvalDecisionId?: string; terminalMode?: "user" | "agent"; backgroundCommandId?: string; deviceSize?: { width: number; height: number } }
 export interface FileBuffer { file: FileDocument; draft: string }
 export interface TerminalState { id?: string; status: "opening" | "ready" | "closing" | "exited" | "error"; error?: string }
 interface PendingSend { id: string; content: string; uncertain: boolean; intent?: "steering" | "follow_up"; targetRunId?: string; docPaths?: string[]; documentNames?: string[] }

@@ -1,17 +1,14 @@
+import { getFileIconAssetSource as buildIconSrc, getFileIconFallback as resolveFallbackFileIconSrc } from "@/lib/file-icons";
 import { useEffect, useState, type ReactElement } from "react";
 import { getPathLeaf, isAbsoluteFilePath } from "./path";
 import {
-  DEFAULT_FILE_ICON_NAME,
   normalizePath,
   trimTrailingSeparator,
   resolveIconName,
 } from "./fileDisplayHelpers";
 
-export const INLINE_FALLBACK_FILE_ICON_SRC =
-  "data:image/svg+xml;utf8," +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M4.5 1.5h4.586L12.5 4.914V13a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 3.5 13V3A1.5 1.5 0 0 1 5 1.5Z" stroke="%2394A3B8" stroke-width="1.2" stroke-linejoin="round"/><path d="M9 1.75V5h3.25" stroke="%2394A3B8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-  );
+export { INLINE_FALLBACK_FILE_ICON_SRC, FOLDER_FILE_ICON_SRC, DOCUMENT_FILE_ICON_SRC } from "@/lib/file-icons";
+
 let defaultFileDisplayBasePath: string | null = null;
 
 export interface FileDisplayDescriptor {
@@ -35,39 +32,6 @@ export interface FileDisplayOptions {
 
 export function setDefaultFileDisplayBasePath(basePath: string | null) {
   defaultFileDisplayBasePath = basePath;
-}
-
-function buildIconSrc(iconName: string): string {
-  return (
-    materialIconUrls[`./assets/material-icons/${iconName}.svg`] ??
-    materialIconUrls[`./assets/material-icons/${DEFAULT_FILE_ICON_NAME}.svg`] ??
-    INLINE_FALLBACK_FILE_ICON_SRC
-  );
-}
-
-const materialIconUrls = import.meta.glob("./assets/material-icons/*.svg", {
-  eager: true,
-  query: "?url",
-  import: "default",
-}) as Record<string, string>;
-
-export const FOLDER_FILE_ICON_SRC = buildIconSrc("folder");
-export const DOCUMENT_FILE_ICON_SRC = buildIconSrc(DEFAULT_FILE_ICON_NAME);
-
-function resolveFallbackFileIconSrc(currentSrc: string): string | null {
-  const defaultIconSrc = DOCUMENT_FILE_ICON_SRC;
-  if (currentSrc === INLINE_FALLBACK_FILE_ICON_SRC) {
-    return null;
-  }
-
-  if (currentSrc === defaultIconSrc || currentSrc.endsWith("/document.svg")) {
-    // 之前图标缺失最多只会回退到 document.svg。
-    // 如果默认素材本身也不存在，界面上仍会出现破图。这里补第二层兜底，
-    // 退回内置 data URL 图标，保证不同运行环境都至少有稳定占位。
-    return INLINE_FALLBACK_FILE_ICON_SRC;
-  }
-
-  return defaultIconSrc;
 }
 
 function stripBasePath(path: string, basePath?: string): string {
@@ -141,8 +105,8 @@ export function createFileDisplayDom(
     const icon = document.createElement("img");
     icon.src = descriptor.fileIconSrc;
     icon.alt = "";
-    icon.width = options.iconSize ?? 14;
-    icon.height = options.iconSize ?? 14;
+    icon.width = options.iconSize ?? 16;
+    icon.height = options.iconSize ?? 16;
     icon.className = "shrink-0";
     icon.setAttribute("aria-hidden", "true");
     icon.addEventListener("error", () => {

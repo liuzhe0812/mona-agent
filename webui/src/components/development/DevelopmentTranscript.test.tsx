@@ -18,6 +18,20 @@ const run: DevRun = { id: "run_a", sessionId: "dev_a", executor: "mona", status:
 const event = (id: string, type: string, payload: Record<string, unknown>, runId = "run_a"): DevEvent => ({ id, sequence: Number(id.replace(/\D/g, "")) || 1, type, runId, payload });
 
 describe("development transcript", () => {
+  it("keeps queued inputs out of the transcript until they are delivered", () => {
+    const initial = message("request", { role: "user", content: "执行当前任务" });
+    const queued = message("queued", { role: "user", content: "怎么卡住了", queued: true, runId: undefined });
+    const view = render(<DevelopmentTranscript messages={[initial, queued]} events={[]} runs={[run]} sessionId="dev_a" />);
+    expect(screen.getByText("执行当前任务")).toBeVisible();
+    expect(screen.queryByText("怎么卡住了")).toBeNull();
+    expect(screen.queryByText("后续消息")).toBeNull();
+
+    view.rerender(<DevelopmentTranscript messages={[initial, { ...queued, id: "guided", queued: false, sourceKind: "steering", runId: run.id }]}
+      events={[]} runs={[run]} sessionId="dev_a" />);
+    expect(screen.getAllByText("怎么卡住了")).toHaveLength(1);
+    expect(screen.getByText("怎么卡住了")).toBeVisible();
+    expect(screen.queryByText("后续消息")).toBeNull();
+  });
   it("shows an expired confirmation as a status without empty parameters or internal JSON", () => {
     const activity = developmentActivity([event("e_expired", "decision.expired", { decisionId: "decision_expired" })], run.id)[0];
     const rows: WorkRow[] = [{ rowId: "expired", kind: "toolCall", activity }];

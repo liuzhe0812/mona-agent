@@ -101,10 +101,12 @@ class ProjectEnvironmentManager:
         *,
         runtime_installer: Any | None = None,
         runner: Callable[..., Awaitable[tuple[int, str, str]]] | None = None,
+        timeout_seconds: float = 60,
     ) -> None:
         self.runtime_root = runtime_root.resolve()
         self.store = RuntimeComponentStore(self.runtime_root)
         self.runtime_installer = runtime_installer
+        self.timeout_seconds = timeout_seconds
         self.runner = runner or self._run
 
     @staticmethod
@@ -186,8 +188,11 @@ class ProjectEnvironmentManager:
         lock_root = self.runtime_root / "project-locks"
         lock_root.mkdir(parents=True, exist_ok=True)
         key = hashlib.sha256(str(project_root).encode()).hexdigest()[:24]
-        lock = FileLock(str(lock_root / f"{key}.lock"), timeout=600)
-        await _acquire_file_lock(lock, 600)
+        lock = FileLock(str(lock_root / f"{key}.lock"), timeout=self.timeout_seconds)
+        try:
+            await _acquire_file_lock(lock, self.timeout_seconds)
+        except Timeout:
+            raise ProjectRuntimeError("等待项目 Python 环境准备超时，请核对正在运行的任务。") from None
         try:
             python = destination / python_relative
             if python.is_file():
@@ -196,7 +201,7 @@ class ProjectEnvironmentManager:
             try:
                 base_python = self._entrypoint("python-base", "python")
                 code, stdout, stderr = await self.runner(
-                    [str(base_python), "-m", "venv", str(staging)],
+                    [str(base_python), "-I", "-m", "venv", str(staging)],
                     cwd=project_root,
                 )
                 if code != 0:
@@ -207,8 +212,9 @@ class ProjectEnvironmentManager:
                 if not (staging / python_relative).is_file():
                     raise ProjectRuntimeError("project Python environment is incomplete")
                 os.replace(staging, destination)
-            except Exception:
-                shutil.rmtree(staging, ignore_errors=True)
+            except (Exception, asyncio.CancelledError):
+                if staging.exists() and staging.resolve().is_relative_to(project_root.resolve()):
+                    shutil.rmtree(staging)
                 raise
         finally:
             lock.release()
@@ -292,19 +298,31 @@ class ProjectEnvironmentManager:
                 f"project requires Node {expected}, but Mona currently provides {active_version}"
             )
 
-    @staticmethod
-    async def _run(command: list[str], *, cwd: Path) -> tuple[int, str, str]:
+    async def _run(self, command: list[str], *, cwd: Path) -> tuple[int, str, str]:
+        from mona.agent.tools.shell import kill_process_tree
+
         kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = 0x08000000
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            **kwargs,
-        )
-        stdout, stderr = await process.communicate()
+        starting = asyncio.create_task(asyncio.create_subprocess_exec(
+            *command, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=sys.platform != "win32", **kwargs,
+        ))
+        try:
+            process = await asyncio.shield(starting)
+        except asyncio.CancelledError:
+            await kill_process_tree(await starting)
+            raise
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), self.timeout_seconds)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            await kill_process_tree(process)
+            if isinstance(exc, asyncio.TimeoutError):
+                raise ProjectRuntimeError(
+                    f"准备项目 Python 环境超过 {self.timeout_seconds:g} 秒，已停止准备进程。"
+                ) from None
+            raise
         return (
             process.returncode or 0,
             stdout.decode("utf-8", errors="replace"),

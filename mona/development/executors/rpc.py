@@ -41,6 +41,7 @@ class RemoteRpcError(RpcError):
         # Native error text/data may contain prompts, paths or credentials.
         super().__init__("native_request_rejected", f"原生执行者拒绝请求（协议错误 {rpc_code}）。")
         self.rpc_code = rpc_code
+        self.rpc_method: str | None = None
 
 
 def _id(value: Any) -> bool:
@@ -166,6 +167,9 @@ class JsonRpcProcess:
 
         try:
             return await asyncio.wait_for(exchange(), timeout=budget)
+        except RemoteRpcError as exc:
+            exc.rpc_method = method
+            raise
         except asyncio.TimeoutError as exc:
             raise RpcError("native_request_timeout", "等待原生回执超时；已发送的请求结果未知，不应自动重跑。",
                            outcome_unknown=written) from exc

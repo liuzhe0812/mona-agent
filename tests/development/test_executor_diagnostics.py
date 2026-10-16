@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from mona.config.schema import Config, DevelopmentConfig
 from mona.development.contracts import ExecutorId
 from mona.development.executors import sdk_policy
 from mona.development.executors.diagnostics import failed_probe, native_version
@@ -84,6 +85,50 @@ async def test_probe_http_returns_dependency_problem_without_starting_agent(tmp_
         assert data["stage"] == "dependency" and data["executable"] == sys.executable
         assert data["source"] == "configured" and "private diagnostic" not in str(data)
         assert not runtime.native.hosts and not runtime.tasks
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sdk_error", "expected_available"), [(None, True), ("sdk_not_installed", False)])
+async def test_managed_codebuddy_program_availability_is_independent_of_sdk_support(
+    tmp_path, monkeypatch, sdk_error, expected_available
+):
+    from test_workbench_api import setup_client
+
+    from mona.development.executors.base import ExecutorProbe
+
+    config = Config(development=DevelopmentConfig(enabled_engines=["codebuddy"]))
+    client, runtime, _ = await setup_client(tmp_path, monkeypatch, config_loader=lambda: config)
+    executable = tmp_path / "runtimes" / "components" / "codebuddy-cli" / "versions" / "0.0.0" / "codebuddy.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"synthetic managed CodeBuddy; never executed")
+
+    def discover(_config):
+        return [ExecutorProbe(executor=ExecutorId.CODEBUDDY, state="detected", executable=str(executable),
+                              source="managed_runtime")]
+
+    def version(_executor):
+        if sdk_error:
+            raise RpcError(sdk_error, "private SDK diagnostic")
+        return "0.3.264"
+
+    monkeypatch.setattr("mona.development.native_manager.discover_executors", discover)
+    monkeypatch.setattr("mona.development.native_manager.sdk_version", version)
+    try:
+        description = next(item for item in runtime.native.describe() if item["id"] == "codebuddy")
+        assert description["programAvailable"] is True
+        assert description["available"] is expected_available
+        assert description["enabled"] is True
+        assert description["detection"] == "detected"
+        assert description["executable"] == str(executable)
+        assert description["probe"]["source"] == "managed_runtime"
+        if sdk_error:
+            assert description["probe"]["errorCode"] == sdk_error
+            assert description["probe"]["stage"] == "dependency"
+            assert "private SDK diagnostic" not in str(description)
+        else:
+            assert description["probe"]["sdkVersion"] == "0.3.264"
     finally:
         await client.close()
 

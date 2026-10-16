@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from mona.agent.tools.base import Tool, tool_parameters
@@ -61,12 +62,22 @@ class _ExecSession:
         timeout: int,
         owner_session_key: str | None,
         diagnostics: Callable[[int | None, str], str] | None = None,
+        observe_output: bool = False,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.session_id = session_id
         self.process = process
         self.command = command
         self.cwd = cwd
         self.started_at = time.monotonic()
+        self.started_at_iso = datetime.now(timezone.utc).isoformat()
+        self.finished_at: float | None = None
+        self.background = False
+        self._observe_output = observe_output
+        self._on_change = on_change
+        self._output_preview = ""
+        self._output_truncated = False
+        self._terminated = False
         self.deadline = time.monotonic() + timeout
         self.owner_session_key = owner_session_key
         self._diagnostics = diagnostics
@@ -74,9 +85,32 @@ class _ExecSession:
         self.last_access = time.monotonic()
         self._chunks: list[str] = []
         self._lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
         self._timed_out = False
         self._stdout_task = asyncio.create_task(self._read_stream(process.stdout, ""))
         self._stderr_task = asyncio.create_task(self._read_stream(process.stderr, "STDERR:\n"))
+        if observe_output:
+            self._exit_task = asyncio.create_task(self._watch_exit())
+
+    def _changed(self) -> None:
+        if self.background and self._on_change:
+            self._on_change()
+
+    async def _watch_exit(self) -> None:
+        await self.process.wait()
+        self.finished_at = time.monotonic()
+        self._changed()
+
+    def describe(self) -> dict[str, Any]:
+        status = "running"
+        if self.process.returncode is not None:
+            status = "timed_out" if self._timed_out else "terminated" if self._terminated else "exited"
+        return {
+            "id": self.session_id, "command": self.command, "cwd": self.cwd,
+            "startedAt": self.started_at_iso,
+            "elapsedSeconds": max(0.0, (self.finished_at or time.monotonic()) - self.started_at),
+            "status": status, "exitCode": self.process.returncode,
+        }
 
     async def _read_stream(
         self,
@@ -96,8 +130,13 @@ class _ExecSession:
                 first = False
             async with self._lock:
                 self._chunks.append(text)
+                if self._observe_output:
+                    combined = self._output_preview + text
+                    self._output_truncated |= len(combined) > MAX_OUTPUT_CHARS
+                    self._output_preview = combined[-MAX_OUTPUT_CHARS:]
                 if prefix and self._diagnostics:
                     self._stderr_tail = (self._stderr_tail + text)[-4096:]
+            self._changed()
 
     async def write(self, chars: str) -> str | None:
         if self.process.returncode is not None:
@@ -131,7 +170,10 @@ class _ExecSession:
     ) -> _SessionPoll:
         self.last_access = time.monotonic()
         if yield_time_ms > 0 and self.process.returncode is None:
-            await asyncio.sleep(min(yield_time_ms, MAX_YIELD_MS) / 1000)
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    self.process.wait(), timeout=min(yield_time_ms, MAX_YIELD_MS) / 1000,
+                )
 
         if self.process.returncode is None and time.monotonic() >= self.deadline:
             self._timed_out = True
@@ -149,7 +191,7 @@ class _ExecSession:
             self._chunks.clear()
 
         output, truncated = _truncate_output(output, max_output_chars)
-        if self.process.returncode is not None and not (terminated or self._timed_out) and self._diagnostics:
+        if self.process.returncode is not None and not (terminated or self._terminated or self._timed_out) and self._diagnostics:
             diagnostics = self._diagnostics(self.process.returncode, self._stderr_tail)
             if diagnostics:
                 output = f"{output}\n{diagnostics}" if output else diagnostics
@@ -159,7 +201,7 @@ class _ExecSession:
             exit_code=self.process.returncode,
             elapsed_s=max(0.0, time.monotonic() - self.started_at),
             timed_out=self._timed_out,
-            terminated=terminated,
+            terminated=terminated or self._terminated,
             stdin_closed=stdin_closed,
             truncated_chars=truncated,
         )
@@ -167,15 +209,63 @@ class _ExecSession:
     async def kill(self) -> None:
         from mona.agent.tools.shell import kill_process_tree
 
-        await kill_process_tree(self.process)
+        async with self._stop_lock:
+            if self.process.returncode is None:
+                self._terminated = True
+            await kill_process_tree(self.process)
+            self._changed()
 
 
 class ExecSessionManager:
-    def __init__(self, *, max_sessions: int = 8, idle_timeout: int = 1800) -> None:
+    def __init__(self, *, max_sessions: int = 8, idle_timeout: int = 1800,
+                 observe_output: bool = False) -> None:
         self.max_sessions = max_sessions
         self.idle_timeout = idle_timeout
         self._sessions: dict[str, _ExecSession] = {}
+        self._completed: dict[str, _ExecSession] = {}
+        self._observe_output = observe_output
+        self.on_change: Callable[[], None] | None = None
         self._lock = asyncio.Lock()
+
+    def _changed(self) -> None:
+        if self.on_change:
+            self.on_change()
+
+    def _remember(self, session: _ExecSession) -> None:
+        if self._observe_output and session.background:
+            self._completed[session.session_id] = session
+            while len(self._completed) > self.max_sessions:
+                self._completed.pop(next(iter(self._completed)))
+            self._changed()
+
+    def describe(self) -> list[dict[str, Any]]:
+        """Read the Code process projection without consuming model output."""
+        return [session.describe() for session in {**self._completed, **self._sessions}.values()
+                if session.background]
+
+    async def inspect(self, session_id: str) -> dict[str, Any]:
+        session = self._sessions.get(session_id) or self._completed.get(session_id)
+        if session is None or not session.background:
+            raise KeyError(session_id)
+        if session.process.returncode is not None:
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(asyncio.gather(
+                    session._stdout_task, session._stderr_task,
+                )), timeout=2.0)
+        return {**session.describe(), "output": session._output_preview,
+                "truncated": session._output_truncated}
+
+    async def stop(self, session_id: str) -> dict[str, Any]:
+        session = self._sessions.get(session_id) or self._completed.get(session_id)
+        if session is None or not session.background:
+            raise KeyError(session_id)
+        await session.kill()
+        if session.process.returncode is None:
+            raise RuntimeError("未确认命令已停止，请核对当前运行状态。")
+        async with self._lock:
+            self._sessions.pop(session_id, None)
+            self._remember(session)
+        return await self.inspect(session_id)
 
     async def start(
         self,
@@ -204,13 +294,24 @@ class ExecSessionManager:
                 timeout=timeout,
                 owner_session_key=owner_session_key,
                 diagnostics=self._execution_diagnostics(),
+                observe_output=self._observe_output,
+                on_change=self._changed,
             )
             self._sessions[session_id] = session
 
-        poll = await session.poll(yield_time_ms, max_output_chars)
+        try:
+            poll = await session.poll(yield_time_ms, max_output_chars)
+        except asyncio.CancelledError:
+            await session.kill()
+            async with self._lock:
+                self._sessions.pop(session_id, None)
+            raise
         if poll.done:
             async with self._lock:
                 self._sessions.pop(session_id, None)
+        else:
+            session.background = True
+            self._changed()
         return session_id, poll
 
     def _execution_diagnostics(self) -> Callable[[int | None, str], str] | None:
@@ -228,7 +329,7 @@ class ExecSessionManager:
     ) -> _SessionPoll:
         async with self._lock:
             await self._cleanup_locked()
-            session = self._sessions.get(session_id)
+            session = self._sessions.get(session_id) or self._completed.get(session_id)
         if session is None:
             raise KeyError(session_id)
 
@@ -253,6 +354,7 @@ class ExecSessionManager:
         if poll.done:
             async with self._lock:
                 self._sessions.pop(session_id, None)
+                self._remember(session)
         return poll
 
     async def list(self) -> list[ExecSessionInfo]:
@@ -283,9 +385,17 @@ class ExecSessionManager:
             sessions = [self._sessions.pop(session_id) for session_id in owned]
         if sessions:
             await asyncio.gather(*(session.kill() for session in sessions))
+            async with self._lock:
+                for session in sessions:
+                    self._remember(session)
         return len(sessions)
 
     async def _cleanup_locked(self) -> None:
+        if self._observe_output:
+            for session_id, session in list(self._sessions.items()):
+                if session.process.returncode is not None:
+                    self._sessions.pop(session_id)
+                    self._remember(session)
         now = time.monotonic()
         stale = [
             session_id
@@ -295,6 +405,7 @@ class ExecSessionManager:
         for session_id in stale:
             session = self._sessions.pop(session_id)
             await session.kill()
+            self._remember(session)
 
     async def _spawn(
         self,

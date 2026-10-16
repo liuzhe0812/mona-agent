@@ -11,6 +11,7 @@ import type { ModelOption } from "@/components/models/model-sources";
 import { developmentModels, developmentModelRoute } from "./development-models";
 import { DevelopmentDecision } from "./DevelopmentDecisions";
 import { DevelopmentPermissionSelector, type DevelopmentPermissionMode } from "./DevelopmentPermissionSelector";
+import { DevelopmentBackgroundTasks } from "./DevelopmentBackgroundTasks";
 import { DevelopmentUnknownResult } from "./DevelopmentUnknownResult";
 import { DevelopmentTranscript } from "./DevelopmentTranscript";
 import type { TimelineNavigation } from "./zcode/VirtualTimeline";
@@ -19,6 +20,7 @@ import { prependVirtualAnchorAdjustment } from "./zcode/timelineScrollAnchor";
 import { DevelopmentMarkdown } from "./DevelopmentMarkdown";
 import { DevelopmentTurnNavigator } from "./DevelopmentTurnNavigator";
 import { buildDevelopmentTurns } from "./development-turns";
+import { projectPendingGuideQueue } from "./zcode/pendingGuideProjection";
 import { DevelopmentApiError, developmentApi, isRunActive, runLabels,
   type DevelopmentSendAttachments, type DevExecutor, type DevProject, type DevSession } from "@/lib/development-api";
 import { cn } from "@/lib/utils";
@@ -42,6 +44,13 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
   const snapshot = useDevelopmentSession(id, visible);
   const turns = useMemo(() => buildDevelopmentTurns(snapshot?.messages ?? [], snapshot?.runs ?? [], snapshot?.live), [snapshot?.messages, snapshot?.runs, snapshot?.live]);
   const current = snapshot?.session ?? session;
+  const queue = useMemo(() => projectPendingGuideQueue({ items: (snapshot?.pendingInputs ?? []).map((item, admissionSeq) => {
+    const message = snapshot?.messages.find((entry) => entry.id === item.messageId);
+    return { ...item, queueItemId: item.id, sourceCommandId: item.id, clientId: item.id,
+      text: message?.content || item.source?.content || item.source?.documentNames?.join("、") || "",
+      attachments: message?.media, admittedAt: item.createdAt ?? message?.timestamp ?? "", order: { admissionSeq },
+      delivery: { admitted: item.intent === "steering" ? "guide" as const : "queue" as const } };
+  }) }), [snapshot?.pendingInputs, snapshot?.messages]);
   const draft = useDevelopmentStore((s) => id ? s.drafts[id] ?? "" : "");
   const documents = useDevelopmentStore((s) => id ? s.documentDrafts[id] ?? EMPTY_DOCUMENTS : EMPTY_DOCUMENTS);
   const error = useDevelopmentStore((s) => id ? s.errors[id] : "");
@@ -140,9 +149,9 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
       return false;
     } finally { setSending(false); }
   };
-  const queuedMessages: (PendingMessage & { locked: boolean })[] = (snapshot?.pendingInputs ?? []).map((item) => ({
+  const queuedMessages: (PendingMessage & { locked: boolean })[] = queue.visibleQueue.items.map((item) => ({
     id: item.id,
-    content: snapshot?.messages.find((message) => message.id === item.messageId)?.content ?? "",
+    content: item.text,
     locked: item.state !== "pending" || queueBusy || sending || !!pending || !!current?.archived,
   }));
   const changeQueued = async (inputId: string, action: "remove" | "edit" | "append") => {
@@ -154,6 +163,15 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
     const content = source?.content ?? queued.content;
     queueRequest.current = true; setQueueBusy(true); setActionError(null);
     try {
+      if (action === "append") {
+        if (!run || !canSteer || !sourceInput) return;
+        const result = await developmentApi.guideInput(id, inputId, sourceInput.revision, run.id);
+        if (["unknown", "reserved"].includes(result.input.state)) {
+          throw new DevelopmentApiError(409, "native_steering_unknown", "引导结果待核对，原消息已保留，不会重复发送。");
+        }
+        refreshDevelopmentSession(id);
+        return;
+      }
       await developmentApi.cancelInput(id, inputId);
       const state = useDevelopmentStore.getState();
       const latest = state.snapshots[id];
@@ -162,15 +180,13 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
         state.setDraft(id, content);
         state.setDocumentDraft(id, attachmentDraft(source));
       }
-      if (action === "append") {
-        const accepted = await send(content, "steering", source ?? undefined, sourceInput?.runId);
-        if (!accepted) {
-          state.appendDraft(id, content);
-          state.setDocumentDraft(id, [...new Map([...(useDevelopmentStore.getState().documentDrafts[id] ?? []), ...attachmentDraft(source)].map((doc) => [doc.path, doc])).values()]);
-        }
-      }
       refreshDevelopmentSession(id);
     } catch (cause) {
+      if (cause instanceof DevelopmentApiError && cause.code === "native_steering_rejected") {
+        const state = useDevelopmentStore.getState();
+        state.appendDraft(id, content);
+        state.setDocumentDraft(id, [...new Map([...(state.documentDrafts[id] ?? []), ...attachmentDraft(source)].map((doc) => [doc.path, doc])).values()]);
+      }
       setActionError({ scope: "queue", inputId, message: cause instanceof Error ? cause.message : "消息操作失败，请重试。" });
       refreshDevelopmentSession(id);
     } finally { queueRequest.current = false; setQueueBusy(false); }
@@ -300,7 +316,7 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
         aria-label="开发会话记录" className="scrollbar-thin absolute inset-0 overflow-y-auto overscroll-contain">
         <div ref={feed} className="flex min-h-full flex-col">
         <div className="development-conversation-content flex-1">
-        {snapshot ? <DevelopmentTranscript messages={snapshot.messages} events={snapshot.events} runs={snapshot.runs} sessionId={current.id} visible={visible} live={snapshot.live} scrollRef={scroll} followingRef={follow} navigationRef={timelineNavigation} onLayoutScroll={timelineScroll.recordLayoutScroll} restoringRef={timelineScroll.restoringRef} showRunHeaders onUseAnswer={onUseAnswer}
+        {snapshot ? <DevelopmentTranscript messages={snapshot.messages} events={snapshot.events} runs={snapshot.runs} pendingGuides={queue.pendingGuides} sessionId={current.id} visible={visible} live={snapshot.live} scrollRef={scroll} followingRef={follow} navigationRef={timelineNavigation} onLayoutScroll={timelineScroll.recordLayoutScroll} restoringRef={timelineScroll.restoringRef} showRunHeaders onUseAnswer={onUseAnswer}
           canFork={canFork} onFork={forkMessage} onForkError={reportForkError} forkSource={current.forkSource}
           onReturnToForkSource={onNavigateToSession ? returnToForkSource : undefined} /> : !error && <DevelopmentLoading label="正在读取会话…" />}
         </div>
@@ -339,9 +355,10 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
           modelOptions={models} modelLabel={models.find((option) => option.active)?.label ?? current.model ?? "选择模型"}
           modelDisabled={modelsLoading || !snapshot || blocksRunControls || switching || sending || queueBusy || !!pending} currentExecutor={current.executor}
           onModelSelect={(option, effort) => selectModel(option, effort)} onOpenSettings={onManageModels}
-          leadingActions={<DevelopmentPermissionSelector mode={current.permissionMode ?? "ask"} readonly={current.readonly}
+          leadingActions={<><DevelopmentPermissionSelector mode={current.permissionMode ?? "ask"} readonly={current.readonly}
             disabled={!snapshot || !executor?.available || blocksRunControls || switching || sending || queueBusy || !!pending || !!current.parentSessionId || current.archived}
-            onChange={selectPermissions} />}
+            onChange={selectPermissions} />
+            <DevelopmentBackgroundTasks sessionId={current.id} commands={snapshot?.backgroundCommands ?? []} readonly={current.readonly} /></>}
           pendingMessages={queuedMessages} isPendingFull={queuedMessages.length >= 3}
           onPendingRemove={(inputId) => void changeQueued(inputId, "remove")}
           onPendingEdit={(inputId) => changeQueued(inputId, "edit")}
