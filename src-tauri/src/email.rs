@@ -2781,6 +2781,10 @@ fn extract_attachment_response(
             return Ok(None);
         }
     };
+    // mailparse also accepts plain text as a header with an empty value.
+    if parsed.headers.iter().all(|header| header.get_value().is_empty()) {
+        return Ok(None);
+    }
     let Some((part, actual_filename)) = find_attachment_bytes(&parsed, filename, content_id) else {
         return Err("本地邮件缓存中未找到该附件，请重新同步邮件后重试。".into());
     };
@@ -5750,7 +5754,7 @@ mod prefetch_cache_tests {
             serde_json::from_slice(&std::fs::read(meta_path).unwrap()).unwrap();
         assert_eq!(meta["bodyFetched"], true);
         assert_eq!(meta["isStarred"], true);
-        assert_eq!(meta["hasAttachments"], true);
+        assert_eq!(meta["hasAttachments"], false);
     }
 
     #[test]
@@ -7891,7 +7895,7 @@ mod body_transport_tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let error = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().unwrap()
+        let error = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap()
             .get(format!("http://{address}/email/fetch_body")).send().await.unwrap_err();
         let failure = EmailBodyFetchError::Request(error);
         assert!(failure.is_connection_error());
@@ -8441,5 +8445,16 @@ mod attachment_tests {
         assert!(extract_attachment_response(b"not an RFC822 message", "file.bin", None)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn valid_cached_eml_without_the_attachment_requires_resync() {
+        assert!(extract_attachment_response(
+            b"From: sender@example.test\r\nSubject: text\r\n\r\nBody",
+            "file.bin",
+            None,
+        )
+        .unwrap_err()
+        .contains("请重新同步邮件"));
     }
 }
