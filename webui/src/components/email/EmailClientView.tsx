@@ -6,11 +6,15 @@ import {
   ReplyAll,
   Forward,
   Loader2,
+  Settings,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
 import { getServicesHttpBase } from "@/lib/api";
+import { AgentSearchScopeSettings } from "@/components/settings/AgentSearchScopeSettings";
 import { useEmailStore } from "./store/emailStore";
 import { FolderTree } from "./FolderTree";
 import { MailListView } from "./MailListView";
@@ -18,6 +22,8 @@ import { MailView } from "./MailView";
 import { MailAgentPanel } from "./MailAgentPanel";
 import { ContactsView } from "./contacts/ContactsView";
 import { openComposeWindow } from "./lib/emailApi";
+import { OutboxDialog } from "./OutboxDialog";
+import { isSentFolder } from "./lib/folderUtils";
 import { useTodoStore } from "@/components/schedule/todoStore";
 import type { EmailAccount, EmailMessage } from "./lib/types";
 
@@ -25,6 +31,21 @@ const LIST_WIDTH_KEY = "mona:email:listWidth";
 const MIN_LIST_WIDTH = 240;
 const MAX_LIST_WIDTH = 600;
 const FOLDER_TREE_WIDTH = 180;
+
+/**
+ * 撰写窗口通过 URL hash 传参，正文/附件不进 URL：
+ * 引用正文可能带 base64 内联图（几 MB），塞进 URL 会让窗口创建失败。
+ * 撰写窗口打开后会自己按需 fetchEmailBody（本地 .eml 解析，毫秒级）。
+ */
+function toComposeBaseMessage(message: EmailMessage): EmailMessage {
+  return {
+    ...message,
+    bodyText: "",
+    bodyHtml: null,
+    attachments: undefined,
+    bodyFetched: false,
+  };
+}
 
 export function EmailClientView({ onOpenEmailExtraction }: {
   onOpenSubscribe?: () => void;
@@ -50,6 +71,8 @@ export function EmailClientView({ onOpenEmailExtraction }: {
   const loadContacts = useEmailStore((s) => s.loadContacts);
   const [gatewayUrl, setGatewayUrl] = useState("");
   const [agentPanelVisible, setAgentPanelVisible] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [outboxOpen, setOutboxOpen] = useState(false);
   const [view, setView] = useState<"mail" | "contacts">("mail");
   const [listWidth, setListWidth] = useState(() => {
     try {
@@ -81,26 +104,31 @@ export function EmailClientView({ onOpenEmailExtraction }: {
     return () => window.clearInterval(timer);
   }, [gatewayUrl, checkGatewayHealth]);
 
-  // 定时处理 outbox 中到期的延迟发送邮件（每 60 秒检查一次，仅在线时执行）
-  useEffect(() => {
-    if (!gatewayUrl || !isOnline) return;
-    const check = () => {
-      import("./lib/emailApi").then(({ outboxProcess }) => {
-        outboxProcess(gatewayUrl).catch(() => {
-          // ignore
-        });
-      });
-    };
-    check(); // 启动时立即检查一次
-    const timer = window.setInterval(check, 60_000);
-    return () => window.clearInterval(timer);
-  }, [gatewayUrl, isOnline]);
-
   useEffect(() => {
     if (selectedAccountId) {
       void loadMessages(selectedAccountId, selectedFolder);
     }
   }, [selectedAccountId, selectedFolder, loadMessages]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ accountId: string; folder: string }>("email-draft-saved", (event) => {
+          void syncAllAccounts(gatewayUrl, true, event.payload.accountId, event.payload.folder);
+        }),
+      )
+      .then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [gatewayUrl, syncAllAccounts]);
 
   // 邮件列表与正文之间的拖动调整
   useEffect(() => {
@@ -137,6 +165,12 @@ export function EmailClientView({ onOpenEmailExtraction }: {
     return accounts.find((a) => a.id === selectedAccountId) ?? null;
   };
 
+  // 统一收件箱模式下没有选中账号，写/回复/转发必须用邮件自己所属的账号
+  const getAccountForMessage = (message: EmailMessage): EmailAccount | null => {
+    const accounts = useEmailStore.getState().accounts;
+    return accounts.find((a) => a.id === message.accountId) ?? getCurrentAccount();
+  };
+
   const openCompose = () => {
     const account = getCurrentAccount();
     if (!account) return;
@@ -144,15 +178,33 @@ export function EmailClientView({ onOpenEmailExtraction }: {
   };
 
   const openReply = (message: EmailMessage, mode: "reply" | "replyAll") => {
-    const account = getCurrentAccount();
+    const account = getAccountForMessage(message);
     if (!account) return;
-    void openComposeWindow({ mode, accountId: account.id, baseMessage: message });
+    void openComposeWindow({
+      mode,
+      accountId: account.id,
+      baseMessage: toComposeBaseMessage(message),
+    });
   };
 
   const openForward = (message: EmailMessage) => {
-    const account = getCurrentAccount();
+    const account = getAccountForMessage(message);
     if (!account) return;
-    void openComposeWindow({ mode: "forward", accountId: account.id, baseMessage: message });
+    void openComposeWindow({
+      mode: "forward",
+      accountId: account.id,
+      baseMessage: toComposeBaseMessage(message),
+    });
+  };
+
+  const openDraft = (message: EmailMessage) => {
+    const account = getAccountForMessage(message);
+    if (!account) return;
+    void openComposeWindow({
+      mode: "draft",
+      accountId: account.id,
+      baseMessage: toComposeBaseMessage(message),
+    });
   };
 
   const addFromEmail = useTodoStore((s) => s.addFromEmail);
@@ -230,7 +282,15 @@ export function EmailClientView({ onOpenEmailExtraction }: {
         return;
       }
       // R: 切换已读/未读（无 Ctrl 时）
-      if (e.key === "r" && !e.ctrlKey && !e.metaKey && selectedMessage && gatewayUrl) {
+      // 已发送文件夹没有未读语义，忽略该快捷键
+      if (
+        e.key === "r" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        selectedMessage &&
+        gatewayUrl &&
+        !isSentFolder(selectedMessage.folder)
+      ) {
         e.preventDefault();
         void toggleRead(gatewayUrl, selectedMessage);
         return;
@@ -252,6 +312,9 @@ export function EmailClientView({ onOpenEmailExtraction }: {
   }, [selectedMessage, messages, gatewayUrl, selectMessage, toggleRead, toggleStarred]);
 
   const hasSelection = !!selectedMessage;
+  const selectedIsDraft = Boolean(
+    selectedMessage && (/draft/i.test(selectedMessage.folder) || selectedMessage.folder.includes("草稿")),
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
@@ -278,25 +341,46 @@ export function EmailClientView({ onOpenEmailExtraction }: {
           onClick={openCompose}
         />
         <ToolbarDivider />
+        {selectedIsDraft ? (
+          <ToolbarButton
+            icon={PenSquare}
+            label="编辑草稿"
+            onClick={() => selectedMessage && openDraft(selectedMessage)}
+          />
+        ) : (
+          <>
+            <ToolbarButton
+              icon={Reply}
+              label="回复"
+              disabled={!hasSelection}
+              onClick={() => selectedMessage && openReply(selectedMessage, "reply")}
+            />
+            <ToolbarButton
+              icon={ReplyAll}
+              label="回复全部"
+              disabled={!hasSelection}
+              onClick={() => selectedMessage && openReply(selectedMessage, "replyAll")}
+            />
+            <ToolbarButton
+              icon={Forward}
+              label="转发"
+              disabled={!hasSelection}
+              onClick={() => selectedMessage && openForward(selectedMessage)}
+            />
+          </>
+        )}
         <ToolbarButton
-          icon={Reply}
-          label="回复"
-          disabled={!hasSelection}
-          onClick={() => selectedMessage && openReply(selectedMessage, "reply")}
-        />
-        <ToolbarButton
-          icon={ReplyAll}
-          label="回复全部"
-          disabled={!hasSelection}
-          onClick={() => selectedMessage && openReply(selectedMessage, "replyAll")}
-        />
-        <ToolbarButton
-          icon={Forward}
-          label="转发"
-          disabled={!hasSelection}
-          onClick={() => selectedMessage && openForward(selectedMessage)}
+          icon={Clock}
+          label="定时邮件"
+          disabled={!selectedAccountId}
+          onClick={() => setOutboxOpen(true)}
         />
         <div className="flex-1" />
+        <ToolbarButton
+          icon={Settings}
+          label="设置"
+          onClick={() => setSettingsOpen(true)}
+        />
         <Button
           type="button"
           variant="ghost"
@@ -354,6 +438,19 @@ export function EmailClientView({ onOpenEmailExtraction }: {
         )}
       </div>
 
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>邮件设置</DialogTitle>
+          </DialogHeader>
+          <AgentSearchScopeSettings source="email" />
+        </DialogContent>
+      </Dialog>
+      <OutboxDialog
+        open={outboxOpen}
+        onOpenChange={setOutboxOpen}
+        accountId={selectedAccountId ?? ""}
+      />
     </div>
   );
 }

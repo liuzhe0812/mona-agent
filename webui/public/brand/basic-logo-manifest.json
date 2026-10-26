@@ -1,0 +1,311 @@
+{
+  "version": "raster-original-df0209-v1",
+  "reference": "极简红底黑猫头像图标.png",
+  "reference_sha256": "0ea1fb4ba1524bad1011325cfb50042cd2740eab5962c240746d764857b6cda9",
+  "source": "极简红底黑猫头像图标.png",
+  "source_sha256": "0ea1fb4ba1524bad1011325cfb50042cd2740eab5962c240746d764857b6cda9",
+  "source_crop": [
+    125,
+    123,
+    1126,
+    1124
+  ],
+  "foreground_offset_source_px": [
+    0,
+    40
+  ],
+  "processed_source": "design-assets/mona-brand-ui-v2/basic-logo/mona-logo-df0209.png",
+  "processed_sha256": "80a4c85e15aba69af675fbc7b0ba878eca99f160c3bcf03d7ce0063806f426c6",
+  "style": {
+    "background": "#DF0209",
+    "head_and_eyes": "original PNG pixels",
+    "corner_ratio": 0.22,
+    "pupils": false,
+    "ear_decoration": false
+  },
+  "avatars_replaced": false,
+  "protected_assets": {
+    "webui/public/brand/agents/a-share-analyst.png": "4651feb223c24483c5294cf4b890588f39265e050789086b7481d8de50d08946",
+    "webui/public/brand/agents/academic-researcher.png": "a8ec5fa2200f8a9f049cdaa76d2c103d97f489b1891bf91461e509b0bdd6102f",
+    "webui/public/brand/agents/musician.webp": "b2a4706c82976179d10cdb64550930471005269a81b1e2d23aa9b80078f079aa",
+    "webui/public/brand/agents/xhs-operator.png": "8d4a2e907d2fc57fa2bfe032bd3d83e6ef096ae0b78c9ae1209446b6598f0b67",
+    "webui/public/brand/v2/avatar.webp": "8f12d953a3958c736c8df64080e2b49708846cd02105f11c954edf2d4611768d",
+    "webui/public/brand/v2/composer-cat.png": "4c30a8aa08eaf46acd74c8a4ea8ba70711cc66fcff6b8e69c46e3649a7911649",
+    "webui/public/brand/v2/composer-human-chibi-left.png": "f12413128f523022359e04bf1accdb38feddf47fb6fca406cdc73ce221bebe38",
+    "webui/public/brand/v2/composer-human-chibi-resting.png": "41ba9cf36b8f240db28882d8801ade592a2f64d26575a9f3404de6d8c261f8b1",
+    "webui/public/brand/v2/composer-human.png": "e8f94547cba2a55f172c85f4f2c3949e0e840cbbc9c656091ff8435eb032f87c",
+    "webui/public/brand/v2/human-master.webp": "3d162c94a2c4df0df74813a5c5bddfff767ace477014ef5ce1685dfc13a538a0",
+    "official-site/public/img/mona-brand/avatar.webp": "8f12d953a3958c736c8df64080e2b49708846cd02105f11c954edf2d4611768d",
+    "official-site/public/img/mona-brand/full-body.webp": "ac37c2ee9e360035419b98e3433166dff1b6b8765282b068c2496e5995398e1b",
+    "official-site/public/img/mona-brand/hero-workspace.webp": "f06acaab8ba8a004e503656204af4fcf5c1255130e4f92039d69ecf22ad18b97",
+    "official-site/public/img/mona-brand/human-master.webp": "3d162c94a2c4df0df74813a5c5bddfff767ace477014ef5ce1685dfc13a538a0",
+    "official-site/public/img/mona-brand/presenting.webp": "fea221fc9bf82eb31e96b6829e4cce6c38990f3f5183258021cd836238605b0c",
+    "official-site/public/img/mona-brand/pro-multidevice.webp": "b83b1393d3ef8561deca133ecd27e6ef7308dedaf4b395ca79081e8abe8a7d44",
+    "webui/public/brand/mona_avatar_human.png": "fdced94da1315c7d6a1716c9f603eeb0f6972a2146be43b99a00ca48842bee2e",
+    "webui/public/brand/mona_human_solid.png": "e1faafe4d86d5e204d401ac8b2fd74b7bed44c8dfa56aacaf8b73d04d78e19ae",
+    "webui/public/brand/mona_startup_cat_sleeping.png": "daa3cf43d13a3c49905ba2672c6f8f6ce096db2956d6691f4554989cf044998a",
+    "webui/public/brand/mona_startup_human_ghost_dark.png": "df3bf1562718e0861e73d4601342535348ca0b12e5735798f826ff3dcb5f7650",
+    "webui/public/brand/mona_startup_human_ghost_light.png": "4a9e2bed44d9b0d65ade271df747b71da9bd90c6ab1b91a2a5d652807c3fe4f9",
+    "webui/public/brand/mona_startup_human_solid.png": "e1faafe4d86d5e204d401ac8b2fd74b7bed44c8dfa56aacaf8b73d04d78e19ae",
+    "webui/public/brand/mona_avatar_white.png": "81bd0ff630c49111c816a6acd216a110ab3a45ac5735c2c3842a783649583c62",
+    "official-site/public/img/mona-brand/mona-wordmark-01.svg": "862c700e1798a09ab15af53c31801a1cb6623431f3e7e55b584b0730cbeb8c39",
+    "official-site/public/img/mona-brand/mona-wordmark-01-small.svg": "ef8a4b0e20100bd542e170e26cfbce98280c4538d3bd21f4a72d6595f4d41687"
+  },
+  "revision": "a829e97b8751",
+  "preserved_alpha": {
+    "512": "37170d8aa0fb6d7c1c034bb1c8b03ed2c8d0e5493e66ae45ba98a525725245f1",
+    "1024": "0b8ff0dd7599537cd5cb0abc9d36f8033abe6175c263afbbbacf256b7500f124"
+  },
+  "format": "PNG",
+  "provenance": "Approved original PNG; red backdrop recolored, white surround cropped, cat translated down 40 source pixels (1.28px at 32px and 1.92px at 48px), and existing app alpha retained. No vector redraw or cat rescaling.",
+  "installed": {
+    "src-tauri/app-icon.png": {
+      "bytes": 121318,
+      "sha256": "a829e97b87513c03fab7b2ce12d63d090bc65d80c05ac7d0d5bbee53d6fe824e"
+    },
+    "webui/public/brand/mona_app_icon.png": {
+      "bytes": 121318,
+      "sha256": "a829e97b87513c03fab7b2ce12d63d090bc65d80c05ac7d0d5bbee53d6fe824e"
+    },
+    "official-site/public/img/mona-brand/mona-app-icon.png": {
+      "bytes": 121318,
+      "sha256": "a829e97b87513c03fab7b2ce12d63d090bc65d80c05ac7d0d5bbee53d6fe824e"
+    },
+    "official-site/public/mona-cat-logo.png": {
+      "bytes": 121318,
+      "sha256": "a829e97b87513c03fab7b2ce12d63d090bc65d80c05ac7d0d5bbee53d6fe824e"
+    },
+    "logo.png": {
+      "bytes": 346062,
+      "sha256": "de0b20153b1638027e8657f8215454f0abee9eddfbaff4de450b1f5b39d7ed45"
+    },
+    "src-tauri/icons/icon.png": {
+      "bytes": 346062,
+      "sha256": "de0b20153b1638027e8657f8215454f0abee9eddfbaff4de450b1f5b39d7ed45"
+    },
+    "webui/public/brand/mona-basic-master.png": {
+      "bytes": 346062,
+      "sha256": "de0b20153b1638027e8657f8215454f0abee9eddfbaff4de450b1f5b39d7ed45"
+    },
+    "webui/public/brand/mona-basic-master-512.png": {
+      "bytes": 121318,
+      "sha256": "a829e97b87513c03fab7b2ce12d63d090bc65d80c05ac7d0d5bbee53d6fe824e"
+    },
+    "webui/public/brand/mona-basic-android-foreground.png": {
+      "bytes": 217057,
+      "sha256": "7879e4a5217d2893c86aa7aa16624a395645bfcce71a18312e2c29f9f6f341ef"
+    },
+    "webui/public/brand/mona_icon.png": {
+      "bytes": 11832,
+      "sha256": "30be30cf8f32a80a26aab648be1b46fbfced63b7e3abfa53a6559c34a0b99d84"
+    },
+    "webui/public/brand/mona_favicon_32.png": {
+      "bytes": 1714,
+      "sha256": "d2508ac3a27307c48518f2088532717ae3b1e33734558229c816ef2f4fce1c7f"
+    },
+    "webui/public/brand/mona_apple_touch.png": {
+      "bytes": 21038,
+      "sha256": "0d136d384c6cbe21e097742dee35bfc806bb5e61d1eb45999d748755679e5b7e"
+    },
+    "src-tauri/icons/32x32.png": {
+      "bytes": 1714,
+      "sha256": "d2508ac3a27307c48518f2088532717ae3b1e33734558229c816ef2f4fce1c7f"
+    },
+    "src-tauri/icons/64x64.png": {
+      "bytes": 4025,
+      "sha256": "3861fd0b31a6849980c2baa8cb794e01003689ece8ac10474183fb9c1e0a07cf"
+    },
+    "src-tauri/icons/128x128.png": {
+      "bytes": 11832,
+      "sha256": "30be30cf8f32a80a26aab648be1b46fbfced63b7e3abfa53a6559c34a0b99d84"
+    },
+    "src-tauri/icons/128x128@2x.png": {
+      "bytes": 37846,
+      "sha256": "b484e03658e734fc4fa3a9897a9d44e8a3fe0419ea57bb11be5c59132c1fb0db"
+    },
+    "src-tauri/icons/StoreLogo.png": {
+      "bytes": 3008,
+      "sha256": "a40ce4d42bdf085261c67f14987b454f6fff9b06c1721f0c2b15052cae1c4b5c"
+    },
+    "src-tauri/icons/Square30x30Logo.png": {
+      "bytes": 1575,
+      "sha256": "94fbadc59351b3451163a7c8042b6d667e2ac4dec64b0117e3fde09893d1fdf6"
+    },
+    "src-tauri/icons/Square44x44Logo.png": {
+      "bytes": 2560,
+      "sha256": "028025550620f9618b19026c081142fb072aae1dc200cfc13bdb2ab0bacb3434"
+    },
+    "src-tauri/icons/Square71x71Logo.png": {
+      "bytes": 4667,
+      "sha256": "c9bd37d7c3a18da2fe8dce121165df710a95cc4551841e8bce18c7a054b339f4"
+    },
+    "src-tauri/icons/Square89x89Logo.png": {
+      "bytes": 6592,
+      "sha256": "48643e952c1c688bba8ff1a0fa399803f9693397c2d24f30b410ba4b422fd8ab"
+    },
+    "src-tauri/icons/Square107x107Logo.png": {
+      "bytes": 8924,
+      "sha256": "10a75ff58bc5d05cb401d3c61664337ce2dd6aa965c2b42ef757cc0340ada589"
+    },
+    "src-tauri/icons/Square142x142Logo.png": {
+      "bytes": 13983,
+      "sha256": "c95f5c80ad7f4809bf679b800470f6abcb1685252d14b6839ede2ec24c47243f"
+    },
+    "src-tauri/icons/Square150x150Logo.png": {
+      "bytes": 15350,
+      "sha256": "da13a129ef388a707e3cf3f39b6aaac82893e0b9fec70e97a782c990f4927d8a"
+    },
+    "src-tauri/icons/Square284x284Logo.png": {
+      "bytes": 47740,
+      "sha256": "d91704d87d0f4e00d43698b567bc67a220ba6b07e77bd2631b617fdae585c9dd"
+    },
+    "src-tauri/icons/Square310x310Logo.png": {
+      "bytes": 56475,
+      "sha256": "bed6df0a50780413408766d7fb814eaa6cfe66fc6457f1cec77348ab79698c2a"
+    },
+    "src-tauri/icons/icon.ico": {
+      "bytes": 62183,
+      "sha256": "36c54004d844ada638fe2ac588a6bbda7803934bb2df2fa193f9c525d7c59cb1"
+    },
+    "official-site/public/favicon.ico": {
+      "bytes": 62183,
+      "sha256": "36c54004d844ada638fe2ac588a6bbda7803934bb2df2fa193f9c525d7c59cb1"
+    },
+    "src-tauri/icons/icon.icns": {
+      "bytes": 730724,
+      "sha256": "984eece7bb78bd75970aabba26f97cac14f022b804edf41feffd52fb92e23fae"
+    },
+    "src-tauri/icons/ios/AppIcon-20x20@1x.png": {
+      "bytes": 817,
+      "sha256": "eb113f17fd8921ea70b6d8c69e669a366b1dff6823ba5264df9755a09db747fe"
+    },
+    "src-tauri/icons/ios/AppIcon-20x20@2x-1.png": {
+      "bytes": 1983,
+      "sha256": "bb2513e1d28a3a175c1027479f78a4bcc3bc6e0c9002e14963779d04ecfc8400"
+    },
+    "src-tauri/icons/ios/AppIcon-20x20@2x.png": {
+      "bytes": 1983,
+      "sha256": "bb2513e1d28a3a175c1027479f78a4bcc3bc6e0c9002e14963779d04ecfc8400"
+    },
+    "src-tauri/icons/ios/AppIcon-20x20@3x.png": {
+      "bytes": 3332,
+      "sha256": "db1c5a6063dacdd1e72de35308823d86fa59626f7e9c77e0e67e3ace3529b8e1"
+    },
+    "src-tauri/icons/ios/AppIcon-29x29@1x.png": {
+      "bytes": 1332,
+      "sha256": "9680eb5f46f2ada4cb835265be26377e12f69f02673100d3db7152be0ed6c2d3"
+    },
+    "src-tauri/icons/ios/AppIcon-29x29@2x-1.png": {
+      "bytes": 3170,
+      "sha256": "fda1ee85620a3324d067f9ac35d25f2d0fc6f67e5e85689e3866aee3a017529f"
+    },
+    "src-tauri/icons/ios/AppIcon-29x29@2x.png": {
+      "bytes": 3170,
+      "sha256": "fda1ee85620a3324d067f9ac35d25f2d0fc6f67e5e85689e3866aee3a017529f"
+    },
+    "src-tauri/icons/ios/AppIcon-29x29@3x.png": {
+      "bytes": 5586,
+      "sha256": "25406c61239921f10cc02db5c1a531daead1fd054dd0fa8567d2d7bb5e376789"
+    },
+    "src-tauri/icons/ios/AppIcon-40x40@1x.png": {
+      "bytes": 1983,
+      "sha256": "bb2513e1d28a3a175c1027479f78a4bcc3bc6e0c9002e14963779d04ecfc8400"
+    },
+    "src-tauri/icons/ios/AppIcon-40x40@2x-1.png": {
+      "bytes": 4909,
+      "sha256": "b89cfa6efa5b6c386bb7178bbb73822e136875e631ced9b13fd95ea209a01252"
+    },
+    "src-tauri/icons/ios/AppIcon-40x40@2x.png": {
+      "bytes": 4909,
+      "sha256": "b89cfa6efa5b6c386bb7178bbb73822e136875e631ced9b13fd95ea209a01252"
+    },
+    "src-tauri/icons/ios/AppIcon-40x40@3x.png": {
+      "bytes": 9085,
+      "sha256": "e82d3a6ecf71d8d99880ea90c2a32bec221c835b37e3f930d0622197ba6a80d7"
+    },
+    "src-tauri/icons/ios/AppIcon-512@2x.png": {
+      "bytes": 298754,
+      "sha256": "b7647c610c541a492285cc6caa04866dacbf5c4534761107d04c39e4ba22a1f0"
+    },
+    "src-tauri/icons/ios/AppIcon-60x60@2x.png": {
+      "bytes": 9085,
+      "sha256": "e82d3a6ecf71d8d99880ea90c2a32bec221c835b37e3f930d0622197ba6a80d7"
+    },
+    "src-tauri/icons/ios/AppIcon-60x60@3x.png": {
+      "bytes": 17865,
+      "sha256": "819d5dba8f57cabed57bbed5654068acdff06f9032896c2df9e85d93d6f1a99c"
+    },
+    "src-tauri/icons/ios/AppIcon-76x76@1x.png": {
+      "bytes": 4549,
+      "sha256": "1887ec874daf3484780339475ebacaef3ba6d7084c8b7e90981f42ec1304ff36"
+    },
+    "src-tauri/icons/ios/AppIcon-76x76@2x.png": {
+      "bytes": 13395,
+      "sha256": "ac8c78d674023f3633c75d9e052aa073f5060678214fee243357b06921edc3ef"
+    },
+    "src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png": {
+      "bytes": 15729,
+      "sha256": "393e607ebf666c2e0b34506598f4ae140d77bc889c14186e88888175123357d7"
+    },
+    "src-tauri/icons/android/mipmap-hdpi/ic_launcher.png": {
+      "bytes": 2927,
+      "sha256": "61874f7ef1c313e714224392e243cbf3c970c4bde9b94b04dea3f39926799507"
+    },
+    "src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png": {
+      "bytes": 8247,
+      "sha256": "72161d3c0d9b5970fd2ed128b5351beb334f2ec10d0baa3f7b111d71cbba5c73"
+    },
+    "src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png": {
+      "bytes": 2927,
+      "sha256": "61874f7ef1c313e714224392e243cbf3c970c4bde9b94b04dea3f39926799507"
+    },
+    "src-tauri/icons/android/mipmap-mdpi/ic_launcher.png": {
+      "bytes": 2683,
+      "sha256": "739a092887d7d3a6bda04c0df9b91117c76f52ded2d77a34e4f8598105034d01"
+    },
+    "src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png": {
+      "bytes": 4453,
+      "sha256": "5ba529fd6f97917e9fe1101fbc4cd26fb444ea043d743fefa651072ec8cb0775"
+    },
+    "src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png": {
+      "bytes": 2683,
+      "sha256": "739a092887d7d3a6bda04c0df9b91117c76f52ded2d77a34e4f8598105034d01"
+    },
+    "src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png": {
+      "bytes": 7542,
+      "sha256": "7fbedd5df7a5ef65997c7ce7db6058e037b00a8df2b0ec515512ae1db659ad76"
+    },
+    "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png": {
+      "bytes": 13395,
+      "sha256": "5276e7b0f024d9c21f5c816b07fcf49ff98deb0bb08310e47cccdc3aeff8d8e2"
+    },
+    "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png": {
+      "bytes": 7542,
+      "sha256": "7fbedd5df7a5ef65997c7ce7db6058e037b00a8df2b0ec515512ae1db659ad76"
+    },
+    "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png": {
+      "bytes": 14362,
+      "sha256": "cbba3759413ccd6b249475542e92eea00747ca03c205c12f8692ec3d4f5e58dd"
+    },
+    "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png": {
+      "bytes": 28775,
+      "sha256": "eb90450a16ab058c74f41e68d8273a7e0ee3c0cd0db137e2d71d593ab5c84b1b"
+    },
+    "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png": {
+      "bytes": 14362,
+      "sha256": "cbba3759413ccd6b249475542e92eea00747ca03c205c12f8692ec3d4f5e58dd"
+    },
+    "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png": {
+      "bytes": 23312,
+      "sha256": "959298eb305d8f86ffcbb843010946d3e8f662351430b9ae041414ca3e4d1efe"
+    },
+    "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png": {
+      "bytes": 48512,
+      "sha256": "f0e26232a6d2fc6b519501ea6019be0496cbdb140209b1da1e512a0aed15ef16"
+    },
+    "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png": {
+      "bytes": 23312,
+      "sha256": "959298eb305d8f86ffcbb843010946d3e8f662351430b9ae041414ca3e4d1efe"
+    }
+  }
+}

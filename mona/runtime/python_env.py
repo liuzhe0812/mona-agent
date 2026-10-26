@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -25,6 +26,8 @@ from mona.runtime.manager import (
     RuntimeManagerError,
     parse_runtime_pack_ref,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ManagedPythonEnvironment(Base):
@@ -91,18 +94,31 @@ class PythonEnvironmentBuilder:
         *,
         runner: CommandRunner = _run_command,
         current_platform: str = sys.platform,
+        environment: str = "official",
     ) -> None:
         self.root = root.resolve()
         self.store = store
         self.runner = runner
         self.current_platform = current_platform
-        self.environments_root = self.root / "python" / "official-envs"
+        self.environment = RuntimeComponentManifest._validate_id(environment)
+        self.environments_root = self.root / "python" / f"{self.environment}-envs"
         self.current_path = self.environments_root / "current.json"
+
+    def for_environment(self, name: str) -> PythonEnvironmentBuilder:
+        if name == self.environment:
+            return self
+        return PythonEnvironmentBuilder(
+            self.root, self.store, runner=self.runner,
+            current_platform=self.current_platform, environment=name,
+        )
 
     async def ensure(self, requested_packs: list[str]) -> ManagedPythonEnvironment:
         current = self.current()
         packs = self._merge_packs(current.packs if current else [], requested_packs)
         components = self._resolve_components(packs)
+        for _ref, manifest, _root, _receipt in components.values():
+            if manifest.python_requirements is not None and manifest.python_environment != self.environment:
+                raise RuntimeManagerError("Python packs belong to a different environment")
         base_ref, base_manifest, base_root, _base_receipt = self._python_base(components)
         generation = self._generation(packs, components)
         final = self.environments_root / generation
@@ -319,7 +335,16 @@ class PythonEnvironmentBuilder:
             protected.add(current.generation)
         for environment, directory in environments:
             if environment.generation not in protected:
-                shutil.rmtree(directory)
+                try:
+                    shutil.rmtree(directory)
+                except PermissionError as error:
+                    _LOGGER.warning(
+                        "Could not prune inactive Python environment generation %s "
+                        "(errno=%s, winerror=%s)",
+                        environment.generation,
+                        error.errno,
+                        getattr(error, "winerror", None),
+                    )
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, object]) -> None:

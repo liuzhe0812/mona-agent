@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
+use russh::keys::{decode_secret_key, load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::terminal::config::AuthConfig;
+use crate::terminal::credential_store;
 use crate::terminal::error::TerminalError;
 use crate::terminal::ssh::client::SshClient;
 
@@ -137,10 +138,23 @@ impl SftpClient {
             }
             AuthConfig::KeyFile {
                 key_path,
-                passphrase: _,
+                passphrase,
             } => {
-                let key_pair = load_secret_key(key_path, None)
-                    .map_err(|e| TerminalError::AuthFailed(e.to_string()))?;
+                let key_pair = if credential_store::ops_secret_name_from_marker(
+                    key_path,
+                    credential_store::OpsSecretField::PrivateKey,
+                )
+                .is_some()
+                {
+                    let private_key = credential_store::load_ops_private_key(key_path)
+                        .map_err(|_| TerminalError::AuthFailed("保存的私钥不可用。".into()))?
+                        .ok_or_else(|| TerminalError::AuthFailed("保存的私钥不可用。".into()))?;
+                    decode_secret_key(&private_key, passphrase.as_deref())
+                        .map_err(|_| TerminalError::AuthFailed("私钥无法解码或口令不正确。".into()))?
+                } else {
+                    load_secret_key(key_path, passphrase.as_deref())
+                        .map_err(|e| TerminalError::AuthFailed(e.to_string()))?
+                };
                 let auth_result = handle
                     .authenticate_publickey(
                         username,

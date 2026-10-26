@@ -119,7 +119,6 @@ class _EmailToolBase(Tool):
 
     _scopes = {"core"}
     _plugin_discoverable = True
-    # All email tools (search/read/action) require an active subscription.
 
     @classmethod
     def enabled(cls, ctx: ToolContext) -> bool:

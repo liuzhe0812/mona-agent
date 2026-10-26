@@ -1,0 +1,3291 @@
+[
+  {
+    "name": "commodity_research_team",
+    "title": "Commodity Research Team",
+    "description": "Parallel deep-dive on supply and demand, synthesized by a cycle strategist into an investment thesis — DAG workflow",
+    "source": "agent/src/swarm/presets/commodity_research_team.yaml",
+    "workers": [
+      {
+        "id": "supply_analyst",
+        "role": "Supply Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "commodity-analysis",
+          "web-reader",
+          "geopolitical-risk"
+        ]
+      },
+      {
+        "id": "demand_analyst",
+        "role": "Demand Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "commodity-analysis",
+          "seasonal",
+          "global-macro"
+        ]
+      },
+      {
+        "id": "cycle_strategist",
+        "role": "Cycle Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "commodity-analysis",
+          "seasonal",
+          "strategy-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-supply-research",
+        "agent_id": "supply_analyst",
+        "prompt_template": "Conduct a comprehensive supply-side analysis of {commodity}: production landscape, inventory cycle, capacity utilization, OPEC policy or mine output, supply disruption risks, and cost curve. Output a supply tightness score and inventory cycle assessment to inform a {horizon} investment strategy.",
+        "depends_on": []
+      },
+      {
+        "id": "task-demand-research",
+        "agent_id": "demand_analyst",
+        "prompt_template": "Conduct a comprehensive demand-side analysis of {commodity}: downstream demand structure, leading macro indicators, China demand tracking, seasonal patterns, and structural energy-transition demand. Output a demand strength score and seasonality calendar to inform a {horizon} investment strategy.",
+        "depends_on": []
+      },
+      {
+        "id": "task-cycle-strategy",
+        "agent_id": "cycle_strategist",
+        "prompt_template": "Synthesize the supply and demand research to construct a supply-demand balance sheet for {commodity}, identify the commodity cycle phase, overlay seasonal timing, and develop a complete cycle investment strategy for a {horizon} horizon. Output investment recommendations, price range forecasts, and optimal entry windows.",
+        "depends_on": [
+          "task-supply-research",
+          "task-demand-research"
+        ],
+        "input_from": {
+          "supply_analysis": "task-supply-research",
+          "demand_analysis": "task-demand-research"
+        }
+      }
+    ]
+  },
+  {
+    "name": "convertible_bond_team",
+    "title": "Convertible Bond Research Team",
+    "description": "Parallel three-dimensional analysis — bond floor, equity optionality, and embedded option value — synthesized into a convertible bond investment strategy",
+    "source": "agent/src/swarm/presets/convertible_bond_team.yaml",
+    "workers": [
+      {
+        "id": "bond_analyst",
+        "role": "Bond Floor Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_financial_statements",
+          "read_url"
+        ],
+        "skills": [
+          "convertible-bond",
+          "fundamental-filter",
+          "credit-analysis"
+        ]
+      },
+      {
+        "id": "equity_analyst",
+        "role": "Underlying Equity Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "convertible-bond",
+          "technical-basic",
+          "valuation-model"
+        ]
+      },
+      {
+        "id": "option_analyst",
+        "role": "Embedded Option Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "options_pricing"
+        ],
+        "skills": [
+          "options-strategy",
+          "volatility",
+          "convertible-bond",
+          "options-payoff"
+        ]
+      },
+      {
+        "id": "cb_strategist",
+        "role": "Convertible Bond Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "convertible-bond",
+          "strategy-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-bond",
+        "agent_id": "bond_analyst",
+        "prompt_template": "Conduct a bond-floor value analysis of the {market} convertible bond market, assessing downside protection strength and credit risk, with a focus on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-equity",
+        "agent_id": "equity_analyst",
+        "prompt_template": "Analyze the fundamentals and technicals of underlying equities for {market} convertible bonds, assessing conversion value and reset potential, with a focus on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-option",
+        "agent_id": "option_analyst",
+        "prompt_template": "Analyze the option characteristics of {market} convertible bonds, evaluating implied volatility and Greeks metrics, with a focus on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "cb_strategist",
+        "prompt_template": "Synthesize the three-dimensional analysis — bond floor, equity optionality, and embedded option value — to design a {strategy_type} strategy and validate through backtesting. Target market: {market}. Research focus: {goal}.",
+        "depends_on": [
+          "task-bond",
+          "task-equity",
+          "task-option"
+        ],
+        "input_from": {
+          "bond_analysis": "task-bond",
+          "equity_analysis": "task-equity",
+          "option_analysis": "task-option"
+        }
+      }
+    ]
+  },
+  {
+    "name": "credit_research_team",
+    "title": "Fixed Income Credit Research Team",
+    "description": "Credit quality + interest rate environment + sector credit three-dimensional parallel analysis → fixed income strategist synthesizes a complete bond investment strategy",
+    "source": "agent/src/swarm/presets/credit_research_team.yaml",
+    "workers": [
+      {
+        "id": "credit_analyst",
+        "role": "Credit Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_financial_statements",
+          "get_stock_profile",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "credit-analysis",
+          "financial-statement"
+        ]
+      },
+      {
+        "id": "rate_analyst",
+        "role": "Interest Rate Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "credit-analysis",
+          "macro-analysis"
+        ]
+      },
+      {
+        "id": "sector_credit_analyst",
+        "role": "Sector Credit Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "credit-analysis",
+          "sector-rotation",
+          "regulatory-knowledge"
+        ]
+      },
+      {
+        "id": "fixed_income_strategist",
+        "role": "Fixed Income Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "credit-analysis",
+          "strategy-generate",
+          "risk-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-credit",
+        "agent_id": "credit_analyst",
+        "prompt_template": "Conduct a deep credit quality analysis of \"{target}\", assessing debt service capacity, default probability, and credit rating outlook. Market: {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-rate",
+        "agent_id": "rate_analyst",
+        "prompt_template": "Analyze the current {market} interest rate environment, assessing yield curve shape, credit spread trends, and interest rate risk with respect to \"{target}\"-related bonds.",
+        "depends_on": []
+      },
+      {
+        "id": "task-sector-credit",
+        "agent_id": "sector_credit_analyst",
+        "prompt_template": "Analyze the credit risk characteristics of the sector / industry where \"{target}\" operates, assessing sector-level default risk and policy impacts. Market: {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "fixed_income_strategist",
+        "prompt_template": "Synthesize the credit, interest rate, and sector credit three-dimensional research to build a complete fixed income investment strategy for {market} targeting \"{target}\".",
+        "depends_on": [
+          "task-credit",
+          "task-rate",
+          "task-sector-credit"
+        ],
+        "input_from": {
+          "credit_report": "task-credit",
+          "rate_report": "task-rate",
+          "sector_credit_report": "task-sector-credit"
+        }
+      }
+    ]
+  },
+  {
+    "name": "crypto_research_lab",
+    "title": "Crypto Asset Research Lab",
+    "description": "On-chain data + DeFi protocol + market sentiment three-dimensional parallel analysis → Alpha synthesizer converges investment recommendations",
+    "source": "agent/src/swarm/presets/crypto_research_lab.yaml",
+    "workers": [
+      {
+        "id": "onchain_analyst",
+        "role": "On-Chain Data Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "onchain-analysis",
+          "okx-market",
+          "stablecoin-flow"
+        ]
+      },
+      {
+        "id": "defi_analyst",
+        "role": "DeFi Protocol Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "crypto-derivatives",
+          "defi-yield",
+          "token-unlock-treasury",
+          "web-reader"
+        ]
+      },
+      {
+        "id": "crypto_sentiment_analyst",
+        "role": "Crypto Sentiment Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "sentiment-analysis",
+          "okx-market",
+          "perp-funding-basis",
+          "liquidation-heatmap"
+        ]
+      },
+      {
+        "id": "alpha_synthesizer",
+        "role": "Alpha Synthesizer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-onchain",
+        "agent_id": "onchain_analyst",
+        "prompt_template": "Analyze on-chain data for {target}, including active addresses, holder distribution, exchange net flows, and MVRV/SOPR cycle indicators. Provide a {timeframe} on-chain directional signal.",
+        "depends_on": []
+      },
+      {
+        "id": "task-defi",
+        "agent_id": "defi_analyst",
+        "prompt_template": "Analyze the DeFi ecosystem related to {target}, including TVL trends, lending rates, liquidity depth, and protocol revenues. Provide a {timeframe} DeFi-layer signal.",
+        "depends_on": []
+      },
+      {
+        "id": "task-sentiment",
+        "agent_id": "crypto_sentiment_analyst",
+        "prompt_template": "Analyze market sentiment for {target}, including funding rates, open interest, fear & greed index, and options market structure. Provide a {timeframe} sentiment-based timing signal.",
+        "depends_on": []
+      },
+      {
+        "id": "task-alpha",
+        "agent_id": "alpha_synthesizer",
+        "prompt_template": "Integrate the on-chain, DeFi, and sentiment three-dimensional analyses for {target} and provide a composite {timeframe} investment recommendation with position allocation.",
+        "depends_on": [
+          "task-onchain",
+          "task-defi",
+          "task-sentiment"
+        ],
+        "input_from": {
+          "onchain": "task-onchain",
+          "defi": "task-defi",
+          "sentiment": "task-sentiment"
+        }
+      }
+    ]
+  },
+  {
+    "name": "crypto_trading_desk",
+    "title": "Crypto Trading & Risk Desk",
+    "description": "Execution-oriented crypto desk: funding/basis analyst + liquidation/microstructure analyst + on-chain/flow analyst + risk manager. Goes beyond research into position sizing, execution timing, and risk gating.",
+    "source": "agent/src/swarm/presets/crypto_trading_desk.yaml",
+    "workers": [
+      {
+        "id": "funding_basis_analyst",
+        "role": "Funding Rate & Basis Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "perp-funding-basis",
+          "okx-market",
+          "crypto-derivatives"
+        ]
+      },
+      {
+        "id": "liquidation_analyst",
+        "role": "Liquidation & Microstructure Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "liquidation-heatmap",
+          "market-microstructure",
+          "execution-model"
+        ]
+      },
+      {
+        "id": "flow_analyst",
+        "role": "On-Chain & Stablecoin Flow Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "stablecoin-flow",
+          "onchain-analysis",
+          "token-unlock-treasury",
+          "defi-yield"
+        ]
+      },
+      {
+        "id": "desk_risk_manager",
+        "role": "Trading Desk Risk Manager",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "risk-analysis",
+          "asset-allocation",
+          "volatility",
+          "hedging-strategy"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-funding",
+        "agent_id": "funding_basis_analyst",
+        "prompt_template": "Analyze funding rates, basis structure, and carry opportunities for {target}. Timeframe: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-liquidation",
+        "agent_id": "liquidation_analyst",
+        "prompt_template": "Map liquidation levels, cascade risks, and microstructure conditions for {target}. Timeframe: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-flow",
+        "agent_id": "flow_analyst",
+        "prompt_template": "Analyze stablecoin flows, on-chain positioning, and capital rotation signals for {target}. Timeframe: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-risk-decision",
+        "agent_id": "desk_risk_manager",
+        "prompt_template": "Integrate all desk analyses and deliver an executable trading plan for {target} with position sizing and risk gates. Timeframe: {timeframe}.",
+        "depends_on": [
+          "task-funding",
+          "task-liquidation",
+          "task-flow"
+        ],
+        "input_from": {
+          "funding_basis": "task-funding",
+          "liquidation_micro": "task-liquidation",
+          "flow_analysis": "task-flow"
+        }
+      }
+    ]
+  },
+  {
+    "name": "derivatives_strategy_desk",
+    "title": "Derivatives Strategy Desk",
+    "description": "Volatility analysis → strategy design → Greeks risk management: sequential options trading desk workflow",
+    "source": "agent/src/swarm/presets/derivatives_strategy_desk.yaml",
+    "workers": [
+      {
+        "id": "vol_analyst",
+        "role": "Volatility Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "options_pricing",
+          "get_options_chain",
+          "get_market_data"
+        ],
+        "skills": [
+          "volatility",
+          "options-advanced"
+        ]
+      },
+      {
+        "id": "strategy_designer",
+        "role": "Strategy Designer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "options_pricing",
+          "get_options_chain",
+          "get_market_data"
+        ],
+        "skills": [
+          "options-strategy",
+          "options-advanced",
+          "hedging-strategy",
+          "options-payoff"
+        ]
+      },
+      {
+        "id": "greeks_manager",
+        "role": "Greeks Risk Manager",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "options_pricing",
+          "get_options_chain",
+          "get_market_data"
+        ],
+        "skills": [
+          "options-advanced",
+          "risk-analysis",
+          "volatility",
+          "options-payoff"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-vol",
+        "agent_id": "vol_analyst",
+        "prompt_template": "Analyze the historical volatility, implied volatility surface, term structure, and skew of {target} to provide a volatility environment assessment for options strategy design.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "strategy_designer",
+        "prompt_template": "Based on the volatility analysis of {target} and the market view '{view}', design the optimal options combination strategy and specify all contract details.",
+        "depends_on": [
+          "task-vol"
+        ],
+        "input_from": {
+          "vol_context": "task-vol"
+        }
+      },
+      {
+        "id": "task-greeks",
+        "agent_id": "greeks_manager",
+        "prompt_template": "Conduct Greeks risk quantification, scenario analysis, and stress testing for the {target} options strategy, and provide dynamic adjustment recommendations.",
+        "depends_on": [
+          "task-strategy"
+        ],
+        "input_from": {
+          "strategy_context": "task-strategy",
+          "vol_context": "task-vol"
+        }
+      }
+    ]
+  },
+  {
+    "name": "earnings_research_desk",
+    "title": "Earnings Research Desk",
+    "description": "Earnings-focused research team: fundamental analyst + earnings revision tracker + options/event analyst + earnings strategist. Deep-dives into company financials, consensus revisions, earnings event trades, and post-earnings drift.",
+    "source": "agent/src/swarm/presets/earnings_research_desk.yaml",
+    "workers": [
+      {
+        "id": "fundamental_analyst",
+        "role": "Fundamental & Filing Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "edgar-sec-filings",
+          "financial-statement",
+          "yfinance",
+          "fundamental-filter",
+          "valuation-model"
+        ]
+      },
+      {
+        "id": "revision_tracker",
+        "role": "Earnings Revision & Consensus Tracker",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "earnings-revision",
+          "earnings-forecast"
+        ]
+      },
+      {
+        "id": "event_options_analyst",
+        "role": "Earnings Event & Options Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_options_chain",
+          "get_market_data",
+          "options_pricing"
+        ],
+        "skills": [
+          "options-advanced",
+          "options-strategy",
+          "event-driven",
+          "volatility"
+        ]
+      },
+      {
+        "id": "earnings_strategist",
+        "role": "Earnings Desk Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "strategy-generate",
+          "risk-analysis",
+          "report-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-fundamental",
+        "agent_id": "fundamental_analyst",
+        "prompt_template": "Conduct deep fundamental and filing analysis on {target}. Focus on earnings quality, financial health, and peer comparison.",
+        "depends_on": []
+      },
+      {
+        "id": "task-revision",
+        "agent_id": "revision_tracker",
+        "prompt_template": "Track consensus revisions, earnings surprise history, and PEAD status for {target}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-options-event",
+        "agent_id": "event_options_analyst",
+        "prompt_template": "Analyze options positioning, implied move vs realized, and event trade setups for {target} around earnings.",
+        "depends_on": []
+      },
+      {
+        "id": "task-earnings-strategy",
+        "agent_id": "earnings_strategist",
+        "prompt_template": "Synthesize all analyses and deliver the final earnings trade recommendation for {target} with position sizing and decision tree.",
+        "depends_on": [
+          "task-fundamental",
+          "task-revision",
+          "task-options-event"
+        ],
+        "input_from": {
+          "fundamentals": "task-fundamental",
+          "revisions": "task-revision",
+          "options_event": "task-options-event"
+        }
+      }
+    ]
+  },
+  {
+    "name": "equity_research_team",
+    "title": "Equity Research Team",
+    "description": "Macro → sector → stock three-tier deep research → research editor consolidates into a complete report",
+    "source": "agent/src/swarm/presets/equity_research_team.yaml",
+    "workers": [
+      {
+        "id": "macro_analyst",
+        "role": "Macro Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "tushare",
+          "okx-market",
+          "yfinance",
+          "web-reader",
+          "global-macro"
+        ]
+      },
+      {
+        "id": "sector_analyst",
+        "role": "Sector Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis"
+        ],
+        "skills": [
+          "tushare",
+          "yfinance",
+          "fundamental-filter",
+          "multi-factor",
+          "us-etf-flow",
+          "sector-rotation"
+        ]
+      },
+      {
+        "id": "stock_picker",
+        "role": "Stock Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "backtest",
+          "factor_analysis"
+        ],
+        "skills": [
+          "tushare",
+          "yfinance",
+          "strategy-generate",
+          "technical-basic",
+          "multi-factor",
+          "earnings-revision"
+        ]
+      },
+      {
+        "id": "aggregator",
+        "role": "Research Report Editor",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "report-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-macro",
+        "agent_id": "macro_analyst",
+        "prompt_template": "Analyze the current macroeconomic environment and its impact on the {market} market, with a focus on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-sector",
+        "agent_id": "sector_analyst",
+        "prompt_template": "Based on the macro analysis, identify the most promising sectors in {market}.",
+        "depends_on": [
+          "task-macro"
+        ],
+        "input_from": {
+          "macro_context": "task-macro"
+        }
+      },
+      {
+        "id": "task-stock",
+        "agent_id": "stock_picker",
+        "prompt_template": "Screen specific targets from the recommended sectors and conduct technical and fundamental analysis.",
+        "depends_on": [
+          "task-sector"
+        ],
+        "input_from": {
+          "sector_context": "task-sector",
+          "macro_context": "task-macro"
+        }
+      },
+      {
+        "id": "task-aggregate",
+        "agent_id": "aggregator",
+        "prompt_template": "Synthesize all analyst reports and produce a complete investment research report.",
+        "depends_on": [
+          "task-stock"
+        ],
+        "input_from": {
+          "macro": "task-macro",
+          "sector": "task-sector",
+          "stock": "task-stock"
+        }
+      }
+    ]
+  },
+  {
+    "name": "etf_allocation_desk",
+    "title": "ETF Allocation Desk",
+    "description": "ETF screening + macro allocation + risk budgeting three-dimensional parallel analysis → portfolio optimizer constructs the final ETF portfolio and backtests",
+    "source": "agent/src/swarm/presets/etf_allocation_desk.yaml",
+    "workers": [
+      {
+        "id": "etf_screener",
+        "role": "ETF Screener",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis"
+        ],
+        "skills": [
+          "etf-analysis",
+          "fund-analysis",
+          "tushare"
+        ]
+      },
+      {
+        "id": "macro_allocator",
+        "role": "Macro Allocator",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "macro-analysis",
+          "asset-allocation",
+          "global-macro"
+        ]
+      },
+      {
+        "id": "risk_budgeter",
+        "role": "Risk Budgeter",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "backtest"
+        ],
+        "skills": [
+          "risk-analysis",
+          "volatility",
+          "etf-analysis"
+        ]
+      },
+      {
+        "id": "portfolio_optimizer",
+        "role": "Portfolio Optimizer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "etf-analysis",
+          "strategy-generate",
+          "asset-allocation"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-etf-screen",
+        "agent_id": "etf_screener",
+        "prompt_template": "In the {market} market, screen high-quality ETF candidates across major asset classes for investors with a {risk_profile} risk profile.",
+        "depends_on": []
+      },
+      {
+        "id": "task-macro-alloc",
+        "agent_id": "macro_allocator",
+        "prompt_template": "Based on the current economic cycle and macro environment, develop cross-asset class allocation weight recommendations for {market} suited for investors with a {risk_profile} risk profile.",
+        "depends_on": []
+      },
+      {
+        "id": "task-risk-budget",
+        "agent_id": "risk_budgeter",
+        "prompt_template": "Compute risk budgets and weight constraints for each asset class for a {market} ETF portfolio suited for investors with a {risk_profile} risk profile.",
+        "depends_on": []
+      },
+      {
+        "id": "task-optimize",
+        "agent_id": "portfolio_optimizer",
+        "prompt_template": "Synthesize the ETF screening, macro allocation, and risk budget inputs to construct a final ETF portfolio for investors with a {risk_profile} risk profile in the {market} market, and validate through backtesting.",
+        "depends_on": [
+          "task-etf-screen",
+          "task-macro-alloc",
+          "task-risk-budget"
+        ],
+        "input_from": {
+          "etf_candidates": "task-etf-screen",
+          "macro_allocation": "task-macro-alloc",
+          "risk_budget": "task-risk-budget"
+        }
+      }
+    ]
+  },
+  {
+    "name": "event_driven_task_force",
+    "title": "Event-Driven Task Force",
+    "description": "Event scanning → deep impact analysis → strategy construction: sequential deep-dive chain replicating an event-driven hedge fund special investigation unit workflow",
+    "source": "agent/src/swarm/presets/event_driven_task_force.yaml",
+    "workers": [
+      {
+        "id": "event_scanner",
+        "role": "Event Scout",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "event-driven",
+          "corporate-events",
+          "web-reader",
+          "geopolitical-risk"
+        ]
+      },
+      {
+        "id": "impact_analyst",
+        "role": "Impact Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_market_data",
+          "get_stock_news",
+          "read_url"
+        ],
+        "skills": [
+          "corporate-events",
+          "sentiment-analysis",
+          "valuation-model"
+        ]
+      },
+      {
+        "id": "strategy_builder",
+        "role": "Strategy Builder",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "event-driven",
+          "strategy-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-event-scan",
+        "agent_id": "event_scanner",
+        "prompt_template": "Scan for major corporate events in the {market} market, focusing on event types: {event_type} (cover all types if blank). Output a quality-filtered list of 10–15 events with materiality ratings and event cluster analysis.",
+        "depends_on": []
+      },
+      {
+        "id": "task-impact-analysis",
+        "agent_id": "impact_analyst",
+        "prompt_template": "Conduct deep impact analysis on high / medium-rated events from the scan list: assess fundamental impact, market pricing status, historical CAR statistics. Output the event impact matrix and Top 5 tradeable event recommendations.",
+        "depends_on": [
+          "task-event-scan"
+        ],
+        "input_from": {
+          "event_list": "task-event-scan"
+        }
+      },
+      {
+        "id": "task-strategy-build",
+        "agent_id": "strategy_builder",
+        "prompt_template": "Design complete trading strategies for the impact analyst's Top 5 tradeable events: entry conditions, position management, exit rules, stop-loss framework, and backtest validation of strategy performance under historically similar events.",
+        "depends_on": [
+          "task-impact-analysis"
+        ],
+        "input_from": {
+          "impact_analysis": "task-impact-analysis",
+          "event_list": "task-event-scan"
+        }
+      }
+    ]
+  },
+  {
+    "name": "factor_research_committee",
+    "title": "Factor Research Committee",
+    "description": "Factor mining + factor validation running in parallel → factor combination construction → backtest review: quant fund internal research review workflow",
+    "source": "agent/src/swarm/presets/factor_research_committee.yaml",
+    "workers": [
+      {
+        "id": "factor_miner",
+        "role": "Factor Miner",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "factor-research",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "factor_validator",
+        "role": "Factor Validator",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "quant-statistics",
+          "factor-research"
+        ]
+      },
+      {
+        "id": "factor_combiner",
+        "role": "Factor Combiner",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "backtest"
+        ],
+        "skills": [
+          "multi-factor",
+          "strategy-generate"
+        ]
+      },
+      {
+        "id": "backtest_reviewer",
+        "role": "Backtest Reviewer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "backtest-diagnose",
+          "quant-statistics"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-mine",
+        "agent_id": "factor_miner",
+        "prompt_template": "In the {market} market, mine 5–10 candidate Alpha factors of the {factor_type} type; provide detailed definitions and economic logic.",
+        "depends_on": []
+      },
+      {
+        "id": "task-validate",
+        "agent_id": "factor_validator",
+        "prompt_template": "Conduct comprehensive statistical validity testing on {factor_type} candidate factors in the {market} market, including IC analysis, quintile backtest, and robustness testing.",
+        "depends_on": []
+      },
+      {
+        "id": "task-combine",
+        "agent_id": "factor_combiner",
+        "prompt_template": "Based on factor mining and validation results, design the optimal factor combination scheme and build a {factor_type} multi-factor stock selection strategy for the {market} market.",
+        "depends_on": [
+          "task-mine",
+          "task-validate"
+        ],
+        "input_from": {
+          "mine_result": "task-mine",
+          "validate_result": "task-validate"
+        }
+      },
+      {
+        "id": "task-review",
+        "agent_id": "backtest_reviewer",
+        "prompt_template": "Review the backtest results of the {factor_type} multi-factor strategy in the {market} market; identify overfitting and data bias risks; provide deployment recommendations.",
+        "depends_on": [
+          "task-combine"
+        ],
+        "input_from": {
+          "combine_result": "task-combine",
+          "mine_result": "task-mine",
+          "validate_result": "task-validate"
+        }
+      }
+    ]
+  },
+  {
+    "name": "fund_selection_panel",
+    "title": "Fund Selection Panel",
+    "description": "Multi-dimensional quantitative screening → Brinson performance attribution and style analysis → FOF portfolio weight optimization, sequential professional review chain",
+    "source": "agent/src/swarm/presets/fund_selection_panel.yaml",
+    "workers": [
+      {
+        "id": "fund_screener",
+        "role": "Fund Screener",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "fund-analysis",
+          "fundamental-filter"
+        ]
+      },
+      {
+        "id": "attribution_analyst",
+        "role": "Performance Attribution Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "etf_holdings",
+          "get_market_data",
+          "get_stock_profile",
+          "get_fundamentals"
+        ],
+        "skills": [
+          "performance-attribution",
+          "fund-analysis",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "fof_optimizer",
+        "role": "FOF Portfolio Optimizer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis",
+          "strategy-generate",
+          "etf-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-fund-screen",
+        "agent_id": "fund_screener",
+        "prompt_template": "Conduct systematic multi-dimensional screening of {fund_type} funds with the objective: {goal}. Apply the six-dimensional screening framework (scale / performance / risk / manager / holdings / operations) and output the candidate fund list, screening funnel report, and preliminary ranking.",
+        "depends_on": []
+      },
+      {
+        "id": "task-performance-attribution",
+        "agent_id": "attribution_analyst",
+        "prompt_template": "Conduct deep performance attribution analysis on candidate funds: Brinson three-effect decomposition via src.quantlib.attribution on retrieved holdings and return series, a fitted cross-sectional style exposure profile via src.quantlib.factormodel (state the factor definitions; this is not Barra and must not be labelled as such), excess return quality rating, up/down capture rate comparison. Output attribution report and shortlist for FOF construction. Objective: {goal}.",
+        "depends_on": [
+          "task-fund-screen"
+        ],
+        "input_from": {
+          "candidate_funds": "task-fund-screen"
+        }
+      },
+      {
+        "id": "task-fof-optimize",
+        "agent_id": "fof_optimizer",
+        "prompt_template": "Construct and optimize an FOF portfolio from the shortlisted funds. Compare mean-variance / risk parity / equal-weight schemes, run historical stress tests, and output the recommended weight scheme, expected performance metrics, and rebalancing rulebook. Objective: {goal}.",
+        "depends_on": [
+          "task-performance-attribution"
+        ],
+        "input_from": {
+          "selected_funds": "task-performance-attribution",
+          "candidate_funds": "task-fund-screen"
+        }
+      }
+    ]
+  },
+  {
+    "name": "fundamental_research_team",
+    "title": "Fundamental Deep Research Team",
+    "description": "Financial / valuation / quality three-dimensional parallel analysis → research editor consolidates into a buy-side deep research report",
+    "source": "agent/src/swarm/presets/fundamental_research_team.yaml",
+    "workers": [
+      {
+        "id": "financial_analyst",
+        "role": "Financial Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_financial_statements",
+          "get_stock_profile",
+          "financial_rigor"
+        ],
+        "skills": [
+          "financial-statement",
+          "fundamental-filter"
+        ]
+      },
+      {
+        "id": "valuation_analyst",
+        "role": "Valuation Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_financial_statements",
+          "get_stock_profile",
+          "financial_rigor"
+        ],
+        "skills": [
+          "valuation-model",
+          "earnings-forecast"
+        ]
+      },
+      {
+        "id": "quality_analyst",
+        "role": "Quality Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "fundamental-filter",
+          "web-reader"
+        ]
+      },
+      {
+        "id": "report_editor",
+        "role": "Research Report Editor",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "report-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-financial",
+        "agent_id": "financial_analyst",
+        "prompt_template": "Conduct deep financial statement analysis of {target}, focusing on financial quality, profitability, cash flow health, and debt risk.",
+        "depends_on": []
+      },
+      {
+        "id": "task-valuation",
+        "agent_id": "valuation_analyst",
+        "prompt_template": "Value {target} by cross-validating the methods you can actually source: peer multiples from get_stock_profile, historical valuation percentiles, and a three_scenario target-price range from financial_rigor. If you build a DCF, build it explicitly in bash and label every assumed input; if you do not, say so. Provide a target price range with the method behind it named.",
+        "depends_on": []
+      },
+      {
+        "id": "task-quality",
+        "agent_id": "quality_analyst",
+        "prompt_template": "Conduct moat assessment, management quality analysis, and competitive landscape research on {target}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-report",
+        "agent_id": "report_editor",
+        "prompt_template": "Synthesize the research outputs from all three analysts to produce a complete deep research report on {target}, with a clear investment rating and target price.",
+        "depends_on": [
+          "task-financial",
+          "task-valuation",
+          "task-quality"
+        ],
+        "input_from": {
+          "financial": "task-financial",
+          "valuation": "task-valuation",
+          "quality": "task-quality"
+        }
+      }
+    ]
+  },
+  {
+    "name": "geopolitical_war_room",
+    "title": "Geopolitical Risk War Room",
+    "description": "Geopolitical analysis, energy shock, and supply-chain impact run in parallel, then feed into the Chief Strategist for synthesis, producing emergency asset-allocation playbooks for geopolitical crises.",
+    "source": "agent/src/swarm/presets/geopolitical_war_room.yaml",
+    "workers": [
+      {
+        "id": "geopolitical_analyst",
+        "role": "Geopolitical Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "geopolitical-risk",
+          "web-reader",
+          "global-macro"
+        ]
+      },
+      {
+        "id": "energy_analyst",
+        "role": "Energy Shock Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "commodity-analysis",
+          "geopolitical-risk"
+        ]
+      },
+      {
+        "id": "supply_chain_analyst",
+        "role": "Supply Chain Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "geopolitical-risk",
+          "sector-rotation",
+          "event-driven"
+        ]
+      },
+      {
+        "id": "chief_strategist",
+        "role": "Chief Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis",
+          "hedging-strategy"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-geopolitical",
+        "agent_id": "geopolitical_analyst",
+        "prompt_template": "Analyze geopolitical risk for crisis scenario \"{crisis}\": rate six hotspots, track GPR Index, with focus on {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-energy",
+        "agent_id": "energy_analyst",
+        "prompt_template": "Assess energy impact of crisis \"{crisis}\", quantify war risk premium and oil/gas disruption odds, with focus on {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-supply-chain",
+        "agent_id": "supply_chain_analyst",
+        "prompt_template": "Analyze global supply-chain impact (semis/rare earths/shipping/food) of crisis \"{crisis}\", identify affected industries and companies in {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "chief_strategist",
+        "prompt_template": "Synthesize all three streams and craft emergency geopolitical-risk allocation and hedging for {market} under crisis \"{crisis}\".",
+        "depends_on": [
+          "task-geopolitical",
+          "task-energy",
+          "task-supply-chain"
+        ],
+        "input_from": {
+          "geopolitical_report": "task-geopolitical",
+          "energy_report": "task-energy",
+          "supply_chain_report": "task-supply-chain"
+        }
+      }
+    ]
+  },
+  {
+    "name": "global_allocation_committee",
+    "title": "Global Allocation Committee",
+    "description": "Parallel A-shares + crypto + HK/US analysts; allocator synthesizes cross-market allocation with data-driven weighting, scenario analysis, and rebalancing rules.",
+    "source": "agent/src/swarm/presets/global_allocation_committee.yaml",
+    "workers": [
+      {
+        "id": "a_share_analyst",
+        "role": "A-Share Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis"
+        ],
+        "skills": [
+          "tushare",
+          "technical-basic",
+          "fundamental-filter",
+          "hk-connect-flow",
+          "sector-rotation",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "crypto_analyst",
+        "role": "Crypto Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "okx-market",
+          "perp-funding-basis",
+          "stablecoin-flow",
+          "crypto-derivatives",
+          "volatility",
+          "onchain-analysis"
+        ]
+      },
+      {
+        "id": "us_hk_analyst",
+        "role": "HK / US Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "yfinance",
+          "us-etf-flow",
+          "earnings-revision",
+          "adr-hshare",
+          "hk-connect-flow",
+          "technical-basic"
+        ]
+      },
+      {
+        "id": "allocator",
+        "role": "Allocation Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis",
+          "correlation-analysis",
+          "strategy-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-ashare",
+        "agent_id": "a_share_analyst",
+        "prompt_template": "Analyze the current A-share market with focus on: {goal}. Provide sector rotation view, Northbound flow signal, and 3-5 top picks.",
+        "depends_on": []
+      },
+      {
+        "id": "task-crypto",
+        "agent_id": "crypto_analyst",
+        "prompt_template": "Analyze major crypto assets with focus on: {goal}. Cover funding rates, stablecoin flows, and 3-5 top picks.",
+        "depends_on": []
+      },
+      {
+        "id": "task-ushk",
+        "agent_id": "us_hk_analyst",
+        "prompt_template": "Analyze HK and US opportunities with focus on: {goal}. Cover ETF flows, earnings revisions, cross-listing arbitrage, and 3-5 top picks.",
+        "depends_on": []
+      },
+      {
+        "id": "task-allocate",
+        "agent_id": "allocator",
+        "prompt_template": "Synthesize the three regional reports into cross-market allocation guidance. Risk tolerance: {risk_tolerance}. Goal: {goal}.",
+        "depends_on": [
+          "task-ashare",
+          "task-crypto",
+          "task-ushk"
+        ],
+        "input_from": {
+          "a_share": "task-ashare",
+          "crypto": "task-crypto",
+          "us_hk": "task-ushk"
+        }
+      }
+    ]
+  },
+  {
+    "name": "global_equities_desk",
+    "title": "Global Equities Research Desk",
+    "description": "Cross-market equity research: A-share analyst + HK/US analyst + crypto analyst + global strategist. Covers fundamental screening, earnings analysis, ETF flows, and cross-listing arbitrage for multi-market stock selection.",
+    "source": "agent/src/swarm/presets/global_equities_desk.yaml",
+    "workers": [
+      {
+        "id": "a_share_researcher",
+        "role": "A-Share Equity Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis"
+        ],
+        "skills": [
+          "tushare",
+          "fundamental-filter",
+          "hk-connect-flow",
+          "technical-basic",
+          "multi-factor",
+          "sector-rotation"
+        ]
+      },
+      {
+        "id": "us_hk_researcher",
+        "role": "US & HK Equity Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "yfinance",
+          "edgar-sec-filings",
+          "earnings-revision",
+          "us-etf-flow",
+          "adr-hshare",
+          "hk-connect-flow",
+          "technical-basic"
+        ]
+      },
+      {
+        "id": "crypto_researcher",
+        "role": "Crypto Asset Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "okx-market",
+          "perp-funding-basis",
+          "stablecoin-flow",
+          "onchain-analysis",
+          "crypto-derivatives"
+        ]
+      },
+      {
+        "id": "global_strategist",
+        "role": "Global Equity Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis",
+          "strategy-generate",
+          "correlation-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-ashare",
+        "agent_id": "a_share_researcher",
+        "prompt_template": "Conduct A-share equity research focused on: {goal}. Identify 5-8 top picks with fundamental rationale and Northbound flow support.",
+        "depends_on": []
+      },
+      {
+        "id": "task-ushk",
+        "agent_id": "us_hk_researcher",
+        "prompt_template": "Conduct US and HK equity research focused on: {goal}. Identify 5-8 top picks with earnings revision, ETF flow, and cross-listing analysis.",
+        "depends_on": []
+      },
+      {
+        "id": "task-crypto",
+        "agent_id": "crypto_researcher",
+        "prompt_template": "Analyze crypto opportunities in the context of: {goal}. Focus on cross-market correlation and 3-5 top picks.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "global_strategist",
+        "prompt_template": "Synthesize all three regional reports into a global equity strategy. Goal: {goal}. Risk tolerance: {risk_tolerance}. Deliver allocation weights, final security selection, and risk matrix.",
+        "depends_on": [
+          "task-ashare",
+          "task-ushk",
+          "task-crypto"
+        ],
+        "input_from": {
+          "a_share_research": "task-ashare",
+          "us_hk_research": "task-ushk",
+          "crypto_research": "task-crypto"
+        }
+      }
+    ]
+  },
+  {
+    "name": "investment_committee",
+    "title": "Investment Committee",
+    "description": "Long–short debate → risk review → PM final call: buy-side fund investment committee workflow.",
+    "source": "agent/src/swarm/presets/investment_committee.yaml",
+    "workers": [
+      {
+        "id": "bull_advocate",
+        "role": "Bull-side Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis",
+          "get_financial_statements",
+          "get_fund_flow",
+          "get_margin_trading",
+          "get_research_reports",
+          "get_stock_news"
+        ],
+        "skills": [
+          "technical-basic",
+          "fundamental-filter",
+          "yfinance",
+          "earnings-revision",
+          "sentiment-analysis"
+        ]
+      },
+      {
+        "id": "bear_advocate",
+        "role": "Bear-side Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis",
+          "get_options_chain",
+          "get_financial_statements",
+          "get_fund_flow",
+          "get_margin_trading",
+          "get_research_reports",
+          "get_stock_news"
+        ],
+        "skills": [
+          "technical-basic",
+          "fundamental-filter",
+          "yfinance",
+          "risk-analysis",
+          "volatility"
+        ]
+      },
+      {
+        "id": "risk_officer",
+        "role": "Chief Risk Officer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_options_chain",
+          "options_pricing",
+          "options_payoff",
+          "get_financial_statements",
+          "get_fund_flow",
+          "get_margin_trading",
+          "get_research_reports",
+          "get_stock_news"
+        ],
+        "skills": [
+          "risk-analysis",
+          "volatility",
+          "correlation-analysis"
+        ]
+      },
+      {
+        "id": "portfolio_manager",
+        "role": "Portfolio Manager",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "strategy-generate",
+          "asset-allocation"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-bull",
+        "agent_id": "bull_advocate",
+        "prompt_template": "Conduct full bull-side research on {target} and build a complete bullish investment case. Market: {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-bear",
+        "agent_id": "bear_advocate",
+        "prompt_template": "Conduct full bear-side research on {target}, identifying all bearish risks and downside logic. Market: {market}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-risk",
+        "agent_id": "risk_officer",
+        "prompt_template": "Review bull and bear arguments on {target}; from a risk angle assess validity, suggest position size, and propose risk management.",
+        "depends_on": [
+          "task-bull",
+          "task-bear"
+        ],
+        "input_from": {
+          "bull_report": "task-bull",
+          "bear_report": "task-bear"
+        }
+      },
+      {
+        "id": "task-decision",
+        "agent_id": "portfolio_manager",
+        "prompt_template": "After the debate and risk review on {target}, make the final investment decision and execution plan.",
+        "depends_on": [
+          "task-risk"
+        ],
+        "input_from": {
+          "full_debate": "task-risk"
+        }
+      }
+    ]
+  },
+  {
+    "name": "macro_rates_fx_desk",
+    "title": "Macro / Rates / FX Desk",
+    "description": "Cross-asset macro desk: global rates analyst + FX strategist + commodity/inflation analyst + macro portfolio manager. Covers central bank policy, yield curve dynamics, currency positioning, and macro-driven asset allocation.",
+    "source": "agent/src/swarm/presets/macro_rates_fx_desk.yaml",
+    "workers": [
+      {
+        "id": "rates_analyst",
+        "role": "Global Rates & Yield Curve Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "macro-analysis",
+          "global-macro",
+          "credit-analysis"
+        ]
+      },
+      {
+        "id": "fx_strategist",
+        "role": "FX Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "global-macro",
+          "macro-analysis",
+          "yfinance"
+        ]
+      },
+      {
+        "id": "commodity_inflation_analyst",
+        "role": "Commodity & Inflation Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "commodity-analysis",
+          "global-macro",
+          "seasonal"
+        ]
+      },
+      {
+        "id": "macro_pm",
+        "role": "Macro Portfolio Manager",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis",
+          "hedging-strategy",
+          "strategy-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-rates",
+        "agent_id": "rates_analyst",
+        "prompt_template": "Analyze the global rates environment: Fed path, yield curve signals, China-US rate differential, and cross-asset rate implications. Goal: {goal}. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-fx",
+        "agent_id": "fx_strategist",
+        "prompt_template": "Analyze the FX landscape: DXY, USD/CNY, HKD peg, major crosses, and portfolio hedging implications. Goal: {goal}. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-commodity-inflation",
+        "agent_id": "commodity_inflation_analyst",
+        "prompt_template": "Analyze commodity and inflation dynamics: energy, metals, inflation indicators, and asset allocation implications. Goal: {goal}. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-macro-allocation",
+        "agent_id": "macro_pm",
+        "prompt_template": "Synthesize rates, FX, and commodity/inflation analyses into a macro-driven cross-asset allocation recommendation. Goal: {goal}. Horizon: {timeframe}.",
+        "depends_on": [
+          "task-rates",
+          "task-fx",
+          "task-commodity-inflation"
+        ],
+        "input_from": {
+          "rates": "task-rates",
+          "fx": "task-fx",
+          "commodity_inflation": "task-commodity-inflation"
+        }
+      }
+    ]
+  },
+  {
+    "name": "macro_strategy_forum",
+    "title": "Macro Strategy Forum",
+    "description": "Global + domestic + policy perspectives run in parallel; chief strategist delivers integrated cross-asset allocation guidance.",
+    "source": "agent/src/swarm/presets/macro_strategy_forum.yaml",
+    "workers": [
+      {
+        "id": "global_economist",
+        "role": "Global Economist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "global-macro",
+          "web-reader",
+          "geopolitical-risk"
+        ]
+      },
+      {
+        "id": "domestic_economist",
+        "role": "China Economist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "read_url"
+        ],
+        "skills": [
+          "macro-analysis",
+          "tushare"
+        ]
+      },
+      {
+        "id": "policy_analyst",
+        "role": "Policy Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "regulatory-knowledge",
+          "sector-rotation",
+          "web-reader"
+        ]
+      },
+      {
+        "id": "chief_strategist",
+        "role": "Chief Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "asset-allocation",
+          "macro-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-global",
+        "agent_id": "global_economist",
+        "prompt_template": "Analyze the global macro environment; focus on major central banks and implications for {market}. Horizon: {horizon}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-domestic",
+        "agent_id": "domestic_economist",
+        "prompt_template": "Analyze China domestic macro and policy stance; implications for {market}. Horizon: {horizon}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-policy",
+        "agent_id": "policy_analyst",
+        "prompt_template": "Analyze current regulatory and industrial policy changes affecting {market}. Horizon: {horizon}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "chief_strategist",
+        "prompt_template": "Integrate global, domestic, and policy dimensions into cross-asset allocation and market outlook for {market} over {horizon}.",
+        "depends_on": [
+          "task-global",
+          "task-domestic",
+          "task-policy"
+        ],
+        "input_from": {
+          "global_macro": "task-global",
+          "domestic_macro": "task-domestic",
+          "policy_analysis": "task-policy"
+        }
+      }
+    ]
+  },
+  {
+    "name": "ml_quant_lab",
+    "title": "Machine Learning Quant Lab",
+    "description": "Feature engineering and model design in parallel; flows into the backtest engineer for strict out-of-sample validation.",
+    "source": "agent/src/swarm/presets/ml_quant_lab.yaml",
+    "workers": [
+      {
+        "id": "feature_engineer",
+        "role": "Feature Engineer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "ml-strategy",
+          "factor-research",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "data_scientist",
+        "role": "Data Scientist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "load_skill"
+        ],
+        "skills": [
+          "ml-strategy",
+          "quant-statistics"
+        ]
+      },
+      {
+        "id": "backtest_engineer",
+        "role": "Backtest Engineer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "strategy-generate",
+          "backtest-diagnose",
+          "quant-statistics"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-features",
+        "agent_id": "feature_engineer",
+        "prompt_template": "Design the feature-engineering plan for predicting {target_variable} in {market}. Objective: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-model",
+        "agent_id": "data_scientist",
+        "prompt_template": "Design the ML model plan for predicting {target_variable} in {market}. Objective: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-backtest",
+        "agent_id": "backtest_engineer",
+        "prompt_template": "Turn the feature and model plans into a backtestable strategy and run strict OOS validation of the {target_variable} signal in {market}. Objective: {goal}.",
+        "depends_on": [
+          "task-features",
+          "task-model"
+        ],
+        "input_from": {
+          "feature_plan": "task-features",
+          "model_plan": "task-model"
+        }
+      }
+    ]
+  },
+  {
+    "name": "pairs_research_lab",
+    "title": "Pairs Trading Research Lab",
+    "description": "Correlation scan and cointegration testing in parallel → converge into the pair strategist for strategy design → final microstructure review for execution feasibility.",
+    "source": "agent/src/swarm/presets/pairs_research_lab.yaml",
+    "workers": [
+      {
+        "id": "correlation_scanner",
+        "role": "Correlation Scanner",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_market_data",
+          "screen_market"
+        ],
+        "skills": [
+          "correlation-analysis",
+          "pair-trading",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "cointegration_tester",
+        "role": "Cointegration Tester",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_market_data"
+        ],
+        "skills": [
+          "correlation-analysis",
+          "quant-statistics"
+        ]
+      },
+      {
+        "id": "pair_strategist",
+        "role": "Pair Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "pair-trading",
+          "correlation-analysis",
+          "strategy-generate"
+        ]
+      },
+      {
+        "id": "microstructure_reviewer",
+        "role": "Microstructure Reviewer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "market-microstructure",
+          "execution-model"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-correlation-scan",
+        "agent_id": "correlation_scanner",
+        "prompt_template": "Scan {market} ({sector} sector; empty = full market) for highly correlated pairs—comovement and sector clustering.",
+        "depends_on": []
+      },
+      {
+        "id": "task-cointegration-test",
+        "agent_id": "cointegration_tester",
+        "prompt_template": "Strict cointegration tests on {market} pair candidates ({sector} constraint); half-life and dynamic hedge; keep significant pairs.",
+        "depends_on": []
+      },
+      {
+        "id": "task-pair-strategy",
+        "agent_id": "pair_strategist",
+        "prompt_template": "Integrate correlation and cointegration; design full pair strategy for {market} ({sector}) and backtest.",
+        "depends_on": [
+          "task-correlation-scan",
+          "task-cointegration-test"
+        ],
+        "input_from": {
+          "correlation_report": "task-correlation-scan",
+          "cointegration_report": "task-cointegration-test"
+        }
+      },
+      {
+        "id": "task-microstructure-review",
+        "agent_id": "microstructure_reviewer",
+        "prompt_template": "Microstructure review of {market} ({sector}) pair strategy—feasibility, costs, liquidity limits.",
+        "depends_on": [
+          "task-pair-strategy"
+        ],
+        "input_from": {
+          "strategy_report": "task-pair-strategy",
+          "correlation_report": "task-correlation-scan",
+          "cointegration_report": "task-cointegration-test"
+        }
+      }
+    ]
+  },
+  {
+    "name": "portfolio_review_board",
+    "title": "Portfolio Review Board",
+    "description": "Performance attribution, risk review, and execution quality in parallel; CIO synthesizes into rebalance decisions.",
+    "source": "agent/src/swarm/presets/portfolio_review_board.yaml",
+    "workers": [
+      {
+        "id": "attribution_analyst",
+        "role": "Performance Attribution Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_market_data"
+        ],
+        "skills": [
+          "performance-attribution",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "risk_inspector",
+        "role": "Risk Inspector",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "risk-analysis",
+          "volatility"
+        ]
+      },
+      {
+        "id": "execution_analyst",
+        "role": "Execution Quality Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "analyze_trade_journal",
+          "get_market_data"
+        ],
+        "skills": [
+          "execution-model",
+          "market-microstructure"
+        ]
+      },
+      {
+        "id": "chief_investment_officer",
+        "role": "Chief Investment Officer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "asset-allocation",
+          "risk-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-attribution",
+        "agent_id": "attribution_analyst",
+        "prompt_template": "Performance attribution for portfolio {portfolio}, {review_period}, with emphasis on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-risk",
+        "agent_id": "risk_inspector",
+        "prompt_template": "Risk health check for portfolio {portfolio}, {review_period}, with emphasis on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-execution",
+        "agent_id": "execution_analyst",
+        "prompt_template": "Execution quality analysis for portfolio {portfolio} over {review_period}, with emphasis on {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-cio-decision",
+        "agent_id": "chief_investment_officer",
+        "prompt_template": "Chair the {review_period} review for portfolio {portfolio}; synthesize the three reports into position decisions, emphasizing {goal}.",
+        "depends_on": [
+          "task-attribution",
+          "task-risk",
+          "task-execution"
+        ],
+        "input_from": {
+          "attribution_report": "task-attribution",
+          "risk_report": "task-risk",
+          "execution_report": "task-execution"
+        }
+      }
+    ]
+  },
+  {
+    "name": "quant_strategy_desk",
+    "title": "Quant Strategy Desk",
+    "description": "Stock screening + factor research in parallel → strategy backtest → risk audit → final report.",
+    "source": "agent/src/swarm/presets/quant_strategy_desk.yaml",
+    "workers": [
+      {
+        "id": "screener",
+        "role": "Stock Screener",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "factor_analysis"
+        ],
+        "skills": [
+          "tushare",
+          "fundamental-filter"
+        ]
+      },
+      {
+        "id": "factor_miner",
+        "role": "Factor Researcher",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "multi-factor",
+          "factor-research"
+        ]
+      },
+      {
+        "id": "backtester",
+        "role": "Strategy Backtester",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "strategy-generate",
+          "technical-basic"
+        ]
+      },
+      {
+        "id": "risk_auditor",
+        "role": "Risk Auditor",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "volatility"
+        ]
+      },
+      {
+        "id": "report_aggregator",
+        "role": "Report Aggregator",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "report-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-screen",
+        "agent_id": "screener",
+        "prompt_template": "Screen {market} for candidates matching the objective '{goal}'.",
+        "depends_on": []
+      },
+      {
+        "id": "task-factor",
+        "agent_id": "factor_miner",
+        "prompt_template": "Mine alpha factors in {market} suited to strategy '{goal}'.",
+        "depends_on": []
+      },
+      {
+        "id": "task-backtest",
+        "agent_id": "backtester",
+        "prompt_template": "Build the strategy from screening and factor output and backtest.",
+        "depends_on": [
+          "task-screen",
+          "task-factor"
+        ],
+        "input_from": {
+          "screener_result": "task-screen",
+          "factors": "task-factor"
+        }
+      },
+      {
+        "id": "task-risk",
+        "agent_id": "risk_auditor",
+        "prompt_template": "Audit risk exposures in the backtest and recommend improvements.",
+        "depends_on": [
+          "task-backtest"
+        ],
+        "input_from": {
+          "backtest_result": "task-backtest"
+        }
+      },
+      {
+        "id": "task-report",
+        "agent_id": "report_aggregator",
+        "prompt_template": "Consolidate screening, factor research, backtest, and risk audit into the final research report.",
+        "depends_on": [
+          "task-screen",
+          "task-factor",
+          "task-backtest",
+          "task-risk"
+        ],
+        "input_from": {
+          "screener_result": "task-screen",
+          "factors": "task-factor",
+          "backtest_result": "task-backtest",
+          "risk_audit": "task-risk"
+        }
+      }
+    ]
+  },
+  {
+    "name": "risk_committee",
+    "title": "Risk Committee",
+    "description": "Drawdown, tail risk, and market regime reviews run in parallel; head of risk signs off.",
+    "source": "agent/src/swarm/presets/risk_committee.yaml",
+    "workers": [
+      {
+        "id": "drawdown_analyst",
+        "role": "Drawdown Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "volatility"
+        ]
+      },
+      {
+        "id": "tail_risk_analyst",
+        "role": "Tail Risk Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_options_chain",
+          "options_pricing",
+          "options_payoff"
+        ],
+        "skills": [
+          "volatility"
+        ]
+      },
+      {
+        "id": "regime_detector",
+        "role": "Market Regime Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "technical_indicators"
+        ],
+        "skills": [
+          "volatility",
+          "technical-basic"
+        ]
+      },
+      {
+        "id": "aggregator",
+        "role": "Head of Risk",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file"
+        ],
+        "skills": []
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-drawdown",
+        "agent_id": "drawdown_analyst",
+        "prompt_template": "Analyze historical drawdown behavior and current drawdown risk for {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-tail",
+        "agent_id": "tail_risk_analyst",
+        "prompt_template": "Assess tail risk for {goal} under extreme market conditions.",
+        "depends_on": []
+      },
+      {
+        "id": "task-regime",
+        "agent_id": "regime_detector",
+        "prompt_template": "Determine the current market regime for {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-aggregate",
+        "agent_id": "aggregator",
+        "prompt_template": "Integrate the three risk dimensions into a complete risk audit report.",
+        "depends_on": [
+          "task-drawdown",
+          "task-tail",
+          "task-regime"
+        ],
+        "input_from": {
+          "drawdown": "task-drawdown",
+          "tail_risk": "task-tail",
+          "regime": "task-regime"
+        }
+      }
+    ]
+  },
+  {
+    "name": "sector_rotation_team",
+    "title": "Sector Rotation Research Team",
+    "description": "Economic cycle + prosperity + capital flows in parallel → rotation strategist builds and backtests a sector rotation strategy.",
+    "source": "agent/src/swarm/presets/sector_rotation_team.yaml",
+    "workers": [
+      {
+        "id": "cycle_analyst",
+        "role": "Economic Cycle Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "macro-analysis",
+          "seasonal"
+        ]
+      },
+      {
+        "id": "prosperity_analyst",
+        "role": "Sector Prosperity Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "sector-rotation",
+          "fundamental-filter",
+          "multi-factor"
+        ]
+      },
+      {
+        "id": "flow_analyst",
+        "role": "Capital Flow Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "tushare",
+          "sentiment-analysis"
+        ]
+      },
+      {
+        "id": "rotation_strategist",
+        "role": "Sector Rotation Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "strategy-generate",
+          "sector-rotation"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-cycle",
+        "agent_id": "cycle_analyst",
+        "prompt_template": "Judge {market} economic cycle phase and sector tilts. Focus: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-prosperity",
+        "agent_id": "prosperity_analyst",
+        "prompt_template": "Rank {market} sector prosperity and value-for-prosperity. Focus: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-flow",
+        "agent_id": "flow_analyst",
+        "prompt_template": "Analyze {market} sector flows—accumulation vs distribution. Focus: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "rotation_strategist",
+        "prompt_template": "Merge cycle, prosperity, flows into a {market} rotation strategy and backtest. Focus: {goal}.",
+        "depends_on": [
+          "task-cycle",
+          "task-prosperity",
+          "task-flow"
+        ],
+        "input_from": {
+          "cycle_analysis": "task-cycle",
+          "prosperity_analysis": "task-prosperity",
+          "flow_analysis": "task-flow"
+        }
+      }
+    ]
+  },
+  {
+    "name": "sentiment_intelligence_team",
+    "title": "Market Sentiment Intelligence Unit",
+    "description": "News intel / social sentiment / capital flows in parallel → sentiment signal synthesizer outputs composite score and reversal signals.",
+    "source": "agent/src/swarm/presets/sentiment_intelligence_team.yaml",
+    "workers": [
+      {
+        "id": "news_analyst",
+        "role": "News Intelligence Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "web-reader",
+          "sentiment-analysis",
+          "social-media-intelligence"
+        ]
+      },
+      {
+        "id": "social_analyst",
+        "role": "Social Sentiment Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "behavioral-finance",
+          "sentiment-analysis",
+          "social-media-intelligence"
+        ]
+      },
+      {
+        "id": "flow_analyst",
+        "role": "Capital Flow Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "tushare",
+          "sentiment-analysis"
+        ]
+      },
+      {
+        "id": "signal_synthesizer",
+        "role": "Sentiment Signal Synthesizer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill"
+        ],
+        "skills": [
+          "behavioral-finance",
+          "risk-analysis"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-news-intel",
+        "agent_id": "news_analyst",
+        "prompt_template": "Analyze {market} at {timeframe}: finance news, policy, sell-side summaries. Output news sentiment −100..+100, key events, policy phase.",
+        "depends_on": []
+      },
+      {
+        "id": "task-social-sentiment",
+        "agent_id": "social_analyst",
+        "prompt_template": "Analyze {market} at {timeframe}: social sentiment, fear/greed, retail behavior, extremes. Output social score and extreme alerts.",
+        "depends_on": []
+      },
+      {
+        "id": "task-flow-analysis",
+        "agent_id": "flow_analyst",
+        "prompt_template": "Analyze {market} at {timeframe}: main / Northbound / margin / block / dragon-tiger flows. Output flow score and smart-money signals.",
+        "depends_on": []
+      },
+      {
+        "id": "task-signal-synthesis",
+        "agent_id": "signal_synthesizer",
+        "prompt_template": "Merge news, social, and flow for {market} {timeframe}: composite score, percentile calibration, reversal call, position advice.",
+        "depends_on": [
+          "task-news-intel",
+          "task-social-sentiment",
+          "task-flow-analysis"
+        ],
+        "input_from": {
+          "news_sentiment": "task-news-intel",
+          "social_sentiment": "task-social-sentiment",
+          "flow_sentiment": "task-flow-analysis"
+        }
+      }
+    ]
+  },
+  {
+    "name": "social_alpha_team",
+    "title": "Social-Media Alternative Data Team",
+    "description": "Twitter, Telegram, and Reddit analyzed in parallel → Alpha synthesizer extracts tradable social sentiment factors.",
+    "source": "agent/src/swarm/presets/social_alpha_team.yaml",
+    "workers": [
+      {
+        "id": "twitter_analyst",
+        "role": "Twitter Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "social-media-intelligence",
+          "sentiment-analysis"
+        ]
+      },
+      {
+        "id": "telegram_analyst",
+        "role": "Telegram Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "social-media-intelligence",
+          "sentiment-analysis",
+          "onchain-analysis"
+        ]
+      },
+      {
+        "id": "reddit_analyst",
+        "role": "Reddit Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "read_url"
+        ],
+        "skills": [
+          "social-media-intelligence",
+          "behavioral-finance",
+          "sentiment-analysis"
+        ]
+      },
+      {
+        "id": "alpha_synthesizer",
+        "role": "Alpha Synthesizer",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis"
+        ],
+        "skills": [
+          "social-media-intelligence",
+          "factor-research",
+          "quant-statistics"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-twitter",
+        "agent_id": "twitter_analyst",
+        "prompt_template": "Analyze FinTwit on \"{target}\": KOL views, topic heat, sentiment extremes. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-telegram",
+        "agent_id": "telegram_analyst",
+        "prompt_template": "Analyze Telegram crypto/quant channels on \"{target}\": signal quality, heat, alpha clues. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-reddit",
+        "agent_id": "reddit_analyst",
+        "prompt_template": "Analyze Reddit (WSB/investing/crypto) on \"{target}\": hot names, options anomalies, retail sentiment. Horizon: {timeframe}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-alpha-synthesis",
+        "agent_id": "alpha_synthesizer",
+        "prompt_template": "Synthesize Twitter/Telegram/Reddit into social-media alpha for \"{target}\": build factors and validate. Horizon: {timeframe}.",
+        "depends_on": [
+          "task-twitter",
+          "task-telegram",
+          "task-reddit"
+        ],
+        "input_from": {
+          "twitter_report": "task-twitter",
+          "telegram_report": "task-telegram",
+          "reddit_report": "task-reddit"
+        }
+      }
+    ]
+  },
+  {
+    "name": "statistical_arbitrage_desk",
+    "title": "Statistical Arbitrage Desk",
+    "description": "Pair scanning and microstructure analysis in parallel → converge into the arbitrage strategist to build the strategy → final risk-control review.",
+    "source": "agent/src/swarm/presets/statistical_arbitrage_desk.yaml",
+    "workers": [
+      {
+        "id": "pair_scanner",
+        "role": "Pair Scanner",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "factor_analysis",
+          "get_market_data",
+          "screen_market"
+        ],
+        "skills": [
+          "pair-trading",
+          "quant-statistics",
+          "correlation-analysis"
+        ]
+      },
+      {
+        "id": "microstructure_analyst",
+        "role": "Microstructure Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "orderbook_depth"
+        ],
+        "skills": [
+          "market-microstructure",
+          "execution-model"
+        ]
+      },
+      {
+        "id": "arb_strategist",
+        "role": "Arbitrage Strategist",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "backtest"
+        ],
+        "skills": [
+          "pair-trading",
+          "strategy-generate",
+          "quant-statistics"
+        ]
+      },
+      {
+        "id": "risk_monitor",
+        "role": "Risk Monitor",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "risk-analysis",
+          "volatility"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-pair-scan",
+        "agent_id": "pair_scanner",
+        "prompt_template": "Scan {market} for stat-arb pairs ({sector} sector constraint). Focus: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-microstructure",
+        "agent_id": "microstructure_analyst",
+        "prompt_template": "Analyze microstructure and trading costs for candidate pairs in {market}. Focus: {goal}.",
+        "depends_on": []
+      },
+      {
+        "id": "task-strategy",
+        "agent_id": "arb_strategist",
+        "prompt_template": "Integrate pair scan and microstructure work; design and backtest a {market} stat-arb strategy. Focus: {goal}.",
+        "depends_on": [
+          "task-pair-scan",
+          "task-microstructure"
+        ],
+        "input_from": {
+          "pair_scan_result": "task-pair-scan",
+          "microstructure_report": "task-microstructure"
+        }
+      },
+      {
+        "id": "task-risk-review",
+        "agent_id": "risk_monitor",
+        "prompt_template": "Full risk review of the {market} stat-arb strategy. Focus: {goal}.",
+        "depends_on": [
+          "task-strategy"
+        ],
+        "input_from": {
+          "strategy_report": "task-strategy",
+          "pair_scan_result": "task-pair-scan",
+          "microstructure_report": "task-microstructure"
+        }
+      }
+    ]
+  },
+  {
+    "name": "technical_analysis_panel",
+    "title": "Technical Analysis Panel",
+    "description": "Classic TA + Ichimoku + harmonic patterns + Elliott Wave + SMC run in parallel → signal aggregator scores consensus and resonance.",
+    "source": "agent/src/swarm/presets/technical_analysis_panel.yaml",
+    "workers": [
+      {
+        "id": "classic_ta_analyst",
+        "role": "Classic Technical Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "technical_indicators"
+        ],
+        "skills": [
+          "technical-basic",
+          "candlestick"
+        ]
+      },
+      {
+        "id": "ichimoku_analyst",
+        "role": "Ichimoku Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "technical_indicators"
+        ],
+        "skills": [
+          "ichimoku"
+        ]
+      },
+      {
+        "id": "harmonic_analyst",
+        "role": "Harmonic Pattern Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "pattern"
+        ],
+        "skills": [
+          "harmonic"
+        ]
+      },
+      {
+        "id": "wave_analyst",
+        "role": "Elliott Wave Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "pattern"
+        ],
+        "skills": [
+          "elliott-wave",
+          "chanlun"
+        ]
+      },
+      {
+        "id": "smc_analyst",
+        "role": "SMC / Order-Flow Analyst",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data"
+        ],
+        "skills": [
+          "smc",
+          "minute-analysis"
+        ]
+      },
+      {
+        "id": "signal_aggregator",
+        "role": "Signal Aggregator (Judge)",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file"
+        ],
+        "skills": []
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-classic-ta",
+        "agent_id": "classic_ta_analyst",
+        "prompt_template": "Classic TA on {target} at {timeframe}: direction and key levels.",
+        "depends_on": []
+      },
+      {
+        "id": "task-ichimoku",
+        "agent_id": "ichimoku_analyst",
+        "prompt_template": "Ichimoku on {target} at {timeframe}: cloud, TK, Chikou, time theory.",
+        "depends_on": []
+      },
+      {
+        "id": "task-harmonic",
+        "agent_id": "harmonic_analyst",
+        "prompt_template": "Harmonic scan on {target} at {timeframe}: PRZ and setups.",
+        "depends_on": []
+      },
+      {
+        "id": "task-wave",
+        "agent_id": "wave_analyst",
+        "prompt_template": "Elliott wave count on {target} at {timeframe}: position and targets.",
+        "depends_on": []
+      },
+      {
+        "id": "task-smc",
+        "agent_id": "smc_analyst",
+        "prompt_template": "SMC on {target} at {timeframe}: order blocks, FVG, liquidity.",
+        "depends_on": []
+      },
+      {
+        "id": "task-aggregate",
+        "agent_id": "signal_aggregator",
+        "prompt_template": "Aggregate five TA schools on {target} at {timeframe}: resonance and final call.",
+        "depends_on": [
+          "task-classic-ta",
+          "task-ichimoku",
+          "task-harmonic",
+          "task-wave",
+          "task-smc"
+        ],
+        "input_from": {
+          "classic_ta": "task-classic-ta",
+          "ichimoku": "task-ichimoku",
+          "harmonic": "task-harmonic",
+          "wave": "task-wave",
+          "smc": "task-smc"
+        }
+      }
+    ]
+  },
+  {
+    "name": "value_investing_committee",
+    "title": "Value Investing Committee (Buffett / Munger / Duan / Li Lu)",
+    "description": "Four adversarial master perspectives — Buffett (moat & price), Munger (inversion & risk), Duan Yongping (good business & trustworthy management), Li Lu (10-year certainty & civilizational trend, incl. demographic/consumption macro) — run in parallel on one company, then a chair synthesizes consensus and contradictions into a verdict. Inspired by the ai-berkshire master-视角 framework. Each perspective is a reconstruction of a publicly documented methodology, not the named individual and not an endorsement. Use for deep value-investing deliberation on a single named company.",
+    "source": "agent/src/swarm/presets/value_investing_committee.yaml",
+    "workers": [
+      {
+        "id": "buffett",
+        "role": "Warren Buffett — Moat & Price",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_financial_statements",
+          "web_search",
+          "financial_rigor"
+        ],
+        "skills": [
+          "fundamental-filter",
+          "valuation-model",
+          "management-deep-dive"
+        ]
+      },
+      {
+        "id": "munger",
+        "role": "Charlie Munger — Inversion & Risk",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_financial_statements",
+          "web_search",
+          "financial_rigor"
+        ],
+        "skills": [
+          "risk-analysis",
+          "financial-statement",
+          "fundamental-filter"
+        ]
+      },
+      {
+        "id": "duan_yongping",
+        "role": "Duan Yongping — Good Business & Trustworthy People",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_financial_statements",
+          "web_search",
+          "financial_rigor"
+        ],
+        "skills": [
+          "management-deep-dive",
+          "fundamental-filter",
+          "thesis-tracker"
+        ]
+      },
+      {
+        "id": "li_lu",
+        "role": "Li Lu — 10-Year Certainty & Civilizational Trend",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "get_market_data",
+          "get_financial_statements",
+          "web_search",
+          "financial_rigor"
+        ],
+        "skills": [
+          "bottleneck-hunter",
+          "valuation-model",
+          "thesis-tracker",
+          "global-macro"
+        ]
+      },
+      {
+        "id": "chair",
+        "role": "Committee Chair — Consensus & Contradictions",
+        "tools": [
+          "bash",
+          "read_file",
+          "write_file",
+          "load_skill",
+          "report_audit"
+        ],
+        "skills": [
+          "report-generate"
+        ]
+      }
+    ],
+    "task_structure": [
+      {
+        "id": "task-buffett",
+        "agent_id": "buffett",
+        "prompt_template": "Assess whether {company} ({market}) is a good business and whether the current price offers a margin of safety.",
+        "depends_on": []
+      },
+      {
+        "id": "task-munger",
+        "agent_id": "munger",
+        "prompt_template": "Do an inversion analysis on {company} ({market}) — list every path that could make it fail, go to zero, or underperform.",
+        "depends_on": []
+      },
+      {
+        "id": "task-duan",
+        "agent_id": "duan_yongping",
+        "prompt_template": "Assess whether {company} ({market}) is a good business and whether management is worth entrusting with your money for 10 years.",
+        "depends_on": []
+      },
+      {
+        "id": "task-li",
+        "agent_id": "li_lu",
+        "prompt_template": "Assess whether {company} ({market}) will still exist and be stronger in 10 years; the civilizational trend it's on, certainty, and the demographic/consumption macro headwinds.",
+        "depends_on": []
+      },
+      {
+        "id": "task-chair",
+        "agent_id": "chair",
+        "prompt_template": "Synthesize the four masters' lenses; find consensus and contradictions; give the committee's final verdict.",
+        "depends_on": [
+          "task-buffett",
+          "task-munger",
+          "task-duan",
+          "task-li"
+        ],
+        "input_from": {
+          "buffett": "task-buffett",
+          "munger": "task-munger",
+          "duan": "task-duan",
+          "li": "task-li"
+        }
+      }
+    ]
+  }
+]

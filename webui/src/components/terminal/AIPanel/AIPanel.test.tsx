@@ -12,7 +12,8 @@ vi.mock("../ipc", () => ({
   onTerminalOutput: vi.fn().mockResolvedValue(() => {}),
   onTerminalSessionStatus: vi.fn().mockResolvedValue(() => {}),
   onTerminalMaintenanceUpdated: vi.fn().mockResolvedValue(() => {}),
-  terminalSaveConnections: vi.fn(),
+  terminalUpsertConnection: vi.fn(),
+  terminalDeleteSavedConnection: vi.fn(),
   terminalLoadConnections: vi.fn().mockResolvedValue([]),
 }));
 
@@ -95,8 +96,25 @@ describe("AIPanel", () => {
     expect(screen.getByText("修复 nginx 502")).toBeTruthy();
   });
 
-  it("switches to the history tab", () => {
+  it("shows a retry action when restoring the active maintenance task fails", async () => {
+    getActive.mockRejectedValueOnce(new Error("temporary backend failure"));
     render(<AIPanel sessionId="sess-1" />);
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText("无法加载当前维护任务，任务状态可能不是最新的。")).toBeTruthy();
+
+    getActive.mockResolvedValueOnce(null);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("switches to the history tab", async () => {
+    await act(async () => {
+      render(<AIPanel sessionId="sess-1" />);
+    });
     expect(screen.getByTestId("ai-chat")).toBeTruthy();
 
     fireEvent.click(screen.getByText("维护记录"));

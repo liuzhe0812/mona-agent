@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "id": "huashu-3d",
+  "name": "立体展示",
+  "description": "浅色影棚、立体物体和连续镜头，适合产品形象与细节展示。",
+  "baseTemplateId": "huashu-3d",
+  "mode": "light",
+  "tokens": {
+    "colors": {
+      "primary": "#D9480F",
+      "secondary": "#6B655E",
+      "accent": "#D9480F",
+      "background": "#EFECE6",
+      "surface": "#FFFFFF",
+      "textPrimary": "#1D1B18",
+      "textSecondary": "#6B655E",
+      "border": "#CCC7BF",
+      "success": "#2B6B54",
+      "warning": "#C69A4B",
+      "error": "#A62920"
+    },
+    "typography": {
+      "headingFamily": "Inter",
+      "bodyFamily": "Noto Sans SC",
+      "scale": "large",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.2,
+      "bodyLineHeight": 1.55
+    },
+    "shape": {
+      "cardRadius": 4,
+      "cardStyle": "none",
+      "density": "spacious",
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 80
+    }
+  },
+  "components": {
+    "cover": "cover-title-right-v1",
+    "chapter": "chapter-numbered-v1",
+    "content": "content-outline-v1",
+    "data": "data-metric-row-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-horizontal-v1",
+    "quote": "quote-accent-v1",
+    "outro": "outro-brand-light-v1"
+  },
+  "allowedLayouts": [
+    "cover-title-right",
+    "chapter-numbered",
+    "content-outline",
+    "data-metric-row",
+    "comparison-columns",
+    "process-horizontal",
+    "quote-accent",
+    "outro-brand"
+  ],
+  "allowedAnimations": [
+    "fade-rise",
+    "stagger-rise",
+    "cross-fade"
+  ],
+  "motion": {
+    "intensity": "standard",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 520,
+    "staggerMs": 90,
+    "transitionDurationMs": 420
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "overlay": {
+        "type": "solid",
+        "color": "#EFECE6",
+        "opacity": 0.92,
+        "direction": "none"
+      },
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {
+        "top": 0.08,
+        "right": 0.08,
+        "bottom": 0.1,
+        "left": 0.08
+      },
+      "fallback": "#EFECE6"
+    },
+    "roles": {
+      "cover": {
+        "inherit": "default"
+      },
+      "chapter": {
+        "inherit": "default"
+      },
+      "content": {
+        "inherit": "default",
+        "assetPolicy": "episode-replaceable"
+      },
+      "data": {
+        "inherit": "default"
+      },
+      "comparison": {
+        "inherit": "default"
+      },
+      "process": {
+        "inherit": "default"
+      },
+      "quote": {
+        "inherit": "default"
+      },
+      "outro": {
+        "inherit": "default"
+      }
+    }
+  },
+  "subtitle": {
+    "position": "bottom-center",
+    "style": "caption-rail",
+    "fontSize": 36,
+    "lineHeight": 1.35,
+    "safeAreaBottom": 0.08,
+    "maxLines": 2
+  },
+  "aspectVariants": {
+    "16:9": {
+      "enabled": true
+    },
+    "9:16": {
+      "enabled": true
+    },
+    "1:1": {
+      "enabled": true
+    }
+  },
+  "source": {
+    "kind": "huashu-motion",
+    "version": "0.3.1",
+    "template": "object-3d",
+    "templatePath": "assets/huashu-motion/templates/object-3d/index.html",
+    "manifestPath": "assets/huashu-motion/templates/object-3d/template.json"
+  }
+}

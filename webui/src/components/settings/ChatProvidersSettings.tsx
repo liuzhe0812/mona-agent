@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { MONA_PROVIDER_ICON } from "@/lib/brand-assets";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import openaiIcon from "@lobehub/icons-static-svg/icons/openai.svg";
 import anthropicIcon from "@lobehub/icons-static-svg/icons/anthropic.svg";
@@ -9,12 +10,11 @@ import { developmentApi, executorLabels, isCodeBuddyConnected, type DevExecutor,
 import { useNativeProviderState } from "@/lib/native-provider-state";
 import { ProviderNativeConnection } from "./ProviderNativeConnection";
 import { ProviderMark } from "@/components/models/ProviderMark";
-import { OpenAiSubscriptionAction } from "./OpenAiSubscriptionAction";
 import { NativeAccountQuota, formatNativePlan } from "./NativeAccountQuota";
 import { useNativeAccountUsage } from "./useNativeAccountUsage";
 import { modelPresentation } from "./model-presentation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ModelEngineProgramDialog } from "./ModelEngineProgramDialog";
+import { NativeProviderSetup } from "./NativeProviderSetup";
 import alibabaCloudIcon from "@lobehub/icons-static-svg/icons/alibabacloud-color.svg";
 import deepSeekIcon from "@lobehub/icons-static-svg/icons/deepseek-color.svg";
 import geminiIcon from "@lobehub/icons-static-svg/icons/gemini-color.svg";
@@ -33,6 +33,7 @@ import {
   Check,
   ChevronLeft,
   ChevronDown,
+  Filter,
   Image as ImageIcon,
   GripVertical,
   KeyRound,
@@ -48,6 +49,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,38 +77,7 @@ import { cn } from "@/lib/utils";
 
 type ChatProvider = NonNullable<SettingsPayload["chat_providers"]>[number];
 type ChatModel = ChatProvider["models"][number];
-const ENGINE_SOURCE_LABELS: Record<string, string> = {
-  configured: "指定路径",
-  path: "系统路径",
-  standard_location: "标准位置",
-  npm_platform_package: "系统安装包",
-  desktop_application: "桌面应用",
-  system: "系统程序",
-  managed: "Mona 管理",
-  managed_runtime: "Mona 管理",
-  not_detected: "尚未检测到",
-  unavailable: "程序暂不可用",
-  invalid_path: "程序路径需检查",
-};
 const CODEBUDDY_PRICING_URL = "https://www.codebuddy.cn/pricing/";
-const NATIVE_VERSION_MARKERS: Record<NativeExecutorId, RegExp> = {
-  codex: /\bcodex(?:[_ -]cli(?:[_ -]rs)?|[_ -]rs)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
-  claude: /\bclaude(?:[_ -]code)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
-  codebuddy: /\bcodebuddy(?:[_ -]cli)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
-};
-
-function engineSourceLabel(source: string | undefined, programAvailable: boolean): string {
-  if (!source) return programAvailable ? "本机程序" : "尚未检测到";
-  return ENGINE_SOURCE_LABELS[source] ?? "本机程序";
-}
-
-function nativeProgramVersion(executor: NativeExecutorId, value?: string | null): string {
-  if (!value) return "未检测";
-  const version = value.trim();
-  const direct = version.match(/^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/i);
-  if (direct) return direct[1];
-  return NATIVE_VERSION_MARKERS[executor].exec(version)?.[1] ?? "未检测";
-}
 
 type ModelReasoningMetadata = Pick<
   ChatModel,
@@ -231,7 +202,7 @@ const PROVIDER_ICON_BY_ID: Record<string, string> = {
 };
 
 function ProviderIcon({ provider, size }: { provider: ChatProvider; size: number }) {
-  const icon = provider.is_builtin ? "/brand/mona_icon.png" : PROVIDER_ICON_BY_ID[provider.name];
+  const icon = provider.is_builtin ? MONA_PROVIDER_ICON : PROVIDER_ICON_BY_ID[provider.name];
   if (!icon) return <span className="text-xs font-semibold">{providerInitials(provider.label)}</span>;
   return <img src={icon} alt="" width={size} height={size} className="object-contain" />;
 }
@@ -282,9 +253,10 @@ export function ChatProvidersSettings({
   const providerRevision = useNativeProviderState((state) => state.revision);
   const [nativeError, setNativeError] = useState("");
   const [engineError, setEngineError] = useState("");
+  const [nativeFailure, setNativeFailure] = useState<NativeExecutorId | null>(null);
+  const refreshNative = useCallback(() => setNativeRefresh((value) => value + 1), []);
   const [pricingError, setPricingError] = useState(false);
   const [engineBusy, setEngineBusy] = useState<NativeExecutorId | null>(null);
-  const [engineDialogTarget, setEngineDialogTarget] = useState<NativeExecutorId | null>(null);
   const probedSources = useRef(new Set<string>());
   const codebuddyResumeProbe = useRef({ pending: false, lastStartedAt: 0 });
   const primary = (name: string) => (PRIMARY_SOURCES as readonly string[]).includes(name);
@@ -327,6 +299,8 @@ export function ChatProvidersSettings({
   }, [providers, providerOrder]);
   const [selectedId, setSelectedId] = useState<string | null>(builtinProvider?.name ?? configured[0]?.name ?? null);
   const selectedCodebuddy = selectedId === "native:codebuddy" ? codebuddy : undefined;
+  const workbuddyAuthenticated = !!selectedCodebuddy && nativeProgramAvailable(selectedCodebuddy)
+    && selectedCodebuddy.probe?.authentication === "ready";
   const codebuddyCanRefreshOnResume = selectedId === "native:codebuddy"
     && !!codebuddy
     && nativeProgramAvailable(codebuddy);
@@ -340,7 +314,7 @@ export function ChatProvidersSettings({
       guard.pending = true;
       guard.lastStartedAt = now;
       void developmentApi.probe(undefined, "codebuddy")
-        .catch(() => setNativeError("暂时无法刷新 CodeBuddy 账号状态，请稍后重试。"))
+        .catch(() => setNativeError("暂时无法刷新 WorkBuddy 账号状态，请稍后重试。"))
         .finally(() => { guard.pending = false; });
     };
     const handleVisibilityChange = () => {
@@ -444,7 +418,7 @@ export function ChatProvidersSettings({
   );
   const allSourceIds = orderedSources([...configured.map((provider) => provider.name), ...(codebuddy ? ["native:codebuddy"] : [])], providerOrder);
   const visibleSourceIds = allSourceIds.filter((id) => id === "native:codebuddy"
-    ? `CodeBuddy 腾讯 ${codebuddy?.name ?? ""}`.toLowerCase().includes(providerQuery.trim().toLowerCase())
+    ? `WorkBuddy CodeBuddy 腾讯 ${codebuddy?.name ?? ""}`.toLowerCase().includes(providerQuery.trim().toLowerCase())
     : filteredConfigured.some((provider) => provider.name === id));
   const apiSourceIds = visibleSourceIds.filter((id) => !isAccountSource(id));
   const accountSourceIds = visibleSourceIds.filter(isAccountSource);
@@ -1059,7 +1033,8 @@ export function ChatProvidersSettings({
       developmentApi.refreshNativeProviders();
       setNativeRefresh((value) => value + 1);
     } catch {
-      setEngineError("引擎状态未更新，请重试。");
+      setNativeFailure(executor.id as NativeExecutorId);
+      refreshNative();
     } finally {
       setEngineBusy(null);
     }
@@ -1155,47 +1130,31 @@ export function ChatProvidersSettings({
   const selectedImageModel = selected && settings.image_generation?.provider === selected.name ? settings.image_generation.model : null;
   const selectedVideoModel = selected && settings.video_generation?.provider === selected.name ? settings.video_generation.model : null;
   const hasVisibleModels = visibleModels.length > 0;
-  const visibleNative = (modelFilter === "all" || modelFilter === "chat") && (nativeFor(selected?.name ?? "")?.models.some((model) => model.id && `${model.label} ${model.id}`.toLowerCase().includes(normalizedModelQuery)) ?? false);
+  const visibleNative = !!nativeSource && nativeProgramAvailable(nativeSource) && nativeConnected(selected?.name ?? "")
+    && (modelFilter === "all" || modelFilter === "chat") && nativeSource.models.some((model) => model.id && `${model.label} ${model.id}`.toLowerCase().includes(normalizedModelQuery));
   const availableToAdd = manageableProviders
     .filter((provider) => !provider.configured)
     .slice()
     .sort((a, b) => Number(primary(b.name)) - Number(primary(a.name)) || Number(b.region === "cn") - Number(a.region === "cn"))
     .filter((provider) => `${provider.label} ${provider.name}`.toLowerCase().includes(wizardQuery.trim().toLowerCase()));
 
-  const renderNativeEngineSummary = (executor?: DevExecutor) => {
+  const renderNativeSetup = (executor?: DevExecutor) => {
     if (!executor || executor.id === "mona") return null;
-    const id = executor.id as NativeExecutorId;
-    const enabled = nativeEnabled(executor);
-    const programAvailable = nativeProgramAvailable(executor);
-    const source = engineSourceLabel(executor.probe?.source ?? executor.detection, programAvailable);
-    const statusNote = [
-      !programAvailable ? "尚未找到本机程序，可在引擎管理中设置路径或准备程序。" : "",
-      !enabled ? "账号和模型偏好会保留，停用期间不会用于新调用。" : "",
-    ].filter(Boolean).join(" ");
-    return <>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/60 bg-accent/30 px-5 py-2.5">
-        <div className="flex shrink-0 items-center gap-2">
-          <Switch checked={enabled} disabled={!executorSettings || engineBusy === id}
-            aria-label={`${executorLabels[id]} 启用状态`} onCheckedChange={(next) => void updateNativeEnabled(executor, next)} />
-          <span className="text-caption">{enabled ? "已启用" : "已停用"}</span>
-        </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-caption">
-          <span className="font-medium">{executorLabels[id]}</span>
-          <span className="text-muted-foreground">来源：{source}</span>
-          <span className="text-muted-foreground">版本：{nativeProgramVersion(id, executor.probe?.version)}</span>
-        </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setEngineDialogTarget(id)}>引擎管理</Button>
-      </div>
-      {statusNote && <p role="status" className="border-b border-border/60 px-5 py-2 text-caption text-muted-foreground">{statusNote}</p>}
-      {engineError && <p role="alert" className="border-b border-border/60 px-5 py-2 text-caption text-destructive">{engineError}</p>}
-    </>;
+    return <div className="p-5">
+      <NativeProviderSetup key={executor.id} executor={executor} enabled={nativeEnabled(executor)}
+        enableBusy={engineBusy === executor.id} enableAvailable={!!executorSettings}
+        onEnabledChange={(enabled) => void updateNativeEnabled(executor, enabled)} onChanged={refreshNative} />
+      {engineError && !nativeFailure && <div role="status" className="mt-3 flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
+        暂时无法读取 {executorLabels[executor.id]} 使用设置，准备和认证仍可继续。
+        <Button variant="ghost" size="sm" onClick={refreshNative}>重新读取设置</Button>
+      </div>}
+    </div>;
   };
-
   const renderSource = (id: string) => {
     const provider = configured.find((item) => item.name === id);
     const buddy = id === "native:codebuddy";
     if (!provider && !buddy) return null;
-    const label = buddy ? "CodeBuddy" : provider!.label;
+    const label = buddy ? "WorkBuddy" : provider!.label;
     const suggested = isSuggestedSource(id);
     const executor = nativeFor(id);
     const position = sortableSourceIds.indexOf(id);
@@ -1221,14 +1180,14 @@ export function ChatProvidersSettings({
           if (event.key === "ArrowUp" && position > 0) moveSource(id, sortableSourceIds[position - 1]);
           if (event.key === "ArrowDown" && position < sortableSourceIds.length - 1) moveSource(id, sortableSourceIds[position + 2] ?? null);
         }}><GripVertical className="h-3 w-3" /></button>}
-      <button type="button" aria-label={buddy ? "CodeBuddy 连接设置" : undefined} aria-current={active ? "true" : undefined}
+      <button type="button" aria-label={buddy ? "WorkBuddy 连接设置" : undefined} aria-current={active ? "true" : undefined}
         onClick={() => {
           setSelectedId(id); setModelQuery(""); setAdjustModels(false);
         }}
         className={cn("flex w-full items-center gap-2 rounded-xl py-2 pr-3 text-left transition-colors", suggested ? "pl-3" : "pl-4", active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">{buddy ? <ProviderMark provider={id} label={label} /> : <ProviderIcon provider={provider!} size={22} />}</span>
         <span id={`source-name-${id}`} className="min-w-0 flex-1 truncate text-ui font-medium">{label}</span>
-        {suggested && <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-micro text-muted-foreground">{executor && nativeProgramAvailable(executor) ? "未登陆" : "未安装"}</span>}
+        {suggested && <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-micro text-muted-foreground">{executor && nativeProgramAvailable(executor) ? "待认证" : "待准备"}</span>}
       </button>
     </div>;
   };
@@ -1270,31 +1229,31 @@ export function ChatProvidersSettings({
         </aside>
 
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          {selectedCodebuddy ? <>
+          {selectedCodebuddy ? <div className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto">
             <header className="flex items-center gap-3 border-b border-border/70 p-5">
-              <ProviderMark provider="native:codebuddy" label="CodeBuddy" className="h-9 w-9" />
+              <ProviderMark provider="native:codebuddy" label="WorkBuddy" className="h-9 w-9" />
               <div className="min-w-0 flex-1">
-                <h3 className="text-title-sm font-semibold">CodeBuddy</h3>
+                <h3 className="text-title-sm font-semibold">WorkBuddy</h3>
                 <p className="text-caption text-muted-foreground">
-                  默认连接国内服务，使用账号中的模型。
-                  {selectedCodebuddy.probe?.authentication === "ready" ? "购买套餐时，请使用当前已连接的 CodeBuddy 账号。" : ""}
+                  在 Mona 中使用 WorkBuddy 的订阅模型。
+                  {selectedCodebuddy.probe?.authentication === "ready" ? "购买套餐时，请使用当前已连接的 WorkBuddy 账号。" : ""}
                 </p>
               </div>
               <Button type="button" variant="outline" size="sm" className="shrink-0"
                 onClick={() => void openCodeBuddyPricing()}>
                 查看套餐
               </Button>
-              <ProviderNativeConnection executor={selectedCodebuddy} showModels={false} onChanged={() => setNativeRefresh((n) => n + 1)} />
             </header>
-            {renderNativeEngineSummary(selectedCodebuddy)}
+            {renderNativeSetup(selectedCodebuddy)}
+            {workbuddyAuthenticated ? <>
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-2.5">
-              <span className="text-caption text-muted-foreground">已选 {nativeConnected("native:codebuddy") ? selectedCodebuddy.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: "native:codebuddy", model: model.id, executor: "codebuddy" }))).length : 0} 个模型</span>
+              <span className="text-caption font-medium">可用模型 {selectedCodebuddy.models.length}</span>
               <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
                 <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => void refreshNativeModels(selectedCodebuddy)} disabled={refreshing || !nativeProgramAvailable(selectedCodebuddy)} title="刷新模型" aria-label="刷新模型">
                   {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 </Button>
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="sm" className="gap-2 rounded-full">管理<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+                  <DropdownMenuTrigger asChild><TooltipButton type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" title="筛选模型" aria-label="筛选模型"><Filter className="h-4 w-4" /></TooltipButton></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuLabel>排列</DropdownMenuLabel>
                     <DropdownMenuRadioGroup value={managementView} onValueChange={(value) => { if (value === "brand" || value === "model") setManagementView(value); }}>
@@ -1316,12 +1275,18 @@ export function ChatProvidersSettings({
                 </div>
               </div>
             </div>
-            <div data-testid="model-list-scroll" className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto px-5 py-2">
-              <ProviderNativeConnection executor={selectedCodebuddy} showControls={false} search={modelQuery} managementView={managementView} onChanged={() => setNativeRefresh((n) => n + 1)} />
+            <div data-testid="model-list-scroll" className="min-w-0 px-5 pb-5 pt-2">
+              <ProviderNativeConnection executor={selectedCodebuddy} showControls={false} modelControl="checkbox" search={modelQuery} managementView={managementView} onChanged={refreshNative} />
               {nativeError && <p role="status" className="mt-3 text-caption text-muted-foreground">{nativeError}</p>}
             </div>
-          </> : selected ? (
-            <>
+            </> : <div data-testid="model-list-scroll" className="border-t border-border/60 px-5 py-4">
+              <h4 className="text-caption font-semibold">可用模型</h4>
+              <p className="py-6 text-center text-caption text-muted-foreground">
+                {nativeProgramAvailable(selectedCodebuddy) ? "认证完成后，自动显示可用模型" : "准备就绪后，这里会显示可用模型"}
+              </p>
+            </div>}
+          </div> : selected ? (
+            <div className={cn("flex min-h-0 flex-1 flex-col", nativeSource ? "scrollbar-thin scrollbar-track-transparent overflow-y-auto" : "overflow-hidden")}>
               <header className="flex items-center gap-3 border-b border-border/70 p-5">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm"><ProviderIcon provider={selected} size={30} /></span>
                 <div className="min-w-0 flex-1">
@@ -1333,16 +1298,13 @@ export function ChatProvidersSettings({
                   <p className="truncate text-caption text-muted-foreground">{selected.is_builtin ? (selected.configured ? "全部模型 · 按实际 Token 从 Mona AI 余额扣费" : "暂无可用模型") : selected.name === "openai" ? (accountUsage.usage?.email ? `ChatGPT 订阅 · Codex · ${accountUsage.usage.email}` : "ChatGPT 订阅 · Codex") : selected.name === "anthropic" ? "Claude Code 账号 · Anthropic 模型" : selected.api_base}</p>
                 </div>
                 {!["openai", "anthropic"].includes(selected.name) && <span className={cn("flex shrink-0 items-center gap-1.5 text-caption", selected.configured || nativeConnected(selected.name) ? "text-success" : "text-muted-foreground")}><span className={cn("h-1.5 w-1.5 rounded-full", selected.configured || nativeConnected(selected.name) ? "bg-success" : "bg-muted-foreground/30")} />{nativeConnected(selected.name) ? "已连接" : selected.is_builtin ? selected.configured ? "可用" : "暂无模型" : selected.configured ? "已配置" : "未配置"}</span>}
-                {["openai", "anthropic"].includes(selected.name) ? selected.name === "openai" ? <>
-                  <span className={cn("flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-caption text-muted-foreground", nativeConnected(selected.name) && "bg-muted/40")}>{nativeConnected(selected.name) && <Check className="h-3.5 w-3.5" />}{nativeConnected(selected.name) ? "已连接" : "未连接"}</span>
-                  <OpenAiSubscriptionAction executor={nativeFor("openai")} onChanged={() => setNativeRefresh((value) => value + 1)} />
-                </> : nativeFor("anthropic") ? <ProviderNativeConnection executor={nativeFor("anthropic")!} showModels={false} onChanged={() => setNativeRefresh((value) => value + 1)} /> : null : !selected.is_builtin ? <>
+                {!["openai", "anthropic"].includes(selected.name) && !selected.is_builtin ? <>
                   <Button type="button" variant="ghost" size="icon" onClick={openEditWizard} disabled={saving} title="编辑供应商" aria-label="编辑供应商"><Pencil className="h-4 w-4" /></Button>
                   <Button type="button" variant="ghost" size="icon" onClick={deleteSelected} disabled={saving} title="删除供应商" aria-label="删除供应商"><Trash2 className="h-4 w-4 text-destructive" /></Button>
                 </> : null}
               </header>
-              {renderNativeEngineSummary(nativeSource)}
-              <div data-testid="model-list-scroll" className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto">
+              {renderNativeSetup(nativeSource)}
+              <div data-testid="model-list-scroll" className={nativeSource ? "min-w-0" : "scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto"}>
               {selected.name === "openai" && accountUsage.usage?.connected && <NativeAccountQuota usage={accountUsage.usage} />}
               {selected.is_builtin && selected.configured ? (
                 <div className="flex flex-wrap items-center gap-3 border-b border-border/60 px-5 py-4">
@@ -1354,14 +1316,14 @@ export function ChatProvidersSettings({
                   {onOpenBilling ? <Button type="button" size="sm" className="rounded-full" onClick={onOpenBilling}>余额充值</Button> : null}
                 </div>
               ) : null}
-              <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border/60 bg-card px-5 py-2.5">
-                <span className="shrink-0 text-caption text-muted-foreground">已选 {selectedModelCount} 个模型</span>
+              <div className={cn("z-10 flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-2.5", !nativeSource && "sticky top-0 bg-card")}>
+                <span className="shrink-0 text-caption text-muted-foreground">{nativeSource ? `可用模型 ${(nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) ? nativeSource.models.filter((model) => model.id).length : 0) + selected.models.length}` : `已选 ${selectedModelCount} 个模型`}</span>
                 <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
                   <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving || (!selected.configured && (!nativeSource || !nativeProgramAvailable(nativeSource)))} title="刷新模型" aria-label="刷新模型">
                     {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   </Button>
                   <DropdownMenu>
-                      <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="sm" className="gap-2 rounded-full">管理<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><TooltipButton type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" title="筛选模型" aria-label="筛选模型"><Filter className="h-4 w-4" /></TooltipButton></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuLabel>排列</DropdownMenuLabel>
                         <DropdownMenuRadioGroup value={managementView} onValueChange={(value) => { if (value === "brand" || value === "model") setManagementView(value); }}>
@@ -1389,7 +1351,7 @@ export function ChatProvidersSettings({
                 </div>
               </div>
               <div className="px-5 py-2">
-                {(modelFilter === "all" || modelFilter === "chat") && nativeFor(selected.name) && <ProviderNativeConnection key={selected.name} executor={nativeFor(selected.name)!} showControls={false} search={modelQuery} managementView={managementView} onChanged={() => setNativeRefresh((n) => n + 1)} />}
+                {(modelFilter === "all" || modelFilter === "chat") && nativeSource && nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) && <ProviderNativeConnection key={selected.name} executor={nativeSource} showControls={false} modelControl="checkbox" search={modelQuery} managementView={managementView} onChanged={refreshNative} />}
                 {nativeError && ["openai", "anthropic"].includes(selected.name) && <p role="status" className="px-3 py-2 text-caption text-muted-foreground">{nativeError}</p>}
                 {hasVisibleModels ? (
                   <section>
@@ -1506,12 +1468,12 @@ export function ChatProvidersSettings({
                   </section>
                 ) : !visibleNative ? (
                   <p className="p-6 text-center text-caption text-muted-foreground">
-                    {selected.is_builtin && !selected.configured ? "暂无可用模型" : "没有匹配的模型"}
+                    {selected.is_builtin && !selected.configured ? "暂无可用模型" : nativeSource && !nativeConnected(selected.name) ? nativeProgramAvailable(nativeSource) ? "认证完成后，自动显示可用模型" : "准备就绪后，这里会显示可用模型" : "没有匹配的模型"}
                   </p>
                 ) : null}
               </div>
               </div>
-            </>
+            </div>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
               <KeyRound className="h-8 w-8" />
@@ -1521,9 +1483,6 @@ export function ChatProvidersSettings({
         </section>
       </div>
 
-      {engineDialogTarget && <ModelEngineProgramDialog open executor={engineDialogTarget}
-        onOpenChange={(open) => { if (!open) setEngineDialogTarget(null); }}
-        onChanged={() => setNativeRefresh((value) => value + 1)} />}
       {wizardOpen ? (
         <Dialog open={wizardOpen} onOpenChange={(open) => { if (!wizardLoading) setWizardOpen(open); }}>
           <DialogContent className="max-h-[85vh] max-w-2xl gap-5 overflow-y-auto rounded-2xl p-6">
@@ -1574,11 +1533,20 @@ export function ChatProvidersSettings({
           </DialogContent>
         </Dialog>
       ) : null}
+      <AlertDialog open={!!nativeFailure} onOpenChange={(open) => { if (!open) setNativeFailure(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{nativeFailure ? executorLabels[nativeFailure] : "引擎"} 使用状态未能确认</AlertDialogTitle>
+            <AlertDialogDescription>更新请求未获得确认，正在重新读取状态。请稍后核对开关的当前状态，再决定是否重试。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>知道了</AlertDialogCancel></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={pricingError} onOpenChange={(open) => { if (!open) setPricingError(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>套餐页面打不开</AlertDialogTitle>
-            <AlertDialogDescription>无法打开 CodeBuddy 套餐页面，请稍后重试。</AlertDialogDescription>
+            <AlertDialogDescription>无法打开 WorkBuddy 套餐页面，请稍后重试。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>关闭</AlertDialogCancel>

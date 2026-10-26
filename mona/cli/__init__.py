@@ -1,1 +1,1 @@
-﻿"""CLI module for mona."""
+﻿"""Internal desktop backend process entry points."""

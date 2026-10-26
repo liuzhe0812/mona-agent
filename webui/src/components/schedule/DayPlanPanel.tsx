@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, GripVertical, Pause, Play, Star } from "lucide-react";
+import { Bot, Check, GripVertical, Pause, Play, Plus, Star } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -27,6 +27,8 @@ interface DayPlanPanelProps {
   onSelectScheduleItem: (item: ScheduleItem) => void;
   onCompleteSchedule: (id: string) => void;
   onToggleSchedule: (id: string, enabled: boolean) => void;
+  /** Open the create dialog anchored at the selected date. */
+  onCreate: () => void;
 }
 
 function formatDueLabel(ms: number): string {
@@ -58,6 +60,7 @@ export function DayPlanPanel({
   onSelectScheduleItem,
   onCompleteSchedule,
   onToggleSchedule,
+  onCreate,
 }: DayPlanPanelProps) {
   const { items: todos, loadAll: loadTodos, loadBriefing, briefing, completeItem } = useTodoStore();
   const [busyTodo, setBusyTodo] = useState<string | null>(null);
@@ -145,16 +148,14 @@ export function DayPlanPanel({
   };
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    <div className="flex h-full flex-col">
       {/* Date header */}
-      <div className="px-4 py-3 border-b border-border/40">
-        <div className="text-body font-semibold">
+      <div className="px-4 py-3.5 border-b border-border/60">
+        <div className="text-body-lg font-semibold">
           {date.getMonth() + 1}月{date.getDate()}日 {weekdayName(date)}
-          {isToday && (
-            <span className="ml-2 text-micro font-normal text-primary">今天</span>
-          )}
         </div>
-        <div className="mt-0.5 text-micro text-muted-foreground">
+        <div className="mt-0.5 text-caption text-muted-foreground">
+          {isToday ? "今天 · " : ""}
           {planCount} 项计划
         </div>
       </div>
@@ -191,11 +192,11 @@ export function DayPlanPanel({
               今日三件事
             </div>
             {top3.length === 0 ? (
-              <div className="text-ui text-muted-foreground/70">
+              <div className="rounded-lg border border-border/60 bg-editor-surface px-3 py-4 text-ui text-muted-foreground/70">
                 还没有重点事项，从下方待办中标记
               </div>
             ) : (
-              <div className="space-y-1">
+              <div className="space-y-1 rounded-lg border border-border/60 bg-editor-surface p-2">
                 {top3.map((it, idx) => (
                   <div
                     key={it.id}
@@ -219,7 +220,7 @@ export function DayPlanPanel({
 
         {/* Schedule items + todos (merged empty state) */}
         {daySchedules.length === 0 && dayTodos.length === 0 ? (
-          <div className="mx-3 mt-3 py-6 text-center text-ui text-muted-foreground">
+          <div className="mx-3 mt-3 rounded-lg border border-border/60 bg-editor-surface py-8 text-center text-ui text-muted-foreground">
             这一天还没有日程或待办
           </div>
         ) : (
@@ -229,11 +230,11 @@ export function DayPlanPanel({
                 日程 ({daySchedules.length})
               </div>
               {daySchedules.length === 0 ? (
-                <div className="px-1 text-ui text-muted-foreground">
+                <div className="rounded-lg border border-border/60 bg-editor-surface px-3 py-3 text-ui text-muted-foreground">
                   当天没有日程
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-1 rounded-lg border border-border/60 bg-editor-surface p-2">
                   {daySchedules.map((item) => (
                     <ScheduleRow
                       key={item.id}
@@ -252,11 +253,11 @@ export function DayPlanPanel({
                 待办 ({dayTodos.length})
               </div>
               {dayTodos.length === 0 ? (
-                <div className="px-1 text-ui text-muted-foreground">
+                <div className="rounded-lg border border-border/60 bg-editor-surface px-3 py-3 text-ui text-muted-foreground">
                   当天没有待办
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-1 rounded-lg border border-border/60 bg-editor-surface p-2">
                   {dayTodos.map((it) => (
                     <TodoRow
                       key={it.id}
@@ -282,7 +283,7 @@ export function DayPlanPanel({
                 拖到日历上排期
               </span>
             </div>
-            <div className="space-y-0.5">
+            <div className="space-y-0.5 rounded-lg border border-border/60 bg-editor-surface p-2">
               {unscheduledTodos.slice(0, 6).map((it) => (
                 <div
                   key={it.id}
@@ -309,6 +310,19 @@ export function DayPlanPanel({
             </div>
           </section>
         )}
+      </div>
+
+      {/* Footer: primary create action */}
+      <div className="flex-shrink-0 border-t border-border/60 p-3">
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 w-full gap-1 rounded-full text-caption"
+          onClick={onCreate}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          新建日程
+        </Button>
       </div>
     </div>
   );

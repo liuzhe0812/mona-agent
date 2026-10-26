@@ -1,29 +1,30 @@
 ---
 name: mona-canvas
 description: >
-  在 Mona 自研画布中创建和修改高质量的流程图、架构图、泳道图、系统拓扑图和关系示意图。
+  在 Mona 自研画布中创建和修改高质量的流程图、架构图、泳道图、系统拓扑图、关系示意图和思维导图。
   当用户要求画图、把内容整理成图、编辑当前画布或复刻参考图时使用；结果必须在编辑器中可见、
   可继续编辑，并通过实际渲染检查。不生成 draw.io XML，不把图片冒充可编辑画布。
 ---
 
 # Mona 画布创作
 
-先判断用户是在讨论内容，还是要创建/修改画布。讨论时直接回答；创建或修改时使用 `canvas` 工具，让有效修改直接出现在当前编辑器中。工具不可用时报告未完成，不生成替代产物。
+先判断用户是在讨论内容，还是要创建/修改画布。讨论时直接回答；创建或修改时使用 `canvas` 工具，让有效修改直接出现在当前编辑器中。工具不可用、修改失败或检查未完成时如实报告未完成，不生成 SVG 等静态文件替代画布。
 
 ## 工作流
 
-1. 用 `canvas.open` 轻量读取当前 `canvasId`、对象、选区和版本哈希；它不是视觉检查。
-2. 从用户内容确定问题、边界、主语法、模块顺序和视觉角色。新建小图可一次 `replaceGraph`；已有图的小改动用局部 patch；较大的新图按语义完整模块逐步提交。每次 `canvas.apply` 都传对象 patch（不能传 JSON 字符串），使用当前版本并让结果立即成为编辑器内可见、可继续编辑的文档状态。用户可在模块之间接管画布；冲突或未确认写入时重新读取当前文档，按工具阶段回执继续，不猜测状态、重放旧 patch 或反复连接。
-3. 所有必要写入完成后，用 `canvas.inspect(include_visual=true)` 做结构和真实画面验收。只按新的质量问题做局部修正；同一修正没有改善就停止并说明，不能把空回执或未取得的截图当作通过。
-4. 需要交付图片时再调用 `canvas.export`；源画布仍是权威版本。
+1. 调用 `canvas(action="open")` 轻量读取当前画布的 `kind`、文档、选区和哈希；它不是视觉检查。
+2. 按 `open` 返回的 `kind` 分流：`flowchart` 才读取流程图参考并使用流程图 schema；`mindmap` 才读取思维导图参考并使用 MindMapNode 与 mindmap patch。不要混用两类 schema。
+3. 流程图新建或大幅重组可使用一次 `replaceGraph`，已有图局部修改用对应 patch。思维导图只用局部 patch，不存在 `replaceGraph`。调用 `canvas(action="apply", patch=...)` 时传对象，不传 JSON 字符串；使用最近一次 `open` 返回的版本哈希，并让有效修改直接成为编辑器内可见、可继续编辑的文档状态。用户可在操作之间接管画布；冲突或未确认写入时重新 `open`，按工具阶段回执继续，不猜测状态、重放旧 patch 或反复连接。
+4. 写入完成后调用 `canvas(action="inspect", include_visual=true)` 做结构和真实画面验收。只按新的质量问题做局部修正；同一修正没有改善就停止并说明，不能把空回执或未取得的截图当作通过。
+5. 用户需要交付图片时才调用 `canvas(action="export", format="png")` 或 `canvas(action="export", format="svg")`；源画布仍是权威版本。
 
-写入 patch 时查 [flowchart-and-architecture.md](references/flowchart-and-architecture.md) 的协议字段和操作；主语法不明确时查 [diagram-grammars.md](references/diagram-grammars.md)，需要信息结构或布局取舍时查 [design-method.md](references/design-method.md)，需要视觉验收或处理质量回执时查 [visual-review.md](references/visual-review.md)。[official-demo-examples.md](references/official-demo-examples.md) 用于学习官方 Demo 的抽象、留白、层次、语义配色和可编辑图形经验，按任务需要加载。
+`kind=flowchart` 时按需读取 [flowchart-and-architecture.md](references/flowchart-and-architecture.md)、[diagram-grammars.md](references/diagram-grammars.md)、[design-method.md](references/design-method.md) 和 [visual-review.md](references/visual-review.md)；`kind=mindmap` 时读取 [mindmap.md](references/mindmap.md) 的结构、patch 协议与验收要求。`official-demo-examples.md` 仅供流程图任务参考。
 
-按内容边界拆出的每个模块都应包含自己的节点、关系和必要边界，不只提交空框；先保持稳定 ID 和大致阅读顺序，再依据当前文档和用户接管调整。批次数量随内容决定，简单图一次完成。
+流程图和架构图按内容边界拆出语义完整模块，每个模块包含必要节点、关系和边界，不只提交空框；先保持稳定 ID 和大致阅读顺序，再依据当前文档和用户接管调整。批次数量随内容决定，简单图一次完成。
 
-官方 Demo 和仓库样例用于学习字段表达、构图方法和验收质量，不是产品模板。每次都从用户内容重新抽取对象、关系、边界和重点，选择视觉语法并重算布局，不按主题复用示例文案、节点、坐标或整份 patch。
+流程图任务可从官方 Demo 和仓库样例学习字段表达、构图方法和验收质量，但不能把它们当作产品模板。每次都从用户内容重新抽取对象、关系、边界和重点，选择视觉语法并重算布局，不按主题复用示例文案、节点、坐标或整份 patch。
 
-## 用户未指定样式时
+## 流程图未指定样式时
 
 主动完成设计，不追问配色和排版：
 

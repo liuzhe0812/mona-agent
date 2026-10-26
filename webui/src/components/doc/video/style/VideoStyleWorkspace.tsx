@@ -165,7 +165,7 @@ export function VideoStyleWorkspace({ initialSeriesId, baseStyle, aspectRatio, t
     catch (failure) {
       if (!(failure instanceof ApiError) || failure.status !== 404) throw failure;
       await createVideoProject(token, projectName, aspect === "9:16" ? "1080x1920" : aspect === "1:1" ? "1080x1080" : "1920x1080", {
-        templateId: baseStyle?.id ?? (current.baseTemplateId === "custom" ? "minimal-business" : current.baseTemplateId) ?? "minimal-business", narrationEnabled: true, ...tts,
+        templateId: baseStyle?.id ?? (current.baseTemplateId === "custom" ? "huashu-keynote" : current.baseTemplateId) ?? "huashu-keynote", narrationEnabled: true, ...tts,
       });
       project = await fetchVideoProject(token, projectName);
     }
@@ -317,7 +317,7 @@ export function VideoStyleWorkspace({ initialSeriesId, baseStyle, aspectRatio, t
       previewKey.current = "";
       setRunning(true); setStatus("正在制作样片…");
       client.sendMessage(boundChat,
-        `为已存在的项目「${projectName}」制作或继续修改自定义风格样片。先inspect当前结果，保留可复用的已完成工作。用户要求：${description || `以${baseStyle?.name ?? current.name}为起点制作风格`}。参考图片已导入该项目，仅作为画法依据，不自动嵌入样片。演示内容：${topic || "用一个具体事物和它的变化解释一个简单概念"}。制作约12秒有声动画，按实际口播时间安排；不制作整片。用style_rules保存画法、材质、文字和动画规律及匹配的tokens；使用--mona-primary、--mona-bg、--mona-heading-family、--mona-body-family使界面设置真实生效。创建短方案后依据inspect中的样片授权继续配音、TSX动画和完整preview，查看真实画面再修正；不要只做文字幻灯片。不要导出，也不要要求第二次导演确认。`,
+        `为已存在的项目「${projectName}」制作或继续修改自定义风格样片。先inspect当前结果，保留可复用的已完成工作。用户要求：${description || `以${baseStyle?.name ?? current.name}为起点制作风格`}。参考图片已导入该项目，仅作为画法依据，不自动嵌入样片。演示内容：${topic || "用一个具体事物和它的变化解释一个简单概念"}。制作约12秒有声动画，按实际口播时间安排；只做这个短样片。用style_rules保存画法、材质、文字和动画规律及匹配的tokens；使用--mona-primary、--mona-bg、--mona-heading-family、--mona-body-family使界面设置真实生效。创建短方案后依据inspect中的样片授权继续配音、使用内置Huashu模板与资源制作连贯HTML动画和完整preview，查看真实画面再修正；不要只做文字幻灯片。不要导出，也不要要求第二次导演确认。`,
         undefined, { agentKind: "video", displayContent: description || `以${baseStyle?.name ?? current.name}创建风格` });
     } catch (failure) { setRunning(false); setError(failure instanceof ApiError || failure instanceof RoomCommandError ? failure.message : "样片未能准备好，已保留现有内容，请重试。"); setRetryAction(() => generate); }
     finally { setWorking(false); }

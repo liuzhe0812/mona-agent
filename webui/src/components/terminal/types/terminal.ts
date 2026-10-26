@@ -13,6 +13,8 @@ export interface ConnectionConfig {
   port: number;
   username: string;
   auth: AuthConfig;
+  /** Native saved-connection snapshot revision used for compare-and-swap edits. */
+  storageRevision?: string;
 }
 
 export type SessionStatus = "disconnected" | "connecting" | "connected" | "error";

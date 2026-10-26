@@ -1,11 +1,12 @@
 import { cn } from "@/lib/utils";
+import { MONA_BRAND_AVATAR, resolveMonaAvatarUrl } from "@/lib/brand-assets";
 import type { AgentSummary, ConversationMeta } from "@/lib/types";
 
 /** Reserved ID of the built-in main assistant (mirrors ``mona/agent/partners.py``). */
 export const MONA_AGENT_ID = "mona";
 
 /** Static brand mark for Mona's default avatar in the session list. */
-export const MONA_AVATAR_IMAGE = "/brand/mona_avatar_human.png";
+export const MONA_AVATAR_IMAGE = MONA_BRAND_AVATAR;
 
 const BUILTIN_AGENT_AVATAR_IMAGES: Readonly<Record<string, string>> = {
   "com.mona.xhs-operator": "/brand/agents/xhs-operator.png",
@@ -73,8 +74,9 @@ interface AgentAvatarProps {
 /** Small circular avatar for an agent. Mona and built-in partners use bundled
  *  portraits; installed partners fall back to a deterministic tinted initial. */
 export function AgentAvatar({ agentId, displayName, avatarUrl, className }: AgentAvatarProps) {
-  const resolvedAvatarUrl = avatarUrl
-    ?? (agentId === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : BUILTIN_AGENT_AVATAR_IMAGES[agentId]);
+  const resolvedAvatarUrl = agentId === MONA_AGENT_ID
+    ? resolveMonaAvatarUrl(avatarUrl)
+    : avatarUrl ?? BUILTIN_AGENT_AVATAR_IMAGES[agentId];
   if (resolvedAvatarUrl) {
     return (
       <img

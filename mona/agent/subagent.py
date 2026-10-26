@@ -22,6 +22,7 @@ from mona.agent.jobs import (
     AgentJobStore,
     JobNotFoundError,
     JobTransitionError,
+    is_retired_stock_job,
 )
 from mona.agent.partners import (
     MONA_AGENT_ID,
@@ -184,7 +185,6 @@ class SubagentManager:
         session_manager: Any | None = None,
         agent_runtime_resolver: Callable[[AgentDefinition], tuple[LLMProvider, str, Any, ProviderSnapshot | None]]
         | None = None,
-        subscription_access_resolver: Callable[[], bool] | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -204,10 +204,6 @@ class SubagentManager:
         self.max_concurrent_subagents = defaults.max_concurrent_subagents
         self.runner = AgentRunner(provider)
         self._agent_runtime_resolver = agent_runtime_resolver
-        # The main AgentLoop refreshes the verified license state once per
-        # turn.  Subagents receive that state through this trusted callback;
-        # absent a callback, keep the registry fail-closed.
-        self._subscription_access_resolver = subscription_access_resolver
         self._llm_wall_timeout_for_session = llm_wall_timeout_for_session
         # Optional SessionManager used to post agent-authored room messages.
         self._sessions = session_manager
@@ -296,21 +292,6 @@ class SubagentManager:
             restrict_to_workspace=self.restrict_to_workspace,
         )
 
-    def _inject_subscription_access(self, registry: ToolRegistry) -> None:
-        """Apply the parent runtime's verified subscription state.
-
-        Registry defaults intentionally deny subscription-gated tools.  The
-        callback is supplied by the parent runtime after its license refresh;
-        failures or a missing callback therefore never widen access.
-        """
-        has_access = False
-        if self._subscription_access_resolver is not None:
-            try:
-                has_access = bool(self._subscription_access_resolver())
-            except Exception:
-                logger.exception("Subagent subscription access resolver failed")
-        registry.set_subscription_access(has_access)
-
     def _build_tools(
         self,
         workspace: Path | None = None,
@@ -332,7 +313,6 @@ class SubagentManager:
             file_state_store=FileStates(),
         )
         ToolLoader().load(ctx, registry, scope="subagent")
-        self._inject_subscription_access(registry)
         return registry
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
@@ -676,7 +656,6 @@ class SubagentManager:
                 run_store=self.run_store_for_room(room_id),
                 step_executor=executor,
                 observer=observer,
-                run_initializer=self._run_initializer_for_room(room_id),
                 max_parallel=max(1, self.max_concurrent_subagents),
             )
             self._workflow_runners[room_id] = runner
@@ -863,29 +842,6 @@ class SubagentManager:
                 self.workflow_run_observer(room_id, serialize_run(failed))
         except Exception:
             logger.exception("Cannot mark collaboration run for room {} failed", room_id)
-
-    def _run_initializer_for_room(self, room_id: str):
-        """Per-room workflow-run initializer hook (stock-module T21).
-
-        The two stock hidden rooms need one: it builds the evidence bundle
-        for ``run.inputs["symbols"]`` before the first step executes, so
-        every stock Agent reads prepared data instead of fetching its own.
-        Other rooms get ``None`` and the runner skips the hook entirely.
-        """
-        from mona.agent.pack_bootstrap import (
-            STOCK_DIAGNOSIS_ROOM_ID,
-            STOCK_ROOM_ID,
-        )
-
-        if room_id not in {STOCK_ROOM_ID, STOCK_DIAGNOSIS_ROOM_ID}:
-            return None
-
-        async def _init(run: WorkflowRun) -> None:
-            from mona.services.stock.run_init import build_run_evidence
-
-            await build_run_evidence(run, workspace=self.workspace)
-
-        return _init
 
     def sync_workflow_cron(self, room_id: str, workflow: WorkflowDefinition | None) -> None:
         """Sync the room's workflow cron entry with the active revision.
@@ -1100,21 +1056,10 @@ class SubagentManager:
             except Exception:
                 logger.exception("Cannot resolve workspace for room {}", room_id)
         ws_token = None
+        from mona.config.paths import get_agent_output_dir
+
+        ws_token = set_current_workspace(get_agent_output_dir(agent_root, definition.id))
         try:
-            from mona.agent.pack_bootstrap import (
-                STOCK_DIAGNOSIS_ROOM_ID,
-                STOCK_ROOM_ID,
-            )
-
-            if room_id in {STOCK_ROOM_ID, STOCK_DIAGNOSIS_ROOM_ID}:
-                from mona.config.paths import get_stock_project_dir
-
-                step_workspace = get_stock_project_dir(agent_root, run.id)
-            else:
-                from mona.config.paths import get_agent_output_dir
-
-                step_workspace = get_agent_output_dir(agent_root, definition.id)
-            ws_token = set_current_workspace(step_workspace)
             # announce=False: a workflow run must not wake the room's main
             # agent for every step; step results flow through the run file.
             await self._run_named_agent(
@@ -1364,7 +1309,6 @@ class SubagentManager:
             workflow_run_id=job.workflow_run_id,
         )
         ToolLoader().load(ctx, registry, scope="subagent", tool_allowlist=effective.allowed_tools)
-        self._inject_subscription_access(registry)
         # Named jobs do not pass through AgentLoop._set_tool_context.  Inject
         # the same request-scoped context here so ContextAware tools (most
         # importantly deliver_file) can publish to the originating room and
@@ -2173,6 +2117,15 @@ class SubagentManager:
                 logger.exception("Job recovery: cannot scan {}", store.jobs_dir)
                 continue
             for job in pending:
+                if is_retired_stock_job(job.assigned_to, job.room_id):
+                    try:
+                        store.mark_failed(job.id, error="旧股票模块已移除，历史任务不会恢复执行")
+                        stats["failed"] += 1
+                    except JobTransitionError:
+                        logger.info("Retired job [{}] already left the pending state", job.id)
+                    except Exception:
+                        logger.exception("Job recovery: cannot retire job [{}]", job.id)
+                    continue
                 if job.status == JOB_STATUS_RUNNING:
                     try:
                         store.fail_job(

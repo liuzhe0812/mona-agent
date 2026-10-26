@@ -6,7 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FolderOpen, GitFork, MoreHorizontal, Share2, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FolderOpen, GitFork, MoreHorizontal, Share2, Sparkles, SquareTerminal, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
 import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { useTranslation } from "react-i18next";
 
@@ -35,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
 import { deriveNoteTitle } from "@/lib/note-title";
+import { formatToolCallTrace, isCommandTrace } from "@/lib/tool-traces";
 import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 import { InlineWidget } from "@/components/visualizer/InlineWidget";
@@ -113,72 +114,6 @@ function formatMessageTokenCount(value: number): string {
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
   if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}k`;
   return String(value);
-}
-
-/** 确认卡标记行协议（T22d，design §10.4）：
- *  `[[stock-deep-research XSHG:600519 名称?]]`，A股分析师在私聊中
- *  输出该标记行，客户端渲染为「启动深度投研」确认卡。 */
-const STOCK_CONFIRM_RE =
-  /^\[\[stock-deep-research (XSHG|XSHE|BJSE):(\d{6})(?:\s+([^\]\n]+?))?\]\]$/;
-
-type StockConfirmSegment =
-  | { type: "text"; text: string }
-  | { type: "card"; instrumentId: string; name: string };
-
-function parseStockConfirmSegments(content: string): StockConfirmSegment[] {
-  const segments: StockConfirmSegment[] = [];
-  let buf: string[] = [];
-  for (const line of content.split("\n")) {
-    const match = STOCK_CONFIRM_RE.exec(line.trim());
-    if (match) {
-      if (buf.length > 0) {
-        segments.push({ type: "text", text: buf.join("\n") });
-        buf = [];
-      }
-      segments.push({
-        type: "card",
-        instrumentId: `${match[1]}:${match[2]}`,
-        name: match[3]?.trim() || `${match[1]}:${match[2]}`,
-      });
-    } else {
-      buf.push(line);
-    }
-  }
-  if (buf.length > 0) segments.push({ type: "text", text: buf.join("\n") });
-  return segments;
-}
-
-/** 「启动深度投研」确认卡：点击经 mona-open-stock 事件跳转股票工作台
- *  并自动启动单股研究。 */
-function StockConfirmCard({
-  instrumentId,
-  name,
-}: {
-  instrumentId: string;
-  name: string;
-}) {
-  return (
-    <div className="my-2 flex items-center gap-3 rounded-lg border px-3 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="text-ui">{name}</div>
-        <div className="text-micro text-muted-foreground">
-          将由 6 个 Agent 协作完成深度研究（3 位分析师 → 多空辩论 → 主席汇总）
-        </div>
-      </div>
-      <Button
-        size="sm"
-        onClick={() =>
-          window.dispatchEvent(
-            new CustomEvent("mona-open-stock", {
-              detail: { symbol: instrumentId },
-            }),
-          )
-        }
-      >
-        启动深度投研
-      </Button>
-    </div>
-  );
 }
 
 function QuotedMessagePreview({ quote }: { quote: NonNullable<UIMessage["quote"]> }) {
@@ -267,6 +202,7 @@ export function MessageBubble({
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sharingImage, setSharingImage] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const messageContentRef = useRef<HTMLDivElement>(null);
   const copyResetRef = useRef<number | null>(null);
   const saveResetRef = useRef<number | null>(null);
@@ -451,38 +387,17 @@ export function MessageBubble({
     && latencyMs != null
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
-  const stockConfirmSegments = message.content.includes("[[stock-deep-research")
-    ? parseStockConfirmSegments(message.content)
-    : null;
-  const hasStockConfirmCard = stockConfirmSegments?.some((segment) => segment.type === "card") ?? false;
   const canCollapseReply =
     isGroupChat
     && message.role === "assistant"
     && !message.isStreaming
     && !empty
-    && !hasStockConfirmCard
     && (
       message.content.length > LONG_REPLY_CHAR_THRESHOLD
       || message.content.split(/\r?\n/).length > LONG_REPLY_LINE_THRESHOLD
     );
   const replyCollapsed = canCollapseReply && !expanded;
-  const renderedContent = stockConfirmSegments ? (
-    stockConfirmSegments.map((seg, i) =>
-      seg.type === "card" ? (
-        <StockConfirmCard
-          key={`card-${i}`}
-          instrumentId={seg.instrumentId}
-          name={seg.name}
-        />
-      ) : seg.text.trim() ? (
-        <MarkdownText key={`text-${i}`} streaming={!!message.isStreaming}>
-          {seg.text}
-        </MarkdownText>
-      ) : null,
-    )
-  ) : (
-    <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
-  );
+  const renderedContent = <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>;
   return (
     <MessageContextMenu>
       <div
@@ -553,7 +468,10 @@ export function MessageBubble({
         <TooltipProvider delayDuration={250}>
         <div
           data-testid="direct-message-actions"
-          className="mt-1 flex min-h-7 items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+          className={cn(
+            "mt-1 flex min-h-7 items-center gap-0.5 text-muted-foreground transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+            moreActionsOpen ? "opacity-100" : "opacity-0",
+          )}
         >
           <MessageActionTooltip label={t("message.copyMessage")}>
           <button
@@ -588,7 +506,7 @@ export function MessageBubble({
             </button>
             </MessageActionTooltip>
           ) : null}
-          <DropdownMenu>
+          <DropdownMenu open={moreActionsOpen} onOpenChange={setMoreActionsOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -621,11 +539,6 @@ export function MessageBubble({
           <span className="ml-1 text-[11px] tabular-nums text-muted-foreground/70">
             {formatMessageTime(message.createdAt)}
           </span>
-          {latencyMs != null ? (
-            <span className="text-[11px] tabular-nums text-muted-foreground/70">
-              {formatTurnLatency(latencyMs)}
-            </span>
-          ) : null}
           {message.tokenUsage?.totalTokens ? (
             <span className="text-[11px] tabular-nums text-muted-foreground/70">
               {t("message.tokenUsage", {
@@ -1085,17 +998,17 @@ export function ReasoningBubble({
         type="button"
         onClick={onToggle}
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5",
-          "text-xs text-muted-foreground transition-colors hover:bg-muted/45",
+          "group flex items-center gap-2 rounded-md py-1.5 text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          embeddedInCluster ? "max-w-full text-caption hover:text-foreground" : "w-full px-2 text-xs hover:bg-muted/45",
         )}
         aria-expanded={open}
         aria-live={streaming ? "polite" : undefined}
       >
         <Sparkles
-          className={cn("h-3.5 w-3.5", streaming && "animate-pulse")}
+          className={cn("shrink-0", embeddedInCluster ? "h-4 w-4" : "h-3.5 w-3.5", streaming && "animate-pulse")}
           aria-hidden
         />
-        <StreamingLabelSheen active={streaming} className="min-w-0 flex-1 text-left">
+        <StreamingLabelSheen active={streaming} className={cn("min-w-0 text-left", !embeddedInCluster && "flex-1")}>
           {streaming
             ? t("message.reasoningStreaming", { defaultValue: "Thinking…" })
             : t("message.reasoning", { defaultValue: "Thinking" })}
@@ -1103,7 +1016,8 @@ export function ReasoningBubble({
         <ChevronRight
           aria-hidden
           className={cn(
-            "ml-auto h-3.5 w-3.5 transition-transform duration-200",
+            "h-3.5 w-3.5 shrink-0 transition-transform duration-200",
+            !embeddedInCluster && "ml-auto",
             open && "rotate-90",
           )}
         />
@@ -1136,8 +1050,9 @@ export function ReasoningBubble({
 }
 
 interface TraceGroupProps {
-  message: UIMessage;
+  message: UIMessage | UIMessage[];
   animClass: string;
+  inline?: boolean;
 }
 
 /**
@@ -1145,11 +1060,31 @@ interface TraceGroupProps {
  * collapsed because tool traces are supporting evidence, not the answer.
  * A single click expands the exact calls when the user wants details.
  */
-export function TraceGroup({ message, animClass }: TraceGroupProps) {
+export function TraceGroup({ message, animClass, inline = false }: TraceGroupProps) {
   const { t } = useTranslation();
-  const lines = message.traces ?? [message.content];
+  const messages = Array.isArray(message) ? message : [message];
+  const lines = messages.flatMap((message) => message.traces ?? [message.content]);
   const count = lines.length;
   const [open, setOpen] = useState(false);
+  if (inline) {
+    const groups: { lines: string[]; phase?: string; error?: unknown; groupable: boolean }[] = [];
+    for (const message of messages) {
+      const events = message.toolEvents?.slice().reverse();
+      for (const line of message.traces ?? [message.content]) {
+        if (!line.trim()) continue;
+        const event = events?.find((item) => formatToolCallTrace(item) === line);
+        if (event?.call_id && message.fileEdits?.some((edit) => edit.call_id === event.call_id)) continue;
+        const groupable = event?.phase !== "error" && !isCommandTrace(line) && /^[\w.:/-]+\s*\(/.test(line.trim());
+        const previous = groups[groups.length - 1];
+        if (groupable && previous?.groupable && previous.phase === event?.phase) previous.lines.push(line);
+        else groups.push({ lines: [line], phase: event?.phase, error: event?.error, groupable });
+      }
+    }
+    if (groups.length === 0) return null;
+    return <ul className="space-y-2">
+      {groups.map((group, index) => <TraceActivityRow key={index} lines={group.lines} phase={group.phase} error={group.error} />)}
+    </ul>;
+  }
   return (
     <div className={cn("w-full", animClass)}>
       <button
@@ -1194,4 +1129,26 @@ export function TraceGroup({ message, animClass }: TraceGroupProps) {
       )}
     </div>
   );
+}
+
+function TraceActivityRow({ lines, phase, error }: { lines: string[]; phase?: string; error?: unknown }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const line = lines[0];
+  const command = isCommandTrace(line);
+  const Icon = command ? SquareTerminal : Wrench;
+  const label = lines.length > 1
+    ? t(phase === "start" ? "message.activityToolRunningMany" : "message.activityToolMany", { count: lines.length })
+    : !phase && !/^[\w.:/-]+\s*\(/.test(line.trim())
+      ? line
+      : t(`message.activity${command ? "Command" : "Tool"}${phase === "error" ? "Failed" : phase === "end" ? "Completed" : phase === "start" ? "Running" : ""}`);
+  return <li className="text-caption text-muted-foreground">
+    <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}
+      className="flex max-w-full items-center gap-2 py-1.5 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+      <span>{label}</span>
+      {lines.length > 1 && <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", open && "rotate-90")} />}
+    </button>
+    {open && <pre className="mt-1 whitespace-pre-wrap break-words text-micro">{lines.join("\n")}{typeof error === "string" && error ? `\n${error}` : ""}</pre>}
+  </li>;
 }

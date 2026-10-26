@@ -35,6 +35,50 @@ export async function browserCreateTab(id: string, url: string, isIncognito?: bo
   return invoke<CreateTabResult>("browser_create_tab", { id, url, isIncognito: isIncognito ?? false, adBlockEnabled: adBlockEnabled ?? true });
 }
 
+function browserLinkUrl(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Unsupported browser link");
+  }
+  return url.href;
+}
+
+/** Ask the main window to open a web link, including from a mail preview window. */
+export async function openBrowserUrl(value: string): Promise<void> {
+  const url = browserLinkUrl(value);
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { emitTo } = await import("@tauri-apps/api/event");
+  await emitTo("main", "browser-open-url", { url });
+}
+
+/** Main-window receiver; native creation events remain the source of tab state. */
+export async function listenForBrowserUrls(onOpen: () => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ url: string }>("browser-open-url", async (event) => {
+    let created = false;
+    try {
+      const url = browserLinkUrl(event.payload.url);
+      onOpen();
+      await browserCreateTab(`tab-${crypto.randomUUID()}`, url);
+      created = true;
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const mainWindow = getCurrentWindow();
+      await mainWindow.show();
+      await mainWindow.unminimize();
+      await mainWindow.setFocus();
+    } catch {
+      const { message } = await import("@tauri-apps/plugin-dialog");
+      await message(
+        created ? "网页已在新标签页打开，请切回 Mona 查看。" : "链接未能打开，请重试。",
+        { title: created ? "请切回 Mona 查看" : "打开链接失败", kind: created ? "info" : "error" },
+      );
+    }
+  });
+}
+
 /** 关闭标签 */
 export async function browserCloseTab(id: string): Promise<void> {
   return invoke<void>("browser_close_tab", { id });

@@ -28,7 +28,7 @@ def _start_child(code: str, *, desktop_process: bool) -> _Child:
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         bufsize=1,
@@ -62,6 +62,30 @@ def _cleanup_child(child: _Child) -> None:
     child.output_reader.join(timeout=2)
     if child.process.stdout is not None and not child.process.stdout.closed:
         child.process.stdout.close()
+    if child.process.stderr is not None and not child.process.stderr.closed:
+        child.process.stderr.close()
+
+
+def test_desktop_child_exits_with_system_exit_while_parent_keeps_stdin_open() -> None:
+    child = _start_child(
+        """
+import time
+from mona.runtime.desktop_process import start_parent_stdin_watchdog
+start_parent_stdin_watchdog()
+time.sleep(0.2)
+print("READY", flush=True)
+raise SystemExit(23)
+""",
+        desktop_process=True,
+    )
+    try:
+        assert _wait_for_line(child) == "READY"
+        child.process.wait(timeout=3)
+        assert child.process.returncode == 23
+        assert child.process.stderr is not None
+        assert "_enter_buffered_busy" not in child.process.stderr.read()
+    finally:
+        _cleanup_child(child)
 
 
 def test_desktop_child_stays_alive_until_parent_closes_stdin() -> None:

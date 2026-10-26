@@ -14,6 +14,26 @@ it("uses the authenticated local native bridge and exact selected Work payload",
   expect(JSON.parse(init.body)).toEqual({ draft_id: "a".repeat(32), session_keys: ["websocket:one"], confirmed: true });
   expect(init.headers).not.toHaveProperty("Authorization");
 });
+it("resumes receiving without sending upload authorization or a request payload", async () => {
+  mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ enabled: true }), { headers: { "Content-Type": "application/json" } }));
+  await expect(cloudSyncApi.resume()).resolves.toEqual({ enabled: true });
+  const [url, init] = mocks.fetch.mock.calls[0];
+  expect(url).toBe("http://127.0.0.1:17173/api/cloud-sync/resume");
+  expect(init.method).toBe("POST");
+  expect(init).not.toHaveProperty("body");
+});
+it("passes explicit operations host and credential upload scope to enable and scope", async () => {
+  respond({ enabled: true });
+  await cloudSyncApi.enable("a".repeat(32), [], false, false, false, false, true, true);
+  expect(JSON.parse(mocks.fetch.mock.calls[0][1].body)).toEqual({ draft_id: "a".repeat(32), session_keys: [], confirmed: true,
+    sync_new_conversations: false, sync_planning: false, sync_notes: false, sync_preferences: false,
+    sync_operations: true, sync_operations_credentials: true });
+  respond({ selected_keys: [], sync_new_conversations: false, sync_planning: false, sync_preferences: false,
+    sync_operations: true, sync_operations_credentials: true });
+  await cloudSyncApi.scope([], false, false, false, false, true, true);
+  expect(JSON.parse(mocks.fetch.mock.calls[1][1].body)).toEqual({ session_keys: [], sync_new_conversations: false,
+    sync_planning: false, sync_notes: false, sync_preferences: false, sync_operations: true, sync_operations_credentials: true });
+});
 it("never retries unknown writes and does not echo arbitrary network exceptions", async () => {
   mocks.fetch.mockRejectedValue(new Error("SYNTHETIC_INTERNAL_ENDPOINT_AND_TOKEN"));
   await expect(cloudSyncApi.prepare("synthetic-recovery")).rejects.toThrow("暂时无法连接云同步");

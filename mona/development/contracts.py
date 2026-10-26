@@ -175,7 +175,7 @@ class Binding(Contract):
     context_fingerprint: str | None = None
     transcript_cursor: int = Field(default=0, ge=0)
     replaces_binding_id: Identifier | None = None
-    replacement_reason: Literal["history_missing", "user_requested", "collaboration_updated"] | None = None
+    replacement_reason: Literal["history_missing", "user_requested", "collaboration_updated", "design_resources_updated"] | None = None
     created_at: datetime = Field(default_factory=now)
     last_used_at: datetime = Field(default_factory=now)
 

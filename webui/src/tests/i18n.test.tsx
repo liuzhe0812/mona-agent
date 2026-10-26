@@ -9,7 +9,7 @@ import { resources } from "@/i18n";
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = [
-  "billing",
+  "account",
   "usage",
   "general",
   "resources",
@@ -84,7 +84,7 @@ describe("webui i18n", () => {
       expect(document.documentElement.lang).toBe("zh-CN");
     });
     expect(localStorage.getItem("mona.locale")).toBe("zh-CN");
-    expect(screen.getByPlaceholderText("有什么事情，交给Mona吧")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("与 Mona 协作")).toBeInTheDocument();
   });
 
   it("updates the composer aria label when the language changes", async () => {
@@ -164,12 +164,12 @@ describe("webui i18n", () => {
     expect(settings.shortcuts.sendMessage).toBe("发送消息");
   });
 
-  it("uses the billing navigation copy for English and Simplified Chinese", () => {
+  it("uses the account navigation copy for English and Simplified Chinese", () => {
     expect(resources.en.common.settings.nav.general).toBe("General");
-    expect(resources.en.common.settings.nav.billing).toBe("Balance & billing");
+    expect(resources.en.common.settings.nav.account).toBe("Account");
     expect(resources.en.common.settings.nav.usage).toBe("Usage");
     expect(resources["zh-CN"].common.settings.nav.general).toBe("通用");
-    expect(resources["zh-CN"].common.settings.nav.billing).toBe("余额与充值");
+    expect(resources["zh-CN"].common.settings.nav.account).toBe("账户");
     expect(resources["zh-CN"].common.settings.nav.usage).toBe("用量统计");
   });
 });

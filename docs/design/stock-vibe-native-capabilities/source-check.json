@@ -1,0 +1,160 @@
+{
+  "date": "2026-10-18",
+  "manifest_files": 2544,
+  "matched": 2544,
+  "missing": [],
+  "changed": [],
+  "frontend_reference_file_hashes": [
+    {
+      "path": "frontend/package.json",
+      "bytes": 1535,
+      "sha256": "456c633540035f893b750216f32ff106fbf8a5beaaee9d69a4ab6706186b9191"
+    },
+    {
+      "path": "frontend/src/components/chat/Composer.tsx",
+      "bytes": 18931,
+      "sha256": "98ece41f1481f980fb735b2059180bd41b22ee6c28c8bae27dd17885517b232a"
+    },
+    {
+      "path": "frontend/src/components/chat/RunnerBudgetControls.tsx",
+      "bytes": 4278,
+      "sha256": "8a0ca00ad6d9dd9784ef1bcd720b1d0a033c5bb822801b64f03791d0a8c973e4"
+    },
+    {
+      "path": "frontend/src/components/chat/ToolProgressIndicator.tsx",
+      "bytes": 10059,
+      "sha256": "3e5b108b929ce9b28939d65dc63541a4cd3288d97b66bf92732fedaf4efd323f"
+    },
+    {
+      "path": "frontend/src/components/chat/WelcomeScreen.tsx",
+      "bytes": 13433,
+      "sha256": "f200ccbd7138ad57f6370bd263dc6358e79a4256dae089834b3a59eceb73ca56"
+    },
+    {
+      "path": "frontend/src/components/layout/Layout.tsx",
+      "bytes": 24626,
+      "sha256": "60fbe59f1e62c679469aa749782d8ac46254ae4fc4e1489da28b5a73a79c9b6e"
+    },
+    {
+      "path": "frontend/src/components/layout/navigation.ts",
+      "bytes": 1165,
+      "sha256": "f3df0fb560650fb05771db017810cdd843c65d096bc94b8bc5c56b41f9542962"
+    },
+    {
+      "path": "frontend/src/components/options/OptionsChainTable.tsx",
+      "bytes": 10883,
+      "sha256": "621ec447dbdfc76a4e5e5852df0d5ec703091ab8b91efd4a0bcc4638bacce2f4"
+    },
+    {
+      "path": "frontend/src/components/options/StrategyBuilder.tsx",
+      "bytes": 11164,
+      "sha256": "1b8682dbdbe496c4a17dfd7dbed6c0365e3c200e6d314da4d12946816664f348"
+    },
+    {
+      "path": "frontend/src/components/portfolio/ConnectionCenter.tsx",
+      "bytes": 18549,
+      "sha256": "3657e96595413b6205d1e7d6ab3a077b3ebe0cb9009061e1e9bfbf817a77212c"
+    },
+    {
+      "path": "frontend/src/components/portfolio/ExtraEtfImport.tsx",
+      "bytes": 2810,
+      "sha256": "c20cb3f6dcb83eda00fb355f3ea650ba13349e8c5ef445b2dabfec43bea82ea2"
+    },
+    {
+      "path": "frontend/src/components/portfolio/PortfolioSourceEditor.tsx",
+      "bytes": 9975,
+      "sha256": "ce650cccf3f0e91efbcb6e63aa0345065dc3850de8d6326cd342ea26b5761630"
+    },
+    {
+      "path": "frontend/src/components/portfolio/RebalanceProposal.tsx",
+      "bytes": 3350,
+      "sha256": "19db9a1b81512fc3b809b2f4b9ff70bcd5cc5c3b5cece486927b1063d1210ad0"
+    },
+    {
+      "path": "frontend/src/components/settings/CustomProviderManager.tsx",
+      "bytes": 11427,
+      "sha256": "f93177c36b91e922ecbc0ad7d36ee83dae5ce4e5be022bc211ce6835f635c93e"
+    },
+    {
+      "path": "frontend/src/i18n/locales/zh-CN.json",
+      "bytes": 120985,
+      "sha256": "df5d7adacf8323cd7013d25d3852693357150298ccfd3fa6b454560769b2f25a"
+    },
+    {
+      "path": "frontend/src/lib/tools.ts",
+      "bytes": 1636,
+      "sha256": "42ee4c9cd07a3bbf001ea2d4b21ff1bddf2d5e1d5e99bdf76da4113654c2fcbf"
+    },
+    {
+      "path": "frontend/src/pages/Agent.tsx",
+      "bytes": 77686,
+      "sha256": "e822c61602fcba17791d1861e5d8d32d3177f3bbeed2a1d05a0673751353ff48"
+    },
+    {
+      "path": "frontend/src/pages/AlphaZoo.tsx",
+      "bytes": 56430,
+      "sha256": "9c8c65c975b7becd1aef56f1bc2070c3b447f67fdfa288b8eb4289394ce9087b"
+    },
+    {
+      "path": "frontend/src/pages/Compare.tsx",
+      "bytes": 21027,
+      "sha256": "01d071a108f681d8279ca3d9bf8022c21e5c79e3064d9e1c62bdb56a89a092de"
+    },
+    {
+      "path": "frontend/src/pages/Correlation.tsx",
+      "bytes": 8798,
+      "sha256": "804bfd8deecbe5d3b79842c89b8fa2208e78ddf9e3d4569c8f82c1e55d3ccb82"
+    },
+    {
+      "path": "frontend/src/pages/Home.tsx",
+      "bytes": 3231,
+      "sha256": "e5d636a95171665229697d3df3c6e6829861a3e2802ce387f7c96ad1185ca3d0"
+    },
+    {
+      "path": "frontend/src/pages/OptionsLab.tsx",
+      "bytes": 10358,
+      "sha256": "7b2b97c92edb3bbcd5c6493089bcc88225071f3c1f9f2c5ae6526f4f81370774"
+    },
+    {
+      "path": "frontend/src/pages/PixelOffice.tsx",
+      "bytes": 9599,
+      "sha256": "88c5da4cb313f4d62fe818f4366db51de79d207c964303257a093fcb76725903"
+    },
+    {
+      "path": "frontend/src/pages/Portfolio.tsx",
+      "bytes": 40333,
+      "sha256": "64a0d8d15c8cc53cd831a23f14c97bd782f40af2a6e28ea6de23410709b3ed6a"
+    },
+    {
+      "path": "frontend/src/pages/Reports.tsx",
+      "bytes": 13015,
+      "sha256": "d473d72017799b0d5bd303640afabccc2dd9d99e284978ccb6f8d8391dd866ad"
+    },
+    {
+      "path": "frontend/src/pages/RunDetail.tsx",
+      "bytes": 55713,
+      "sha256": "3507188d4ba9617b81a82e371e61b3cf229e7d9c087b7544908090fff7dc3d66"
+    },
+    {
+      "path": "frontend/src/pages/Runtime.tsx",
+      "bytes": 27202,
+      "sha256": "58602d3db171a7b6626429cbd58fa2d49c226d91d32f5fc2f4881d75719f28fb"
+    },
+    {
+      "path": "frontend/src/pages/Scheduled.tsx",
+      "bytes": 34161,
+      "sha256": "83e51e8a3812ce94ebc9395352fe9a27919278d665c9115f4077e0beb45c1098"
+    },
+    {
+      "path": "frontend/src/pages/Settings.tsx",
+      "bytes": 31207,
+      "sha256": "a625f96d1d970bc9ec1977cec2e9f5554fc129272826a2e2964b18981c3b03f4"
+    },
+    {
+      "path": "frontend/src/router.tsx",
+      "bytes": 2799,
+      "sha256": "a7847a436c18677f4e4cd6ca0072650c7148f59367841deb480c58f0cba2cb65"
+    }
+  ],
+  "frontend_note": "Frontend is not in the pinned backend ZIP; these are the evidence files read from the matching local full source copy, version 0.1.16."
+}

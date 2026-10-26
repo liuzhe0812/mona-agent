@@ -19,6 +19,7 @@ import type { UIMessage } from "@/lib/types";
 interface ThreadViewportProps {
   messages: UIMessage[];
   isStreaming: boolean;
+  runStartedAt?: number | null;
   /** Rooms render assistant turns as a group-chat conversation. */
   isGroupChat?: boolean;
   composer: ReactNode;
@@ -60,6 +61,7 @@ export function windowMessages(messages: UIMessage[], visibleCount: number): UIM
 export function ThreadViewport({
   messages,
   isStreaming,
+  runStartedAt,
   isGroupChat = false,
   composer,
   emptyState,
@@ -341,6 +343,8 @@ export function ThreadViewport({
                 <ThreadMessages
                   messages={visibleMessages}
                   isStreaming={isStreaming}
+                  runStartedAt={runStartedAt}
+                  focusMessage={focusMessage}
                   isGroupChat={isGroupChat}
                   hiddenMessageCount={hiddenMessageCount}
                   hasMoreHistory={hasMoreHistory}

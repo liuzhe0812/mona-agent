@@ -1,0 +1,46 @@
+# Stock Vibe native operations
+
+The hosted native process exposes a small, authenticated surface for native operations and raw A-share bars. It invokes existing Vibe tools and keeps the native source receipt beside each operation. The host submits controlled identifiers and query parameters; the native side resolves those identifiers inside its private runtime root.
+
+`POST /mona/operations` accepts one of these operation payloads:
+
+| Operation | Required fields | Optional fields |
+| --- | --- | --- |
+| `backtest` | `run_id` | — |
+| `analyze_trade_journal` | `upload_id` | — |
+| `extract_shadow_strategy` | `upload_id` | `min_support`, `max_rules` |
+| `run_shadow_backtest` | `shadow_id` | `window_start`, `window_end`, `markets`, `source`, `per_market_count`, `upload_id` |
+| `render_shadow_report` | `shadow_id`, `window_start`, `window_end`, `source`, `markets`, `per_market_count` | `upload_id`, `include_today_signals` (must be `false`) |
+| `scan_shadow_signals` | `shadow_id` | `date`, `per_market`, `source` |
+| `strategy_oos_validation` | `run_id`, `window_start`, `window_end` | `cost_scenarios` |
+| `strict_factor_validation` | `zoo`, `start_date`, `end_date`, `oos_cutoff` | `n_random_seeds`, `horizon`, `top` |
+
+Unknown fields are rejected. A backtest `run_id` identifies an input run directly under the private `runs` directory. The operation safely copies only its `config.json` and `code/` subtree into a new `mona-<uuid>` run directory before dispatch; it rejects links, credential fields/files, and input larger than 16 MiB. The original run is left untouched, and the job references both `input_run_id` and the new output `run_id`. Old artifacts and caches are not copied. `shadow_id` must match the native identifier format. `upload_id` is the 32-character stem returned by the authenticated upload receipt; only a single CSV/XLS/XLSX file with that stem under the private `uploads` directory is accepted. The resolved upload path is passed only to the original Shadow tool and is never exposed in the operation record. Shadow date fields must be real `YYYY-MM-DD` dates. Markets are limited to the original native market names. `source` for Shadow backtests and scans is limited to `auto`, `tencent`, `eastmoney`, or `local`.
+
+The POST returns an opaque `operation_id` and a persisted record. Use `GET /mona/operations/{operation_id}` to read the current status and original tool output, or `GET /mona/operations?limit=50` to list recent jobs. States are `queued`, `running`, `completed`, `failed`, and `interrupted`. A process restart marks prior queued/running work `interrupted`; it never starts that work again. Only one operation may be queued or running. Cancellation is reported as unsupported because the existing native tools do not provide a precise cancellation handle.
+
+The request ledger covers `POST /mona/operations` and native `POST /upload`. A stable `X-Mona-Request-ID` creates one durable response receipt. When the result is uncertain, clients query the request or operation records; they do not submit a replacement operation automatically. The activity endpoint includes the current queued/running operation count.
+
+`GET /mona/market-data` accepts only `symbol`, `start_date`, `end_date`, `interval`, and optional `source`. The symbol must be a six-digit A-share code ending in `.SH`, `.SZ`, or `.BJ`. Dates are strict ISO calendar dates. With no source, daily SH/SZ requests use Tencent and other supported intervals use Eastmoney; BJ defaults to Eastmoney. Explicit sources are `tencent` and `eastmoney`. Tencent is accepted only for daily SH/SZ bars. Eastmoney intervals are limited to its actual loader mapping; unsupported `4H` requests are rejected. The endpoint invokes the existing `MarketDataTool` with one symbol and `max_rows=0`, then returns its JSON string unchanged, including `_provenance`, `_unresolved`, or native error fields. It does not add indicators or an adapter-level fallback.
+
+The operation database is `mona-operations.sqlite3` under `VIBE_TRADING_HOME`. It stores controlled request fields, source receipts, native tool output, statuses, and object identifiers. It does not store API credentials or arbitrary input paths.
+
+## Strategy out-of-sample validation (patch 26)
+
+`strategy_oos_validation` requires an existing private A-share run, `window_start`, and `window_end`. The native side reads that run's config and code, verifies that the test window starts strictly after the development run's configured end date, and creates a new native run for each cost scenario. It copies the strategy code without modifying the source run. `cost_scenarios` accepts one to three uniquely named entries and must include exactly one empty `source_config` baseline; at most two additional scenarios may override `commission_rate`, `commission_min`, `stamp_tax`, `transfer_fee`, or `slippage`. Values must be finite JSON numbers in the implementation's bounded ranges; arbitrary config, code, paths, and environment variables are not accepted.
+
+The returned `code_sha256` is the digest of the whole code tree: sorted relative POSIX filenames and file contents, each separated by NUL bytes. A raw SHA-256 for an individual `signal_engine.py` file is a separate value and is not interchangeable with the tree digest. Each scenario returns its own run ID and the operation references retain the source run and created runs. The ordinary validation payload exposes individual checks, but it does not implement an aggregate pass gate: `outcome: unavailable` with `outcome_reason_code: no_native_aggregate_gate` is not a passing result. The native payload also marks strict factor validation not applicable because it needs cross-sectional factor inputs.
+
+The fresh local native-runner/UI evidence in `.codex_tmp/stock-vibe-ui-preview-5/ui-native-evidence.json` exercised the UI and two independent scenarios (`source_config` and `stress`) against a synthetic fixture. Both native backtests completed and retained the same code-tree digest. The ordinary validation result was partial with no aggregate gate, so this verifies the operation path only; it is not a strategy acceptance result or market-data study.
+
+## Strict factor validation (patch 27)
+
+`strict_factor_validation` accepts only `zoo`, `start_date`, `end_date`, `oos_cutoff`, and the optional `n_random_seeds`, `horizon`, and `top` parameters. The zoo is `alpha101` or `qlib158`; the universe is fixed to `csi300`, and the requested period may not exceed five calendar years. The OOS cutoff must fall strictly inside that period. Defaults are 5 random seeds, horizon 1, and top 20; their accepted ranges are 1–5, 1–21, and 1–100 respectively. The wrapper calls the shipped strict native runner and its registered factor zoo; it does not calculate factor returns itself or accept a user-supplied universe, code, or data path.
+
+A result is usable only when native metadata confirms a non-degraded `csi300` universe sourced from `tushare index_weight`, with tested rows. A synthetic panel probe used the real alpha101 registry and produced 71 rows with 30 skipped, but its synthetic input did not establish authentic CSI300 constituents; the wrapper therefore records the experiment as unavailable. In the separate missing-token probe, the wrapper returned `tushare_token_unconfigured` with `no_network_attempt: true`. Evidence is in `.codex_tmp/strict-factor-validation-42b785cad4e645d3b30814e48768e6c1/evidence.json` and `.codex_tmp/strict-factor-validation-8280b15b140e447584b4dcb38b3f64cf/evidence.json`. Neither probe is a qualified Tushare result.
+
+## Credential and package verification boundary
+
+Tushare is a market-data credential. When configured through the stock-Vibe settings, the Services runtime scopes it as `TUSHARE_TOKEN` for the hosted native process. The operation's cloned strategy config must retain `source: tushare` when the strategy uses that loader, so the native loader and strategy receive the same source selection. This is application-level environment scoping, not OS-level isolation of the token. The upstream model-provider key and broker credentials stay out of the native child; model calls use the host's local bridge instead of forwarding the provider key.
+
+Preflight 11 includes patches 1–27 and completed fresh offline verification with status `verified`: all three environment-builder steps, pip check and nine selected core imports passed; global base, pointers and HOME were unchanged and network was disabled. This proves this installation and selected imports, not every financial feature or real data entitlement. Preview 6 then started that installed hosted server and exercised the UI's unconfigured-token branch: operation `3f59f04a8f2b45f68127999eca5a6bf1` persisted as failed with experiment unavailable, no_network_attempt true and native_result null. The UI showed no fabricated factor metrics. Prior patch-26 OOS records retained their original source and output bytes after this upgrade. See `.codex_tmp/stock-vibe-ui-preview-6/ui-native-evidence.json` and the UI verification record. Real Tushare qualification and Tushare-backed statistics remain unverified; synthetic registry results are not live constituents or market research.

@@ -165,12 +165,19 @@ fn agent_scope_path() -> PathBuf {
     app_data_dir().join("agent_search_scope.json")
 }
 
-fn read_agent_search_scope() -> AgentSearchScope {
-    let path = agent_scope_path();
-    match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => AgentSearchScope::default(),
+fn read_agent_search_scope_at(path: &Path) -> Result<AgentSearchScope, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|error| format!("Failed to parse agent search scope: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(AgentSearchScope::default())
+        }
+        Err(error) => Err(format!("Failed to read agent search scope: {error}")),
     }
+}
+
+fn read_agent_search_scope() -> AgentSearchScope {
+    read_agent_search_scope_at(&agent_scope_path()).unwrap_or_default()
 }
 
 fn write_agent_search_scope(scope: &AgentSearchScope) -> Result<(), String> {
@@ -241,12 +248,71 @@ pub fn agent_allowed_email_folders() -> Option<std::collections::HashSet<String>
 
 #[tauri::command]
 pub async fn get_agent_search_scope() -> Result<AgentSearchScope, String> {
-    Ok(read_agent_search_scope())
+    read_agent_search_scope_at(&agent_scope_path())
 }
 
 #[tauri::command]
 pub async fn set_agent_search_scope(scope: AgentSearchScope) -> Result<(), String> {
     write_agent_search_scope(&scope)
+}
+
+#[cfg(test)]
+mod agent_search_scope_tests {
+    use super::read_agent_search_scope_at;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn missing_scope_defaults_to_both_search_sources() {
+        let temp = tempdir().unwrap();
+
+        let scope = read_agent_search_scope_at(&temp.path().join("missing.json")).unwrap();
+
+        assert!(scope.notes.mode.is_empty());
+        assert!(scope.notes.allowed_notebook_ids.is_empty());
+        assert!(scope.email.mode.is_empty());
+        assert!(scope.email.allowed_folders.is_empty());
+    }
+
+    #[test]
+    fn valid_scope_reads_notes_and_email_configuration() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("scope.json");
+        fs::write(
+            &path,
+            r#"{"notes":{"mode":"specific","allowedNotebookIds":["notebook-a"]},"email":{"mode":"specific","allowedFolders":["Inbox"]}}"#,
+        )
+        .unwrap();
+
+        let scope = read_agent_search_scope_at(&path).unwrap();
+
+        assert_eq!(scope.notes.mode, "specific");
+        assert_eq!(scope.notes.allowed_notebook_ids, ["notebook-a"]);
+        assert_eq!(scope.email.mode, "specific");
+        assert_eq!(scope.email.allowed_folders, ["Inbox"]);
+    }
+
+    #[test]
+    fn malformed_scope_returns_an_error() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("scope.json");
+        fs::write(&path, "{").unwrap();
+
+        let error = read_agent_search_scope_at(&path).unwrap_err();
+
+        assert!(error.contains("parse agent search scope"));
+    }
+
+    #[test]
+    fn scope_read_io_error_is_not_treated_as_missing() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("scope.json");
+        fs::create_dir(&path).unwrap();
+
+        let error = read_agent_search_scope_at(&path).unwrap_err();
+
+        assert!(error.contains("read agent search scope"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +351,83 @@ fn write_vault_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_default_directory(path: &Path, parent: &Path) -> Result<PathBuf, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if sync::linked(&metadata) {
+                return Err("默认笔记仓库路径包含链接。".into());
+            }
+            if !metadata.is_dir() {
+                return Err("默认笔记仓库路径不是目录。".into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(|_| "默认笔记仓库目录无法创建。")?;
+            let metadata = fs::symlink_metadata(path).map_err(|_| "默认笔记仓库目录无法核对。")?;
+            if sync::linked(&metadata) || !metadata.is_dir() {
+                return Err("默认笔记仓库路径不是安全目录。".into());
+            }
+        }
+        Err(_) => return Err("默认笔记仓库目录无法核对。".into()),
+    }
+    let resolved = path.canonicalize().map_err(|_| "默认笔记仓库目录无法核对。")?;
+    if resolved.parent() != Some(parent) {
+        return Err("默认笔记仓库路径越出应用笔记目录。".into());
+    }
+    Ok(resolved)
+}
+
+fn ensure_default_vault_at<F>(notes_dir: &Path, register_assets: F) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
+
+    fs::create_dir_all(notes_dir).map_err(|_| "应用笔记目录无法创建。")?;
+    let root_metadata = fs::symlink_metadata(notes_dir).map_err(|_| "应用笔记目录无法核对。")?;
+    if sync::linked(&root_metadata) || !root_metadata.is_dir() {
+        return Err("应用笔记目录不是安全目录。".into());
+    }
+    let root = notes_dir
+        .canonicalize()
+        .map_err(|_| "应用笔记目录无法核对。")?;
+    let path_file = notes_dir.join(VAULT_PATH_FILE);
+    match fs::symlink_metadata(&path_file) {
+        Ok(metadata) => {
+            if sync::linked(&metadata) || !metadata.is_file() {
+                return Err("笔记仓库配置包含链接或不是普通文件。".into());
+            }
+            let resolved = path_file
+                .canonicalize()
+                .map_err(|_| "笔记仓库配置无法核对。")?;
+            if resolved.parent() != Some(root.as_path()) {
+                return Err("笔记仓库配置越出应用笔记目录。".into());
+            }
+            let current = fs::read_to_string(&path_file)
+                .map_err(|_| "笔记仓库配置无法读取。")?;
+            if !current.trim().is_empty() {
+                return Ok(());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("笔记仓库配置无法核对。".into()),
+    }
+
+    let vault = ensure_default_directory(&notes_dir.join("vault"), &root)?;
+    ensure_default_directory(&vault.join(".mona"), &vault)?;
+    ensure_default_directory(&vault.join("assets"), &vault)?;
+    register_assets(&vault)?;
+    fs::write(&path_file, vault.to_string_lossy().to_string())
+        .map_err(|_| "默认笔记仓库路径无法保存。".into())
+}
+
+pub(crate) fn initialize_cloud_default_vault(app: &tauri::AppHandle) -> Result<(), String> {
+    let notes_dir = app_data_dir().join("notes");
+    ensure_default_vault_at(&notes_dir, |vault| {
+        register_vault_assets_scope_checked(app, vault)
+    })
+}
+
 fn vault_meta_file(vault: &Path) -> PathBuf {
     vault.join(".mona").join("vault.json")
 }
@@ -321,20 +464,26 @@ pub async fn notes_vault_get_path() -> Result<Option<String>, String> {
 /// write images directly via `tauri-plugin-fs`.
 ///
 /// Must be called after the vault path is set/known. Safe to call repeatedly.
-pub fn register_vault_assets_scope(app: &tauri::AppHandle, vault: &Path) {
+fn register_vault_assets_scope_checked(
+    app: &tauri::AppHandle,
+    vault: &Path,
+) -> Result<(), String> {
     use tauri::Manager;
     use tauri_plugin_fs::FsExt;
     let assets_dir = vault.join("assets");
-    if let Err(e) = fs::create_dir_all(&assets_dir) {
-        log::warn!("Failed to ensure assets dir for scope: {}", e);
-    }
-    let asset_scope = app.asset_protocol_scope();
-    if let Err(e) = asset_scope.allow_directory(&assets_dir, true) {
-        log::warn!("Failed to allow assets dir in asset protocol scope: {}", e);
-    }
-    let fs_scope = app.fs_scope();
-    if let Err(e) = fs_scope.allow_directory(&assets_dir, true) {
-        log::warn!("Failed to allow assets dir in fs scope: {}", e);
+    fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to ensure assets dir: {}", e))?;
+    app.asset_protocol_scope()
+        .allow_directory(&assets_dir, true)
+        .map_err(|e| format!("Failed to allow assets dir in asset protocol scope: {}", e))?;
+    app.fs_scope()
+        .allow_directory(&assets_dir, true)
+        .map_err(|e| format!("Failed to allow assets dir in fs scope: {}", e))?;
+    Ok(())
+}
+
+pub fn register_vault_assets_scope(app: &tauri::AppHandle, vault: &Path) {
+    if let Err(error) = register_vault_assets_scope_checked(app, vault) {
+        log::warn!("Failed to register vault asset scopes: {}", error);
     }
 }
 
@@ -2106,6 +2255,140 @@ mod tests {
         sanitize_note_asset_file_name,
     };
     use std::collections::HashSet;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn cloud_default_vault_initializes_empty_config_and_can_be_read_back() {
+        let temp = tempdir().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let path_file = notes_dir.join("vault_path.txt");
+
+        super::ensure_default_vault_at(&notes_dir, |vault| {
+            assert!(vault.join(".mona").is_dir());
+            assert!(vault.join("assets").is_dir());
+            assert!(!path_file.exists());
+            Ok(())
+        })
+        .unwrap();
+
+        let configured = fs::read_to_string(path_file).unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(configured),
+            notes_dir.join("vault").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn cloud_default_vault_preserves_configured_paths() {
+        let temp = tempdir().unwrap();
+        for (name, configured) in [
+            ("valid", temp.path().join("chosen-vault")),
+            ("unavailable", temp.path().join("missing-vault")),
+        ] {
+            let notes_dir = temp.path().join(name).join("notes");
+            fs::create_dir_all(&notes_dir).unwrap();
+            if name == "valid" {
+                fs::create_dir_all(&configured).unwrap();
+            }
+            let path_file = notes_dir.join("vault_path.txt");
+            fs::write(&path_file, configured.to_string_lossy().as_bytes()).unwrap();
+            let before = fs::read(&path_file).unwrap();
+
+            super::ensure_default_vault_at(&notes_dir, |_| -> Result<(), String> {
+                panic!("configured repository replaced")
+            })
+            .unwrap();
+
+            assert_eq!(fs::read(&path_file).unwrap(), before);
+            assert!(!notes_dir.join("vault").exists());
+        }
+
+        let notes_dir = temp.path().join("unreadable-config").join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
+        let path_file = notes_dir.join("vault_path.txt");
+        fs::write(&path_file, b"\xff").unwrap();
+        let before = fs::read(&path_file).unwrap();
+        assert!(super::ensure_default_vault_at(&notes_dir, |_| Ok(())).is_err());
+        assert_eq!(fs::read(&path_file).unwrap(), before);
+        assert!(!notes_dir.join("vault").exists());
+    }
+
+    #[test]
+    fn cloud_default_vault_rejects_non_directories_and_links_outside_notes_root() {
+        let temp = tempdir().unwrap();
+
+        let file_notes_dir = temp.path().join("file-notes");
+        fs::create_dir_all(&file_notes_dir).unwrap();
+        fs::write(file_notes_dir.join("vault"), "not a directory").unwrap();
+        let file_path = file_notes_dir.join("vault_path.txt");
+        assert!(super::ensure_default_vault_at(&file_notes_dir, |_| Ok(())).is_err());
+        assert!(!file_path.exists());
+
+        let linked_notes_dir = temp.path().join("linked-notes");
+        let outside_dir = temp.path().join("outside-vault");
+        fs::create_dir_all(&linked_notes_dir).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        let linked_vault = linked_notes_dir.join("vault");
+        create_test_link(&outside_dir, &linked_vault, true).unwrap();
+        let linked_path = linked_notes_dir.join("vault_path.txt");
+        assert!(super::ensure_default_vault_at(&linked_notes_dir, |_| Ok(())).is_err());
+        assert!(!linked_path.exists());
+
+        let pointer_notes_dir = temp.path().join("pointer-notes");
+        fs::create_dir_all(&pointer_notes_dir).unwrap();
+        let outside_config = temp.path().join("outside-config.txt");
+        fs::write(&outside_config, outside_dir.to_string_lossy().as_bytes()).unwrap();
+        let linked_path = pointer_notes_dir.join("vault_path.txt");
+        if let Err(error) = create_test_link(&outside_config, &linked_path, false) {
+            #[cfg(windows)]
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("File-symlink pointer case unavailable without Windows symlink privilege; directory-junction boundary was verified.");
+                return;
+            }
+            panic!("Could not create pointer link: {error}");
+        }
+        assert!(super::ensure_default_vault_at(&pointer_notes_dir, |_| Ok(())).is_err());
+        assert!(fs::symlink_metadata(&linked_path).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    fn create_test_link(
+        target: &std::path::Path,
+        link: &std::path::Path,
+        _is_dir: bool,
+    ) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_test_link(
+        target: &std::path::Path,
+        link: &std::path::Path,
+        is_dir: bool,
+    ) -> std::io::Result<()> {
+        if is_dir {
+            match std::os::windows::fs::symlink_dir(target, link) {
+                Err(error) if error.raw_os_error() == Some(1314) => {
+                    use std::os::windows::process::CommandExt;
+                    let result = std::process::Command::new("cmd")
+                        .args(["/D", "/C", "mklink", "/J"])
+                        .arg(link)
+                        .arg(target)
+                        .creation_flags(0x08000000)
+                        .output()?;
+                    if result.status.success() {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other("Could not create test junction"))
+                    }
+                }
+                result => result,
+            }
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
 
     #[test]
     fn task_directories_are_not_notebooks() {

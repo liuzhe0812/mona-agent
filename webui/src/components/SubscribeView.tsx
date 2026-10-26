@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { SectionHeader, SubsectionLabel } from "@/components/ui/page-header";
 import { useLicense } from "@/hooks/useLicense";
 import { PaymentDialog } from "@/components/PaymentDialog";
-import { Check, Copy, Loader2, Mail, RotateCcw, Zap } from "lucide-react";
+import { Check, Loader2, RotateCcw } from "lucide-react";
 import { isTauri } from "@/lib/tauri";
+import { formatMoneyAmount } from "@/lib/money";
+import { cn } from "@/lib/utils";
 
 const PRO_BENEFITS = [
   "最多 3 台设备登录",
@@ -35,15 +39,34 @@ export function SubscribeView({
   loading,
   onManageSubscription,
 }: SubscribeViewProps) {
-  const { pricingConfig, pricingError, refreshLicense, licenseActive, serverTrial, fetchPricing } = useLicense();
+  const { pricingConfig, pricingError, refreshLicense, licenseActive, serverTrial, remainingDays, licenseInfo, fetchPricing } = useLicense();
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
   const [subscribing, setSubscribing] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [currentOrder, setCurrentOrder] = useState<SubscribeOrder | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [autoRenew, setAutoRenew] = useState(false);
+  const [autoRenewError, setAutoRenewError] = useState(false);
+  const [subscriptionRevision, setSubscriptionRevision] = useState(0);
   const defaultPlanApplied = useRef(false);
+  const subscriptionOwner = `${licenseInfo?.account ?? userEmail}:${licenseInfo?.email ?? ""}:${licenseInfo?.device_session_id ?? ""}`;
+  const canManageSubscription = !!onManageSubscription;
+
+  useEffect(() => {
+    setAutoRenew(false);
+    setAutoRenewError(false);
+    if (!licenseActive || serverTrial || !canManageSubscription || !isTauri()) return;
+    let cancelled = false;
+    void import("@tauri-apps/api/core").then(async ({ invoke }) => {
+      const info = await invoke<{ auto_renew: boolean }>("get_subscription_info");
+      if (typeof info?.auto_renew !== "boolean") throw new Error("自动续费状态返回异常");
+      if (!cancelled) setAutoRenew(info.auto_renew);
+    }).catch(() => {
+      if (!cancelled) setAutoRenewError(true);
+    });
+    return () => { cancelled = true; };
+  }, [licenseActive, serverTrial, canManageSubscription, subscriptionOwner, subscriptionRevision]);
 
   useEffect(() => {
     if (!pricingConfig || defaultPlanApplied.current) return;
@@ -57,23 +80,19 @@ export function SubscribeView({
     [pricingConfig, selectedPlanId]
   );
 
-  const contact = pricingConfig?.contact ?? { email: "", wechat: "" };
-
-  const handleCopy = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
   const handleRefresh = async () => {
     setRefreshing(true);
-    await refreshLicense();
-    setRefreshing(false);
+    try {
+      await refreshLicense();
+      setSubscriptionRevision((value) => value + 1);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // 发起订阅
   const handleSubscribe = async (paymentMethod: "alipay_page") => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || (licenseActive && !serverTrial)) return;
     if (!userEmail) {
       setErrorMsg("请先登录后再订阅");
       return;
@@ -107,7 +126,7 @@ export function SubscribeView({
       if (msg.includes("already_subscribed")) {
         setErrorMsg("您已有有效订阅，无需重复购买");
       } else if (msg.includes("alipay_disabled")) {
-        setErrorMsg("支付宝支付暂未开启，请使用联系作者方式开通");
+        setErrorMsg("支付宝支付暂未开启，请稍后重试。");
       } else {
         setErrorMsg(msg);
       }
@@ -125,6 +144,7 @@ export function SubscribeView({
   const handlePaymentCancel = () => {
     setDialogOpen(false);
     setCurrentOrder(null);
+    void refreshLicense();
   };
 
   if (loading) {
@@ -149,160 +169,125 @@ export function SubscribeView({
     );
   }
 
-  // 已订阅用户视图
   const isPaidUser = licenseActive && !serverTrial;
+  const subscriptionStatus = serverTrial
+    ? `试用剩余 ${remainingDays} 天`
+    : isPaidUser
+      ? licenseInfo?.expires_at ? `剩余 ${remainingDays} 天` : "长期有效"
+      : "未开通";
 
   const content = (
-    <div className="flex w-full flex-col gap-4">
+    <div className="flex w-full flex-col gap-5">
+      {!embed && <SectionHeader title="Mona Pro" description="多设备登录与个人云空间" />}
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-caption text-muted-foreground">当前状态</span>
+          <Badge variant={serverTrial ? "default" : isPaidUser ? "success" : "secondary"}>{subscriptionStatus}</Badge>
+        </div>
+        <div className="flex items-center gap-1">
+          {autoRenew && onManageSubscription && <Button variant="ghost" size="xs" onClick={onManageSubscription}>
+            自动续费设置
+          </Button>}
+          <Button variant="ghost" size="xs" onClick={handleRefresh} disabled={refreshing}>
+            <RotateCcw className={cn("mr-1.5 h-3.5 w-3.5", refreshing && "animate-spin")} aria-hidden />
+            {refreshing ? "刷新中…" : "刷新状态"}
+          </Button>
+        </div>
+      </div>
+
       {pricingConfig.promotionalBanner && (
-        <div className="relative rounded-lg border border-border bg-card px-4 py-2 text-center text-sm font-medium text-foreground">
-          <span
-            aria-hidden="true"
-            className="absolute bottom-2 left-0 top-2 w-0.5 bg-[hsl(var(--brand-red))]"
-          />
+        <div className="rounded-lg bg-muted/50 px-3 py-2 text-caption text-foreground">
           {pricingConfig.promotionalBanner}
         </div>
       )}
 
-      <div className="text-center">
-        <p className="text-title-sm font-semibold">升级至 Mona Pro</p>
-        <p className="text-sm text-muted-foreground">
-          {isPaidUser ? "当前订阅已生效" : "选择订阅方案，扫码即可开通"}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-lg border border-primary/15 bg-primary/5 p-3 text-sm">
-        {PRO_BENEFITS.map((benefit) => (
-          <div key={benefit} className="flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-primary" />
-            <span>{benefit}</span>
-          </div>
-        ))}
-        <p className="pt-1 text-xs text-muted-foreground">
+      <section className="space-y-3 border-y border-border/60 py-4" aria-label="Pro 权益">
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {PRO_BENEFITS.map((benefit) => (
+            <li key={benefit} className="flex items-start gap-2 text-ui">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span>{benefit}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="text-caption leading-relaxed text-muted-foreground">
           本地 AI 功能免费；Pro 不含模型额度，自带 API Key 或 CLI 不扣 Mona 余额。云同步以账户设置中的服务可用状态为准。
         </p>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-3 gap-3">
-        {pricingConfig.plans.map((plan) => {
-          const period = plan.durationMonths ?? 0;
-          const unitLabel = period === 0 ? "永久" : `${period}个月`;
-          return (
-            <button
-              key={plan.id}
-              onClick={() => setSelectedPlanId(plan.id)}
-              className={`relative flex flex-col gap-1 rounded-xl border p-4 text-left transition-colors ${
-                selectedPlanId === plan.id
-                  ? "border-[hsl(var(--brand-red))] bg-foreground/5"
-                  : "border-border hover:bg-muted/50"
-              }`}
-            >
-              {plan.badge && (
-                <span className="absolute right-2 top-2 rounded-full bg-info-soft px-2 py-0.5 text-micro text-info">
-                  {plan.badge}
-                </span>
-              )}
-              <span className="text-sm font-medium">{plan.name}</span>
-              <div className="flex items-baseline gap-1">
-                <span className="text-xl font-bold">¥{plan.price}</span>
-                <span className="text-xs text-muted-foreground">/{unitLabel}</span>
-              </div>
-              {plan.originalPrice ? (
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground line-through">¥{plan.originalPrice}</span>
-                  <span className="font-medium text-primary">早期用户价</span>
+      <section aria-label="订阅套餐">
+        <SubsectionLabel className="mb-2">{isPaidUser ? "订阅套餐" : "选择订阅周期"}</SubsectionLabel>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {pricingConfig.plans.map((plan) => {
+            const period = plan.durationMonths
+              ? `${plan.durationMonths}个月`
+              : plan.periodDays ? `${plan.periodDays}天` : "长期有效";
+            const selected = selectedPlanId === plan.id;
+            return (
+              <Button
+                key={plan.id}
+                variant="outline"
+                aria-pressed={selected}
+                disabled={subscribing}
+                onClick={() => setSelectedPlanId(plan.id)}
+                className={cn(
+                  "h-auto min-w-0 flex-col items-start gap-2 whitespace-normal rounded-xl p-3 text-left",
+                  selected && "border-foreground bg-muted/50 ring-1 ring-foreground hover:bg-muted/50",
+                )}
+              >
+                <div className="flex w-full flex-wrap items-center gap-1.5">
+                  <span className="mr-auto text-ui font-medium">{plan.name}</span>
+                  {plan.badge && <Badge variant="secondary" className="px-1.5 py-0 text-micro">{plan.badge}</Badge>}
+                  {selected && <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />}
                 </div>
-              ) : null}
-              <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span
-                  className={`h-3.5 w-3.5 rounded-full border ${
-                    selectedPlanId === plan.id
-                      ? "border-foreground bg-foreground"
-                      : "border-muted-foreground"
-                  }`}
-                />
-                选择
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 订阅按钮区 */}
-      {selectedPlan && (
-        <div className="flex flex-col gap-2">
-          <Button
-            onClick={() => handleSubscribe("alipay_page")}
-            disabled={subscribing || !userEmail}
-            className="w-full"
-          >
-            {subscribing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Zap className="mr-2 h-4 w-4" />
-            )}
-            立即购买
-          </Button>
-
-          {!userEmail && (
-            <p className="text-center text-xs text-muted-foreground">购买需要先登录账号</p>
-          )}
-          {errorMsg && (
-            <p className="text-center text-xs text-destructive">{errorMsg}</p>
-          )}
+                <span className="flex flex-wrap items-baseline gap-1">
+                  <span className="text-title-sm font-semibold tabular-nums">¥{formatMoneyAmount(String(plan.price))}</span>
+                  <span className="text-caption font-normal text-muted-foreground">/ {period}</span>
+                </span>
+                {plan.originalPrice ? (
+                  <span className="flex flex-wrap items-center gap-x-1.5 text-caption font-normal text-muted-foreground">
+                    <span className="line-through">¥{formatMoneyAmount(String(plan.originalPrice))}</span>
+                    <span>早期用户价</span>
+                  </span>
+                ) : null}
+              </Button>
+            );
+          })}
         </div>
-      )}
+        {pricingConfig.plans.length === 0 && <p className="py-3 text-caption text-muted-foreground">暂无可购买的订阅套餐</p>}
+      </section>
 
-      {/* 联系方式 */}
-      <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
-        <p className="font-medium text-foreground">联系开发者</p>
-        <div className="flex items-center gap-2">
-          <Mail className="h-4 w-4 text-muted-foreground" />
-          <span className="text-muted-foreground">{contact.email}</span>
-          <button
-            type="button"
-            onClick={() => handleCopy(contact.email, "email")}
-            className="ml-auto inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:bg-muted"
-            title="复制邮箱"
-          >
-            {copied === "email" ? (
-              <Check className="h-3.5 w-3.5 text-green-600" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </button>
+      {licenseActive && serverTrial && <p className="text-caption text-muted-foreground">
+        历史软件试用不包含多设备登录和云空间权益。
+      </p>}
+
+      {errorMsg && <p role="alert" className="text-caption text-destructive">{errorMsg}</p>}
+      {autoRenewError && <p role="alert" className="text-caption text-muted-foreground">
+        自动续费状态暂时无法读取，请点击“刷新状态”重试。
+      </p>}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+        <div>
+          <p className="text-caption text-muted-foreground">{isPaidUser ? "套餐价格" : "应付金额"}</p>
+          <p className="mt-0.5 text-title-sm font-semibold tabular-nums">
+            {selectedPlan ? `¥${formatMoneyAmount(String(selectedPlan.price))}` : "—"}
+          </p>
         </div>
-      </div>
-
-      {/* 状态按钮 */}
-      <div className="flex flex-col gap-2">
-        {isPaidUser && onManageSubscription && (
-          <Button variant="outline" onClick={onManageSubscription} className="w-full">
-            管理订阅
-          </Button>
-        )}
-        <Button onClick={handleRefresh} disabled={refreshing} variant={isPaidUser ? "ghost" : "outline"} className="w-full">
-          {refreshing ? "刷新中..." : "刷新订阅状态"}
+        <Button
+          onClick={() => handleSubscribe("alipay_page")}
+          disabled={isPaidUser || subscribing || !userEmail || !selectedPlan}
+          className="rounded-lg px-5"
+        >
+          {subscribing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          {isPaidUser ? "已开通" : subscribing ? "正在创建订单…" : "立即订阅"}
         </Button>
       </div>
+      {!userEmail && <p className="text-caption text-muted-foreground">购买需要先登录账号</p>}
 
-      {licenseActive && serverTrial && (
-        <p className="text-center text-sm text-amber-600">
-          历史软件试用不包含多设备登录和云空间权益。
-        </p>
-      )}
-
-      {licenseActive && !serverTrial && (
-        <p className="text-center text-sm text-green-600">订阅已生效，请返回主界面。</p>
-      )}
-
-      <button
-        type="button"
-        onClick={onBackToLogin}
-        className="text-center text-xs text-muted-foreground hover:underline"
-      >
-        ← 返回{userEmail ? "账号" : "登录"}
-      </button>
+      {!embed && <Button type="button" variant="text" size="sm" className="self-center" onClick={onBackToLogin}>
+        返回{userEmail ? "账户" : "登录"}
+      </Button>}
 
       {/* 支付弹窗 */}
       {currentOrder && (

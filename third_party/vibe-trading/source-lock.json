@@ -1,0 +1,21 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "source": {
+    "upstream_url": "https://github.com/HKUDS/Vibe-Trading",
+    "git_metadata": "absent; commit and tag are unknown",
+    "declared_package_version": "0.1.16",
+    "declared_repository_url": "https://github.com/HKUDS/Vibe-Trading"
+  },
+  "archive": {
+    "path": "vibe-trading-source.zip",
+    "sha256": "1f3eeca190f1ce935ad71d3bb294f5e8bb1cbaa3f63fbb5304ff2e11a0fda83d",
+    "size": 18034920,
+    "format": "zip-deflate-level-9; sorted paths; fixed 1980-01-01 timestamps"
+  },
+  "files_manifest": {
+    "path": "files.json",
+    "sha256": "3ae39b3f698f4361fc048a146f0cddba5fa9195ddcc6643b871c04fcbd46d093",
+    "count": 2544,
+    "raw_bytes": 42782560
+  }
+}

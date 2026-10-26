@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Expose opaque downloads from persisted native Swarm artifact references only.",
+  "files": [
+    {
+      "path": "agent/api_server.py",
+      "sha256": "f4600c28d90f4740d0a77927b473b6716e476dc68961e2f4d9d7cb4e4af17e8d",
+      "replacements": [
+        {
+          "before": "from src.api.mona_reads import register_mona_reads  # noqa: E402\nregister_mona_reads(app)\n",
+          "after": "from src.api.mona_reads import register_mona_reads  # noqa: E402\nregister_mona_reads(app)\nfrom src.api.mona_swarm_artifacts import register_mona_swarm_artifacts  # noqa: E402\nregister_mona_swarm_artifacts(app)\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {
+    "agent/src/api/mona_swarm_artifacts.py": "\"\"\"Opaque downloads selected only from persisted native task artifacts.\"\"\"\n\nimport hashlib\nimport os\nimport re\nfrom pathlib import Path\n\nfrom fastapi import Depends, FastAPI, HTTPException\nfrom fastapi.responses import FileResponse\nfrom src.api.mona_reads import _private_file\nfrom src.api.security import require_auth\nfrom src.api.swarm_routes import _get_swarm_runtime\n\n\ndef _artifacts(run_id: str):\n    if not re.fullmatch(r\"[A-Za-z0-9_-]{1,128}\", run_id):\n        raise HTTPException(status_code=404, detail=\"Swarm run not found\")\n    store = _get_swarm_runtime()._store\n    run = store.load_run(run_id)\n    if run is None:\n        raise HTTPException(status_code=404, detail=\"Swarm run not found\")\n    root = store.run_dir(run_id).resolve()\n    result = []\n    for task in run.tasks:\n        for relative in task.artifacts:\n            if not isinstance(relative, str):\n                continue\n            artifact_id = hashlib.sha256((task.id + \"\\0\" + relative).encode()).hexdigest()\n            try:\n                path = _private_file(root / relative)\n                if not path.is_relative_to(root):\n                    continue\n            except HTTPException:\n                continue\n            result.append((artifact_id, task.id, path))\n    return result\n\n\ndef register_mona_swarm_artifacts(app: FastAPI) -> None:\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") != \"1\":\n        return\n\n    @app.get(\"/mona/swarm-runs/{run_id}/artifacts\", dependencies=[Depends(require_auth)])\n    async def list_artifacts(run_id: str):\n        items = []\n        for artifact_id, task_id, path in _artifacts(run_id):\n            size = path.stat().st_size\n            digest = hashlib.sha256(path.read_bytes()).hexdigest() if size <= 16 * 1024 * 1024 else None\n            items.append({\"artifact_id\": artifact_id, \"task_id\": task_id, \"filename\": path.name,\n                          \"bytes\": size, \"sha256\": digest})\n        return {\"artifacts\": items}\n\n    @app.get(\"/mona/swarm-runs/{run_id}/artifacts/{artifact_id}\", dependencies=[Depends(require_auth)])\n    async def download_artifact(run_id: str, artifact_id: str):\n        if not re.fullmatch(r\"[a-f0-9]{64}\", artifact_id):\n            raise HTTPException(status_code=404, detail=\"Artifact not found\")\n        for found, _task, path in _artifacts(run_id):\n            if found == artifact_id:\n                return FileResponse(path, filename=Path(path).name, content_disposition_type=\"attachment\")\n        raise HTTPException(status_code=404, detail=\"Artifact not found\")\n"
+  }
+}

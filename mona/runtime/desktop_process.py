@@ -16,15 +16,15 @@ def start_parent_stdin_watchdog() -> None:
 
     threading.Thread(
         target=_wait_for_parent_eof,
-        args=(sys.stdin.buffer,),
+        args=(sys.stdin.fileno(),),
         name="mona-desktop-parent-watchdog",
         daemon=True,
     ).start()
 
 
-def _wait_for_parent_eof(stdin) -> None:
+def _wait_for_parent_eof(stdin_fd: int) -> None:
     try:
-        while stdin.read(1):
+        while os.read(stdin_fd, 1):
             pass
     except Exception:
         logging.getLogger(__name__).exception("Failed to monitor desktop parent stdin")

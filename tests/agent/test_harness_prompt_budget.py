@@ -173,7 +173,6 @@ def test_database_query_tools_follow_connection_context() -> None:
     loader = LoadCapabilityTool(workspace=".", agent_id="mona", registry=registry)
     for tool in (loader, inspect, query, draft):
         registry.register(tool)
-    registry.set_subscription_access(True)
 
     empty = RequestContext(channel="websocket", chat_id="chat", metadata={})
     bind_capability_context(empty)
@@ -237,7 +236,6 @@ def test_terminal_entry_stays_visible_while_session_tools_follow_context() -> No
     loader = LoadCapabilityTool(workspace=".", agent_id="mona", registry=registry)
     for tool in (loader, task, *session_tools):
         registry.register(tool)
-    registry.set_subscription_access(True)
 
     no_terminal = RequestContext(channel="websocket", chat_id="chat")
     bind_capability_context(no_terminal)
@@ -284,7 +282,6 @@ def test_terminal_task_unlocks_session_tools_in_the_same_turn(monkeypatch) -> No
     registry.register(loader)
     registry.register(task)
     registry.register(execute)
-    registry.set_subscription_access(True)
     ctx = RequestContext(channel="websocket", chat_id="chat")
     bind_capability_context(ctx)
     task.set_context(ctx)
@@ -375,7 +372,6 @@ def test_contextual_tool_views_are_isolated_between_concurrent_sessions() -> Non
     loader = LoadCapabilityTool(workspace=".", agent_id="mona", registry=registry)
     for tool in (loader, inspect, draft, terminal_task, terminal_exec):
         registry.register(tool)
-    registry.set_subscription_access(True)
 
     async def visible(ctx: RequestContext) -> list[str]:
         bind_capability_context(ctx)

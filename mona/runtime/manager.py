@@ -41,6 +41,7 @@ class RuntimeComponentManifest(Base):
     dependencies: list[str] = Field(default_factory=list)
     python_requirements: str | None = None
     python_wheelhouse: str | None = None
+    python_environment: str = "official"
     health_imports: list[str] = Field(default_factory=list)
 
     @field_validator("schema_version")
@@ -102,6 +103,11 @@ class RuntimeComponentManifest(Base):
             if value not in result:
                 result.append(value)
         return result
+
+    @field_validator("python_environment")
+    @classmethod
+    def _validate_python_environment(cls, value: str) -> str:
+        return cls._validate_id(value)
 
     @model_validator(mode="after")
     def _validate_python_pack(self) -> RuntimeComponentManifest:

@@ -26,8 +26,7 @@ export interface ConversationMeta {
   activeWorkflowId?: string | null;
   activeWorkflowRevision?: number | null;
   archived?: boolean;
-  /** System-managed execution container (stock-module design §5.1): hidden
-   *  from every conversation list, never user-visible. */
+  /** System-managed conversations are excluded from user-facing lists. */
   hidden?: boolean;
 }
 
@@ -37,9 +36,8 @@ export interface AgentSummary {
   displayName: string;
   avatarUrl?: string;
   enabled: boolean;
-  /** Product visibility (stock-module design §4.4): ``internal`` agents only
-   *  exist inside their pack's room and never appear in the global partner
-   *  list. Absent means ``partner``. */
+  /** Internal agents appear in their team's rooms, not the global partner list.
+   *  Absent means ``partner``. */
   visibility?: "partner" | "internal";
   packageId?: string;
   packageVersion?: string;
@@ -129,17 +127,12 @@ export interface AgentDetailPayload {
 }
 
 export interface AgentInstruction {
-  key: "soul" | "agents" | "user" | "memory";
+  key: "soul" | "memory";
   filename: string;
   content: string;
   contentHash: string;
   updatedAt?: string | null;
-}
-
-export interface AgentInstructionHistoryItem {
-  sha: string;
-  message: string;
-  timestamp: string;
+  hasPrevious?: boolean;
 }
 
 export interface AgentSkill {
@@ -487,7 +480,7 @@ export interface WorkflowRun {
   startedAt: string;
   finishedAt?: string | null;
   steps: Record<string, WorkflowStepRun>;
-  /** Structured run inputs supplied at start (stock-module design §4.2). */
+  /** Structured inputs supplied when the workflow run starts. */
   inputs?: Record<string, unknown>;
 }
 
@@ -1044,7 +1037,6 @@ export interface SettingsPayload {
       schedule: string;
       max_batch_size: number;
       max_iterations: number;
-      annotate_line_ages: boolean;
     };
     unified_session: boolean;
   };
@@ -1066,15 +1058,6 @@ export interface SettingsPayload {
     model: string | null;
     api_key_configured: boolean;
     api_key_hint: string | null;
-  };
-  stock: {
-    enabled: boolean;
-    auto_review_enabled: boolean;
-    review_time: string;
-    review_scope: "all" | "focus";
-    push_notification: boolean;
-    push_email: boolean;
-    quote_refresh_sec: number;
   };
   requires_restart: boolean;
   restart_required_sections?: Array<"runtime" | "web" | "providers" | "channels">;
@@ -1204,20 +1187,6 @@ export interface TtsSettingsUpdate {
   apiKey?: string;
   /** Remove the stored API key. */
   clearKey?: boolean;
-}
-
-export interface StockSettingsUpdate {
-  enabled?: boolean;
-  /** Whether the daily review scheduler is enabled independently of the stock module. */
-  autoReviewEnabled?: boolean;
-  /** ``HH:MM`` in Asia/Shanghai — the daily review trigger time. */
-  reviewTime?: string;
-  /** Daily-review coverage: all watchlist items or focus-marked only. */
-  reviewScope?: "all" | "focus";
-  pushNotification?: boolean;
-  pushEmail?: boolean;
-  /** Quote polling interval in seconds (5–3600). */
-  quoteRefreshSec?: number;
 }
 
 export interface SlashCommand {
@@ -1659,7 +1628,6 @@ export type Outbound =
       type: "agent_instruction_restore";
       agent_id: string;
       key: AgentInstruction["key"];
-      commit: string;
       request_id?: string;
     }
   | {

@@ -59,7 +59,6 @@ from mona.webui.settings_api import (
     update_image_generation_settings,
     update_jev_settings,
     update_provider_settings,
-    update_stock_settings,
     update_tts_settings,
     update_video_generation_settings,
     update_web_search_settings,
@@ -957,8 +956,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/tts/update":
             return self._handle_settings_tts_update(request)
 
-        if got == "/api/settings/stock/update":
-            return self._handle_settings_stock_update(request)
 
         if got == "/api/channels/weixin/login/start":
             return self._handle_weixin_login_start(request)
@@ -1031,20 +1028,12 @@ class WebSocketChannel(BaseChannel):
 
         # Stock module report queries (design §10.2, dev plan T16). Detail
         # matches by document content, never by path — see reports.py.
-        if got == "/api/stock/reports":
-            return self._handle_stock_reports(request)
 
-        if got.startswith("/api/stock/reports/"):
-            return self._handle_stock_report_detail(request, got[len("/api/stock/reports/") :])
 
         # Manual report cleanup (design §9). A GET here follows the channel's
         # process_request constraint (no reliable POST body), same as the
         # video delete-project route.
-        if got == "/api/stock/report-delete":
-            return self._handle_stock_report_delete(request)
 
-        if got == "/api/stock/dashboard":
-            return self._handle_stock_dashboard(request)
 
         if got == "/api/project-files":
             return await asyncio.to_thread(
@@ -1466,10 +1455,6 @@ class WebSocketChannel(BaseChannel):
                 from mona.agent.agent_management import read_instruction
 
                 return _http_json_response({"instruction": read_instruction(agent_id, suffix[1])})
-            if len(suffix) == 3 and suffix[0] == "instructions" and suffix[2] == "history":
-                from mona.agent.agent_management import instruction_history
-
-                return _http_json_response({"history": instruction_history(agent_id, suffix[1])})
             if suffix == ["skills"]:
                 from mona.agent.agent_management import SkillManager
 
@@ -1701,44 +1686,6 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         try:
             payload = update_tts_settings(query)
-        except WebUISettingsError as e:
-            return _http_error(e.status, e.message)
-        return _http_json_response(self._with_settings_restart_state(payload))
-
-    def _handle_settings_stock_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        # The review cron lives on the agent runtime's CronService, reached
-        # through the subagent manager (cli/commands.py wires it there).
-        cron_service = (
-            getattr(self._subagent_manager, "cron_service", None)
-            if self._subagent_manager is not None
-            else None
-        )
-
-        def _bootstrap(stock) -> None:
-            """Idempotent pack bootstrap on enable (stock-module T21)."""
-            if self._session_manager is None or self._subagent_manager is None:
-                return
-            try:
-                from mona.agent.pack_bootstrap import STOCK_ROOM_ID, ensure_stock_pack
-                from mona.agent.partners import AgentRegistry
-
-                ensure_stock_pack(
-                    self._session_manager,
-                    self._subagent_manager.workflow_store_for_room(STOCK_ROOM_ID),
-                    cron_service,
-                    AgentRegistry(),
-                    review_time=stock.review_time,
-                    enabled=True,
-                    auto_review_enabled=stock.auto_review_enabled,
-                )
-            except Exception:
-                logger.exception("Stock pack bootstrap failed")
-
-        try:
-            payload = update_stock_settings(query, cron_service=cron_service, bootstrap=_bootstrap)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload))
@@ -3188,81 +3135,6 @@ class WebSocketChannel(BaseChannel):
 
         return _http_json_response({"path": relative_path, "name": new_name})
 
-    def _handle_stock_reports(self, request: WsRequest) -> Response:
-        """List stock reports/digests under ``<workspace>/stock_projects``.
-
-        Requires API token. Empty/missing directory yields an empty list.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from mona.config.paths import get_stock_projects_dir
-        from mona.services.stock.reports import scan_reports
-
-        stock_dir = get_stock_projects_dir(self.workspace)
-        try:
-            reports = scan_reports(stock_dir)
-        except Exception:
-            logger.exception("Failed to scan stock reports in {}", stock_dir)
-            return _http_error(500, "scan failed")
-        return _http_json_response({"reports": reports})
-
-    def _handle_stock_report_detail(self, request: WsRequest, report_id: str) -> Response:
-        """Return one report's JSON document plus its markdown rendering."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from mona.services.stock.reports import (
-            load_report,
-            public_report_detail,
-            valid_report_id,
-        )
-
-        # The id is matched against document content (never joined into a
-        # path), but reject anything outside the id alphabet anyway.
-        if not valid_report_id(report_id):
-            return _http_error(400, "invalid report id")
-        from mona.config.paths import get_stock_projects_dir
-
-        stock_dir = get_stock_projects_dir(self.workspace)
-        result = load_report(stock_dir, report_id)
-        if result is None:
-            return _http_error(404, "report not found")
-        doc, markdown = result
-        return _http_json_response(public_report_detail(doc, markdown))
-
-    def _handle_stock_report_delete(self, request: WsRequest) -> Response:
-        """Delete one report's run directory (manual cleanup, design §9)."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from mona.services.stock.reports import delete_report, valid_report_id
-
-        report_id = _query_first(_parse_query(request.path), "id") or ""
-        if not valid_report_id(report_id):
-            return _http_error(400, "invalid report id")
-        from mona.config.paths import get_stock_projects_dir
-
-        stock_dir = get_stock_projects_dir(self.workspace)
-        if not delete_report(stock_dir, report_id):
-            return _http_error(404, "report not found")
-        return _http_json_response({"deleted": True})
-
-    def _handle_stock_dashboard(self, request: WsRequest) -> Response:
-        """Global watchlist × latest report in the current workspace."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from mona.config.paths import get_stock_projects_dir
-        from mona.services.stock import reports as stock_reports
-        from mona.services.stock.storage import WatchlistCorruptError
-
-        try:
-            watchlist = stock_reports.default_watchlist()
-        except WatchlistCorruptError as exc:
-            return _http_json_response(
-                {"error": {"code": "watchlist_corrupt", "message": str(exc)}},
-                status=500,
-            )
-        stock_dir = get_stock_projects_dir(self.workspace)
-        return _http_json_response({"items": stock_reports.build_dashboard(stock_dir, watchlist)})
-
     def _handle_project_files_list(self, request: WsRequest, key: str) -> Response:
         """List all files of a project session's bound workspace directory.
 
@@ -4142,12 +4014,13 @@ class WebSocketChannel(BaseChannel):
 
             agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
             key = envelope.get("key")
-            commit = envelope.get("commit")
             if self._room_agent_registry().get(agent_id) is None:
                 raise ValueError("agent is not installed")
-            if not isinstance(key, str) or not isinstance(commit, str):
-                raise ValueError("key and commit are required")
-            instruction = restore_instruction(agent_id, key, commit)
+            if not isinstance(key, str):
+                raise ValueError("key is required")
+            if envelope.get("commit") is not None:
+                raise ValueError("仅支持恢复上一版，请刷新页面后重试。")
+            instruction = restore_instruction(agent_id, key)
             await self._send_event(
                 connection,
                 "agent_instruction_restore_result",
@@ -5443,6 +5316,7 @@ class WebSocketChannel(BaseChannel):
     async def _handle_run_workflow_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
+        from mona.agent.jobs import RetiredTaskError
         from mona.agent.workflow import RunConflictError, validate_run_inputs
 
         ctx = await self._workflow_room_context(
@@ -5552,6 +5426,16 @@ class WebSocketChannel(BaseChannel):
                         "detail": "room already has an active run",
                     },
                 )
+            except RetiredTaskError as exc:
+                await self._send_event(
+                    connection,
+                    "run_workflow_result",
+                    ok=False,
+                    code="retired_task",
+                    detail=str(exc),
+                    chat_id=chat_id,
+                    request_id=request_id,
+                )
             except Exception as exc:
                 # Validation failures land here (the run is never created);
                 # executor crashes additionally flip the persisted run to
@@ -5576,104 +5460,6 @@ class WebSocketChannel(BaseChannel):
             ok=True,
             chat_id=chat_id,
             request_id=request_id,
-        )
-
-    async def _handle_sync_stock_selection_schedule_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
-        """Sync a persisted SelectionStrategy schedule into the shared cron.
-
-        The browser may request a strategy id, but schedule fields are read
-        from the durable service record so a client cannot smuggle arbitrary
-        cron expressions into the system.  Only the hidden stock room can
-        address this command.
-        """
-        from mona.agent.pack_bootstrap import STOCK_ROOM_ID, sync_stock_selection_cron
-
-        ctx = await self._workflow_room_context(
-            connection, envelope, result_event="sync_stock_selection_schedule_result"
-        )
-        if ctx is None:
-            return
-        chat_id, _conversation, request_id = ctx
-        if chat_id != STOCK_ROOM_ID:
-            await self._send_event(
-                connection,
-                "sync_stock_selection_schedule_result",
-                ok=False,
-                code="invalid_room",
-                detail="stock selection schedules must use the hidden stock room",
-                chat_id=chat_id,
-                request_id=request_id,
-            )
-            return
-        strategy_id = envelope.get("strategy_id")
-        if not isinstance(strategy_id, str) or not re.fullmatch(
-            r"^[a-z][a-z0-9_-]{1,63}$", strategy_id.strip()
-        ):
-            await self._send_event(
-                connection,
-                "sync_stock_selection_schedule_result",
-                ok=False,
-                code="invalid_strategy_id",
-                detail="malformed strategy_id",
-                chat_id=chat_id,
-                request_id=request_id,
-            )
-            return
-        strategy_id = strategy_id.strip()
-        try:
-            from mona.services.stock.api import _provider
-            from mona.services.stock.screening import default_screening_service
-
-            service = default_screening_service(provider=_provider(), workspace=self.workspace)
-            strategy = next(
-                (item for item in service.strategies() if item.strategy_id == strategy_id),
-                None,
-            )
-        except Exception as exc:
-            await self._send_event(
-                connection,
-                "sync_stock_selection_schedule_result",
-                ok=False,
-                code="service_unavailable",
-                detail=str(exc),
-                chat_id=chat_id,
-                request_id=request_id,
-            )
-            return
-        if strategy is None:
-            await self._send_event(
-                connection,
-                "sync_stock_selection_schedule_result",
-                ok=False,
-                code="strategy_not_found",
-                detail="saved strategy not found",
-                chat_id=chat_id,
-                request_id=request_id,
-            )
-            return
-        cron_service = getattr(self._subagent_manager, "cron_service", None)
-        schedule = strategy.schedule.model_dump(mode="json")
-        result = sync_stock_selection_cron(cron_service, strategy_id, schedule)
-        ok = result.get("status") in {"registered", "disabled"}
-        payload = dict(result)
-        payload.update(
-            {
-                "ok": ok,
-                "code": result.get("code") if not ok else None,
-                "detail": (
-                    "selection schedule synchronized" if ok else "selection schedule unavailable"
-                ),
-                "chat_id": chat_id,
-                "request_id": request_id,
-                "strategy_id": strategy_id,
-            }
-        )
-        await self._send_event(
-            connection,
-            "sync_stock_selection_schedule_result",
-            **payload,
         )
 
     async def _handle_cancel_workflow_run_envelope(
@@ -5834,6 +5620,7 @@ class WebSocketChannel(BaseChannel):
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
         """Retry one failed agent step and resume the run in the background."""
+        from mona.agent.jobs import RetiredTaskError
         from mona.agent.workflow import (
             WorkflowNotFoundError,
             WorkflowRetryError,
@@ -5913,6 +5700,17 @@ class WebSocketChannel(BaseChannel):
                 request_id=request_id,
             )
             return
+        except RetiredTaskError as exc:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="retired_task",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
         except WorkflowRetryError as exc:
             await self._send_event(
                 connection,
@@ -5942,6 +5740,16 @@ class WebSocketChannel(BaseChannel):
         async def _resume() -> None:
             try:
                 await runner.resume(run_id)
+            except RetiredTaskError as exc:
+                await self._send_event(
+                    connection,
+                    "retry_workflow_step_result",
+                    ok=False,
+                    code="retired_task",
+                    detail=str(exc),
+                    chat_id=chat_id,
+                    request_id=request_id,
+                )
             except Exception:
                 logger.exception(
                     "Workflow retry resume failed for run {} step {}",
@@ -5956,6 +5764,7 @@ class WebSocketChannel(BaseChannel):
     async def _handle_resolve_workflow_approval_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
+        from mona.agent.jobs import RetiredTaskError
         from mona.agent.workflow import (
             WorkflowApprovalError,
             WorkflowNotFoundError,
@@ -6028,6 +5837,18 @@ class WebSocketChannel(BaseChannel):
             )
             await self.send_workflow_run_updated(chat_id, serialize_run(run_store.load(run_id)))
             return
+        except RetiredTaskError as exc:
+            await self._send_event(
+                connection,
+                "resolve_workflow_approval_result",
+                ok=False,
+                code="retired_task",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            await self.send_workflow_run_updated(chat_id, serialize_run(run_store.load(run_id)))
+            return
         await self._send_event(
             connection,
             "resolve_workflow_approval_result",
@@ -6044,6 +5865,16 @@ class WebSocketChannel(BaseChannel):
             async def _resume() -> None:
                 try:
                     await runner.resume(run_id)
+                except RetiredTaskError as exc:
+                    await self._send_event(
+                        connection,
+                        "resolve_workflow_approval_result",
+                        ok=False,
+                        code="retired_task",
+                        detail=str(exc),
+                        chat_id=chat_id,
+                        request_id=request_id,
+                    )
                 except Exception:
                     logger.exception("Workflow resume after approval failed for run {}", run_id)
 
@@ -6373,9 +6204,6 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "run_workflow":
             await self._handle_run_workflow_envelope(connection, envelope)
-            return
-        if t == "sync_stock_selection_schedule":
-            await self._handle_sync_stock_selection_schedule_envelope(connection, envelope)
             return
         if t == "cancel_workflow_run":
             await self._handle_cancel_workflow_run_envelope(connection, envelope)

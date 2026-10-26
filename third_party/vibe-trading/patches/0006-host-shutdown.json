@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Expose authenticated graceful Uvicorn shutdown on Windows before the host reclaims its owned job tree; retain ordinary upstream launch behavior.",
+  "files": [
+    {
+      "path": "agent/src/api/server_cli.py",
+      "sha256": "d16faa4e19f6b1881e0a0dccff6d89dc4d3db84551f05de8821b3349d9de1f4f",
+      "replacements": [
+        {
+          "before": "from pathlib import Path\n",
+          "after": "from pathlib import Path\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "        uvicorn.run(app, host=args.host, port=args.port, log_level=\"info\")",
+          "after": "        if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n            server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port,\n                                                    log_level=\"info\", timeout_graceful_shutdown=3))\n            app.state.mona_server = server\n            server.run()\n        else:\n            uvicorn.run(app, host=args.host, port=args.port, log_level=\"info\")",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/mona_routes.py",
+      "sha256": "dcf2a3ea236e6ee6da86af33e0597efac182f31fd289fd5dcdf4f3728479b40a",
+      "replacements": [
+        {
+          "before": "from fastapi import Depends, FastAPI",
+          "after": "from fastapi import Depends, FastAPI, HTTPException",
+          "count": 1
+        },
+        {
+          "before": "    @app.get(\"/mona/identity\", dependencies=[Depends(require_auth)])",
+          "after": "    @app.post(\"/mona/shutdown\", dependencies=[Depends(require_auth)])\n    async def shutdown():\n        server = getattr(app.state, \"mona_server\", None)\n        if server is None:\n            raise HTTPException(status_code=503, detail=\"Host server lifecycle unavailable\")\n        server.should_exit = True\n        return {\"stopping\": True}\n\n    @app.get(\"/mona/identity\", dependencies=[Depends(require_auth)])",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

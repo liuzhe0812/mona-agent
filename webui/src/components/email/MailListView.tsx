@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Loader2,
@@ -38,9 +38,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
-import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
-import { moveMessage, getAccountColor } from "./lib/emailApi";
-import type { EmailMessage } from "./lib/types";
+import { getFolderDisplayName, isSentFolder, isUnreadMessage, sortFolders } from "./lib/folderUtils";
+import { moveMessage, getAccountColor, searchMessages } from "./lib/emailApi";
+import type { EmailMessage, EmailSearchRequest, EmailSearchResult } from "./lib/types";
 
 type SortKey = "date" | "from" | "subject" | "size" | "starred";
 type FilterKey = "all" | "unread" | "starred" | "attachments";
@@ -59,6 +59,24 @@ const FILTER_LABELS: Record<FilterKey, string> = {
   starred: "星标",
   attachments: "附件",
 };
+
+const SEARCH_PAGE_SIZE = 50;
+
+function messageKey(message: Pick<EmailMessage, "uid" | "accountId" | "folder">) {
+  return `${message.accountId}:${message.folder}:${message.uid}`;
+}
+
+function searchResultToMessage(result: EmailSearchResult): EmailMessage {
+  return {
+    ...result,
+    fromName: result.fromName ?? null,
+    ccAddresses: "",
+    bodyText: "",
+    bodyHtml: null,
+    attachments: [],
+    bodyFetched: false,
+  };
+}
 
 interface MailListViewProps {
   onReply?: (message: EmailMessage) => void;
@@ -85,6 +103,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
   const loadingMore = useEmailStore((s) => s.loadingMore);
   const loadMore = useEmailStore((s) => s.loadMore);
   const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
+  const lastMailboxUpdate = useEmailStore((s) => s.lastMailboxUpdate);
   const accounts = useEmailStore((s) => s.accounts);
   // 多选
   const selectedUids = useEmailStore((s) => s.selectedUids);
@@ -96,25 +115,133 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [filterKey, setFilterKey] = useState<FilterKey>("all");
+  const [searchResults, setSearchResults] = useState<EmailSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchRequestIdRef = useRef(0);
+  const searchOffsetRef = useRef(0);
+  const searchLoadingMoreRef = useRef(false);
+  const searchTerm = searchQuery.trim();
+  const isSearchActive = searchTerm.length > 0;
+  const searchMailboxUpdateVersion = lastMailboxUpdate && (
+    isUnifiedInbox
+      ? lastMailboxUpdate.folder === "INBOX"
+      : lastMailboxUpdate.accountId === selectedAccountId && lastMailboxUpdate.folder === selectedFolder
+  )
+    ? lastMailboxUpdate.version
+    : 0;
 
-  // 滚动接近底部时自动加载下一页（游标分页）
-  // 仅当无搜索/过滤条件时触发（过滤后的子集不能正确反映分页状态）
+  const buildSearchRequest = useCallback((offset: number): EmailSearchRequest => {
+    const request: EmailSearchRequest = {
+      keyword: searchTerm,
+      folder: isUnifiedInbox ? "INBOX" : selectedFolder,
+      limit: SEARCH_PAGE_SIZE,
+      offset,
+    };
+    if (!isUnifiedInbox && selectedAccountId) request.accountId = selectedAccountId;
+    if (filterKey === "unread") request.isRead = false;
+    if (filterKey === "starred") request.isStarred = true;
+    if (filterKey === "attachments") request.hasAttachments = true;
+    return request;
+  }, [filterKey, isUnifiedInbox, searchTerm, selectedAccountId, selectedFolder]);
+
+  useEffect(() => {
+    const requestId = ++searchRequestIdRef.current;
+    searchOffsetRef.current = 0;
+    searchLoadingMoreRef.current = false;
+    setSearchLoadingMore(false);
+    setSearchHasMore(false);
+    setSearchError(null);
+
+    if (!isSearchActive || (!isUnifiedInbox && !selectedAccountId)) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+
+    setSearchResults([]);
+    setSearching(true);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const page = await searchMessages(buildSearchRequest(0));
+          if (requestId !== searchRequestIdRef.current) return;
+          setSearchResults(page);
+          searchOffsetRef.current = page.length;
+          setSearchHasMore(page.length === SEARCH_PAGE_SIZE);
+        } catch (e) {
+          if (requestId === searchRequestIdRef.current) {
+            setSearchError(e instanceof Error ? e.message : String(e));
+          }
+        } finally {
+          if (requestId === searchRequestIdRef.current) setSearching(false);
+        }
+      })();
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      if (requestId === searchRequestIdRef.current) searchRequestIdRef.current += 1;
+    };
+  }, [buildSearchRequest, isSearchActive, isUnifiedInbox, searchMailboxUpdateVersion, searchTerm, selectedAccountId]);
+
+  const loadMoreSearch = useCallback(async () => {
+    if (!isSearchActive || !searchHasMore || searchLoadingMoreRef.current) return;
+    const requestId = searchRequestIdRef.current;
+    const offset = searchOffsetRef.current;
+    searchLoadingMoreRef.current = true;
+    setSearchLoadingMore(true);
+    try {
+      const page = await searchMessages(buildSearchRequest(offset));
+      if (requestId !== searchRequestIdRef.current) return;
+      setSearchResults((current) => {
+        const seen = new Set(current.map((result) => messageKey(result)));
+        const next = [...current];
+        for (const result of page) {
+          const key = messageKey(result);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          next.push(result);
+        }
+        return next;
+      });
+      searchOffsetRef.current = offset + page.length;
+      setSearchHasMore(page.length === SEARCH_PAGE_SIZE);
+    } catch (e) {
+      if (requestId === searchRequestIdRef.current) {
+        setSearchError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (requestId === searchRequestIdRef.current) {
+        searchLoadingMoreRef.current = false;
+        setSearchLoadingMore(false);
+      }
+    }
+  }, [buildSearchRequest, isSearchActive, searchHasMore]);
+
+  // 滚动接近底部时自动加载当前列表的下一页。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const handler = () => {
-      if (!hasMore || loadingMore) return;
+      const canLoadMore = isSearchActive ? searchHasMore : hasMore;
+      const isLoadingMore = isSearchActive ? searchLoadingMore : loadingMore;
+      if (!canLoadMore || isLoadingMore) return;
       // 距离底部 200px 内触发加载
       const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       if (distanceToBottom < 200) {
-        void loadMore();
+        if (isSearchActive) void loadMoreSearch();
+        else void loadMore();
       }
     };
     el.addEventListener("scroll", handler, { passive: true });
     return () => el.removeEventListener("scroll", handler);
-  }, [hasMore, loadingMore, loadMore]);
+  }, [hasMore, isSearchActive, loadingMore, loadMore, loadMoreSearch, searchHasMore, searchLoadingMore]);
 
   const handleAnalyze = async (message: EmailMessage) => {
     // 先选中该邮件，让 MailView 顶部卡片展示分析进度
@@ -128,21 +255,16 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
   };
 
   const filteredMessages = useMemo(() => {
-    let result = messages;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      // Offline-First：SQLite 不存正文，未打开过的邮件 bodyText 为空，因此本地搜索仅匹配标题/发件人。
-      // 全文搜索走顶部工具栏的全局搜索（调用 email_search_messages 命令查询本地数据库索引）。
-      result = result.filter(
-        (m) =>
-          m.subject.toLowerCase().includes(q) ||
-          m.fromAddress.toLowerCase().includes(q) ||
-          (m.fromName ?? "").toLowerCase().includes(q),
-      );
-    }
+    const localMessages = new Map(messages.map((message) => [messageKey(message), message]));
+    let result = isSearchActive
+      ? searchResults.map((searchResult) => {
+          const message = searchResultToMessage(searchResult);
+          return { ...message, ...localMessages.get(messageKey(message)) };
+        })
+      : messages;
     if (filterKey !== "all") {
       result = result.filter((m) => {
-        if (filterKey === "unread") return !m.isRead;
+        if (filterKey === "unread") return isUnreadMessage(m);
         if (filterKey === "starred") return m.isStarred;
         if (filterKey === "attachments") return m.hasAttachments;
         return true;
@@ -175,7 +297,10 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
       }
     });
     return sorted;
-  }, [messages, searchQuery, filterKey, sortKey]);
+  }, [filterKey, isSearchActive, messages, searchResults, sortKey]);
+  const displayError = isSearchActive ? searchError : error;
+  const listLoading = isSearchActive ? searching : loading;
+  const listLoadingMore = isSearchActive ? searchLoadingMore : loadingMore;
 
   const rowVirtualizer = useVirtualizer({
     count: filteredMessages.length,
@@ -244,9 +369,11 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
         <span className="text-caption font-semibold text-foreground">
           {isUnifiedInbox ? "全部收件箱" : getFolderDisplayName(selectedFolder)}
         </span>
-        {messages.length > 0 && (
+        {(isSearchActive ? searchResults.length > 0 : messages.length > 0) && (
           <span className="ml-2 text-caption text-muted-foreground">
-            {filteredMessages.length}/{messages.length} 封
+            {isSearchActive
+              ? `${filteredMessages.length}${searchHasMore ? "+" : ""} 封`
+              : `${filteredMessages.length}/${messages.length} 封`}
           </span>
         )}
       </div>
@@ -302,18 +429,18 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
           </DropdownMenu>
         </div>
       </div>
-      {error && (
+      {displayError && (
         <StatusNotice
           tone="danger"
           className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-2"
         >
-          {error}
+          {displayError}
         </StatusNotice>
       )}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
-        {!selectedAccountId ? (
+        {!selectedAccountId && !isUnifiedInbox ? (
           <EmptyHint text="请先选择账号" />
-        ) : loading ? (
+        ) : listLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-caption text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             加载中...
@@ -321,7 +448,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
         ) : filteredMessages.length === 0 ? (
           <EmptyHint
             text={
-              searchQuery || filterKey !== "all"
+              isSearchActive || filterKey !== "all"
                 ? "没有匹配的邮件"
                 : "没有邮件，点击工具栏「收取」同步"
             }
@@ -342,7 +469,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
               const isMultiSelectMode = selectedUids.size > 1;
               return (
                 <div
-                  key={message.uid}
+                  key={messageKey(message)}
                   data-index={virtualRow.index}
                   ref={rowVirtualizer.measureElement}
                   style={{
@@ -355,7 +482,11 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
                 >
                   <MailListItem
                     message={message}
-                    active={selectedMessage?.uid === message.uid}
+                    active={
+                      selectedMessage?.uid === message.uid &&
+                      selectedMessage?.accountId === message.accountId &&
+                      selectedMessage?.folder === message.folder
+                    }
                     selected={isSelected}
                     multiSelectMode={isMultiSelectMode}
                     folders={folders}
@@ -419,7 +550,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
             })}
           </div>
         )}
-        {loadingMore && (
+        {listLoadingMore && (
           <div className="flex items-center justify-center gap-2 py-3 text-caption text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             加载更多...
@@ -490,6 +621,9 @@ function MailListItem({
 
   // 多选模式下，右键菜单显示批量操作；否则显示单邮件菜单
   const showBatchMenu = multiSelectMode && selected;
+  // 已发送文件夹的邮件不存在未读语义，不展示未读标识
+  const isSent = isSentFolder(message.folder);
+  const isUnread = isUnreadMessage(message);
 
   return (
     <ContextMenu>
@@ -502,9 +636,9 @@ function MailListItem({
               ? "border-l-foreground/60 bg-foreground/5"
               : active
                 ? "border-l-foreground/60 bg-foreground/5"
-                : message.isRead
-                  ? "border-l-transparent hover:bg-foreground/5"
-                  : "border-l-info/60 hover:bg-foreground/5",
+                : isUnread
+                  ? "border-l-info/60 hover:bg-foreground/5"
+                  : "border-l-transparent hover:bg-foreground/5",
           )}
           onClick={onClick}
         >
@@ -521,7 +655,7 @@ function MailListItem({
                 {selected && <Check className="h-2.5 w-2.5" />}
               </span>
             )}
-            {!message.isRead && !multiSelectMode && (
+            {isUnread && !multiSelectMode && (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
             )}
             {accountColor && (
@@ -534,9 +668,9 @@ function MailListItem({
             <span
               className={cn(
                 "min-w-0 flex-1 truncate text-caption",
-                message.isRead
-                  ? "font-normal text-muted-foreground"
-                  : "font-semibold text-foreground",
+                isUnread
+                  ? "font-semibold text-foreground"
+                  : "font-normal text-muted-foreground",
               )}
             >
               {resolveSenderDisplay(message.fromName, message.fromAddress, contactsByEmail)}
@@ -554,9 +688,9 @@ function MailListItem({
           <div
             className={cn(
               "truncate text-caption",
-              message.isRead
-                ? "font-normal text-muted-foreground"
-                : "font-medium text-foreground",
+              isUnread
+                ? "font-medium text-foreground"
+                : "font-normal text-muted-foreground",
             )}
           >
             {message.subject || "(无主题)"}
@@ -570,23 +704,27 @@ function MailListItem({
               已选中 {selectedUids.size} 封邮件
             </div>
             <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={onBatchMarkRead}
-              disabled={batchOperating}
-              className="flex items-center gap-2 text-caption"
-            >
-              <MailOpen className="h-3.5 w-3.5" />
-              标为已读
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={onBatchMarkUnread}
-              disabled={batchOperating}
-              className="flex items-center gap-2 text-caption"
-            >
-              <MailOpen className="h-3.5 w-3.5" />
-              标为未读
-            </ContextMenuItem>
-            <ContextMenuSeparator />
+            {!isSent && (
+              <>
+                <ContextMenuItem
+                  onClick={onBatchMarkRead}
+                  disabled={batchOperating}
+                  className="flex items-center gap-2 text-caption"
+                >
+                  <MailOpen className="h-3.5 w-3.5" />
+                  标为已读
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={onBatchMarkUnread}
+                  disabled={batchOperating}
+                  className="flex items-center gap-2 text-caption"
+                >
+                  <MailOpen className="h-3.5 w-3.5" />
+                  标为未读
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            )}
             <ContextMenuItem
               onClick={onBatchStar}
               disabled={batchOperating}
@@ -669,11 +807,13 @@ function MailListItem({
               </>
             )}
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-caption">
-              <MailOpen className="h-3.5 w-3.5" />
-              {message.isRead ? "标为未读" : "标为已读"}
-              <span className="ml-auto text-caption text-muted-foreground">Ctrl+U</span>
-            </ContextMenuItem>
+            {!isSent && (
+              <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-caption">
+                <MailOpen className="h-3.5 w-3.5" />
+                {message.isRead ? "标为未读" : "标为已读"}
+                <span className="ml-auto text-caption text-muted-foreground">Ctrl+U</span>
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={onToggleStar} className="flex items-center gap-2 text-caption">
               <Star
                 className={cn(

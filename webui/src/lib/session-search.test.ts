@@ -5,18 +5,18 @@ import type { AgentSummary, ChatSummary } from "@/lib/types";
 
 const sessions: ChatSummary[] = [
   {
-    key: "websocket:stock",
+    key: "websocket:research",
     channel: "websocket",
-    chatId: "stock",
+    chatId: "research",
     createdAt: null,
     updatedAt: null,
-    title: "每日复盘",
-    preview: "新能源板块估值更新",
+    title: "每周研究",
+    preview: "新能源行业趋势更新",
     conversation: {
       type: "direct",
       title: "",
-      agentIds: ["stock-agent"],
-      directAgentId: "stock-agent",
+      agentIds: ["research-agent"],
+      directAgentId: "research-agent",
     },
   },
   {
@@ -37,16 +37,16 @@ const sessions: ChatSummary[] = [
 ];
 
 const agents = new Map<string, AgentSummary>([
-  ["stock-agent", {
-    id: "stock-agent",
-    displayName: "A股分析师",
+  ["research-agent", {
+    id: "research-agent",
+    displayName: "行业分析师",
     enabled: true,
   }],
 ]);
 
 describe("filterSessionsByQuery", () => {
   it("searches titles, previews, room goals, and agent names with AND terms", () => {
-    expect(filterSessionsByQuery(sessions, "A股 每日", {}, agents)).toEqual([sessions[0]]);
+    expect(filterSessionsByQuery(sessions, "行业 每周", {}, agents)).toEqual([sessions[0]]);
     expect(filterSessionsByQuery(sessions, "运营 排期", {}, agents)).toEqual([sessions[1]]);
     expect(filterSessionsByQuery(sessions, "新能源 运营", {}, agents)).toEqual([]);
   });

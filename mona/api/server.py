@@ -41,7 +41,7 @@ from mona.api.hoard_handlers import (
 )
 from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
-from mona.email.imap_pool import imap_pool_manager
+from mona.email.imap_pool import ImapOperationDeferred, imap_pool_manager
 from mona.materials.api import (
     handle_materials_create_directory,
     handle_materials_create_library,
@@ -68,19 +68,6 @@ from mona.materials.api import (
 )
 from mona.providers.tts import TTSError
 from mona.security.network import validate_host
-from mona.services.stock.api import (
-    handle_stock_kline,
-    handle_stock_quote,
-    handle_stock_research_context,
-    handle_stock_research_preflight,
-    handle_stock_search,
-    handle_stock_watchlist_add,
-    handle_stock_watchlist_focus,
-    handle_stock_watchlist_import,
-    handle_stock_watchlist_list,
-    handle_stock_watchlist_remove,
-    handle_stock_watchlist_reorder,
-)
 from mona.system_agent import handle_storage_analyze, handle_system_diagnose, handle_system_plan
 from mona.usage import get_usage_summary
 from mona.utils.helpers import replace_file_with_retry, safe_filename
@@ -137,17 +124,6 @@ __all__ = (
     "handle_materials_status",
     "handle_materials_update_library",
     "handle_materials_write_wiki_page",
-    "handle_stock_kline",
-    "handle_stock_quote",
-    "handle_stock_research_preflight",
-    "handle_stock_research_context",
-    "handle_stock_search",
-    "handle_stock_watchlist_add",
-    "handle_stock_watchlist_focus",
-    "handle_stock_watchlist_import",
-    "handle_stock_watchlist_list",
-    "handle_stock_watchlist_remove",
-    "handle_stock_watchlist_reorder",
 )
 
 
@@ -184,6 +160,9 @@ _T = TypeVar("_T")
 
 # 按 IMAP 账号串行化操作，避免部分邮箱（如 QQ 邮箱）因并发连接被限制导致 LIST 返回空
 _IMAP_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+_IMAP_LOCK_TIMEOUT_SECONDS = 10.0
+_IMAP_FOREGROUND_WAITERS: dict[tuple[str, str], int] = {}
+_IMAP_SYNC_BATCH_SECONDS = 2.0
 
 
 def _imap_lock_key(body: dict[str, Any]) -> tuple[str, str] | None:
@@ -209,8 +188,56 @@ async def _run_imap_locked(
         return await _retry_imap_call(func, body, max_retries=max_retries)
     if key not in _IMAP_LOCKS:
         _IMAP_LOCKS[key] = asyncio.Lock()
-    async with _IMAP_LOCKS[key]:
+    background = bool(body.get("background")) and func in (
+        _imap_fetch_recent, _imap_list_uids, _imap_fetch_body, _imap_fetch_attachment, _imap_fetch_raw,
+    )
+    lock = _IMAP_LOCKS[key]
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    interrupt_timer: asyncio.TimerHandle | None = None
+
+    def interrupt_background_until_acquired() -> None:
+        nonlocal interrupt_timer
+        imap_pool_manager.interrupt_background(body)
+        interrupt_timer = loop.call_later(0.1, interrupt_background_until_acquired)
+
+    if not background:
+        _IMAP_FOREGROUND_WAITERS[key] = _IMAP_FOREGROUND_WAITERS.get(key, 0) + 1
+        # 后台线程可能仍在启动，等待期间也要让随后开始的后台读让出连接。
+        interrupt_background_until_acquired()
+    try:
+        async with asyncio.timeout(_IMAP_LOCK_TIMEOUT_SECONDS):
+            while True:
+                await lock.acquire()
+                if not background or not _IMAP_FOREGROUND_WAITERS.get(key):
+                    break
+                lock.release()
+                await asyncio.sleep(0)
+    except TimeoutError:
+        if background:
+            raise ImapOperationDeferred("后台收取已暂缓，稍后继续。") from None
+        logger.warning("[imap] queue timeout: operation={} waited={:.1f}s", func.__name__, loop.time() - started)
+        raise TimeoutError("邮箱正忙，请稍后重试。") from None
+    finally:
+        if not background:
+            if interrupt_timer is not None:
+                interrupt_timer.cancel()
+            remaining = _IMAP_FOREGROUND_WAITERS[key] - 1
+            if remaining:
+                _IMAP_FOREGROUND_WAITERS[key] = remaining
+            else:
+                _IMAP_FOREGROUND_WAITERS.pop(key)
+    acquired = loop.time()
+    try:
         return await _retry_imap_call(func, body, max_retries=max_retries)
+    finally:
+        lock.release()
+        elapsed = loop.time() - acquired
+        if acquired - started >= 1 or elapsed >= 10:
+            logger.warning(
+                "[imap] slow operation: operation={} queued={:.1f}s running={:.1f}s",
+                func.__name__, acquired - started, elapsed,
+            )
 
 
 # 可重试的异常特征（网络瞬时故障）
@@ -219,7 +246,6 @@ _RETRYABLE_ERRORS = (
     ConnectionError,
     OSError,
     imaplib.IMAP4.abort,
-    imaplib.IMAP4.readonly,
 )
 
 
@@ -229,6 +255,10 @@ def _is_retryable_error(e: Exception) -> bool:
     # 导致 SMTPAuthenticationError（535 认证失败）被误判为可重试。
     # SMTP 认证/权限错误是永久性业务错误，重试只会加剧邮箱风控。
     if isinstance(e, smtplib.SMTPResponseException):
+        return False
+    if isinstance(e, ImapOperationDeferred):
+        return False
+    if isinstance(e, imaplib.IMAP4.readonly):
         return False
     if isinstance(e, _RETRYABLE_ERRORS):
         return True
@@ -2000,12 +2030,16 @@ def _email_has_attachments(msg: Any) -> bool:
 
 
 def _email_extract_attachments(msg: Any) -> list[dict[str, Any]]:
-    """提取附件元信息列表（filename, contentType, size）。"""
+    """提取普通附件和带 Content-ID 的内联资源元信息。"""
     attachments: list[dict[str, Any]] = []
     if not msg.is_multipart():
         return attachments
     for part in msg.walk():
-        if part.get_content_disposition() != "attachment":
+        is_attachment = part.get_content_disposition() == "attachment"
+        raw_content_id = str(part.get("Content-ID", "") or "").strip()
+        content_id = raw_content_id.strip("<>").strip()
+        is_inline = not is_attachment and bool(content_id)
+        if not is_attachment and not is_inline:
             continue
         filename = part.get_filename() or "unknown"
         # 解码 MIME 编码的文件名
@@ -2020,13 +2054,15 @@ def _email_extract_attachments(msg: Any) -> list[dict[str, Any]]:
             size = len(payload) if payload else 0
         except Exception:
             size = 0
-        attachments.append(
-            {
-                "filename": filename,
-                "contentType": content_type,
-                "size": size,
-            }
-        )
+        attachment = {
+            "filename": filename,
+            "contentType": content_type,
+            "size": size,
+            "isInline": is_inline,
+        }
+        if content_id:
+            attachment["contentId"] = content_id
+        attachments.append(attachment)
     return attachments
 
 
@@ -2101,11 +2137,50 @@ def _validate_mail_host(imap_host: str, smtp_host: str = "") -> None:
             raise ValueError(f"SMTP 服务器地址不被允许: {err}")
 
 
+def _email_sync_uid_batch(
+    all_uids: list[bytes], last_uid: int | None, before_uid: int | None,
+    known_uids: set[bytes] | None = None,
+) -> tuple[list[bytes], set[bytes], bool]:
+    ordered = sorted(set(all_uids), key=int)
+    if not last_uid:
+        selected = list(reversed(ordered[-20:]))
+        return selected, set(selected), len(ordered) > len(selected)
+    newer = [uid for uid in ordered if int(uid) > last_uid]
+    selected_new = newer[:50]
+    older = [
+        uid for uid in ordered if int(uid) <= last_uid
+        and (uid not in known_uids if known_uids is not None else int(uid) < (before_uid or last_uid + 1))
+    ]
+    remaining = 50 - len(selected_new)
+    selected_old = list(reversed(older[-remaining:])) if remaining else []
+    return selected_new + selected_old, set(selected_old), len(newer) > len(selected_new) or len(older) > len(selected_old)
+
+
+def _email_fetch_flags(client: imaplib.IMAP4, uids: list[bytes]) -> list[dict[str, Any]]:
+    result = []
+    for start in range(0, len(uids), 200):
+        uid_set = b",".join(uids[start:start + 200]).decode("ascii")
+        status, fetched = client.uid("FETCH", uid_set, "(UID FLAGS)")
+        if status != "OK":
+            raise RuntimeError("Mailbox flags could not be refreshed")
+        for item in fetched or []:
+            header = item[0] if isinstance(item, tuple) else item
+            if not isinstance(header, bytes):
+                continue
+            match = re.search(rb"\bUID\s+(\d+)\b", header, re.IGNORECASE)
+            if match:
+                flags = re.search(rb"\bFLAGS\s*\(([^)]*)\)", header, re.IGNORECASE)
+                if flags:
+                    values = {value.lower() for value in flags[1].split()}
+                    result.append({"uid": match[1].decode("ascii"), "isRead": b"\\seen" in values, "isStarred": b"\\flagged" in values})
+    return result
+
+
 def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
     """连接 IMAP 并拉取邮件元数据，正文由按需读取和后台预取负责。
 
     - 校验 UIDVALIDITY：变化时返回 uidValidityChanged=true，调用方废弃旧 UID 映射
-    - 支持 lastUid 增量同步：只拉取 UID > lastUid 的新邮件
+    - 新邮件按 UID 递增补收，历史邮件从 beforeUid 向前补齐
     - FETCH HEADER + FLAGS，避免大附件阻塞整个同步请求
     - 首次同步限制为最近 20 封，增量同步单次最多 50 封
     - 复用持久连接池，避免频繁 login 触发邮箱风控
@@ -2113,6 +2188,10 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
     """
     mailbox = str(body.get("mailbox", "INBOX") or "INBOX").strip() or "INBOX"
     last_uid_raw = body.get("lastUid")
+    before_uid_raw = body.get("beforeUid")
+    before_uid = int(before_uid_raw) if before_uid_raw is not None else None
+    known_uids_raw = body.get("knownUids")
+    known_uids = {str(uid).encode("ascii") for uid in known_uids_raw if str(uid).isdigit()} if isinstance(known_uids_raw, list) else None
     # 调用方传入的本地已知 UIDVALIDITY（用于检测变化）
     known_uid_validity = str(body.get("uidValidity", "") or "").strip()
 
@@ -2131,7 +2210,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, _data = client.select(_imap_quote_mailbox(mailbox))
+        status, _data = client.select(_imap_quote_mailbox(mailbox), readonly=True)
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
         uid_validity = _imap_uid_validity(client)
@@ -2142,65 +2221,25 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
         # UID 只在当前 UIDVALIDITY 下有效，变化后不能继续使用旧水位线。
         sync_after_uid = None if uid_validity_changed else last_uid
 
-        # 增量同步：只拉取 UID > last_uid 的邮件
-        uids: list[bytes] = []
-        all_uids: list[bytes] = []
-        if sync_after_uid is not None and sync_after_uid > 0:
-            status, data = client.uid("SEARCH", "UID", f"{sync_after_uid + 1}:*")
-            if status == "OK" and data and data[0]:
-                uids = [u for u in data[0].split() if int(u) > sync_after_uid]
-            # 部分企业邮箱对 UID n:* 范围搜索返回空，回退到 SEARCH ALL 本地过滤
-            if not uids:
-                logger.debug(
-                    "[imap-sync] UID range search returned empty, "
-                    "falling back to SEARCH ALL"
-                )
-                status, data = client.uid("SEARCH", "ALL")
-                if status == "OK" and data and data[0]:
-                    all_uids = data[0].split()
-                    uids = [u for u in all_uids if int(u) > sync_after_uid]
-                    # 增量同步单次最多 50 封
-                    uids = uids[-50:]
-        else:
-            # 首次同步：拉取全部 UID，后续取最后 20 封
-            status, data = client.uid("SEARCH", "ALL")
-            if status != "OK" or not data or not data[0]:
-                return {
-                    "messages": [],
-                    "uidValidity": uid_validity,
-                    "uidValidityChanged": uid_validity_changed,
-                }
-            all_uids = data[0].split()
-            uids = all_uids[-20:]
-
-        # 保护：如果服务器最大 UID < last_uid，说明本地 last_uid 已过期/无效
-        # （服务器删除了高 UID 邮件），重置并重新拉取最近 20 封，避免永远漏掉新邮件。
-        # 注意：用严格小于，last_uid == server max uid 是正常已同步状态，不触发重置。
-        if (
-            sync_after_uid is not None
-            and sync_after_uid > 0
-            and all_uids
-            and max(int(u) for u in all_uids) < sync_after_uid
-        ):
-            logger.warning(
-                f"[imap-sync] local last_uid={sync_after_uid} > server max uid, "
-                f"resetting and fetching recent 20"
-            )
-            uids = all_uids[-20:]
-
-        uids.sort(key=int)
-
-        if not uids:
-            logger.debug(
-                f"[imap-sync] no new uids "
-                f"(mailbox={mailbox}, last_uid={last_uid})"
-            )
-            return {"messages": [], "uidValidity": uid_validity, "uidValidityChanged": uid_validity_changed}
+        status, data = client.uid("SEARCH", "ALL")
+        if status != "OK":
+            raise RuntimeError("Mailbox UID search failed")
+        all_uids = data[0].split() if data and data[0] else []
+        history_before = None if uid_validity_changed else before_uid
+        uids, historical_uids, has_more = _email_sync_uid_batch(
+            all_uids, sync_after_uid, history_before, None if uid_validity_changed else known_uids,
+        )
+        known = [u for u in all_uids if sync_after_uid and int(u) <= sync_after_uid
+                 and (known_uids is None or u in known_uids)
+                 and (history_before is None or int(u) >= history_before)]
 
         messages: list[dict[str, Any]] = []
+        batch_started = time.monotonic()
         for uid in uids:
+            if messages and time.monotonic() - batch_started >= _IMAP_SYNC_BATCH_SECONDS:
+                break
             # 同步主流程只取信头和标志。正文由 /email/fetch_body 按需读取，
-            # 后台也会预取最近未读邮件，避免一个大附件拖死整批同步。
+            # 后台逐步补齐所有正文，避免一个大附件拖慢整批信头同步。
             uid_str = uid.decode("utf-8", errors="ignore")
             fetch_cmd = "(BODY.PEEK[HEADER] UID FLAGS RFC822.SIZE)"
             raw_bytes: bytes | None = None
@@ -2252,6 +2291,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
             messages.append(
                 {
                     "uid": uid_str,
+                    "isHistorical": uid in historical_uids,
                     "subject": subject,
                     "from": from_addr,
                     "fromName": from_name,
@@ -2272,9 +2312,13 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-        return {"messages": messages, "uidValidity": uid_validity, "uidValidityChanged": uid_validity_changed}
+        # 补收历史的连续分页无需反复刷新整份已知标志。
+        flags = _email_fetch_flags(client, known) if body.get("refreshFlags", True) else []
+        return {"messages": messages, "uidValidity": uid_validity,
+                "uidValidityChanged": uid_validity_changed, "flags": flags,
+                "hasMore": has_more or len(messages) < len(uids)}
 
-    result = imap_pool_manager.run(body, op)
+    result = imap_pool_manager.run(body, op, background=bool(body.get("background")))
     logger.debug(
         f"[imap-sync] mailbox={mailbox} "
         f"last_uid={last_uid} fetched={len(result['messages'])} new messages "
@@ -2299,7 +2343,7 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, _data = client.select(_imap_quote_mailbox(mailbox))
+        status, _data = client.select(_imap_quote_mailbox(mailbox), readonly=True)
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
         uid_validity = _imap_uid_validity(client)
@@ -2309,7 +2353,7 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
             uids = [u.decode("utf-8", errors="ignore") for u in data[0].split()]
         return {"uids": uids, "uidValidity": uid_validity}
 
-    result = imap_pool_manager.run(body, op)
+    result = imap_pool_manager.run(body, op, background=bool(body.get("background")))
     logger.debug(
         f"[imap-uids] mailbox={mailbox} "
         f"total_uids={len(result.get('uids', []))} uid_validity={result.get('uidValidity', '')}"
@@ -2628,6 +2672,8 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         # 连接池内部已负责断线重连一次；不要在 HTTP 层再次重跑整个批次。
         result = await _run_imap_locked(body, _imap_fetch_recent, max_retries=0)
         return web.json_response(result)
+    except ImapOperationDeferred:
+        return web.json_response({"deferred": True}, status=409)
     except Exception as e:
         err_msg = str(e)
         # IMAP SELECT 失败（如企业邮箱限制非 INBOX 文件夹访问），返回 422 而非 500
@@ -2654,6 +2700,8 @@ async def handle_email_list_uids(request: web.Request) -> web.Response:
     try:
         result = await _run_imap_locked(body, _imap_list_uids)
         return web.json_response(result)
+    except ImapOperationDeferred:
+        return web.json_response({"deferred": True}, status=409)
     except Exception as e:
         logger.exception("Email list_uids failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -2709,6 +2757,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
     msg.set_content(body_html, subtype="html")
 
     # 添加附件
+    attachment_bytes = 0
     for att in attachments:
         filename = str(att.get("filename", "attachment") or "attachment")
         content_type = str(att.get("contentType", "application/octet-stream") or "application/octet-stream")
@@ -2719,6 +2768,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
         except Exception:
             logger.warning(f"附件 base64 解码失败，跳过: {filename}")
             continue
+        attachment_bytes += len(data_bytes)
         # 解析 maintype/subtype
         if "/" in content_type:
             maintype, _, subtype = content_type.partition("/")
@@ -2753,7 +2803,8 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
 
     raw_bytes = msg.as_bytes()
 
-    timeout = 30
+    # 大附件传输耗时随体积增长，固定 30s 会让 20~50MB 附件在慢链路上直接超时失败
+    timeout = 30 + min(int(attachment_bytes / (512 * 1024)), 240)
     if use_ssl:
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout) as smtp:
             smtp.login(smtp_username, smtp_password)
@@ -2879,7 +2930,7 @@ async def handle_email_send(request: web.Request) -> web.Response:
 
     try:
         # 1. SMTP 发送（同步）
-        raw_bytes = await _retry_smtp_call(_smtp_send_message_no_append, body)
+        raw_bytes = await _run_smtp_call(_smtp_send_message_no_append, body)
         logger.debug(f"[email-send] SMTP 发送成功，raw_bytes 大小={len(raw_bytes)}")
 
         # 2. 同步保存副本到 IMAP 服务器（等 APPEND 完成再返回）
@@ -2920,8 +2971,9 @@ async def handle_email_send(request: web.Request) -> web.Response:
         })
     except Exception as e:
         logger.exception("Email send failed")
-        friendly = _format_smtp_error(e)
-        return web.json_response({"error": friendly}, status=500)
+        definite_failure = isinstance(e, (smtplib.SMTPResponseException, smtplib.SMTPRecipientsRefused, ValueError))
+        friendly = _format_smtp_error(e) if definite_failure else "发送结果尚未确认，请先检查已发送邮件，勿直接重复发送。"
+        return web.json_response({"error": friendly, "sendState": "failed" if definite_failure else "unknown"}, status=500)
 
 
 async def _mark_todos_replied(app: web.Application, in_reply_to: str, ref: str) -> None:
@@ -2991,6 +3043,17 @@ def _format_smtp_error(e: Exception) -> str:
         # 腾讯企业邮返回 "system busy" 并不一定是风控，也可能是密码错误时的通用提示
         # 准确告知用户：认证失败，让用户检查密码/授权码
         return f"SMTP 认证失败（535）：{text}。请检查账号设置中的 SMTP 密码或授权码是否正确。腾讯企业邮需使用客户端专用密码，非网页登录密码。"
+    # 邮件过大：服务器拒收超限邮件（Gmail 25MB、Exchange 默认 10MB、企业邮常见 50MB）
+    if (
+        code == 552
+        or "message size" in text_lower
+        or "size exceeds" in text_lower
+        or "message too large" in text_lower
+    ):
+        return (
+            f"邮件过大被服务器拒收（{code or 'SMTP'}）：{text}。"
+            "请减少附件体积（多数邮箱单封上限 10~25MB，企业邮通常 50MB）。"
+        )
     # 554 发送被拒
     if code == 554 or "message rejected" in text_lower:
         return f"邮件被服务器拒收（554）：{text}。可能是内容被识别为垃圾邮件或发信频率过高。"
@@ -3001,110 +3064,226 @@ def _format_smtp_error(e: Exception) -> str:
     return f"发送邮件失败（{code}）：{text}" if code else f"发送邮件失败：{text}"
 
 
-async def _retry_smtp_call(
+async def _run_smtp_call(
     func: Callable[[dict[str, Any]], _T],
     body: dict[str, Any],
-    max_retries: int = 2,
 ) -> _T:
-    """执行 SMTP 调用，对瞬时网络故障做指数退避重试（发送邮件重试次数较少，避免重复发送）。"""
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await asyncio.to_thread(func, body)
-        except Exception as e:
-            last_error = e
-            if attempt >= max_retries or not _is_retryable_error(e):
-                raise
-            backoff = 2 ** attempt  # 1s, 2s
-            logger.warning(
-                f"[smtp] retryable error (attempt {attempt + 1}/{max_retries + 1}): {e}, "
-                f"retry in {backoff}s"
-            )
-            await asyncio.sleep(backoff)
-    assert last_error is not None
-    raise last_error
+    """SMTP 结果不明时不得自动重发，重试必须由用户核对后重新发起。"""
+    return await asyncio.to_thread(func, body)
 
 
-def _imap_save_draft(body: dict[str, Any]) -> None:
-    """连接 IMAP，将草稿通过 APPEND 保存到 Drafts 文件夹。
+def _format_draft_addresses(values: list[Any]) -> str:
+    formatted: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        bracketed = re.fullmatch(r"(.*?)\s*<([^<>]+)>", value)
+        if bracketed:
+            name = bracketed.group(1).strip().strip('"')
+            address = bracketed.group(2).strip()
+        else:
+            name, address = parseaddr(value)
+            address = address.strip()
+        if address:
+            formatted.append(formataddr((name, address)) if name else address)
+        else:
+            formatted.append(value)
+    return ", ".join(formatted)
 
-    草稿邮件带 \\Draft 标志，按常见 Drafts 文件夹名优先级尝试 APPEND。
-    复用持久连接池。
-    """
-    imap_host = str(body.get("imapHost", "") or "").strip()
-    imap_username = str(body.get("imapUsername", "") or "").strip()
 
+def _build_draft_message(body: dict[str, Any], request_id: str) -> EmailMessage:
     from_address = str(body.get("fromAddress", "") or "").strip()
     from_name = str(body.get("fromName", "") or "").strip()
-    to_addrs = body.get("to", []) or []
-    cc_addrs = body.get("cc", []) or []
-    subject = str(body.get("subject", "") or "")
+    body_text = str(body.get("bodyText", "") or "")
     body_html = str(body.get("bodyHtml", "") or "")
     in_reply_to = body.get("inReplyTo")
 
-    if not imap_host or not imap_username:
-        raise ValueError("imapHost and imapUsername are required")
-
-    _validate_mail_host(imap_host)
-
-    # 构造草稿邮件
     msg = EmailMessage()
-    sender_addr = from_address or imap_username
-    if from_name:
-        msg["From"] = formataddr((from_name, sender_addr))
-    else:
-        msg["From"] = sender_addr
-    if to_addrs:
-        msg["To"] = ", ".join(to_addrs)
-    if cc_addrs:
-        msg["Cc"] = ", ".join(cc_addrs)
-    msg["Subject"] = subject
+    sender_addr = from_address or str(body.get("imapUsername", "") or "").strip()
+    msg["From"] = formataddr((from_name, sender_addr)) if from_name else sender_addr
+    for header, key in (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc")):
+        formatted = _format_draft_addresses(body.get(key, []) or [])
+        if formatted:
+            msg[header] = formatted
+    msg["Subject"] = str(body.get("subject", "") or "")
     msg["Date"] = formatdate(localtime=True)
+    msg["X-Mona-Draft-Request-ID"] = request_id
     if in_reply_to:
         msg["In-Reply-To"] = str(in_reply_to)
         msg["References"] = str(in_reply_to)
-    msg.set_content(body_html, subtype="html")
 
-    raw_bytes = msg.as_bytes()
-    # 常见草稿文件夹名（按优先级）
-    draft_candidates = ["Drafts", "Draft", "草稿", "已发送草稿"]
+    msg.set_content(body_text)
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
 
-    def op(client: imaplib.IMAP4) -> None:
-        # 尝试每个草稿文件夹，第一个成功的即返回
-        for draft_box in draft_candidates:
+    attachments = body.get("attachments", []) or []
+    if not isinstance(attachments, list):
+        raise ValueError("草稿附件格式无效")
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            raise ValueError("草稿附件格式无效")
+        filename = str(attachment.get("filename", "attachment") or "attachment")
+        content_type = str(
+            attachment.get("contentType", "application/octet-stream") or "application/octet-stream"
+        )
+        encoded = str(attachment.get("data", "") or "")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise ValueError(f"草稿附件数据无效: {filename}") from exc
+        maintype, separator, subtype = content_type.partition("/")
+        if not separator or not maintype or not subtype:
+            maintype, subtype = "application", "octet-stream"
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+        content_id = str(attachment.get("contentId", "") or "").strip().strip("<>")
+        if content_id:
+            if "\r" in content_id or "\n" in content_id:
+                raise ValueError(f"草稿附件 Content-ID 无效: {filename}")
+            part = msg.get_payload()[-1]
+            part.replace_header("Content-Disposition", "inline")
+            part.set_param("filename", filename, header="Content-Disposition", replace=True)
+            part["Content-ID"] = f"<{content_id}>"
+    return msg
+
+
+def _appenduid(data: list[bytes] | None) -> str | None:
+    raw = b" ".join(item for item in data or [] if isinstance(item, bytes))
+    match = re.search(rb"APPENDUID\s+\d+\s+(\d+)", raw, re.IGNORECASE)
+    return match.group(1).decode("ascii") if match else None
+
+
+def _find_draft_request_uid(client: imaplib.IMAP4, mailbox: str, request_id: str) -> str | None:
+    selected, _ = client.select(_imap_quote_mailbox(mailbox))
+    if selected != "OK":
+        return None
+    status, data = client.uid(
+        "SEARCH", None, "HEADER", "X-Mona-Draft-Request-ID", request_id
+    )
+    if status != "OK" or not data or not data[0]:
+        return None
+    uids = re.findall(rb"\d+", data[0] if isinstance(data[0], bytes) else str(data[0]).encode())
+    return max((uid.decode("ascii") for uid in uids), key=int, default=None)
+
+
+def _replace_old_draft(
+    client: imaplib.IMAP4,
+    mailbox: str,
+    old_uid: str,
+    delete_strategy: tuple[str, str | None],
+) -> None:
+    selected, _ = client.select(_imap_quote_mailbox(mailbox))
+    if selected != "OK":
+        raise RuntimeError("无法选择原草稿文件夹")
+    strategy, target = delete_strategy
+    if strategy == "move" and target:
+        status, _ = client.uid("MOVE", old_uid, _imap_quote_mailbox(target))
+        if status != "OK":
+            raise RuntimeError("新草稿已保存，但原草稿未能移入回收站")
+        return
+
+    status, _ = client.uid("STORE", old_uid, "+FLAGS.SILENT", "(\\Deleted)")
+    if status != "OK":
+        raise RuntimeError("新草稿已保存，但原草稿标记删除失败")
+    status, _ = client.uid("EXPUNGE", old_uid)
+    if status != "OK":
+        try:
+            client.uid("STORE", old_uid, "-FLAGS.SILENT", "(\\Deleted)")
+        except Exception as exc:
+            logger.warning("恢复原草稿删除标志失败: {}", exc)
+        raise RuntimeError("新草稿已保存，但原草稿未能安全替换")
+
+
+def _imap_save_draft(body: dict[str, Any]) -> dict[str, str]:
+    """将草稿追加到 IMAP Drafts，并在可安全定位时替换原 UID。"""
+    imap_host = str(body.get("imapHost", "") or "").strip()
+    imap_username = str(body.get("imapUsername", "") or "").strip()
+    if not imap_host or not imap_username:
+        raise ValueError("imapHost and imapUsername are required")
+    _validate_mail_host(imap_host)
+
+    request_id = str(body.get("draftRequestId", "") or "").strip() or uuid.uuid4().hex
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", request_id):
+        raise ValueError("草稿请求标识无效")
+    body["draftRequestId"] = request_id
+    draft_uid = str(body.get("draftUid", "") or "").strip()
+    draft_folder = str(body.get("draftFolder", "") or "").strip()
+    if draft_uid and (not draft_folder or not re.fullmatch(r"[1-9]\d{0,19}", draft_uid)):
+        raise ValueError("原草稿 UID 或文件夹无效")
+
+    raw_bytes = _build_draft_message(body, request_id).as_bytes()
+    fixed_candidates = ["Drafts", "Draft", "草稿", "已发送草稿"]
+    trash_candidates = ["Trash", "Deleted Messages", "已删除", "Deleted", "Deleted Items", "废纸篓"]
+
+    def op(client: imaplib.IMAP4) -> dict[str, str]:
+        candidates = [draft_folder] if draft_folder else list(fixed_candidates)
+        if not draft_folder:
             try:
-                typ, _ = client.append(
-                    _imap_quote_mailbox(draft_box), "(\\Draft)", None, raw_bytes
-                )
-                if typ == "OK":
-                    return
-            except imaplib.IMAP4.error:
-                continue
-        # 所有候选文件夹都失败，尝试 LIST 查找含 Draft 的文件夹
-        typ, data = client.list()
-        if typ == "OK":
-            for item in data or []:
+                list_status, folders = client.list()
+                if list_status == "OK":
+                    for item in folders or []:
+                        line = item.decode("utf-8", errors="ignore") if isinstance(item, bytes) else str(item)
+                        if "draft" in line.lower() or "草稿" in line:
+                            name = _extract_mailbox_name_from_list(line)
+                            if name and name not in candidates:
+                                candidates.append(name)
+            except Exception:
+                pass
+
+        delete_strategy: tuple[str, str | None] | None = None
+        if draft_uid:
+            capabilities = {
+                cap.decode("ascii", errors="ignore").upper() if isinstance(cap, bytes) else str(cap).upper()
+                for cap in getattr(client, "capabilities", ())
+            }
+            if "UIDPLUS" in capabilities:
+                delete_strategy = ("uidplus", None)
+            elif "MOVE" in capabilities:
+                trash_folder = _find_trash_folder(client, trash_candidates)
+                if trash_folder:
+                    delete_strategy = ("move", trash_folder)
+            if delete_strategy is None:
+                raise RuntimeError("当前邮箱服务器不支持安全更新草稿，请改为另存新草稿")
+
+        for mailbox in candidates:
+            existing_uid = _find_draft_request_uid(client, mailbox, request_id)
+            new_uid = existing_uid
+            if not new_uid:
                 try:
-                    line = bytes(item).decode("utf-8", errors="ignore")
-                except Exception:
+                    status, data = client.append(
+                        _imap_quote_mailbox(mailbox), "(\\Draft)", None, raw_bytes
+                    )
+                except (imaplib.IMAP4.abort, TimeoutError, ConnectionError, OSError) as exc:
+                    raise RuntimeError(
+                        "草稿保存结果尚未确认，请刷新草稿箱后再检查"
+                    ) from exc
+                except imaplib.IMAP4.error:
+                    if draft_folder:
+                        raise
                     continue
-                lower = line.lower()
-                if "draft" in lower or "草稿" in line:
-                    # 提取文件夹名（最后一个引号内的内容）
-                    m = re.search(r'"([^"]+)"\s*$', line)
-                    if m:
-                        folder_name = m.group(1)
-                        try:
-                            typ, _ = client.append(
-                                _imap_quote_mailbox(folder_name), "(\\Draft)", None, raw_bytes
-                            )
-                            if typ == "OK":
-                                return
-                        except imaplib.IMAP4.error:
-                            continue
+                if status != "OK":
+                    if draft_folder:
+                        raise RuntimeError("保存草稿失败")
+                    continue
+                new_uid = _appenduid(data)
+                if not new_uid:
+                    try:
+                        new_uid = _find_draft_request_uid(client, mailbox, request_id)
+                    except (imaplib.IMAP4.abort, TimeoutError, ConnectionError, OSError) as exc:
+                        raise RuntimeError(
+                            "草稿已提交，但保存结果尚未确认；请刷新草稿箱后再检查"
+                        ) from exc
+                if not new_uid:
+                    raise RuntimeError("草稿已提交，但服务器未能确认新 UID；请勿重复另存")
+
+            if draft_uid and new_uid != draft_uid:
+                assert draft_folder and delete_strategy is not None
+                _replace_old_draft(client, draft_folder, draft_uid, delete_strategy)
+            return {"draftUid": new_uid, "draftFolder": mailbox}
+
         raise RuntimeError("未找到可用的 Drafts 文件夹，请确认邮箱已创建草稿箱")
 
-    imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op)
 
 
 async def handle_email_save_draft(request: web.Request) -> web.Response:
@@ -3115,8 +3294,8 @@ async def handle_email_save_draft(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        await _run_imap_locked(body, _imap_save_draft)
-        return web.json_response({"status": "ok"})
+        result = await _run_imap_locked(body, _imap_save_draft, max_retries=0)
+        return web.json_response({"status": "ok", **result})
     except Exception as e:
         logger.exception("Email save draft failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -4511,8 +4690,15 @@ def _imap_set_flag(body: dict[str, Any]) -> None:
     op = "+FLAGS" if add else "-FLAGS"
 
     def _op(client: imaplib.IMAP4) -> None:
-        client.select(_imap_quote_mailbox(mailbox))
-        client.uid("STORE", uid, op, f"({flag})")
+        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        if status != "OK":
+            raise RuntimeError("Mailbox select failed while updating flags")
+        known_validity = str(body.get("uidValidity") or "")
+        if known_validity and _imap_uid_validity(client) != known_validity:
+            raise RuntimeError("UIDVALIDITY changed while updating flags")
+        status, _ = client.uid("STORE", uid, op + ".SILENT", f"({flag})")
+        if status != "OK":
+            raise RuntimeError("Mailbox flag update was rejected")
 
     imap_pool_manager.run(body, _op)
 
@@ -4529,7 +4715,7 @@ async def handle_email_set_flag(request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
     except Exception as e:
         logger.exception("Email set flag failed")
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": str(e), "uidValidityChanged": "UIDVALIDITY changed" in str(e)}, status=500)
 
 
 def _imap_mark_all_read(body: dict[str, Any]) -> int:
@@ -5050,13 +5236,14 @@ async def handle_email_schedule_extract_manual(request: web.Request) -> web.Resp
 
 
 def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
-    """连接 IMAP，FETCH 完整邮件，按 filename 提取附件并返回 base64 编码。复用持久连接池。"""
+    """连接 IMAP，优先按 Content-ID、再按 filename 提取附件并返回 base64。"""
 
     imap_host = str(body.get("imapHost", "") or "").strip()
     imap_username = str(body.get("imapUsername", "") or "").strip()
     mailbox = str(body.get("mailbox", "INBOX") or "INBOX")
     uid = str(body.get("uid", "") or "")
     filename = str(body.get("filename", "") or "").strip()
+    content_id = str(body.get("contentId", "") or "").strip().strip("<>").strip()
 
     if not imap_host or not imap_username:
         raise ValueError("imapHost and imapUsername are required")
@@ -5065,11 +5252,11 @@ def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
 
     if not uid:
         raise ValueError("uid is required")
-    if not filename:
-        raise ValueError("filename is required")
+    if not filename and not content_id:
+        raise ValueError("filename or contentId is required")
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        status, _ = client.select(_imap_quote_mailbox(mailbox), readonly=True)
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
 
@@ -5084,29 +5271,57 @@ def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
 
         parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
 
-        # 按 filename 查找附件 part
-        for part in parsed.walk():
-            if part.get_content_disposition() != "attachment":
-                continue
-            part_filename = part.get_filename() or ""
-            try:
-                part_filename = str(make_header(decode_header(part_filename)))
-            except Exception:
-                pass
-            if part_filename == filename:
-                payload = part.get_payload(decode=True)
-                if payload is None:
-                    raise RuntimeError(f"附件 {filename} 内容为空")
-                return {
-                    "filename": filename,
-                    "contentType": part.get_content_type() or "application/octet-stream",
-                    "size": len(payload),
-                    "data": base64.b64encode(payload).decode("ascii"),
-                }
+        parts = list(parsed.walk())
+        selected_part = None
+        if content_id:
+            normalized_content_id = content_id.casefold()
+            selected_part = next(
+                (
+                    part
+                    for part in parts
+                    if (part_content_id := str(part.get("Content-ID", "") or "")
+                        .strip()
+                        .strip("<>")
+                        .strip())
+                    and part_content_id.casefold() == normalized_content_id
+                ),
+                None,
+            )
 
-        raise RuntimeError(f"未找到附件: {filename}")
+        # CID 未命中时按旧协议回退 filename，兼容历史调用和邮件格式差异。
+        if selected_part is None and filename:
+            for part in parts:
+                if part.get_content_disposition() != "attachment":
+                    continue
+                part_filename = part.get_filename() or ""
+                try:
+                    part_filename = str(make_header(decode_header(part_filename)))
+                except Exception:
+                    pass
+                if part_filename == filename:
+                    selected_part = part
+                    break
 
-    return imap_pool_manager.run(body, op)
+        if selected_part is None:
+            raise RuntimeError(f"未找到附件: {content_id or filename}")
+
+        part = selected_part
+        part_filename = part.get_filename() or filename or "未命名附件"
+        try:
+            part_filename = str(make_header(decode_header(part_filename)))
+        except Exception:
+            pass
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            raise RuntimeError(f"附件 {part_filename} 内容为空")
+        return {
+            "filename": part_filename,
+            "contentType": part.get_content_type() or "application/octet-stream",
+            "size": len(payload),
+            "data": base64.b64encode(payload).decode("ascii"),
+        }
+
+    return imap_pool_manager.run(body, op, background=bool(body.get("background")))
 
 
 async def handle_email_fetch_attachment(request: web.Request) -> web.Response:
@@ -5117,8 +5332,10 @@ async def handle_email_fetch_attachment(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        result = await _run_imap_locked(body, _imap_fetch_attachment)
+        result = await _run_imap_locked(body, _imap_fetch_attachment, max_retries=0)
         return web.json_response(result)
+    except ImapOperationDeferred:
+        return web.json_response({"deferred": True}, status=409)
     except Exception as e:
         logger.exception("Email fetch attachment failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -5148,11 +5365,14 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
     include_raw = bool(body.get("includeRawBytes", True))
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        started = time.monotonic()
+        status, _ = client.select(_imap_quote_mailbox(mailbox), readonly=True)
+        selected = time.monotonic()
         if status != "OK":
             raise RuntimeError(f"select {mailbox} failed: {status}")
 
         status, fetched = client.uid("FETCH", uid, "(BODY.PEEK[] UID)")
+        fetched_at = time.monotonic()
         if status != "OK" or not fetched:
             raise RuntimeError(f"FETCH uid {uid} failed: {status}")
 
@@ -5166,10 +5386,6 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
 
         parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
         body_text, body_html = _email_extract_bodies(parsed)
-        # body_text 截断到 50000 字符，与同步逻辑保持一致
-        if body_text:
-            body_text = body_text[:50000]
-
         result: dict[str, Any] = {
             "bodyText": body_text,
             "bodyHtml": body_html,
@@ -5179,9 +5395,15 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         if include_raw:
             # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml 文件
             result["rawBytes"] = base64.b64encode(raw_bytes).decode("ascii")
+        finished = time.monotonic()
+        if finished - started >= 5:
+            logger.warning(
+                "[imap] body phases: select={:.1f}s fetch={:.1f}s decode={:.1f}s bytes={}",
+                selected - started, fetched_at - selected, finished - fetched_at, len(raw_bytes),
+            )
         return result
 
-    return imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op, background=bool(body.get("background")))
 
 
 async def handle_email_fetch_body(request: web.Request) -> web.Response:
@@ -5196,10 +5418,12 @@ async def handle_email_fetch_body(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        # fetch_body 是用户主动点击邮件时的按需操作，减少重试次数（1 次，退避 1s）
-        # 避免用户长时间等待；失败时快速返回错误，前端可手动重试
-        result = await _run_imap_locked(body, _imap_fetch_body, max_retries=1)
+        # fetch_body 是用户主动点击邮件时的按需操作，只保留连接池内的一次重连重试。
+        # 避免外层重复请求；失败时快速返回错误，前端可手动重试。
+        result = await _run_imap_locked(body, _imap_fetch_body, max_retries=0)
         return web.json_response(result)
+    except ImapOperationDeferred:
+        return web.json_response({"deferred": True}, status=409)
     except Exception as e:
         logger.exception("Failed to fetch email body")
         return web.json_response({"error": str(e)}, status=500)
@@ -5280,7 +5504,7 @@ def _imap_fetch_raw(body: dict[str, Any]) -> dict[str, Any]:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        status, _ = client.select(_imap_quote_mailbox(mailbox), readonly=True)
         if status != "OK":
             raise RuntimeError(f"select {mailbox} failed: {status}")
 
@@ -5301,7 +5525,7 @@ def _imap_fetch_raw(body: dict[str, Any]) -> dict[str, Any]:
             "size": len(raw_bytes),
         }
 
-    return imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op, background=bool(body.get("background")))
 
 
 async def handle_email_fetch_raw(request: web.Request) -> web.Response:
@@ -5316,8 +5540,10 @@ async def handle_email_fetch_raw(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        result = await _run_imap_locked(body, _imap_fetch_raw)
+        result = await _run_imap_locked(body, _imap_fetch_raw, max_retries=0)
         return web.json_response(result)
+    except ImapOperationDeferred:
+        return web.json_response({"deferred": True}, status=409)
     except Exception as e:
         logger.exception("Failed to fetch raw email")
         return web.json_response({"error": str(e)}, status=500)
@@ -6276,7 +6502,7 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         style_preference = "auto" if body.get("templateId", "auto") == "auto" and not series_id else "fixed"
         template_id = str(body.get("templateId") or "auto").strip()
         if template_id == "auto":
-            template_id = "minimal-business"
+            template_id = "huashu-keynote"
         single_style: dict[str, Any] | None = None
         if not series_id:
             from mona.video_style import get_builtin_template
@@ -6586,7 +6812,7 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
             "subtitleMode": subtitle_mode,
             "musicPreset": music_preset,
         }
-        meta.update({"authoringMode": "remotion", "structuredCompiler": False,
+        meta.update({"authoringMode": "huashu-motion", "structuredCompiler": False,
                      "requirePlanApproval": True, "planRevision": 0,
                      "approvedPlanRevision": None})
         if series is None:
@@ -7238,6 +7464,9 @@ def _video_scene_ready(project_dir: Path, scene: dict) -> bool:
         source = authored_scene_source_path(project_dir, scene)
         if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != scene.get("sourceHash"):
             return False
+    prepared = project_dir / "scenes" / f"scene_{int(idx):02d}.html"
+    if scene.get("preparedHash") and (not prepared.is_file() or hashlib.sha256(prepared.read_bytes()).hexdigest() != scene["preparedHash"]):
+        return False
     return (project_dir / "scenes" / f"scene_{int(idx):02d}.html").is_file()
 
 
@@ -7256,6 +7485,12 @@ def _invalidate_video_outputs(
         reset_html: If True, also reset htmlStatus to pending for affected scenes.
     """
     scenes = meta.get("scenes") or []
+    if meta.get("authoringMode") == "huashu-motion" and reset_html:
+        meta.pop("composition", None)
+        for item in scenes:
+            item["htmlStatus"] = "pending"
+            item.pop("motionReview", None)
+            item.pop("motionReviewSourceHash", None)
     if scene_indexes is None:
         scene_indexes = {s.get("index") for s in scenes if s.get("index") is not None}
     else:
@@ -7380,7 +7615,7 @@ def _require_video_plan_approval(meta: Mapping[str, Any], revision: Any = None, 
 
 
 def _require_video_motion_review(scene: Mapping[str, Any]) -> None:
-    if scene.get("authoredRuntime") != "remotion":
+    if scene.get("authoredRuntime") != "huashu-motion":
         return
     review = scene.get("motionReview") or {}
     if scene.get("motionReviewSourceHash") != scene.get("sourceHash") or review.get("distinctVisualStates", 0) < 2:
@@ -7410,14 +7645,17 @@ async def handle_video_project_confirm(request: web.Request) -> web.Response:
 
 
 def _video_export_input_hash(project_dir: Path, meta: Mapping[str, Any]) -> str:
+    from mona.video_authoring import composition_path
+
+    composition_path(project_dir, meta)
     payload = {
         key: meta.get(key)
-        for key in ("resolution", "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "musicPreset", "musicAssetId", "audioTracks", "backgroundBindings", "styleVersion")
+        for key in ("resolution", "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "musicPreset", "musicAssetId", "audioTracks", "backgroundBindings", "styleVersion", "authoringMode", "composition")
     }
     payload["scenes"] = [_scene_content(scene) for scene in meta.get("scenes") or []]
     files = [project_dir / "storyboard.md", project_dir / "style" / "design-system.json", project_dir / "assets" / "manifest.json"]
     files.extend(sorted((project_dir / "scenes").glob("scene_*.html")))
-    for name in ("assets", "style", "scene_specs", "scene_sources"):
+    for name in ("assets", "style", "scene_specs", "scene_sources", "composition"):
         files.extend(path for path in sorted((project_dir / name).rglob("*")) if path.is_file())
     if any(not path.resolve().is_relative_to(project_dir.resolve()) for path in files if path.is_file()):
         raise ValueError("视频素材文件超出项目范围")
@@ -7429,6 +7667,9 @@ def _video_export_input_hash(project_dir: Path, meta: Mapping[str, Any]) -> str:
 
 
 def _snapshot_video_project(project_dir: Path, meta: Mapping[str, Any]) -> Path:
+    from mona.video_authoring import composition_path
+
+    composition_path(project_dir, meta)
     root = project_dir.resolve()
     snapshot = (project_dir / "renders" / "snapshot").resolve()
     if not snapshot.is_relative_to(root):
@@ -7436,7 +7677,7 @@ def _snapshot_video_project(project_dir: Path, meta: Mapping[str, Any]) -> Path:
     if snapshot.is_dir():
         shutil.rmtree(snapshot)
     snapshot.mkdir(parents=True)
-    for name in ("scenes", "scene_specs", "scene_sources", "audio", "assets", "style"):
+    for name in ("scenes", "scene_specs", "scene_sources", "composition", "audio", "assets", "style"):
         source = project_dir / name
         if source.is_dir():
             if not source.resolve().is_relative_to(root):
@@ -7451,7 +7692,7 @@ def _snapshot_video_project(project_dir: Path, meta: Mapping[str, Any]) -> Path:
 
 
 def _restore_video_render_artifacts(project_dir: Path, snapshot: Path, scenes: list[dict]) -> None:
-    for directory_name in ("audio", "scene_specs", "scene_sources", "scenes"):
+    for directory_name in ("audio", "scene_specs", "scene_sources", "composition", "scenes"):
         source = snapshot / directory_name
         if source.is_dir():
             shutil.copytree(source, project_dir / directory_name, dirs_exist_ok=True)
@@ -7813,6 +8054,16 @@ def _replace_video_scene_order(project_dir: Path, meta: dict, ordered: list[dict
     from mona.video_authoring import authored_scene_source_path
 
     old_scenes = meta.get("scenes") or []
+    if meta.get("authoringMode") == "huashu-motion":
+        _create_video_project_version(project_dir, label="调整片段顺序前", reason="scene-order-change")
+        meta["scenes"] = ordered
+        for index, scene in enumerate(ordered, start=1):
+            scene["index"] = index
+        _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
+        _video_plan_changed(meta)
+        _sync_storyboard(project_dir, ordered)
+        _save_video_meta(project_dir, meta)
+        return
     sources = []
     for scene in ordered:
         path = authored_scene_source_path(project_dir, scene)
@@ -7912,8 +8163,8 @@ async def handle_video_project_scene_add(request: web.Request) -> web.Response:
             "narration": str(body.get("narration", "") or ""),
             "assets": [],
         }
-        if meta.get("authoringMode") == "remotion":
-            new_scene.update({"authored": True, "authoredRuntime": "remotion", "layout": "authored"})
+        if meta.get("authoringMode") == "huashu-motion":
+            new_scene.update({"authored": True, "authoredRuntime": "huashu-motion", "layout": "authored"})
         scenes.append(new_scene)
         meta["scenes"] = scenes
         _invalidate_video_outputs(project_dir, meta, {new_index}, reset_html=True)
@@ -9596,9 +9847,9 @@ async def _run_render_task(
 
         result: dict[str, Any]
         # Authored sandbox scenes use the same seek contract as their native preview.
-        use_hyperframes = requested_engine == "hyperframes" or (
+        use_hyperframes = meta.get("authoringMode") != "huashu-motion" and (requested_engine == "hyperframes" or (
             requested_engine == "auto" and not any(scene.get("authored") for scene in scenes)
-        )
+        ))
         if use_hyperframes:
             actual_engine = "hyperframes"
             if meta.get("narrationEnabled") and targets:
@@ -10584,9 +10835,7 @@ async def handle_video_project_export_status(request: web.Request) -> web.Respon
 async def handle_video_project_preview_full(request: web.Request) -> web.Response:
     """GET /api/video/project/preview-full?name=  → returns inline preview HTML.
 
-    Builds a self-contained preview page that plays every scene in sequence by
-    creating per-scene iframes from blob URLs. This avoids 404s caused by
-    relative ``scenes/scene_*.html`` paths inside a standalone ``index.html``.
+    Plays the authored film once, or existing baked scene documents in sequence.
     """
     try:
         name = str(request.query.get("name", "") or "").strip()
@@ -10666,7 +10915,6 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
             meta = _load_video_meta(project_dir)
 
         storyboard = mod.parse_storyboard(project_dir / "storyboard.md")
-        timeline, total_duration = mod.compute_timeline(scenes, storyboard)
         width, height = storyboard.get("resolution") or (
             mod.DEFAULT_WIDTH,
             mod.DEFAULT_HEIGHT,
@@ -10674,16 +10922,36 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
 
         scene_entries: list[tuple[int, float, str]] = []
         scene_transitions: dict[int, tuple[str, float]] = {}
-        for num, path, _start, duration in timeline:
-            scene_html = path.read_text(encoding="utf-8")
-            scene_transitions[num] = mod.read_scene_transition(path, duration, storyboard.get("motion"))
-            scene_entries.append(
-                (
-                    num,
-                    duration,
-                    _prepare_scene_html_for_preview(scene_html, name, width, height, project_dir=project_dir),
+        if meta.get("authoringMode") == "huashu-motion":
+            from mona.video_authoring import composition_path, refresh_huashu_composition
+
+            if meta.get("composition") and meta.get("narrationEnabled"):
+                refresh_huashu_composition(project_dir, meta)
+                _save_video_meta(project_dir, meta)
+            full_composition = composition_path(project_dir, meta)
+            if full_composition is None:
+                return web.json_response({
+                    "error": "COMPOSITION_NOT_READY",
+                    "message": "整片动画尚未准备完成，请先完成制作。",
+                }, status=409)
+            total_duration = sum(float(scene.get("duration") or 5) for scene in meta.get("scenes") or [])
+            scene_entries.append((
+                1,
+                total_duration,
+                _prepare_scene_html_for_preview(full_composition.read_text(encoding="utf-8"), name, width, height, project_dir=project_dir),
+            ))
+        else:
+            timeline, total_duration = mod.compute_timeline(scenes, storyboard)
+            for num, path, _start, duration in timeline:
+                scene_html = path.read_text(encoding="utf-8")
+                scene_transitions[num] = mod.read_scene_transition(path, duration, storyboard.get("motion"))
+                scene_entries.append(
+                    (
+                        num,
+                        duration,
+                        _prepare_scene_html_for_preview(scene_html, name, width, height, project_dir=project_dir),
+                    )
                 )
-            )
 
         if not scene_entries:
             return web.json_response(
@@ -10698,7 +10966,7 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
                 for scene in (meta.get("scenes") or [])
                 if str(scene.get("narration") or "").strip()
             }
-            if meta.get("narrationEnabled", False)
+            if meta.get("narrationEnabled", False) and meta.get("authoringMode") != "huashu-motion"
             else set()
         )
         from mona.api.video_audio import prepare_preview_audio
@@ -10787,10 +11055,14 @@ def _prepare_scene_html_for_preview(
     fit();
   }}
   window.addEventListener('resize', fit);
-  window.addEventListener('message', (event) => {{
+  window.addEventListener('message', async (event) => {{
     const data = event.data;
     if (!data || data.type !== 'mona-video-seek') return;
     const seconds = Math.max(0, Number(data.seconds) || 0);
+    if (typeof window.__monaSeek === 'function') {{
+      await window.__monaSeek(seconds);
+      return;
+    }}
     if (window.__timelines) {{
       for (const key in window.__timelines) {{
         const timeline = window.__timelines[key];
@@ -10995,10 +11267,14 @@ def _build_video_preview_html(
     controls.addEventListener('pointermove', revealControls);
     document.addEventListener('keydown', revealControls);
 
-    function seekFrame(frame, time) {{
+    async function seekFrame(frame, time) {{
       try {{
         const win = frame.contentWindow;
         if (!win) return;
+        if (typeof win.__monaSeek === 'function') {{
+          await win.__monaSeek(time);
+          return;
+        }}
         if (win.__timelines) {{
           for (const key in win.__timelines) {{
             const timeline = win.__timelines[key];
@@ -11301,5 +11577,7 @@ def create_app(
     register_development_routes(app)
     from mona.cloud.api import register_cloud_routes
     register_cloud_routes(app)
+    from mona.api.stock_model_bridge import register_routes as register_stock_model_routes
+    register_stock_model_routes(app)
 
     return app

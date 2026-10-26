@@ -363,6 +363,7 @@ async def test_system_and_managed_engine_statuses_remain_independent(tmp_path, m
         assert response.status == 200
         row = (await response.json())["components"][0]
         assert row["systemAvailable"] and row["systemExecutable"] == str(system_executable)
+        assert row["usingManaged"] is False
         assert row["systemVersion"] == "9.0.0"
         assert row["managedInstalled"] and row["canDelete"] and row["canUpdate"]
         assert row["managedExecutable"] == str(managed_executor_path("codex", store))
@@ -403,6 +404,102 @@ async def test_mona_managed_path_is_not_reported_as_a_system_program(tmp_path, m
         assert response.status == 200
         assert not row["systemAvailable"] and row["systemExecutable"] is None
         assert row["managedInstalled"] and row["managedExecutable"] == str(managed)
+        assert row["usingManaged"] is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("use_managed_probe", "expected_using_managed"), [(True, True), (False, False)])
+async def test_codebuddy_status_distinguishes_desktop_app_from_selected_cli_source(
+    tmp_path, monkeypatch, use_managed_probe: bool, expected_using_managed: bool
+):
+    import mona.development.resources as resources
+
+    entry, payload = _archive_fixture("codebuddy", f"1.0.0+{sys.platform}.{_ARCH}")
+    _manager, _catalog_client, store, _requested, _release = _make_manager(
+        tmp_path, monkeypatch, _catalog(entry), {str(entry.download_url): payload}
+    )
+    _install_component(store, tmp_path, "codebuddy", entry.version)
+    managed = managed_executor_path("codebuddy", store)
+    system = tmp_path / "system" / ("codebuddy.exe" if sys.platform == "win32" else "codebuddy")
+    system.parent.mkdir(parents=True)
+    system.write_text("system CLI fixture", encoding="utf-8")
+
+    def discover(_config, *, include_managed=True):
+        executable = managed if include_managed and use_managed_probe else system
+        return [
+            ExecutorProbe(
+                executor=ExecutorId.CODEBUDDY,
+                state="detected",
+                executable=str(executable),
+                source="managed_runtime" if executable == managed else "system",
+            ),
+            ExecutorProbe(executor=ExecutorId.CODEX, state="not_detected"),
+            ExecutorProbe(executor=ExecutorId.CLAUDE, state="not_detected"),
+        ]
+
+    async def native_version(_path, _executor, *, cwd, env):
+        return "1.0.0"
+
+    monkeypatch.setattr(resources, "discover_executors", discover)
+    monkeypatch.setattr(resources, "native_version", native_version)
+    monkeypatch.setattr(resources, "detect_workbuddy_desktop_app", lambda: False)
+    client, _runtime = await _api_client(tmp_path, monkeypatch)
+    try:
+        response = await client.get("/api/development/engine-resources?executor=codebuddy", headers=AUTH)
+        row = (await response.json())["components"][0]
+
+        assert response.status == 200
+        assert row["desktopAppDetected"] is False
+        assert row["usingManaged"] is expected_using_managed
+        assert row["managedInstalled"] and row["systemAvailable"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("executor", ["codex", "claude", "codebuddy"])
+async def test_removing_managed_program_keeps_local_engine_available(tmp_path, monkeypatch, executor):
+    import mona.development.executors.discovery as discovery
+    import mona.development.resources as resources
+
+    entry, payload = _archive_fixture(executor, f"1.0.0+{sys.platform}.{_ARCH}")
+    manager, _catalog_client, store, requested, _release = _make_manager(
+        tmp_path, monkeypatch, _catalog(entry), {str(entry.download_url): payload}
+    )
+    _install_component(store, tmp_path, executor, entry.version)
+    app_cli = tmp_path / "local-engine" / executor
+    app_cli.parent.mkdir()
+    app_cli.write_bytes(b"application CLI fixture; never executed")
+    app_cli.chmod(0o700)
+    monkeypatch.setattr(discovery, "discover_workbuddy_cli", lambda: app_cli if executor == "codebuddy" else None)
+    monkeypatch.setattr(discovery, "_codex_desktop_candidates", lambda _: [app_cli] if executor == "codex" else [])
+    monkeypatch.setattr(discovery, "_standard_candidates", lambda *_: [])
+    monkeypatch.setattr(discovery.shutil, "which", lambda name, **_kwargs: str(app_cli) if name == executor else None)
+    monkeypatch.setattr(discovery, "managed_executor_path", lambda name: managed_executor_path(name, store))
+    monkeypatch.setattr(resources, "detect_workbuddy_desktop_app", lambda: True)
+    monkeypatch.setattr("mona.development.settings.read_settings", lambda: {"revision": "0" * 64, "values": {}})
+    async def native_version(_path, _executor, **_kwargs):
+        return "1.0.0"
+    monkeypatch.setattr(resources, "native_version", native_version)
+    client, _runtime = await _api_client(tmp_path, monkeypatch)
+    try:
+        source = "path" if executor == "claude" else "desktop_application"
+        before = (await resources.resource_status(DevelopmentConfig(), executor))["components"][0]
+        assert before["source"] == source and before["managedInstalled"]
+        assert before["usingManaged"] is False
+        response = await client.delete(f"/api/development/executors/{executor}/managed-program",
+            headers=AUTH, json={"version": "1.0.0"})
+        assert response.status == 200 and (await response.json())["deleted"]
+        after = (await resources.resource_status(DevelopmentConfig(), executor))["components"][0]
+        assert after["installed"] and after["systemAvailable"]
+        if executor == "codebuddy":
+            assert after["desktopAppDetected"]
+        assert after["source"] == source and after["executable"] == str(app_cli.resolve())
+        assert not after["managedInstalled"] and after["usingManaged"] is False
+        assert app_cli.read_bytes() == b"application CLI fixture; never executed"
+        assert not manager.list() and not requested.is_set()
     finally:
         await client.close()
 

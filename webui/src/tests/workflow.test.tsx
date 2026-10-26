@@ -625,6 +625,8 @@ describe("workflow step activity projection", () => {
       />,
     );
     expect(screen.getByText("分析完成")).toBeTruthy();
+    expect(screen.queryByText("Using a tool")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand process" }));
     fireEvent.click(screen.getByText("Using a tool"));
     expect(screen.getByText('read_file({"path":"a.md"})')).toBeTruthy();
   });

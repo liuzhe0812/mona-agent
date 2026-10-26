@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { AgentAvatar } from "@/components/room/AgentAvatar";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -143,16 +144,17 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
+        <TooltipButton
           type="button"
           size="sm"
           variant="ghost"
           disabled={disabled || members.length < 2}
-          className="h-7 gap-1.5 rounded-full px-2.5 text-caption text-muted-foreground"
+          title={t("room.discussion.launch")}
+          className="composer-icon-control h-7 gap-1.5 rounded-full px-2.5 text-caption text-muted-foreground"
         >
-          <MessagesSquare className="h-3.5 w-3.5" />
-          {t("room.discussion.launch")}
-        </Button>
+          <MessagesSquare className="h-3.5 w-3.5 shrink-0" />
+          <span className="composer-control-label">{t("room.discussion.launch")}</span>
+        </TooltipButton>
       </DialogTrigger>
       <DialogContent className="flex max-h-[84vh] max-w-2xl flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border/55 px-6 py-5">

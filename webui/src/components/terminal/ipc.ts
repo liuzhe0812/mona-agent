@@ -25,6 +25,17 @@ let terminalOutputReady: Promise<void> | undefined;
 
 export type { ConnectionConfig, AuthConfig, FileInfo };
 
+export interface TerminalConnectionState {
+  connections: ConnectionConfig[];
+  revision: string;
+}
+
+function nativeConnectionConfig(config: ConnectionConfig) {
+  const nativeConfig = { ...config };
+  delete nativeConfig.storageRevision;
+  return nativeConfig;
+}
+
 export async function sftpBatchUpload(
   request: BatchUploadRequest,
 ): Promise<string> {
@@ -63,7 +74,7 @@ export function onBatchTransferProgress(
 }
 
 export async function sshConnect(config: ConnectionConfig): Promise<string> {
-  return invoke<string>("ssh_connect", { config });
+  return invoke<string>("ssh_connect", { config: nativeConnectionConfig(config) });
 }
 
 export async function sshConnectWithId(
@@ -72,7 +83,7 @@ export async function sshConnectWithId(
   cols?: number,
   rows?: number,
 ): Promise<string> {
-  return invoke<string>("ssh_connect_with_id", { sessionId, config, cols: cols || 80, rows: rows || 24 });
+  return invoke<string>("ssh_connect_with_id", { sessionId, config: nativeConnectionConfig(config), cols: cols || 80, rows: rows || 24 });
 }
 
 export async function sshSendInput(sessionId: string, data: string): Promise<void> {
@@ -114,7 +125,7 @@ export async function sshReconnect(
   sessionId: string,
   config: ConnectionConfig,
 ): Promise<string> {
-  return invoke<string>("ssh_reconnect", { sessionId, config });
+  return invoke<string>("ssh_reconnect", { sessionId, config: nativeConnectionConfig(config) });
 }
 
 export async function sshWrite(sessionId: string, data: string): Promise<void> {
@@ -383,14 +394,40 @@ export function onTransferProgress(
   );
 }
 
-export async function terminalSaveConnections(
-  connections: ConnectionConfig[],
-): Promise<void> {
-  return invoke("terminal_save_connections", { connections });
+function attachStorageRevision(state: TerminalConnectionState): ConnectionConfig[] {
+  return state.connections.map((connection) => ({ ...connection, storageRevision: state.revision }));
+}
+
+export async function terminalLoadConnectionState(): Promise<TerminalConnectionState> {
+  return invoke<TerminalConnectionState>("terminal_load_connection_state");
 }
 
 export async function terminalLoadConnections(): Promise<ConnectionConfig[]> {
-  return invoke<ConnectionConfig[]>("terminal_load_connections");
+  return attachStorageRevision(await terminalLoadConnectionState());
+}
+
+export async function terminalUpsertConnection(
+  connection: ConnectionConfig,
+  expectedRevision?: string,
+): Promise<ConnectionConfig[]> {
+  const nativeConnection = { ...connection };
+  delete nativeConnection.storageRevision;
+  const state = await invoke<TerminalConnectionState>("terminal_upsert_connection", {
+    connection: nativeConnection,
+    expectedRevision: expectedRevision ?? null,
+  });
+  return attachStorageRevision(state);
+}
+
+export async function terminalDeleteSavedConnection(
+  connectionId: string,
+  expectedRevision: string,
+): Promise<ConnectionConfig[]> {
+  const state = await invoke<TerminalConnectionState>("terminal_delete_saved_connection", {
+    connectionId,
+    expectedRevision,
+  });
+  return attachStorageRevision(state);
 }
 
 export async function sshTrustHostKey(host: string, port: number): Promise<void> {
@@ -540,7 +577,7 @@ export interface DesktopProcess {
 }
 
 export async function desktopConnect(config: ConnectionConfig): Promise<string> {
-  return invoke<string>("desktop_connect", { config });
+  return invoke<string>("desktop_connect", { config: nativeConnectionConfig(config) });
 }
 
 export async function desktopDisconnect(sessionId: string): Promise<void> {

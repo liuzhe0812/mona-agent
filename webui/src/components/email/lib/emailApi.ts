@@ -12,6 +12,7 @@ import type {
   EmailSearchResult,
   OutboxEmail,
 } from "./types";
+import { extractEmailAddress } from "./addressUtils";
 
 // ---------------------------------------------------------------------------
 // 请求类型 — 必须与 Rust 侧 SyncRequest/SendRequest 的 camelCase 字段名一致
@@ -93,15 +94,74 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function textToHtml(text: string): string {
+export function textToHtml(text: string): string {
   return `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(text)}</div>`;
 }
 
-function parseAddressList(input: string): string[] {
-  return input
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+export function parseEmailAddressList(input: string): string[] {
+  const addresses: string[] = [];
+  let current = "";
+  let quoted = false;
+  let angleDepth = 0;
+  let escaped = false;
+
+  const pushCurrent = () => {
+    const value = current.trim();
+    if (value) addresses.push(value);
+    current = "";
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      current += char;
+      continue;
+    }
+    if (!quoted && char === "<") angleDepth += 1;
+    if (!quoted && char === ">" && angleDepth > 0) angleDepth -= 1;
+
+    if (!quoted && angleDepth === 0 && char === ";") {
+      pushCurrent();
+      continue;
+    }
+    if (!quoted && angleDepth === 0 && char === ",") {
+      const currentHasEmail = extractEmailAddress(current).includes("@");
+      const nextComma = input.indexOf(",", index + 1);
+      const nextSemicolon = input.indexOf(";", index + 1);
+      const nextDelimiter = [nextComma, nextSemicolon]
+        .filter((value) => value >= 0)
+        .reduce((min, value) => Math.min(min, value), input.length);
+      const nextChunk = input.slice(index + 1, nextDelimiter);
+      const commaIsDisplayName =
+        !currentHasEmail && extractEmailAddress(nextChunk).includes("@");
+      if (!commaIsDisplayName) {
+        pushCurrent();
+        continue;
+      }
+    }
+    current += char;
+  }
+  pushCurrent();
+  return addresses;
+}
+
+export function parseAddressList(input: string): string[] {
+  return parseEmailAddressList(input).map((address) => {
+    const bracketed = address.match(/<([^<>]+)>/);
+    const email = bracketed?.[1]?.trim() ?? address.trim();
+    return extractEmailAddress(email).includes("@") ? email : address.trim();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -218,14 +278,21 @@ export async function getMessages(
   });
 }
 
-/// 统一收件箱：聚合所有账号 INBOX，按日期降序，使用 date 作为游标
+/// 统一收件箱：聚合所有账号 INBOX，按邮件真实时间和稳定身份游标分页
 export async function getUnifiedInbox(
   beforeDate: string | null,
   limit: number,
+  beforeAccountId?: string | null,
+  beforeUid?: string | null,
 ): Promise<EmailMessage[]> {
+  const cursor =
+    beforeAccountId != null && beforeUid != null
+      ? { beforeAccountId, beforeUid }
+      : {};
   return invoke<EmailMessage[]>("email_get_unified_inbox", {
     beforeDate,
     limit,
+    ...cursor,
   });
 }
 
@@ -400,6 +467,7 @@ export interface FetchAttachmentRequest {
   mailbox: string;
   uid: string;
   filename: string;
+  contentId?: string | null;
   useSsl: boolean;
 }
 
@@ -416,6 +484,7 @@ export async function fetchAttachment(
   mailbox: string,
   uid: string,
   filename: string,
+  contentId?: string | null,
 ): Promise<FetchAttachmentResponse> {
   const imapPassword = await getDecryptedPassword(account.id, "imap");
   const req: FetchAttachmentRequest = {
@@ -427,6 +496,7 @@ export async function fetchAttachment(
     mailbox,
     uid,
     filename,
+    contentId: contentId ?? null,
     useSsl: imapSsl(account),
   };
   return invoke<FetchAttachmentResponse>("email_fetch_attachment", { gatewayUrl, req });
@@ -440,6 +510,7 @@ export async function downloadAttachmentToFile(
   uid: string,
   filename: string,
   savePath: string,
+  contentId?: string | null,
 ): Promise<number> {
   const imapPassword = await getDecryptedPassword(account.id, "imap");
   const req: FetchAttachmentRequest = {
@@ -451,6 +522,7 @@ export async function downloadAttachmentToFile(
     mailbox,
     uid,
     filename,
+    contentId: contentId ?? null,
     useSsl: imapSsl(account),
   };
   return invoke<number>("email_download_attachment_to_file", { gatewayUrl, req, savePath });
@@ -484,6 +556,7 @@ export interface FetchEmailBodyResult {
     fromName: string;
     toAddresses: string;
     ccAddresses: string;
+    bccAddresses?: string;
     /** 邮件日期；优先来自本地缓存，缺失时由 RFC822 header 补充。 */
     date?: string;
   };
@@ -580,20 +653,38 @@ export interface SaveDraftRequest {
   fromName?: string | null;
   to: string[];
   cc: string[];
+  bcc: string[];
   subject: string;
+  bodyText: string;
   bodyHtml: string;
   inReplyTo: string | null;
+  draftUid?: string | null;
+  draftFolder?: string | null;
+  draftRequestId?: string | null;
   attachments?: EmailAttachmentInput[];
+}
+
+export interface SaveDraftResult {
+  draftUid: string | null;
+  draftFolder: string | null;
+}
+
+export interface SaveDraftOptions {
+  draftUid?: string | null;
+  draftFolder?: string | null;
+  draftRequestId?: string | null;
 }
 
 export async function saveDraft(
   gatewayUrl: string,
   account: EmailAccount,
   payload: SendEmailPayload,
-): Promise<void> {
+  options: SaveDraftOptions = {},
+): Promise<SaveDraftResult> {
   const imapPassword = await getDecryptedPassword(account.id, "imap");
-  const to = parseAddressList(payload.toAddresses);
-  const cc = payload.ccAddresses ? parseAddressList(payload.ccAddresses) : [];
+  const to = parseEmailAddressList(payload.toAddresses);
+  const cc = payload.ccAddresses ? parseEmailAddressList(payload.ccAddresses) : [];
+  const bcc = payload.bccAddresses ? parseEmailAddressList(payload.bccAddresses) : [];
   const bodyHtml = payload.bodyHtml ?? textToHtml(payload.bodyText);
   const req: SaveDraftRequest = {
     imapHost: account.imapHost,
@@ -605,12 +696,17 @@ export async function saveDraft(
     fromName: account.fromName ?? null,
     to,
     cc,
+    bcc,
     subject: payload.subject,
+    bodyText: payload.bodyText,
     bodyHtml,
     inReplyTo: payload.inReplyTo ?? null,
+    draftUid: options.draftUid ?? null,
+    draftFolder: options.draftFolder ?? null,
+    draftRequestId: options.draftRequestId ?? null,
     attachments: payload.attachments,
   };
-  return invoke("email_save_draft", { gatewayUrl, req });
+  return invoke<SaveDraftResult>("email_save_draft", { gatewayUrl, req });
 }
 
 export async function getDecryptedPassword(
@@ -704,6 +800,43 @@ export async function createFolder(
   return invoke("email_create_folder", { gatewayUrl, req });
 }
 
+const EMAIL_FOLDER_MUTATION_TIMEOUT_MS = 30_000;
+
+async function postFolderMutation(
+  gatewayUrl: string,
+  path: string,
+  req: Record<string, unknown>,
+  action: string,
+): Promise<void> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutResult = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      const error = new Error("Email folder operation timed out");
+      error.name = "EmailFolderMutationTimeoutError";
+      reject(error);
+    }, EMAIL_FOLDER_MUTATION_TIMEOUT_MS);
+  });
+  const request = (async () => {
+    const resp = await fetch(`${gatewayUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(`${action}失败: ${resp.status} ${detail}`);
+    }
+  })();
+  try {
+    await Promise.race([request, timeoutResult]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 export async function renameFolder(
   gatewayUrl: string,
   account: EmailAccount,
@@ -720,15 +853,7 @@ export async function renameFolder(
     oldName,
     newName,
   };
-  const resp = await fetch(`${gatewayUrl}/email/rename_folder`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => "");
-    throw new Error(`重命名文件夹失败: ${resp.status} ${detail}`);
-  }
+  await postFolderMutation(gatewayUrl, "/email/rename_folder", req, "重命名文件夹");
 }
 
 export async function deleteFolder(
@@ -745,15 +870,7 @@ export async function deleteFolder(
     useSsl: imapSsl(account),
     folderName,
   };
-  const resp = await fetch(`${gatewayUrl}/email/delete_folder`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => "");
-    throw new Error(`删除文件夹失败: ${resp.status} ${detail}`);
-  }
+  await postFolderMutation(gatewayUrl, "/email/delete_folder", req, "删除文件夹");
 }
 
 export async function listFolders(
@@ -840,7 +957,7 @@ export interface SendEmailPayload {
 }
 
 export interface OpenComposeWindowRequest {
-  mode: "compose" | "reply" | "replyAll" | "forward";
+  mode: "compose" | "reply" | "replyAll" | "forward" | "draft";
   accountId: string;
   baseMessage?: EmailMessage | null;
   /** 预设收件人（点击发件人名称写邮件时使用） */

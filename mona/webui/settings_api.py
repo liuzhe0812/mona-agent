@@ -961,7 +961,6 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
                 "schedule": defaults.dream.describe_schedule(),
                 "max_batch_size": defaults.dream.max_batch_size,
                 "max_iterations": defaults.dream.max_iterations,
-                "annotate_line_ages": defaults.dream.annotate_line_ages,
             },
             "unified_session": defaults.unified_session,
             "auto_download": config.runtime.auto_download,
@@ -976,15 +975,6 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
         },
         "channels": _channels_payload(config),
         "tts": _tts_payload(config),
-        "stock": {
-            "enabled": config.stock.enabled,
-            "auto_review_enabled": config.stock.auto_review_enabled,
-            "review_time": config.stock.review_time,
-            "review_scope": config.stock.review_scope,
-            "push_notification": config.stock.push_notification,
-            "push_email": config.stock.push_email,
-            "quote_refresh_sec": config.stock.quote_refresh_sec,
-        },
         "requires_restart": requires_restart,
     }
 
@@ -2113,100 +2103,6 @@ def update_tts_settings(query: QueryParams) -> dict[str, Any]:
 
 
 _STOCK_REVIEW_TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-
-
-def update_stock_settings(
-    query: QueryParams,
-    *,
-    cron_service: Any | None = None,
-    bootstrap: Any | None = None,
-) -> dict[str, Any]:
-    """Update the stock module section (design §13, dev plan T17).
-
-    When ``cron_service`` is given, the daily-review job is synced to the
-    resulting config: it exists only when both the module and automatic
-    review are enabled. The sync runs only after a successful save, so a
-    rejected validation never touches cron state.
-
-    When ``bootstrap`` is given and the module ends up enabled, it is
-    invoked with the saved :class:`StockConfig` so the caller can run the
-    idempotent pack bootstrap (hidden room + templates) without the gateway
-    needing a restart (dev plan T21).
-    """
-    from mona.agent.pack_bootstrap import sync_stock_review_cron
-
-    config = load_config()
-    stock = config.stock
-    changed = False
-
-    enabled = _query_first(query, "enabled")
-    if enabled is not None:
-        value = _parse_bool(enabled, "enabled")
-        if stock.enabled != value:
-            stock.enabled = value
-            changed = True
-
-    auto_review_enabled = _query_first_alias(
-        query, "auto_review_enabled", "autoReviewEnabled"
-    )
-
-    if auto_review_enabled is not None:
-        value = _parse_bool(auto_review_enabled, "autoReviewEnabled")
-        if stock.auto_review_enabled != value:
-            stock.auto_review_enabled = value
-            changed = True
-
-    review_time = _query_first_alias(query, "review_time", "reviewTime")
-    if review_time is not None:
-        review_time = review_time.strip()
-        if not _STOCK_REVIEW_TIME_PATTERN.fullmatch(review_time):
-            raise WebUISettingsError("reviewTime must be HH:MM (00:00-23:59)")
-        if stock.review_time != review_time:
-            stock.review_time = review_time
-            changed = True
-
-    review_scope = _query_first_alias(query, "review_scope", "reviewScope")
-    if review_scope is not None:
-        review_scope = review_scope.strip()
-        if review_scope not in ("all", "focus"):
-            raise WebUISettingsError("reviewScope must be 'all' or 'focus'")
-        if stock.review_scope != review_scope:
-            stock.review_scope = review_scope
-            changed = True
-
-    push_notification = _query_first_alias(query, "push_notification", "pushNotification")
-    if push_notification is not None:
-        value = _parse_bool(push_notification, "pushNotification")
-        if stock.push_notification != value:
-            stock.push_notification = value
-            changed = True
-
-    push_email = _query_first_alias(query, "push_email", "pushEmail")
-    if push_email is not None:
-        value = _parse_bool(push_email, "pushEmail")
-        if stock.push_email != value:
-            stock.push_email = value
-            changed = True
-
-    quote_refresh = _query_first_alias(query, "quote_refresh_sec", "quoteRefreshSec")
-    if quote_refresh is not None:
-        try:
-            value = int(quote_refresh.strip())
-        except ValueError:
-            raise WebUISettingsError("quoteRefreshSec must be an integer") from None
-        if not (5 <= value <= 3600):
-            raise WebUISettingsError("quoteRefreshSec must be between 5 and 3600")
-        if stock.quote_refresh_sec != value:
-            stock.quote_refresh_sec = value
-            changed = True
-
-    if changed:
-        save_config(config)
-        if cron_service is not None:
-            sync_stock_review_cron(cron_service, stock)
-        if stock.enabled and bootstrap is not None:
-            bootstrap(stock)
-    return settings_payload(requires_restart=False)
 
 
 def _provider_config(config: Any, provider_name: str) -> Any:

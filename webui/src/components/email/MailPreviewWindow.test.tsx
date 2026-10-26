@@ -74,6 +74,26 @@ describe("MailPreviewWindow loading", () => {
     expect(mocks.invoke.mock.calls.filter(([command]) => command === "email_fetch_body")).toHaveLength(1);
   });
 
+  it("keeps inline CID metadata out of the reader attachment list", async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "email_fetch_body") {
+        return {
+          ...body,
+          attachments: [
+            { filename: "logo.png", contentType: "image/png", size: 3, partId: "", contentId: "logo", isInline: true },
+            { filename: "report.pdf", contentType: "application/pdf", size: 10, partId: "", isInline: false },
+          ],
+        };
+      }
+      return [];
+    });
+
+    render(<MailPreviewWindow />);
+
+    expect(await screen.findByText("report.pdf")).toBeVisible();
+    expect(screen.queryByText("logo.png")).not.toBeInTheDocument();
+  });
+
   it("shows a safe error and lets the user retry a failed body request", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let failed = false;

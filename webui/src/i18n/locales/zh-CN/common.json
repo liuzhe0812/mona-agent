@@ -185,6 +185,7 @@
       "ariaLabel": "设置分区"
     },
     "nav": {
+      "account": "账户",
       "general": "通用",
       "resources": "高级功能",
       "byok": "BYOK",
@@ -274,6 +275,8 @@
       "imageDefaults": "默认值",
       "webSearch": "网页搜索",
       "runtimeParameters": "运行参数",
+      "dateAndTime": "日期与时间",
+      "filesAndStorage": "文件与存储",
       "capabilities": "能力"
     },
     "rows": {
@@ -320,7 +323,8 @@
       "defaultAspectRatio": "AI 未指定时使用，可在单次生成时调整。",
       "defaultImageSize": "AI 未指定时使用；实际支持的分辨率以服务为准。",
       "maxImagesPerTurn": "单次 generate_image 请求允许的图片上限。",
-      "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
+      "timezone": "用于会话时间和计划任务，选择后自动保存。",
+      "workspacePath": "更改后自动保存，重启后使用新目录。已有会话记录会自动迁移。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。"
     },
     "values": {
@@ -343,6 +347,9 @@
     "status": {
       "loading": "正在加载设置...",
       "loadError": "无法加载设置",
+      "updateFailed": "未能更新设置",
+      "autoSaveFailed": "未能确认保存结果，当前显示上次确认的设置。请重试。",
+      "workspacePickerFailed": "未能打开目录选择器，请重试。",
       "unsaved": "有未保存的更改。",
       "upToDate": "已是最新。",
       "savedRestart": "已保存。重启 mona 后生效。",
@@ -354,6 +361,8 @@
       "save": "保存",
       "saving": "保存中",
       "edit": "编辑",
+      "change": "更改",
+      "dismiss": "知道了",
       "cancel": "取消",
       "openDocs": "打开文档"
     },
@@ -537,10 +546,6 @@
     "computer_use": {
       "name": "电脑操作",
       "description": "会话：让 Mona 代你点击、输入或操作其他桌面应用时使用"
-    },
-    "westock": {
-      "name": "股票数据支持",
-      "description": "股票：进行个股诊断、深度投研或选股时，用于补充公司、财务、公告和技术数据"
     }
     }
   },
@@ -1003,6 +1008,37 @@
     "agentActivityToolsOnly": "{{tools}} 次工具调用",
     "agentActivityLiveSummary": "进行中… · {{reasoning}} 步 · {{tools}} 次工具调用",
     "agentActivityLiveToolsOnly": "进行中… · {{tools}} 次工具调用",
+    "agentActivityElapsed": "已处理 {{seconds}}秒",
+    "agentActivityElapsedMinutes": "已处理 {{minutes}}分钟 {{seconds}}秒",
+    "agentActivityDuration": "用时 {{minutes}}分钟 {{seconds}}秒",
+    "agentActivityFinished": "处理完成",
+    "collapseProcess": "收起过程",
+    "expandProcess": "展开过程",
+    "activityFilesAndCommands": "编辑了文件，运行了命令",
+    "activityCommands": "运行了命令",
+    "activityDetails": "处理过程",
+    "activityCommandRunning": "正在运行命令",
+    "activityCommandCompleted": "已运行命令",
+    "activityCommandFailed": "命令运行失败",
+    "activityCommand": "运行命令",
+    "activityToolRunning": "正在使用工具",
+    "activityToolCompleted": "已使用工具",
+    "activityToolFailed": "工具执行失败",
+    "activityTool": "使用工具",
+    "activityToolMany": "使用了 {{count}} 次工具",
+    "activityToolRunningMany": "正在使用工具（{{count}} 次）",
+    "activityFileEdited": "已编辑",
+    "activityFileEditing": "正在编辑",
+    "fileActivityPreparing": "正在准备编辑…",
+    "fileActivityFailedOne": "编辑失败 {{file}}",
+    "fileActivityEditingOne": "正在编辑 {{file}}",
+    "fileActivityEditedOne": "已编辑 {{file}}",
+    "fileActivityFailedMany": "{{count}} 个文件编辑失败",
+    "fileActivityEditingMany": "正在编辑 {{count}} 个文件",
+    "fileActivityEditedMany": "已编辑 {{count}} 个文件",
+    "fileEditPreparing": "正在准备编辑文件…",
+    "fileEditFailed": "失败",
+    "fileEditApproximate": "估算",
     "imageAttachment": "图片附件",
     "showAll": "显示全部",
     "collapse": "收起",

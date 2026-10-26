@@ -172,10 +172,6 @@ class Tool(ABC):
     _plugin_discoverable: bool = True
     _scopes: set[str] = {"core"}
 
-    # When True, the tool is hidden from the model and rejected at execution
-    # time unless the user has an active subscription or valid trial.
-    subscription_required: bool = False
-
     # Dynamic tools such as MCP capabilities are denied until their concrete
     # names are saved in the Agent's tool permissions.
     requires_explicit_permission: bool = False
@@ -192,8 +188,7 @@ class Tool(ABC):
     agent_allowlist: frozenset[str] | None = None
 
     # Runtime availability flag. When False, the tool is excluded from
-    # ``get_definitions`` so the model never sees it. Unlike
-    # ``subscription_required``, this reflects per-request context (e.g.
+    # ``get_definitions`` so the model never sees it. This reflects per-request context (e.g.
     # ``terminal_session_id`` missing) and is updated by ``set_context``.
     is_available: bool = True
 

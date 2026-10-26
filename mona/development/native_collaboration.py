@@ -1,4 +1,4 @@
-"""Bind a native tool call to the existing project collaboration service."""
+"""Bind native collaboration and read-only design calls to the active project turn."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from mona.development.contracts import Binding, ExecutorId, RunStatus
-from mona.development.executors.host_tools import HostToolCall, tool_result
+from mona.development.design_resources import design_resource_result
+from mona.development.executors.host_tools import DESIGN_ENVELOPE, HostToolCall, tool_result
 from mona.development.store import DevelopmentError
 
 if TYPE_CHECKING:
@@ -17,17 +18,18 @@ class NativeCollaboration:
     def __init__(self, runtime: DevelopmentRuntime):
         self.runtime = runtime
 
-    def _owner(self, binding: Binding, turn_id: str):
+    def _owner(self, binding: Binding, turn_id: str, *, resource: bool = False):
         store = self.runtime.store
         session = store.get_session(binding.session_id)
         current = store.get_binding(binding.id)
         run = store.active_run(session.id)
-        if (self.runtime._closed or session.archived or session.readonly or session.parent_session_id
+        collaboration_forbidden = not resource and (
+            session.readonly or session.parent_session_id or current.readonly or not current.capabilities.host_subagents)
+        if (self.runtime._closed or session.archived or collaboration_forbidden
                 or current.state != "active" or current.session_id != session.id
                 or current.native_session_id != binding.native_session_id
                 or current.executor != binding.executor or current.executor != session.executor
-                or current.working_directory != binding.working_directory or current.readonly
-                or not current.capabilities.host_subagents or run is None or run.binding_id != current.id
+                or current.working_directory != binding.working_directory or run is None or run.binding_id != current.id
                 or run.executor != current.executor
                 or run.status not in {RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.WAITING_USER}):
             raise DevelopmentError("host_tool_unavailable", "当前绑定、轮次或权限不允许宿主调用；没有重新派发。")
@@ -41,6 +43,9 @@ class NativeCollaboration:
     async def __call__(self, binding: Binding, turn_id: str, arguments: dict) -> dict:
         from mona.development.runtime import stable_id
         try:
+            if set(arguments) == {DESIGN_ENVELOPE} and isinstance(arguments[DESIGN_ENVELOPE], dict):
+                self._owner(binding, turn_id, resource=True)
+                return design_resource_result(arguments[DESIGN_ENVELOPE])
             call = HostToolCall.model_validate(arguments)
             session, run = self._owner(binding, turn_id)
             manager = self.runtime.collaboration

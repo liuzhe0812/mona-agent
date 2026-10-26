@@ -1,0 +1,822 @@
+{
+  "project": {
+    "name": "Vibe-Trading",
+    "source_root": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading",
+    "project_version": "0.1.16",
+    "frontend_version": "0.1.16",
+    "read_scope": "Static read-only review of frontend routes, navigation, page components, shared page components, and the UI tool/action labels. No dependencies installed, services started, tests run, or credentials inspected.",
+    "identity_note": "The local upstream copy has no Git metadata. All 2544 pinned archive members match this copy by SHA256/size. Frontend reference files are separately hashed; package version alone is not a commit identity."
+  },
+  "navigation_groups": [
+    {
+      "group": "research",
+      "items": [
+        {
+          "label_key": "agent",
+          "route": "/",
+          "component": "Agent"
+        },
+        {
+          "label_key": "reports",
+          "route": "/reports",
+          "component": "Reports"
+        },
+        {
+          "label_key": "portfolio",
+          "route": "/portfolio",
+          "component": "Portfolio"
+        }
+      ]
+    },
+    {
+      "group": "analysis",
+      "items": [
+        {
+          "label_key": "alphaZoo",
+          "route": "/alpha-zoo",
+          "component": "AlphaZoo"
+        },
+        {
+          "label_key": "optionsLab",
+          "route": "/options",
+          "component": "OptionsLab"
+        },
+        {
+          "label_key": "correlation",
+          "route": "/correlation",
+          "component": "Correlation"
+        }
+      ]
+    },
+    {
+      "group": "automation",
+      "items": [
+        {
+          "label_key": "pixelOffice",
+          "route": "/pixel-office",
+          "component": "PixelOffice"
+        },
+        {
+          "label_key": "scheduled",
+          "route": "/scheduled",
+          "component": "Scheduled"
+        },
+        {
+          "label_key": "runtime",
+          "route": "/runtime",
+          "component": "Runtime"
+        },
+        {
+          "label_key": "settings",
+          "route": "/settings",
+          "component": "Settings"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "route": "/ and /agent",
+      "component": "Agent",
+      "navigation": "Research / main entry",
+      "major_user_operations": [
+        "Create and switch chat sessions; reopen, rename, and delete sessions from the shared sidebar.",
+        "Send follow-up prompts with streaming output; stop a live response, retry failed messages, continue a timed-out activity, reconnect to a running activity, and export the chat as Markdown.",
+        "Attach multiple supported files; use drop, paste, and file picker paths.",
+        "Start a research Goal with tracked criteria/evidence and continue it, or request an Agent Swarm from chat.",
+        "Use composer shortcuts for connector check and portfolio analysis; chat UI displays tool calls and progress.",
+        "The composer exposes a live-runtime resume/halt control when live connector execution is available."
+      ],
+      "outputs_and_handoffs": [
+        "Conversation, streamed activity/tool timeline, swarm status, research Goal panel, run completion cards and run previews.",
+        "Run cards link to /runs/:runId; session records stay in the sidebar."
+      ],
+      "external_or_market_limits": [
+        "Agent action breadth depends on enabled native tools, configured model/provider, selected attachments, available data loaders, and any required connector/data credentials.",
+        "Cross-market actions are exposed through language examples and tools; this page itself is a general chat and does not provide a structured A-share opportunity list."
+      ],
+      "ordinary_investor_placement": "Primary entry. A compact summary of latest research/portfolio outcomes could live on a Mona workbench, while the conversation and advanced execution controls remain in this page.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Agent.tsx",
+          "lines": "1391-1512",
+          "supports": "Goal/session creation and prompt submission"
+        },
+        {
+          "file": "frontend/src/pages/Agent.tsx",
+          "lines": "1518-1548",
+          "supports": "Cancel a live response"
+        },
+        {
+          "file": "frontend/src/pages/Agent.tsx",
+          "lines": "1561-1659",
+          "supports": "Continue Goal/activity, retry, Swarm mode, export"
+        },
+        {
+          "file": "frontend/src/pages/Agent.tsx",
+          "lines": "1764-1980",
+          "supports": "Chat timeline, tool activity, composer, live runtime control"
+        },
+        {
+          "file": "frontend/src/components/chat/Composer.tsx",
+          "lines": "260-419",
+          "supports": "Upload, Goal, Swarm, connector and portfolio shortcut actions"
+        },
+        {
+          "file": "frontend/src/components/chat/Composer.tsx",
+          "lines": "412-499",
+          "supports": "File picker, send, export, stop"
+        },
+        {
+          "file": "frontend/src/components/layout/Layout.tsx",
+          "lines": "94-134",
+          "supports": "Session list loading, rename/delete operations"
+        },
+        {
+          "file": "frontend/src/components/layout/Layout.tsx",
+          "lines": "200-303",
+          "supports": "Create new chat, reopen, rename, delete sessions"
+        },
+        {
+          "file": "frontend/src/components/chat/WelcomeScreen.tsx",
+          "lines": "18-218",
+          "supports": "Prompt examples and quick actions, including research, backtest, portfolio, skills, swarm, trade journal, connectors, and Shadow"
+        }
+      ]
+    },
+    {
+      "route": "/about",
+      "component": "Home",
+      "navigation": "Not a sidebar item; reachable from layout footer",
+      "major_user_operations": [
+        "Read a product/how-it-works landing page and follow the Start Research link to /agent."
+      ],
+      "outputs_and_handoffs": [
+        "No investment data or user-specific artifacts."
+      ],
+      "external_or_market_limits": [
+        "Static overview content."
+      ],
+      "ordinary_investor_placement": "Hide from the core investing workspace or retain as an about/help destination.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Home.tsx",
+          "lines": "8-20",
+          "supports": "Static feature and workflow lists"
+        },
+        {
+          "file": "frontend/src/pages/Home.tsx",
+          "lines": "22-67",
+          "supports": "Landing layout and navigation to Agent"
+        },
+        {
+          "file": "frontend/src/components/layout/Layout.tsx",
+          "lines": "345-351",
+          "supports": "Footer link to /about"
+        }
+      ]
+    },
+    {
+      "route": "/reports",
+      "component": "Reports",
+      "navigation": "Research",
+      "major_user_operations": [
+        "Refresh and search recent backtest runs; filter by status/date; sort newest/oldest/return/Sharpe."
+      ],
+      "outputs_and_handoffs": [
+        "Shows run ID, prompt, symbols/date window, status, return and Sharpe; links to full run detail and two-run comparison."
+      ],
+      "external_or_market_limits": [
+        "Scans at most 100 run records and keeps records with a finite total_return or Sharpe metric; no report authoring or editing here."
+      ],
+      "ordinary_investor_placement": "Keep as a separate history page; surface the latest completed report/result card in a workbench summary if useful.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Reports.tsx",
+          "lines": "19-82",
+          "supports": "100-run loading, filtering, and sorting"
+        },
+        {
+          "file": "frontend/src/pages/Reports.tsx",
+          "lines": "286-288",
+          "supports": "Includes only records with finite return or Sharpe metrics"
+        },
+        {
+          "file": "frontend/src/pages/Reports.tsx",
+          "lines": "98-156",
+          "supports": "Refresh, search, status/date/sort controls"
+        },
+        {
+          "file": "frontend/src/pages/Reports.tsx",
+          "lines": "204-257",
+          "supports": "Run row outputs and detail/compare links"
+        }
+      ]
+    },
+    {
+      "route": "/runs/:runId",
+      "component": "RunDetail",
+      "navigation": "Deep link from Reports and Agent run cards; not a sidebar item",
+      "major_user_operations": [
+        "Switch artifact-dependent tabs: dashboard, chart, tearsheet, trades, positions, attribution, factor, studio, validation, run card, code.",
+        "Select/add/remove ticker charts, load all charts with progress, and cancel bulk chart loading.",
+        "Filter trade rows by side/symbol, sort by time, page more rows, download trade and metric CSVs, and copy generated code."
+      ],
+      "outputs_and_handoffs": [
+        "Strategy/research dashboard, price/equity charts, performance metrics, trades, positions, attribution, factor/validation artifacts, risk/studio outputs, run card, and generated code."
+      ],
+      "external_or_market_limits": [
+        "Tabs are hidden when that run does not contain their artifacts; chart symbol data may require additional native data retrieval."
+      ],
+      "ordinary_investor_placement": "Keep as the deep detail page; use a small result summary in the main workbench or Reports list.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/RunDetail.tsx",
+          "lines": "147-168",
+          "supports": "Artifact-dependent tabs"
+        },
+        {
+          "file": "frontend/src/pages/RunDetail.tsx",
+          "lines": "392-470",
+          "supports": "Tab navigation, CSV downloads, tab content"
+        },
+        {
+          "file": "frontend/src/pages/RunDetail.tsx",
+          "lines": "841-980",
+          "supports": "Chart selection/loading/cancel and equity display"
+        },
+        {
+          "file": "frontend/src/pages/RunDetail.tsx",
+          "lines": "1017-1224",
+          "supports": "Trade filtering/paging and code copy"
+        }
+      ]
+    },
+    {
+      "route": "/compare",
+      "component": "Compare",
+      "navigation": "Not a sidebar item; linked from Reports",
+      "major_user_operations": [
+        "Choose two runs, swap sides, and toggle raw versus rebased equity curves."
+      ],
+      "outputs_and_handoffs": [
+        "Overlaid equity curves plus a side-by-side metrics table with deltas/winner highlighting."
+      ],
+      "external_or_market_limits": [
+        "Only compares run records that the backend exposes; missing curves/metrics remain unavailable."
+      ],
+      "ordinary_investor_placement": "Keep as a separate advanced comparison view; no need to put the full matrix on a default dashboard.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Compare.tsx",
+          "lines": "235-320",
+          "supports": "Loads two native run records and their curves/metrics"
+        },
+        {
+          "file": "frontend/src/pages/Compare.tsx",
+          "lines": "327-407",
+          "supports": "Run pickers, swap, raw/rebased curve controls"
+        },
+        {
+          "file": "frontend/src/pages/Compare.tsx",
+          "lines": "409-486",
+          "supports": "Metric delta table and empty state"
+        }
+      ]
+    },
+    {
+      "route": "/portfolio",
+      "component": "Portfolio",
+      "navigation": "Research",
+      "major_user_operations": [
+        "Manage portfolio source inclusion/order/labels/currency, connect a read-only broker profile, enter credentials into the OS vault, test/remove connections, and choose an account when required.",
+        "Import a local ExtraETF CSV with explicit position count and file-age limit; refresh sources; reconnect or retry failed sources.",
+        "Filter/search accounts and holdings; export portfolio CSV and a research snapshot JSON.",
+        "Enter target allocation percentages to generate a rebalance proposal; the UI has no order-submit button."
+      ],
+      "outputs_and_handoffs": [
+        "Snapshot totals, daily change, pricing coverage, latest full snapshot time, account/holding allocation, positions, PnL/prices, refresh status, history chart, warnings, and rebalance delta proposal."
+      ],
+      "external_or_market_limits": [
+        "Requires a configured, supported broker connector or a local import; adapter coverage/compatibility and read-only capability vary by profile.",
+        "Unpriced positions or failed accounts are shown as missing/excluded; conversion display offers USD/CNY/HKD/EUR and depends on snapshot FX data.",
+        "ExtraETF import accepts CSV, caps file size at 4 MB, and uses user-supplied position-count and max-age values."
+      ],
+      "ordinary_investor_placement": "Useful if the user has connected or imported data. Show total/coverage/warnings or top exposures in a workbench summary; keep connector, holdings, and rebalance details in this page.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Portfolio.tsx",
+          "lines": "135-285",
+          "supports": "Load, refresh, reconnect, save settings, CSV and research snapshot exports"
+        },
+        {
+          "file": "frontend/src/pages/Portfolio.tsx",
+          "lines": "355-480",
+          "supports": "Portfolio metrics, allocations, accounts, holdings, rebalance, history, credentials"
+        },
+        {
+          "file": "frontend/src/components/portfolio/PortfolioSourceEditor.tsx",
+          "lines": "96-132",
+          "supports": "Source ordering/enabling/currency, add connections and ExtraETF import"
+        },
+        {
+          "file": "frontend/src/components/portfolio/ConnectionCenter.tsx",
+          "lines": "17-20",
+          "supports": "Local connections and OS credential vault boundary"
+        },
+        {
+          "file": "frontend/src/components/portfolio/ConnectionCenter.tsx",
+          "lines": "62-120",
+          "supports": "Create/test/delete a connector"
+        },
+        {
+          "file": "frontend/src/components/portfolio/ConnectionCenter.tsx",
+          "lines": "186-250",
+          "supports": "Read-only profile, save credentials, test, account selection"
+        },
+        {
+          "file": "frontend/src/components/portfolio/ExtraEtfImport.tsx",
+          "lines": "8-35",
+          "supports": "CSV import, 4 MB bound, declared count and age"
+        },
+        {
+          "file": "frontend/src/components/portfolio/RebalanceProposal.tsx",
+          "lines": "6-32",
+          "supports": "Targets to proposal table only"
+        }
+      ]
+    },
+    {
+      "route": "/alpha-zoo",
+      "component": "AlphaZoo / BrowseView",
+      "navigation": "Analysis",
+      "major_user_operations": [
+        "Browse prebuilt factor libraries; search and filter by library/theme/metadata universe; select multiple factors for comparison or one factor/library for benchmarking."
+      ],
+      "outputs_and_handoffs": [
+        "Factor IDs, themes, supported metadata universes and decay horizons; handoffs to factor detail, benchmark and comparison."
+      ],
+      "external_or_market_limits": [
+        "Browse metadata lists US, CN, HK, India, Korea, crypto, and futures. This is broader than evaluation support; BTC is disabled in factor bench/compare forms."
+      ],
+      "ordinary_investor_placement": "Advanced research library; keep separate. A brief validated finding may be linked from a strategy/research result, but the catalogue itself is not a daily opportunity feed.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "53-103",
+          "supports": "Libraries and the distinction between browse metadata and benchmark universes"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "143-201",
+          "supports": "Browse/filter behavior"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "326-339",
+          "supports": "Compare and benchmark handoffs"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "394-425",
+          "supports": "Factor selection and catalogue columns"
+        }
+      ]
+    },
+    {
+      "route": "/alpha-zoo/:alphaId",
+      "component": "AlphaZoo / DetailView",
+      "navigation": "Deep view under Alpha Zoo",
+      "major_user_operations": [
+        "Read factor formula, metadata and source code; launch a benchmark prefilled with the factor and supported universe."
+      ],
+      "outputs_and_handoffs": [
+        "Formula/LaTeX, theme, data universe, frequency, decay horizon, warmup, sector requirement, module path/notes, source code; link to benchmark."
+      ],
+      "external_or_market_limits": [
+        "The code explicitly drops benchmark prefill for metadata markets without a panel loader, including Korea and India."
+      ],
+      "ordinary_investor_placement": "Keep within the advanced factor research path, not a default workbench panel.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "510-525",
+          "supports": "Metadata-to-benchmark market mapping"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "527-618",
+          "supports": "Detail outputs and benchmark button"
+        }
+      ]
+    },
+    {
+      "route": "/alpha-zoo/bench",
+      "component": "AlphaZoo / BenchView",
+      "navigation": "Internal factor evaluation route",
+      "major_user_operations": [
+        "Select factor library, benchmark universe, period and top-row count; run or reconnect to a long-running evaluation job."
+      ],
+      "outputs_and_handoffs": [
+        "Progress by factor/stage; alive/reversed/dead/skipped counts, top IR and reversed rows, theme breakdown, source coverage and data-quality notice."
+      ],
+      "external_or_market_limits": [
+        "Benchmark selector is CSI 300 or S&P 500; BTC is present but disabled. Readiness panel reports unavailable data and links to settings. Fundamental factors call out their data requirement."
+      ],
+      "ordinary_investor_placement": "Advanced validation tab; keep separate from routine research summaries.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "76-103",
+          "supports": "Available benchmark universes versus metadata universes"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "641-796",
+          "supports": "Bench input and submission"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "798-838",
+          "supports": "Progress and reconnect"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "840-920",
+          "supports": "Bench result summary"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "1261-1290",
+          "supports": "Readiness, source coverage, survivorship/degraded warnings"
+        }
+      ]
+    },
+    {
+      "route": "/alpha-zoo/compare",
+      "component": "AlphaZoo / CompareView",
+      "navigation": "Internal factor comparison route",
+      "major_user_operations": [
+        "Enter at least two alpha IDs, choose CSI300 or S&P500, period, and ranking metric; submit or reconnect the comparison job."
+      ],
+      "outputs_and_handoffs": [
+        "Winner, ranked metrics, skipped factors with reasons, and links back to factor detail."
+      ],
+      "external_or_market_limits": [
+        "BTC universe is explicitly disabled; readiness and data coverage gate whether evaluation can run."
+      ],
+      "ordinary_investor_placement": "Advanced factor evaluation only.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "1027-1165",
+          "supports": "Form, bounded markets, job status/readiness"
+        },
+        {
+          "file": "frontend/src/pages/AlphaZoo.tsx",
+          "lines": "1176-1257",
+          "supports": "Ranking, winner and skipped rows"
+        }
+      ]
+    },
+    {
+      "route": "/options",
+      "component": "OptionsLab",
+      "navigation": "Analysis",
+      "major_user_operations": [
+        "Choose a preset options strategy or edit call/put legs, strikes, quantities, premiums, spot/expiry/volatility and advanced pricing assumptions."
+      ],
+      "outputs_and_handoffs": [
+        "Entry cost, breakevens, max profit/loss, expiry payoff curve, Greeks, spot/IV scenario grid, limitations; optional collapsible chain has ticker/expiry selectors and refresh."
+      ],
+      "external_or_market_limits": [
+        "The payoff calculator is a scenario analysis, not an order page. The live chain section is explicitly US options; defaults to AAPL and requires its data API to return quotes."
+      ],
+      "ordinary_investor_placement": "Separate advanced derivatives page or hide from a stock-only default navigation.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/OptionsLab.tsx",
+          "lines": "58-103",
+          "supports": "Auto-calculated payoff request and retry behavior"
+        },
+        {
+          "file": "frontend/src/pages/OptionsLab.tsx",
+          "lines": "140-250",
+          "supports": "Metrics, charts, limitations and live US chain section"
+        },
+        {
+          "file": "frontend/src/components/options/StrategyBuilder.tsx",
+          "lines": "34-57",
+          "supports": "Add/update/remove legs and parameter changes"
+        },
+        {
+          "file": "frontend/src/components/options/StrategyBuilder.tsx",
+          "lines": "63-177",
+          "supports": "Presets and editable option legs"
+        },
+        {
+          "file": "frontend/src/components/options/OptionsChainTable.tsx",
+          "lines": "14-14",
+          "supports": "AAPL default underlying"
+        },
+        {
+          "file": "frontend/src/components/options/OptionsChainTable.tsx",
+          "lines": "139-245",
+          "supports": "Fetch chain, choose expiry, view quote/Greeks and refresh"
+        }
+      ]
+    },
+    {
+      "route": "/correlation",
+      "component": "Correlation",
+      "navigation": "Analysis",
+      "major_user_operations": [
+        "Enter 2-20 asset codes; choose 30/60/90/180/365 days, Pearson/Spearman, optionally show regime timeline, and compute."
+      ],
+      "outputs_and_handoffs": [
+        "Correlation heatmap, optional regime timeline, coverage dates/count, used/missing assets and per-source failure diagnostics."
+      ],
+      "external_or_market_limits": [
+        "Needs market history for the requested assets; missing coverage is exposed instead of concealed. Results and controls are stored in the current browser session state."
+      ],
+      "ordinary_investor_placement": "Keep under portfolio/risk analysis; optionally summarize only when the user has a multi-asset portfolio.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Correlation.tsx",
+          "lines": "9-64",
+          "supports": "Windows, 2-20-symbol bound, method, request and cancellation"
+        },
+        {
+          "file": "frontend/src/pages/Correlation.tsx",
+          "lines": "75-168",
+          "supports": "User controls and submission"
+        },
+        {
+          "file": "frontend/src/pages/Correlation.tsx",
+          "lines": "177-192",
+          "supports": "Coverage/missing diagnostics and visual outputs"
+        }
+      ]
+    },
+    {
+      "route": "/scheduled",
+      "component": "Scheduled",
+      "navigation": "Automation",
+      "major_user_operations": [
+        "Create/edit/delete a recurring research prompt; choose simple time + weekday/every-day cadence or advanced cron, timezone, delivery channel/target, and email HTML/PDF/protected PDF options."
+      ],
+      "outputs_and_handoffs": [
+        "Next run, end time, status, last error, delivery target/status, and stored run verdict/history."
+      ],
+      "external_or_market_limits": [
+        "Non-in-app delivery only offers channels that are configured, enabled, and available; timezone affects execution; protected PDF needs the configured password. Running or sending jobs cannot be edited."
+      ],
+      "ordinary_investor_placement": "Keep optional scheduling in its own page. A small next-run indicator can appear in a main dashboard when a schedule exists.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Scheduled.tsx",
+          "lines": "136-192",
+          "supports": "Loads schedules and channel runtime/config"
+        },
+        {
+          "file": "frontend/src/pages/Scheduled.tsx",
+          "lines": "420-529",
+          "supports": "Prompt, cadence and timezone form"
+        },
+        {
+          "file": "frontend/src/pages/Scheduled.tsx",
+          "lines": "531-663",
+          "supports": "Available delivery channels/targets and email formats"
+        },
+        {
+          "file": "frontend/src/pages/Scheduled.tsx",
+          "lines": "704-850",
+          "supports": "Schedule status/next run/verdict and edit/delete"
+        }
+      ]
+    },
+    {
+      "route": "/runtime",
+      "component": "Runtime",
+      "navigation": "Automation / operator view",
+      "major_user_operations": [
+        "Refresh live runner/connector status; verify an SDK connector; view authorization, runner heartbeat, mandate expiry/limits, risk/halt state, and edit per-runner intervals/daily turns/tokens/cost caps."
+      ],
+      "outputs_and_handoffs": [
+        "Broker runtime cards, global halt state, authorized-profile count, active runner count, connector diagnostics, budget usage/projection."
+      ],
+      "external_or_market_limits": [
+        "Requires broker connector setup/credentials and installed SDK or OAuth. Capabilities differ by connector; this page shows read-only-compatible profiles, and running budgets are locked while a runner is active."
+      ],
+      "ordinary_investor_placement": "Hide behind connection/automation settings; this is operational state and budget control, not a day-to-day investing dashboard.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Runtime.tsx",
+          "lines": "22-82",
+          "supports": "15-second status polling and refresh"
+        },
+        {
+          "file": "frontend/src/pages/Runtime.tsx",
+          "lines": "87-179",
+          "supports": "Global halt, broker, authorization, runner summaries"
+        },
+        {
+          "file": "frontend/src/pages/Runtime.tsx",
+          "lines": "247-299",
+          "supports": "Broker status, mandate/risk and runner budget panel"
+        },
+        {
+          "file": "frontend/src/pages/Runtime.tsx",
+          "lines": "302-369",
+          "supports": "SDK verification and connector diagnostics"
+        },
+        {
+          "file": "frontend/src/components/chat/RunnerBudgetControls.tsx",
+          "lines": "5-66",
+          "supports": "Operator-owned execution budget limits and save"
+        }
+      ]
+    },
+    {
+      "route": "/pixel-office",
+      "component": "PixelOffice",
+      "navigation": "Automation",
+      "major_user_operations": [
+        "View agent workload; create tasks with title/instructions/priority; assign/reassign; enter completion result; change agent rank."
+      ],
+      "outputs_and_handoffs": [
+        "Internal task board, assignees, workload counts, priorities/status, task results, role ranks."
+      ],
+      "external_or_market_limits": [
+        "Uses the native Pixel Office task/agent service; task management does not itself create a portfolio or research result."
+      ],
+      "ordinary_investor_placement": "Hide from the normal investor workspace; it is an internal agent administration view.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/PixelOffice.tsx",
+          "lines": "6-42",
+          "supports": "Refresh, create, assignment/completion/rank mutations"
+        },
+        {
+          "file": "frontend/src/pages/PixelOffice.tsx",
+          "lines": "56-118",
+          "supports": "Agent floor, task board, task creator, rank editor"
+        }
+      ]
+    },
+    {
+      "route": "/settings",
+      "component": "Settings",
+      "navigation": "Automation / settings",
+      "major_user_operations": [
+        "Configure LLM provider/model/base URL/key, generation parameters/reasoning effort; test/save custom providers; configure QVeris and channels; manage data-source tokens and source priority; set local API access key outside desktop."
+      ],
+      "outputs_and_handoffs": [
+        "Global model/data-source/channel/provider configuration and visible configured/unavailable status."
+      ],
+      "external_or_market_limits": [
+        "Model requests need a usable provider/auth route. Tushare covers China A-share/futures/fund/macro data; without it UI describes AKShare fallback where supported. Gildata is optional. Local API key is stored in browser outside desktop; connector credentials are separate in OS vault."
+      ],
+      "ordinary_investor_placement": "Keep in settings only; do not mix provider keys or data-source setup into routine stock research screens.",
+      "evidence": [
+        {
+          "file": "frontend/src/pages/Settings.tsx",
+          "lines": "41-113",
+          "supports": "Loads global LLM and data source settings"
+        },
+        {
+          "file": "frontend/src/pages/Settings.tsx",
+          "lines": "299-390",
+          "supports": "Local API access, QVeris, channel setup"
+        },
+        {
+          "file": "frontend/src/pages/Settings.tsx",
+          "lines": "398-610",
+          "supports": "Provider/model/auth/generation configuration"
+        },
+        {
+          "file": "frontend/src/pages/Settings.tsx",
+          "lines": "612-729",
+          "supports": "Tushare/Gildata, Baostock readiness, source priority"
+        },
+        {
+          "file": "frontend/src/components/settings/CustomProviderManager.tsx",
+          "lines": "20-103",
+          "supports": "Test, save and activate custom provider profiles"
+        }
+      ]
+    }
+  ],
+  "cross_page_findings": [
+    {
+      "area": "Skills, memory, research hypotheses and self-learning",
+      "frontend_surface": "No dedicated route or sidebar item. Tool operations appear in chat progress labels and can be requested through natural language; there is no structured skill library/memory review page in this frontend route set.",
+      "existing_chat_actions_evidenced": [
+        "load_skill",
+        "save_skill",
+        "patch_skill",
+        "delete_skill",
+        "skill_file",
+        "remember",
+        "create_hypothesis",
+        "search_hypotheses",
+        "link_backtest"
+      ],
+      "product_read": "Retain as chat/tool capabilities only unless a user-facing skill or learning workflow is separately specified. Do not infer a standalone self-learning dashboard from these operation labels.",
+      "evidence": [
+        {
+          "file": "frontend/src/router.tsx",
+          "lines": "57-80",
+          "supports": "Complete frontend route table has no skills/memory/self-learning route"
+        },
+        {
+          "file": "frontend/src/components/layout/navigation.ts",
+          "lines": "3-20",
+          "supports": "All sidebar navigation groups and items"
+        },
+        {
+          "file": "frontend/src/lib/tools.ts",
+          "lines": "6-36",
+          "supports": "Chat tool labels include load_skill and finance operations"
+        },
+        {
+          "file": "frontend/src/i18n/locales/zh-CN.json",
+          "lines": "1997-2055",
+          "supports": "Visible tool labels for hypothesis, skill CRUD/load, remember and related research operations"
+        },
+        {
+          "file": "frontend/src/components/chat/ToolProgressIndicator.tsx",
+          "lines": "150-180",
+          "supports": "Tool calls are rendered as chat progress rows"
+        }
+      ]
+    },
+    {
+      "area": "Agent natural-language investing actions",
+      "frontend_surface": "Prompt examples and chat tool calls, not separate tabs for every operation.",
+      "existing_actions_evidenced": [
+        "market data/screening/fundamentals/sector/news",
+        "factor/alpha analysis",
+        "hypotheses and linked backtests",
+        "financial rigor",
+        "trade journal/Shadow",
+        "connector/account/position/order/history/quote",
+        "options payoff and chain"
+      ],
+      "product_read": "Use chat as the unified task entry; dedicated pages are appropriate for persistent portfolio, reports, factor validation, options, correlation, and operations where the source already provides structured outputs.",
+      "evidence": [
+        {
+          "file": "frontend/src/components/chat/WelcomeScreen.tsx",
+          "lines": "18-218",
+          "supports": "Prompt libraries grouped by backtest, research, value investing, swarms, web/docs, journal, connectors and Shadow"
+        },
+        {
+          "file": "frontend/src/i18n/locales/zh-CN.json",
+          "lines": "1987-2064",
+          "supports": "Agent tool labels for market, fundamentals, screening, hypotheses, connectors, orders and related actions"
+        }
+      ]
+    }
+  ],
+  "route_coverage": {
+    "actual_router_path_count": 17,
+    "actual_paths": [
+      "/",
+      "/about",
+      "/agent",
+      "/pixel-office",
+      "/runtime",
+      "/scheduled",
+      "/reports",
+      "/portfolio",
+      "/settings",
+      "/runs/:runId",
+      "/compare",
+      "/correlation",
+      "/options",
+      "/alpha-zoo",
+      "/alpha-zoo/bench",
+      "/alpha-zoo/compare",
+      "/alpha-zoo/:alphaId"
+    ],
+    "inventory_rows": 16,
+    "alias_note": "/ and /agent are combined in one inventory row",
+    "page_component_count": 13,
+    "page_components": [
+      "Agent",
+      "AlphaZoo",
+      "Compare",
+      "Correlation",
+      "Home",
+      "OptionsLab",
+      "PixelOffice",
+      "Portfolio",
+      "Reports",
+      "RunDetail",
+      "Runtime",
+      "Scheduled",
+      "Settings"
+    ],
+    "sidebar_item_count": 10
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "reason": "Isolated native CLI startup failed because route registrars require the api_server module alias when launched as __main__.",
+  "files": [
+    {
+      "path": "agent/api_server.py",
+      "sha256": "0bc1555c9f09befe4764075e4613c4b0a090e78246976f1a948fd2e90c7e7203",
+      "replacements": [
+        {
+          "before": "import sys as _sys\n",
+          "after": "import sys as _sys\nif __name__ == \"__main__\":\n    _sys.modules[\"api_server\"] = _sys.modules[__name__]\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

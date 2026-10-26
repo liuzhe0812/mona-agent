@@ -21,6 +21,41 @@ function view(onChanged = vi.fn()) {
 }
 
 describe("official login lifecycle", () => {
+  it("recovers an initial status read failure with a read-only check", async () => {
+    api.loginStatus.mockRejectedValueOnce(new Error("status unavailable"));
+    view();
+    const retry = await screen.findByRole("button", { name: "重新检查" });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.getByRole("button", { name: "获取官方登录链接" })).toBeEnabled());
+    expect(api.loginStatus).toHaveBeenCalledTimes(2);
+    expect(api.login).not.toHaveBeenCalled();
+  });
+
+  it("keeps inline reauthentication read-only after a lost response and cancels the restored attempt", async () => {
+    api.login.mockRejectedValueOnce(new Error("lost response"));
+    const changed = vi.fn();
+    render(<DevelopmentLogin executor="codebuddy" disabled={false} authorizationRequired inline
+      actionLabel="重新认证" actionVariant="ghost" onChanged={changed} />);
+    const reauthenticate = screen.getByRole("button", { name: "重新认证" });
+    await waitFor(() => expect(reauthenticate).toBeEnabled());
+    fireEvent.click(reauthenticate);
+    fireEvent.click(reauthenticate);
+    expect(await screen.findByRole("alert")).toHaveTextContent("连接状态暂未确认，请重新检查。");
+    expect(api.login).toHaveBeenCalledTimes(1);
+    api.loginStatus.mockResolvedValue(waiting);
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    expect(await screen.findByText("等待浏览器认证…")).toBeInTheDocument();
+    expect(screen.queryByText(waiting.reason)).not.toBeInTheDocument();
+    const cancelled = { ...waiting, state: "cancelled", authUrl: "", reason: "本次认证已取消" } as NativeLoginStatus;
+    api.cancelLogin.mockImplementation(async () => { api.loginStatus.mockResolvedValue(cancelled); return cancelled; });
+    fireEvent.click(screen.getByRole("button", { name: "取消认证" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重新认证" })).toBeEnabled());
+    expect(api.cancelLogin).toHaveBeenCalledWith(undefined, "codebuddy", waiting.loginId);
+    expect(api.login).toHaveBeenCalledTimes(1);
+    expect(api.interrupt).not.toHaveBeenCalled();
+  });
+
   it("restores pending login from the host and unmounting does not cancel it", async () => {
     api.loginStatus.mockResolvedValue(waiting);
     const ui = view();

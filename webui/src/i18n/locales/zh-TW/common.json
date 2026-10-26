@@ -158,6 +158,7 @@
       "ariaLabel": "設定分區"
     },
     "nav": {
+      "account": "帳戶",
       "general": "一般",
       "resources": "進階功能",
       "byok": "BYOK",
@@ -245,6 +246,8 @@
       "localPreferences": "Local preferences",
       "webSearch": "Web search",
       "runtimeParameters": "執行參數",
+      "dateAndTime": "日期與時間",
+      "filesAndStorage": "檔案與儲存",
       "capabilities": "Capabilities"
     },
     "rows": {
@@ -273,7 +276,8 @@
       "codeWrap": "Keep long code lines readable on smaller screens.",
       "maxResults": "Results returned by each web_search call.",
       "timeout": "Seconds before a search provider request times out.",
-      "timezone": "IANA timezone used by runtime context and schedules.",
+      "timezone": "用於對話時間和排程任務，選擇後自動儲存。",
+      "workspacePath": "更改後自動儲存，重新啟動後使用新目錄。現有對話記錄會自動遷移。",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
     "values": {
@@ -296,6 +300,10 @@
     "status": {
       "loading": "正在載入設定...",
       "loadError": "無法載入設定",
+      "updateFailed": "無法更新設定",
+      "autoSaveFailed": "無法確認儲存結果，目前顯示上次確認的設定。請重試。",
+      "workspacePickerFailed": "無法開啟目錄選擇器，請重試。",
+      "savedRestartApply": "已儲存，可稍後重新啟動。",
       "unsaved": "有未儲存的變更。",
       "savedRestart": "已儲存。重新啟動 mona 後生效。"
     },
@@ -303,6 +311,8 @@
       "save": "儲存",
       "saving": "儲存中",
       "edit": "編輯",
+      "change": "更改",
+      "dismiss": "知道了",
       "cancel": "取消",
       "openDocs": "Open docs"
     },
@@ -473,10 +483,6 @@
     "computer_use": {
       "name": "電腦操作",
       "description": "會話：讓 Mona 代你點擊、輸入或操作其他桌面應用程式時使用"
-    },
-    "westock": {
-      "name": "股票資料支援",
-      "description": "股票：進行個股診斷、深度研究或選股時，用於補充公司、財務、公告和技術資料"
     }
     }
   },
@@ -941,6 +947,37 @@
     "agentActivityToolsOnly": "{{tools}} 次工具呼叫",
     "agentActivityLiveSummary": "進行中… · {{reasoning}} 步 · {{tools}} 次工具呼叫",
     "agentActivityLiveToolsOnly": "進行中… · {{tools}} 次工具呼叫",
+    "agentActivityElapsed": "已處理 {{seconds}}秒",
+    "agentActivityElapsedMinutes": "已處理 {{minutes}}分鐘 {{seconds}}秒",
+    "agentActivityDuration": "用時 {{minutes}}分鐘 {{seconds}}秒",
+    "agentActivityFinished": "處理完成",
+    "collapseProcess": "收起過程",
+    "expandProcess": "展開過程",
+    "activityFilesAndCommands": "編輯了檔案，執行了命令",
+    "activityCommands": "執行了命令",
+    "activityDetails": "處理過程",
+    "activityCommandRunning": "正在執行命令",
+    "activityCommandCompleted": "已執行命令",
+    "activityCommandFailed": "命令執行失敗",
+    "activityCommand": "執行命令",
+    "activityToolRunning": "正在使用工具",
+    "activityToolCompleted": "已使用工具",
+    "activityToolFailed": "工具執行失敗",
+    "activityTool": "使用工具",
+    "activityToolMany": "使用了 {{count}} 次工具",
+    "activityToolRunningMany": "正在使用工具（{{count}} 次）",
+    "activityFileEdited": "已編輯",
+    "activityFileEditing": "正在編輯",
+    "fileActivityPreparing": "正在準備編輯…",
+    "fileActivityFailedOne": "編輯失敗 {{file}}",
+    "fileActivityEditingOne": "正在編輯 {{file}}",
+    "fileActivityEditedOne": "已編輯 {{file}}",
+    "fileActivityFailedMany": "{{count}} 個檔案編輯失敗",
+    "fileActivityEditingMany": "正在編輯 {{count}} 個檔案",
+    "fileActivityEditedMany": "已編輯 {{count}} 個檔案",
+    "fileEditPreparing": "正在準備編輯檔案…",
+    "fileEditFailed": "失敗",
+    "fileEditApproximate": "估算",
     "imageAttachment": "圖片附件",
     "showAll": "顯示全部",
     "collapse": "收合",

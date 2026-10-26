@@ -188,8 +188,19 @@ class NativeWorkProvider(LLMProvider):
 
     def _update_usage(self, payload: dict) -> None:
         usage = payload.get("usage") or (payload.get("tokenUsage") or {}).get("total") or {}
+        prompt_tokens = None
+        if "inputTokens" in usage:
+            prompt_tokens = usage["inputTokens"]
+        elif any(name in usage for name in (
+            "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+        )):
+            prompt_tokens = sum(
+                usage.get(name, 0) or 0
+                for name in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            )
+        if isinstance(prompt_tokens, int) and prompt_tokens >= 0:
+            self._usage["prompt_tokens"] = prompt_tokens
         for name, aliases in {
-            "prompt_tokens": ("inputTokens", "input_tokens"),
             "completion_tokens": ("outputTokens", "output_tokens"),
             "cached_tokens": ("cachedInputTokens", "cache_read_input_tokens"),
         }.items():
@@ -278,6 +289,8 @@ class NativeWorkProvider(LLMProvider):
                 code = payload.get("errorCode") or "native_turn_failed"
                 raise RpcError(code, _ERROR_MESSAGES.get(code, "模型响应未完成，请核对会话结果后重试或选择其他模型。"))
             elif event.type in {"run.unknown", "run.interrupted", "policy.violation"}:
+                logger.warning("Work native turn incomplete for {}: event={}, reason={}",
+                               self.executor.value, event.type, payload.get("reason"))
                 raise RpcError("native_turn_incomplete", "模型响应未完成，请核对会话后重试。", outcome_unknown=True)
 
     async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7,

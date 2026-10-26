@@ -112,7 +112,7 @@ def _sha256(path: Path) -> str:
 @tool_parameters(
     tool_parameters_schema(
         action=StringSchema(
-            "Operation: list | open | inspect | apply | save | export | close. close only when the user asks to close; never use it as edit/error recovery.",
+            "Operation: list | open | inspect | apply | save | export | close. For apply, provide both expected_version and operations. close only when the user asks to close; never use it as edit/error recovery.",
             enum=[
                 "list",
                 "open",
@@ -171,32 +171,7 @@ def _sha256(path: Path) -> str:
                 ),
                 "includeData": BooleanSchema(description="For slides, false returns chart text style without categories and series; default true"),
                 "presetId": StringSchema("For visual: render this preset in an isolated copy; does not change or review the live deck", nullable=True),
-                "templateId": StringSchema("For capabilities: inspect actual Dashi text fields; for visual: preview this template in an isolated copy", nullable=True),
-                "templateFields": ObjectSchema({}, description="Registered Dashi template text fields for visual preview", additional_properties=True),
-                "presetContent": ObjectSchema({}, description="Real preset content for capacity matching or visual preview; image.assetPath uses the workspace", additional_properties=True),
-                "presetRole": StringSchema("For capabilities: optional preset role filter", nullable=True),
-                "presetRelation": StringSchema(
-                    "For capabilities: optional preset relation filter",
-                    enum=["none", "parallel", "sequence", "hierarchy", "matrix", "cycle", "network"],
-                    nullable=True,
-                ),
-                "usedPresetIds": ArraySchema(
-                    StringSchema("Previously used preset ID"),
-                    description="For capabilities: preset IDs already used in this deck, up to 100",
-                    max_items=100,
-                ),
-                "presetLimit": IntegerSchema(
-                    description="For capabilities: maximum matching presets to return",
-                    minimum=1,
-                    maximum=5,
-                ),
-                "presetContentRef": StringSchema(
-                    "For capabilities or visual: reference to previously registered preset content",
-                    nullable=True,
-                ),
-                "presetFamily": StringSchema("For capabilities: optional preset family filter", nullable=True),
-                "presetTheme": StringSchema("For capabilities: dark-product or light-editorial", nullable=True),
-                "presetScenario": StringSchema("For capabilities: scenario ID from presetScenarios; filters templates by presentation purpose", nullable=True),
+                "presetContent": ObjectSchema({}, description="For visual: content of an explicitly selected preset; image.assetPath uses the workspace", additional_properties=True),
                 "slideIds": ArraySchema(
                     StringSchema("Stable slide ID"),
                     description="Slides to inspect, up to 50",
@@ -257,20 +232,32 @@ def _sha256(path: Path) -> str:
             nullable=True,
         ),
         expected_version=ObjectSchema(
-            {},
-            description="Version returned by the latest inspect: editorEpoch and modelRevision",
-            additional_properties=True,
+            {
+                "editorEpoch": StringSchema("Copy the editorEpoch from the latest Office result", min_length=1),
+                "modelRevision": IntegerSchema(description="Copy the modelRevision from the latest Office result", minimum=0),
+            },
+            required=["editorEpoch", "modelRevision"],
+            description="Required for apply. Copy the complete version from the latest open, inspect or apply result; do not guess or reset it.",
+            additional_properties=False,
             nullable=True,
         ),
         operations=ArraySchema(
-            ObjectSchema({}, additional_properties=True),
+            ObjectSchema(
+                {
+                    "op": StringSchema("Exact operation name from the Office Skill or capabilities", min_length=1),
+                    "payload": ObjectSchema({}, description="Parameters for this operation; inspect capabilities for unknown fields", additional_properties=True),
+                },
+                required=["op", "payload"],
+                additional_properties=False,
+            ),
             description=(
                 "Atomic operations, up to 50 per apply. Use the relevant Office Skill for known "
                 "fields; inspect capabilities with operations when a field schema is unknown. "
                 "Use selection and slides inspection for stable target IDs. For slide_add_image, "
-                "slide_compose image items and slide_add_preset content.image/content.images items, assetPath "
+                "slide_compose or slide_add.content image items and slide_add_preset content.image/content.images items, assetPath "
                 "may reference an image in the current workspace; the tool converts it to dataUrl. Detailed examples are "
-                "in the specialist Skill references."
+                "in the specialist Skill references. slide_add can include content using slide_compose fields "
+                "to insert and populate a new page in one apply; its slideId anchors the insertion, not the new content."
             ),
             max_items=_MAX_BATCH_ITEMS,
             nullable=True,
@@ -436,24 +423,14 @@ class OfficeTool(Tool, ContextAware):
                 continue
 
             copied_payload = dict(payload)
-            if operation.get("op") == "slide_add_template":
-                from mona.office.ppt_templates import prepare_ppt_template_assets
-
-                copied_payload["templateAssets"] = prepare_ppt_template_assets(
-                    payload.get("templateId")
-                )
-            elif operation.get("op") == "slide_add_image" and "assetId" in payload:
-                from mona.office.ppt_assets import get_ppt_asset_data_url
-
-                if "assetPath" in payload or "dataUrl" in payload:
-                    raise ValueError("Choose one of assetId, assetPath or dataUrl")
-                copied_payload["dataUrl"] = get_ppt_asset_data_url(payload["assetId"])
-                copied_payload.pop("assetId", None)
-            elif operation.get("op") == "slide_add_image" and "assetPath" in payload:
+            if operation.get("op") == "slide_add_image" and "assetPath" in payload:
                 copied_payload["dataUrl"] = _asset_data_url(payload["assetPath"], workspace)
                 copied_payload.pop("assetPath", None)
-            elif operation.get("op") == "slide_compose":
-                items = payload.get("items")
+            elif operation.get("op") == "slide_compose" or (
+                operation.get("op") == "slide_add" and isinstance(payload.get("content"), dict)
+            ):
+                content = payload if operation.get("op") == "slide_compose" else payload["content"]
+                items = content.get("items")
                 if isinstance(items, list):
                     copied_items: list[object] = []
                     for item in items:
@@ -470,7 +447,10 @@ class OfficeTool(Tool, ContextAware):
                             copied_items.append(copied_item)
                         else:
                             copied_items.append(item)
-                    copied_payload["items"] = copied_items
+                    if operation.get("op") == "slide_compose":
+                        copied_payload["items"] = copied_items
+                    else:
+                        copied_payload["content"] = {**content, "items": copied_items}
             elif operation.get("op") in {"slide_add_preset", "slide_add_design"}:
                 content = payload.get("content")
                 if isinstance(content, dict):
@@ -843,13 +823,6 @@ class OfficeTool(Tool, ContextAware):
         if action == "inspect":
             if query is None:
                 return "Error: 'query' is required for 'inspect'"
-            if query.get("mode") == "visual" and query.get("templateId"):
-                from mona.office.ppt_templates import prepare_ppt_template_assets
-
-                query = {
-                    **query,
-                    "templateAssets": prepare_ppt_template_assets(query["templateId"]),
-                }
             if isinstance(query.get("presetContent"), dict):
                 prepared = self._prepare_slide_assets([{
                     "op": "slide_add_preset", "payload": {"content": query["presetContent"]},

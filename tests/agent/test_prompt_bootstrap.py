@@ -1,11 +1,11 @@
 """Upgrade unchanged shipped bootstrap instructions without changing user files."""
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from mona.agent.context import ContextBuilder
+from mona.agent.memory import MemoryStore
 from mona.utils.prompt_templates import current_bootstrap_content
 
 # Shipped templates: AGENTS at dcfd9691, SOUL at 9eef6e8f.
@@ -64,13 +64,18 @@ def test_legacy_bootstrap_uses_current_prompt_without_overwriting_file(tmp_path,
     source.write_text(legacy, encoding="utf-8-sig")
     before = source.read_bytes()
     builder = object.__new__(ContextBuilder)
-    builder.memory = SimpleNamespace(memory_dir=tmp_path)
+    builder.memory = MemoryStore(tmp_path)
+    builder.memory.soul_file = tmp_path / "SOUL.md"
+    builder.memory.agents_file = tmp_path / "AGENTS.md"
     builder.agent_id = "mona"
 
     result = builder._load_bootstrap_files()
 
     current = Path(__file__).resolve().parents[2] / "mona" / "templates" / name
-    assert current.read_text(encoding="utf-8") in result
+    if name == "SOUL.md":
+        assert current.read_text(encoding="utf-8") in result
+    else:
+        assert result == ""
     assert "`cron` tool" not in result
     assert "wait for user confirmation" not in result
     assert source.read_bytes() == before

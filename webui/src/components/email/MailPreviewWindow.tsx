@@ -45,6 +45,22 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function attachmentErrorHint(error: unknown): string {
+  const message = String(error);
+  if (message.includes("附件未完整缓存在本地")) {
+    return "附件尚未完整保存在本地，邮件服务未就绪。请启动邮件服务或同步邮件后重试。";
+  }
+  if (message.includes("本地邮件缓存中未找到该附件")) {
+    return "本地邮件缓存中没有该附件，请重新同步邮件后重试。";
+  }
+  return "请检查邮件是否已完整收取或网络连接是否正常，然后重试。";
+}
+
+function showAttachmentError(action: string, error: unknown): void {
+  console.warn(`${action}附件失败`);
+  window.alert(`${action}附件失败。${attachmentErrorHint(error)}`);
+}
+
 export function formatPreviewDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -154,7 +170,7 @@ export function MailPreviewWindow() {
             toAddresses: body.header?.toAddresses ?? "",
             ccAddresses: body.header?.ccAddresses ?? "",
             date: body.header?.date ?? "",
-            hasAttachments: (body.attachments?.length ?? 0) > 0,
+            hasAttachments: body.attachments?.some((attachment) => !attachment.isInline) ?? false,
             isRead: true,
             isStarred: false,
             rawSize: 0,
@@ -200,7 +216,14 @@ export function MailPreviewWindow() {
   };
 
   const handleOpenAttachment = async (att: EmailAttachment) => {
-    if (!gatewayUrl || !isTauri() || !account || !message) return;
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中打开附件。");
+      return;
+    }
+    if (!account || !message) {
+      window.alert("邮箱账号尚未准备好，请稍后重试。");
+      return;
+    }
     setDownloadingAtt(att.filename);
     try {
       const tmp = await tempDir();
@@ -213,32 +236,41 @@ export function MailPreviewWindow() {
         message.uid,
         att.filename,
         filePath,
+        att.contentId ?? undefined,
       );
       await openPathWithSystemApp(filePath);
     } catch (e) {
-      console.error("打开附件失败:", e);
+      showAttachmentError("打开", e);
     } finally {
       setDownloadingAtt(null);
     }
   };
 
-  const handleDownloadAttachment = async (filename: string) => {
-    if (!gatewayUrl || !account || !message) return;
-    setDownloadingAtt(filename);
+  const handleDownloadAttachment = async (att: EmailAttachment) => {
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中下载附件。");
+      return;
+    }
+    if (!account || !message) {
+      window.alert("邮箱账号尚未准备好，请稍后重试。");
+      return;
+    }
+    setDownloadingAtt(att.filename);
     try {
-      const savePath = await save({ defaultPath: filename });
+      const savePath = await save({ defaultPath: att.filename });
       if (savePath) {
         await downloadAttachmentToFile(
           gatewayUrl,
           account,
           message.folder,
           message.uid,
-          filename,
+          att.filename,
           savePath,
+          att.contentId ?? undefined,
         );
       }
     } catch (e) {
-      console.error("下载附件失败:", e);
+      showAttachmentError("下载", e);
     } finally {
       setDownloadingAtt(null);
     }
@@ -288,8 +320,8 @@ export function MailPreviewWindow() {
   }
 
   const fromName = message.fromName?.trim() || message.fromAddress;
-  const attachments = message.attachments ?? [];
-  const attachmentsReady = Boolean(account && gatewayUrl);
+  const attachments = message.attachments?.filter((attachment) => !attachment.isInline) ?? [];
+  const attachmentsReady = Boolean(account && isTauri());
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -326,7 +358,7 @@ export function MailPreviewWindow() {
                         className="group flex w-[220px] cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors hover:bg-muted/60"
                         onDoubleClick={() => void handleOpenAttachment(att)}
                         aria-disabled={!attachmentsReady}
-                        title={attachmentsReady ? "双击打开" : "正在准备附件..."}
+                        title={attachmentsReady ? "双击打开" : "邮箱账号尚未准备好"}
                       >
                         {downloadingAtt === att.filename ? (
                           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -349,7 +381,7 @@ export function MailPreviewWindow() {
                         <ExternalLink className="mr-2 h-3.5 w-3.5" />
                         打开
                       </ContextMenuItem>
-                      <ContextMenuItem disabled={!attachmentsReady} onClick={() => void handleDownloadAttachment(att.filename)}>
+                      <ContextMenuItem disabled={!attachmentsReady} onClick={() => void handleDownloadAttachment(att)}>
                         <Download className="mr-2 h-3.5 w-3.5" />
                         另存为...
                       </ContextMenuItem>

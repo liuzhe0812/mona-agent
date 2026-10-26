@@ -31,6 +31,8 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const [syncPlanning, setSyncPlanning] = useState(false);
   const [syncNotes, setSyncNotes] = useState(false);
   const [syncPreferences, setSyncPreferences] = useState(false);
+  const [syncOperations, setSyncOperations] = useState(false);
+  const [syncOperationsCredentials, setSyncOperationsCredentials] = useState(false);
   const [showManagement, setShowManagement] = useState(false);
   const generation = useRef(0);
   const mutation = useRef(false);
@@ -47,7 +49,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
       if (alive.current && generation.current === revision) setState(value);
     } catch (cause) {
       if (alive.current && generation.current === revision && !(cause instanceof Error && cause.name === "AbortError")) {
-        setState({ available: false, enabled: false, phase: "error", problem: { code: "unavailable", message: message(cause) } });
+        setState({ available: false, enabled: false, upload_enabled: false, phase: "error", problem: { code: "unavailable", message: message(cause) } });
       }
     } finally {
       if (alive.current && generation.current === revision) setLoading(false);
@@ -85,7 +87,10 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     setSyncPlanning(state?.space ? state.sync_planning === true : false);
     setSyncNotes(state?.space ? state.sync_notes === true : false);
     setSyncPreferences(state?.space ? state.sync_preferences === true : false);
+    setSyncOperations(state?.space ? state.sync_operations === true : false);
+    setSyncOperationsCredentials(state?.space ? state.sync_operations === true && state.sync_operations_credentials === true : false);
   });
+  const openSetup = () => { setView("setup"); setDraft(null); setRecovery(""); };
   const openScope = () => {
     if (!state) return;
     setKeys(state.selected_keys ?? []);
@@ -94,6 +99,8 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     setSyncPlanning(state.sync_planning === true);
     setSyncNotes(state.sync_notes === true);
     setSyncPreferences(state.sync_preferences === true);
+    setSyncOperations(state.sync_operations === true);
+    setSyncOperationsCredentials(state.sync_operations === true && state.sync_operations_credentials === true);
     setView("scope");
   };
   const candidates = draft?.candidates ?? state?.candidates ?? [];
@@ -106,8 +113,12 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const hasFileIssues = blockedKeys.length > 0
     || (state?.blocked_keys === undefined && state?.problem?.code === "associated_file_unavailable");
   const space = state?.space;
+  const uploadEnabled = state?.upload_enabled === true;
   const occupied = space ? space.used_bytes + space.reserved_bytes : 0;
   const hasHistory = !!state?.conversations?.some((item) => item.version > 0);
+  const statusLabel = loading ? "正在读取云空间…" : !state?.available ? state?.problem?.message : state.enabled
+    ? state.phase !== "idle" ? phases[state.phase] ?? "等待同步" : state.last_sync ? "已同步" : "等待首次同步"
+    : space ? "云端内容接收已暂停" : "未开启同步";
 
   return <section aria-label="云同步">
     <div className="mb-2 flex items-center justify-between gap-3 px-1">
@@ -120,17 +131,16 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-body font-medium"><Cloud className="h-4 w-4" />个人云空间</div>
-          <p className="mt-1 text-caption text-muted-foreground">
-            {loading ? "正在读取云空间…" : !state?.available ? state?.problem?.message : state.enabled
-              ? (state.phase !== "idle" ? phases[state.phase] ?? "等待同步" : state.last_sync ? "已同步" : "等待首次同步") : "未开启同步"}
-          </p>
+          <p className="mt-1 text-caption text-muted-foreground">{statusLabel}</p>
+          {state?.available && state.enabled && !uploadEnabled && <p className="mt-0.5 text-caption text-muted-foreground">自动接收已开启；上传本机资料需单独确认。</p>}
         </div>
         {!loading && state?.available && (state.plan === "free" && !state.space
           ? <Button size="sm" variant="outline" onClick={onUpgrade}>查看 Pro</Button>
-          : <TooltipButton size="xs" variant="ghost" title={state.enabled ? "暂停本机同步，保留本地和云端资料" : "选择内容并开启云同步"} aria-label={state.enabled ? "暂停同步" : "开启同步"} disabled={busy} onClick={() => {
+          : <TooltipButton size="xs" variant="ghost" title={state.enabled ? "暂停接收云端内容，保留本机和云端资料" : space ? "恢复接收云端内容，并保留已授权的上传范围" : "选择要上传的本机资料并开启云同步"} aria-label={state.enabled ? "暂停同步" : space ? "恢复同步" : "开启同步"} disabled={busy} onClick={() => {
             if (state.enabled) void operate(async () => { const result = await cloudSyncApi.pause(); if (result.enabled !== false) throw new Error("暂停结果尚未确认。"); await refresh(); });
-            else { setView("setup"); setDraft(null); setRecovery(""); }
-          }}>{state.enabled ? "暂停同步" : "开启同步"}</TooltipButton>)}
+            else if (space) void operate(async () => { const result = await cloudSyncApi.resume(); if (result.enabled !== true) throw new Error("恢复结果尚未确认。"); await refresh(); });
+            else openSetup();
+          }}>{state.enabled ? "暂停同步" : space ? "恢复同步" : "开启同步"}</TooltipButton>)}
       </div>
       {space && <div className="mt-4">
         <div className="mb-1.5 flex justify-between text-caption text-muted-foreground"><span>空间使用</span><span>{size(space.used_bytes)} / {size(space.quota_bytes)}</span></div>
@@ -139,20 +149,22 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         </div>
         {space.reserved_bytes > 0 && <p className="mt-1.5 text-caption text-muted-foreground">上传预留 {size(space.reserved_bytes)}</p>}
       </div>}
-      {state?.available && <p className="mt-3 text-caption text-muted-foreground">同步工作会话及关联文件，可选笔记、日程与待办；不包含开发会话、项目目录和 AI 自动任务。</p>}
+      {state?.available && <p className="mt-3 text-caption text-muted-foreground">可在本机接收云端已有内容。上传本机工作会话、笔记、日程和偏好需单独确认；不包含开发会话、项目目录和 AI 自动任务。</p>}
       {state?.available && (state.enabled || space || hasHistory) && <div role="group" aria-label="云同步操作" className="mt-3 flex items-center gap-1 overflow-x-auto">
         {state.enabled && <>
-        <TooltipButton size="xs" title="立即检查并同步已选内容" aria-label="立即同步" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
+        <TooltipButton size="xs" title={uploadEnabled ? "检查云端更新并上传已授权内容" : "立即检查并接收云端更新"} aria-label="立即同步" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
           const result = await cloudSyncApi.sync(); if (!result.scheduled) throw new Error("同步请求尚未确认。"); await refresh();
         })}>{state.phase === "syncing" && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}立即同步</TooltipButton>
-        <TooltipButton size="xs" variant="ghost" title="选择要同步的会话、笔记、日程和偏好" aria-label="同步范围" disabled={busy} onClick={openScope}>同步范围</TooltipButton>
+        {uploadEnabled && <TooltipButton size="xs" variant="ghost" title="选择要上传的本机资料；不影响接收云端已有内容" aria-label="上传范围" disabled={busy} onClick={openScope}>上传范围</TooltipButton>}
         </>}
+        {space && state.needs_key && <TooltipButton size="xs" variant="ghost" title="导入旧空间密钥并确认本机上传范围" aria-label="迁移旧云空间" disabled={busy} onClick={openSetup}>迁移旧云空间</TooltipButton>}
+        {space && !uploadEnabled && !state.needs_key && <TooltipButton size="xs" variant="ghost" title="选择要上传的本机资料并明确确认" aria-label="上传本机资料" disabled={busy} onClick={openSetup}>上传本机资料</TooltipButton>}
         {space && <CloudTrashDialog disabled={busy} onChanged={() => void refresh()} />}
         {hasHistory && <CloudHistoryDialog conversations={state.conversations ?? []} candidates={state.candidates ?? []} onRestored={() => void refresh()} />}
         {space && <TooltipButton size="xs" variant="ghost" title="展开历史版本和未使用文件的清理操作" aria-label="空间管理" aria-expanded={showManagement} aria-controls="cloud-space-management" onClick={() => setShowManagement((value) => !value)}>
           空间管理<ChevronDown className={`ml-1.5 h-3.5 w-3.5 ${showManagement ? "rotate-180" : ""}`} />
         </TooltipButton>}
-        {state.enabled && hasFileIssues && <TooltipButton size="xs" variant="ghost" className="text-muted-foreground" title="部分关联文件缺失或过大，查看会话并调整同步范围" aria-label="查看待处理会话" disabled={busy} onClick={openScope}>
+        {state.enabled && uploadEnabled && hasFileIssues && <TooltipButton size="xs" variant="ghost" className="text-muted-foreground" title="部分关联文件缺失或过大，查看会话并调整上传范围" aria-label="查看待处理会话" disabled={busy} onClick={openScope}>
           <Info className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />{blockedKeys.length ? `${blockedKeys.length} 个会话待处理` : "部分会话待处理"}
         </TooltipButton>}
       </div>}
@@ -165,38 +177,52 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     </div>
     <Dialog open={view !== null} onOpenChange={(open) => { if (!open) close(); }}>
       <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
-        <DialogHeader><DialogTitle>{view === "scope" ? "同步范围" : "开启云同步"}</DialogTitle>
-          <DialogDescription>文件加密后上传，密钥由账号服务加密保管。同一账号可自动取得密钥并恢复所选内容。取消选择不会删除本地资料或已有云版本。</DialogDescription>
+        <DialogHeader><DialogTitle>{view === "scope" ? "上传本机资料范围" : space ? "上传本机资料" : "开启云同步"}</DialogTitle>
+          <DialogDescription>{view === "scope" ? "以下选择只决定本机资料上传范围，不影响接收云端已有内容。保存范围不会删除本地资料或已有云版本。" : "选择要从本机上传的资料并明确确认；接收云端已有内容不受这些选项影响。文件加密后上传，密钥由账号服务加密保管。"}</DialogDescription>
         </DialogHeader>
         {view === "setup" && !draft && <>
           {state?.needs_key && <>
             <p className="text-caption text-muted-foreground">此空间使用旧密钥。可在原设备开启账号自动恢复，或在这里输入旧密钥完成一次迁移。</p>
             <Input type="password" autoComplete="off" aria-label="旧云空间恢复密钥" placeholder="输入旧密钥，仅迁移时需要" value={recovery} onChange={(event) => setRecovery(event.target.value)} disabled={busy} />
           </>}
-          <Button disabled={busy || !!state?.needs_key && !recovery.trim()} onClick={() => void prepare()}>{busy ? "正在核对…" : state?.needs_key ? "迁移旧云空间" : "选择同步内容"}</Button>
+          <Button disabled={busy || !!state?.needs_key && !recovery.trim()} onClick={() => void prepare()}>{busy ? "正在核对…" : state?.needs_key ? "迁移旧云空间" : "选择要上传的内容"}</Button>
         </>}
         {(draft || view === "scope") && <div className="space-y-2">
           <label className="flex items-center gap-2 pb-2 text-caption">
             <Checkbox checked={syncNew} disabled={busy} onCheckedChange={(value) => setSyncNew(value === true)} />
-            自动同步此后新建的工作会话
+            上传此后新建的工作会话
           </label>
           <label className="flex items-center gap-2 pb-2 text-caption">
             <Checkbox checked={syncPlanning} disabled={busy} onCheckedChange={(value) => setSyncPlanning(value === true)} />
-            同步现有及后续的日程与待办
+            上传本机现有及后续的日程与待办
           </label>
           <label className="flex items-center gap-2 pb-2 text-caption">
             <Checkbox checked={syncNotes} disabled={busy} onCheckedChange={(value) => setSyncNotes(value === true)} />
-            同步本机笔记仓库及关联附件
+            上传本机笔记仓库及关联附件
           </label>
           <label className="flex items-center gap-2 pb-2 text-caption">
             <Checkbox checked={syncPreferences} disabled={busy} onCheckedChange={(value) => setSyncPreferences(value === true)} />
-            同步侧栏布局、默认页面、发送按键和快捷问答显示模式
+            上传本机侧栏布局、默认页面、发送按键和快捷问答显示模式
           </label>
+          <label className="flex items-center gap-2 pb-1 text-caption">
+            <Checkbox checked={syncOperations} disabled={busy} onCheckedChange={(value) => {
+              const enabled = value === true;
+              setSyncOperations(enabled);
+              if (!enabled) setSyncOperationsCredentials(false);
+            }} />
+            运维主机配置
+          </label>
+          <label className="ml-6 flex items-center gap-2 pb-1 text-caption text-muted-foreground">
+            <Checkbox checked={syncOperationsCredentials} disabled={busy || !syncOperations}
+              onCheckedChange={(value) => setSyncOperationsCredentials(value === true)} />
+            包含密码和 SSH 私钥
+          </label>
+          {syncOperations && <p className="ml-6 pb-2 text-caption text-muted-foreground">自动接收的凭据会安全保存，不会自动连接主机。</p>}
           {view === "scope" && scopeBlocked.size > 0 && <div className="space-y-1">
             <p className="text-caption text-muted-foreground">待处理会话已置顶。请恢复原附件后重试，或取消选择这些会话并保存范围；其他内容继续同步。</p>
             <Button variant="ghost" size="xs" disabled={busy || !keys.some((key) => scopeBlocked.has(key))} onClick={() => setKeys((current) => current.filter((key) => !scopeBlocked.has(key)))}>取消选择待处理会话</Button>
           </div>}
-          <div className="flex justify-between text-caption"><span>工作会话（{keys.length}）</span>
+          <div className="flex justify-between text-caption"><span>上传工作会话（{keys.length}）</span>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setKeys(keys.length === candidates.length ? [] : candidates.map((item) => item.key))}>{keys.length === candidates.length ? "取消全选" : "全选"}</Button></div>
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {orderedCandidates.map((item) => <label key={item.key} className="flex items-center gap-2 text-body">
@@ -211,11 +237,11 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         {error && <p className="text-caption text-destructive" role="alert">{error}</p>}
         <DialogFooter><Button variant="outline" disabled={busy} onClick={close}>取消</Button>
           {(draft || view === "scope") && <Button disabled={busy} onClick={() => void operate(async () => {
-            if (view === "scope") await cloudSyncApi.scope(keys, syncNew, syncPlanning, syncNotes, syncPreferences);
-            else if (draft) { const result = await cloudSyncApi.enable(draft.draft_id, keys, syncNew, syncPlanning, syncNotes, syncPreferences); if (!result.enabled) throw new Error("尚未确认开启同步。"); }
+            if (view === "scope") await cloudSyncApi.scope(keys, syncNew, syncPlanning, syncNotes, syncPreferences, syncOperations, syncOperationsCredentials);
+            else if (draft) { const result = await cloudSyncApi.enable(draft.draft_id, keys, syncNew, syncPlanning, syncNotes, syncPreferences, syncOperations, syncOperationsCredentials); if (!result.enabled) throw new Error("尚未确认开启同步。"); }
             if (!alive.current) return;
             setView(null); setDraft(null); setRecovery(""); await refresh();
-          })}>{busy ? "保存中…" : view === "scope" ? "保存范围" : "确认开启"}</Button>}
+          })}>{busy ? "保存中…" : view === "scope" ? "保存上传范围" : draft?.new_space ? "确认开启并上传" : "确认上传本机资料"}</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

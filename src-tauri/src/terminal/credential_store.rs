@@ -5,6 +5,7 @@ use log::{error, warn};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::terminal::config::AuthConfig;
 
@@ -14,6 +15,104 @@ const VAULT_FILENAME: &str = "credential-vault.json";
 const KEY_FILENAME: &str = "credential-key.bin";
 const DPAPI_SECRET_PREFIX: &str = "dpapi:";
 const VAULT_SECRET_PREFIX: &str = "vault:";
+const OPS_PASSWORD_PREFIX: &str = "__mona_ops_password__:";
+const OPS_PRIVATE_KEY_PREFIX: &str = "__mona_ops_private_key__:";
+const OPS_PASSPHRASE_PREFIX: &str = "__mona_ops_passphrase__:";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OpsSecretField {
+    Password,
+    PrivateKey,
+    Passphrase,
+}
+
+impl OpsSecretField {
+    fn marker_prefix(self) -> &'static str {
+        match self {
+            Self::Password => OPS_PASSWORD_PREFIX,
+            Self::PrivateKey => OPS_PRIVATE_KEY_PREFIX,
+            Self::Passphrase => OPS_PASSPHRASE_PREFIX,
+        }
+    }
+
+    fn name_prefix(self) -> &'static str {
+        match self {
+            Self::Password => "ops_pass_",
+            Self::PrivateKey => "ops_key_",
+            Self::Passphrase => "ops_phrase_",
+        }
+    }
+}
+
+pub fn new_ops_secret_marker(field: OpsSecretField) -> Result<(String, String), String> {
+    let mut random = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut random)
+        .map_err(|_| "Failed to generate credential reference".to_string())?;
+    let name = format!("{}{}", field.name_prefix(), hex::encode(random));
+    Ok((format!("{}{}", field.marker_prefix(), name), name))
+}
+
+pub fn ops_secret_name_from_marker(marker: &str, field: OpsSecretField) -> Option<&str> {
+    let name = marker.strip_prefix(field.marker_prefix())?;
+    let suffix = name.strip_prefix(field.name_prefix())?;
+    (suffix.len() == 64
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(name)
+}
+
+pub fn load_ops_private_key(marker: &str) -> Result<Option<String>, String> {
+    let Some(name) = ops_secret_name_from_marker(marker, OpsSecretField::PrivateKey) else {
+        if marker.starts_with(OPS_PRIVATE_KEY_PREFIX) {
+            return Err("Saved private key reference is invalid".into());
+        }
+        return Ok(None);
+    };
+    load_secret(name)?.map(Some).ok_or_else(|| "Saved private key not found".into())
+}
+
+pub fn auth_credentials_are_protected(auth: &AuthConfig) -> bool {
+    match auth {
+        AuthConfig::Password { password } => {
+            password.is_empty()
+                || password == ENCRYPTED_MARKER
+                || password == LEGACY_KEYRING_MARKER
+                || ops_secret_name_from_marker(password, OpsSecretField::Password).is_some()
+        }
+        AuthConfig::KeyFile {
+            key_path,
+            passphrase,
+        } => {
+            (!key_path.starts_with(OPS_PRIVATE_KEY_PREFIX)
+                || ops_secret_name_from_marker(key_path, OpsSecretField::PrivateKey).is_some())
+                && passphrase.as_ref().map_or(true, |value| {
+                    value.is_empty()
+                        || value == ENCRYPTED_MARKER
+                        || value == LEGACY_KEYRING_MARKER
+                        || ops_secret_name_from_marker(value, OpsSecretField::Passphrase).is_some()
+                })
+        }
+        AuthConfig::Agent => true,
+    }
+}
+
+pub fn secret_version(name: &str) -> Result<Option<String>, String> {
+    secret_version_at(&config_dir()?, name)
+}
+
+fn secret_version_at(
+    directory: &std::path::Path,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let path = secret_path_at(directory, name)?;
+    match fs::read(path) {
+        Ok(protected) => Ok(Some(hex::encode(Sha256::digest(protected)))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Failed to inspect protected secret: {}", error)),
+    }
+}
 
 fn config_dir() -> Result<PathBuf, String> {
     let config_dir =
@@ -27,11 +126,7 @@ fn vault_path() -> Result<PathBuf, String> {
     Ok(config_dir()?.join(VAULT_FILENAME))
 }
 
-fn key_path() -> Result<PathBuf, String> {
-    Ok(config_dir()?.join(KEY_FILENAME))
-}
-
-fn secret_path(name: &str) -> Result<PathBuf, String> {
+fn secret_path_at(directory: &std::path::Path, name: &str) -> Result<PathBuf, String> {
     if name.is_empty()
         || !name
             .bytes()
@@ -39,11 +134,16 @@ fn secret_path(name: &str) -> Result<PathBuf, String> {
     {
         return Err("Invalid secret name".to_string());
     }
-    Ok(config_dir()?.join(format!("secret-{}.bin", name)))
+    Ok(directory.join(format!("secret-{}.bin", name)))
 }
 
-fn get_or_create_key() -> Result<[u8; 32], String> {
-    let path = key_path()?;
+fn secret_path(name: &str) -> Result<PathBuf, String> {
+    secret_path_at(&config_dir()?, name)
+}
+
+fn get_or_create_key_at(directory: &std::path::Path) -> Result<[u8; 32], String> {
+    fs::create_dir_all(directory).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = directory.join(KEY_FILENAME);
 
     if path.exists() {
         match fs::read(&path) {
@@ -74,8 +174,8 @@ fn get_or_create_key() -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-fn encrypt(plaintext: &str) -> Result<String, String> {
-    let key_bytes = get_or_create_key()?;
+fn encrypt_at(plaintext: &str, directory: &std::path::Path) -> Result<String, String> {
+    let key_bytes = get_or_create_key_at(directory)?;
     let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes)
         .map_err(|e| format!("Failed to create AES key: {}", e))?;
     let key = LessSafeKey::new(unbound_key);
@@ -97,7 +197,11 @@ fn encrypt(plaintext: &str) -> Result<String, String> {
     Ok(data_encoding::BASE64URL_NOPAD.encode(&result))
 }
 
-fn decrypt(ciphertext: &str) -> Result<String, String> {
+fn encrypt(plaintext: &str) -> Result<String, String> {
+    encrypt_at(plaintext, &config_dir()?)
+}
+
+fn decrypt_at(ciphertext: &str, directory: &std::path::Path) -> Result<String, String> {
     let data = data_encoding::BASE64URL_NOPAD
         .decode(ciphertext.as_bytes())
         .map_err(|e| format!("Base64 decode failed: {}", e))?;
@@ -113,7 +217,7 @@ fn decrypt(ciphertext: &str) -> Result<String, String> {
             .map_err(|_| "Invalid nonce length")?,
     );
 
-    let key_bytes = get_or_create_key()?;
+    let key_bytes = get_or_create_key_at(directory)?;
     let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes)
         .map_err(|e| format!("Failed to create AES key: {}", e))?;
     let key = LessSafeKey::new(unbound_key);
@@ -124,6 +228,10 @@ fn decrypt(ciphertext: &str) -> Result<String, String> {
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     String::from_utf8(plaintext.to_vec()).map_err(|e| format!("UTF-8 decode failed: {}", e))
+}
+
+fn decrypt(ciphertext: &str) -> Result<String, String> {
+    decrypt_at(ciphertext, &config_dir()?)
 }
 
 #[cfg(windows)]
@@ -195,17 +303,27 @@ fn unprotect_secret(value: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(not(windows))]
-fn protect_secret(value: &str) -> Result<String, String> {
-    Ok(format!("{}{}", VAULT_SECRET_PREFIX, encrypt(value)?))
+#[cfg(windows)]
+fn protect_secret_at(value: &str, _directory: &std::path::Path) -> Result<String, String> {
+    protect_secret(value)
 }
 
 #[cfg(not(windows))]
-fn unprotect_secret(value: &str) -> Result<String, String> {
+fn protect_secret_at(value: &str, directory: &std::path::Path) -> Result<String, String> {
+    Ok(format!("{}{}", VAULT_SECRET_PREFIX, encrypt_at(value, directory)?))
+}
+
+#[cfg(windows)]
+fn unprotect_secret_at(value: &str, _directory: &std::path::Path) -> Result<String, String> {
+    unprotect_secret(value)
+}
+
+#[cfg(not(windows))]
+fn unprotect_secret_at(value: &str, directory: &std::path::Path) -> Result<String, String> {
     let encrypted = value
         .strip_prefix(VAULT_SECRET_PREFIX)
         .ok_or_else(|| "Invalid protected secret".to_string())?;
-    decrypt(encrypted)
+    decrypt_at(encrypted, directory)
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -215,6 +333,48 @@ struct Vault {
 
 fn vault_key(host: &str, port: u16, username: &str, field: &str) -> String {
     format!("{}@{}:{}:{}", username, host, port, field)
+}
+
+fn legacy_credential_value(
+    host: &str,
+    port: u16,
+    username: &str,
+    field: &str,
+) -> Result<Option<String>, String> {
+    let path = vault_path()?;
+    let data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Failed to inspect credential vault: {}", error)),
+    };
+    let vault: Vault = serde_json::from_str(&data)
+        .map_err(|error| format!("Failed to inspect credential vault: {}", error))?;
+    Ok(vault
+        .entries
+        .get(&vault_key(host, port, username, field))
+        .cloned())
+}
+
+pub fn legacy_credential_version(
+    host: &str,
+    port: u16,
+    username: &str,
+    field: &str,
+) -> Result<Option<String>, String> {
+    Ok(legacy_credential_value(host, port, username, field)?
+        .map(|protected| hex::encode(Sha256::digest(protected.as_bytes())))
+    )
+}
+
+pub fn load_legacy_credential(
+    host: &str,
+    port: u16,
+    username: &str,
+    field: &str,
+) -> Result<Option<String>, String> {
+    legacy_credential_value(host, port, username, field)?
+        .map(|protected| decrypt(&protected).map_err(|_| "Saved credential is unavailable".into()))
+        .transpose()
 }
 
 fn load_vault() -> Vault {
@@ -253,21 +413,40 @@ fn save_vault(vault: &Vault) -> Result<(), String> {
 }
 
 pub fn store_secret(name: &str, value: &str) -> Result<(), String> {
-    fs::write(secret_path(name)?, protect_secret(value)?)
+    store_secret_at(&config_dir()?, name, value)
+}
+
+fn store_secret_at(
+    directory: &std::path::Path,
+    name: &str,
+    value: &str,
+) -> Result<(), String> {
+    fs::create_dir_all(directory).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    fs::write(
+        secret_path_at(directory, name)?,
+        protect_secret_at(value, directory)?,
+    )
         .map_err(|e| format!("Failed to store secret: {}", e))
 }
 
 pub fn load_secret(name: &str) -> Result<Option<String>, String> {
-    let path = secret_path(name)?;
+    load_secret_at(&config_dir()?, name)
+}
+
+fn load_secret_at(
+    directory: &std::path::Path,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let path = secret_path_at(directory, name)?;
     if !path.exists() {
         return Ok(None);
     }
     let value = fs::read_to_string(path).map_err(|e| format!("Failed to read secret: {}", e))?;
     if value.starts_with(DPAPI_SECRET_PREFIX) || value.starts_with(VAULT_SECRET_PREFIX) {
-        return unprotect_secret(&value).map(Some);
+        return unprotect_secret_at(&value, directory).map(Some);
     }
-    let legacy = decrypt(&value)?;
-    store_secret(name, &legacy)?;
+    let legacy = decrypt_at(&value, directory)?;
+    store_secret_at(directory, name, &legacy)?;
     Ok(Some(legacy))
 }
 
@@ -282,7 +461,11 @@ pub fn delete_secret(name: &str) -> Result<(), String> {
 pub fn store_credential(auth: &AuthConfig, host: &str, port: u16, username: &str) -> AuthConfig {
     match auth {
         AuthConfig::Password { password } => {
-            if password == ENCRYPTED_MARKER || password == LEGACY_KEYRING_MARKER {
+            if password == ENCRYPTED_MARKER
+                || password == LEGACY_KEYRING_MARKER
+                || ops_secret_name_from_marker(password, OpsSecretField::Password).is_some()
+                || password.starts_with(OPS_PASSWORD_PREFIX)
+            {
                 // Already a stored-credential marker; don't re-encrypt it.
                 return auth.clone();
             }
@@ -312,7 +495,11 @@ pub fn store_credential(auth: &AuthConfig, host: &str, port: u16, username: &str
             passphrase,
         } => {
             if let Some(pp) = passphrase {
-                if pp == ENCRYPTED_MARKER || pp == LEGACY_KEYRING_MARKER {
+                if pp == ENCRYPTED_MARKER
+                    || pp == LEGACY_KEYRING_MARKER
+                    || ops_secret_name_from_marker(pp, OpsSecretField::Passphrase).is_some()
+                    || pp.starts_with(OPS_PASSPHRASE_PREFIX)
+                {
                     return auth.clone();
                 }
                 if !pp.is_empty() {
@@ -350,6 +537,14 @@ pub fn restore_credential(
 ) -> Result<AuthConfig, String> {
     match auth {
         AuthConfig::Password { password } => {
+            if let Some(name) = ops_secret_name_from_marker(password, OpsSecretField::Password) {
+                return load_secret(name)?
+                    .map(|password| AuthConfig::Password { password })
+                    .ok_or_else(|| "Saved password not found. Please re-enter the password.".into());
+            }
+            if password.starts_with(OPS_PASSWORD_PREFIX) {
+                return Err("Saved password reference is invalid".into());
+            }
             if password == ENCRYPTED_MARKER {
                 let key = vault_key(host, port, username, "password");
                 let vault = load_vault();
@@ -383,17 +578,33 @@ pub fn restore_credential(
             key_path,
             passphrase,
         } => {
+            if key_path.starts_with(OPS_PRIVATE_KEY_PREFIX)
+                && ops_secret_name_from_marker(key_path, OpsSecretField::PrivateKey).is_none()
+            {
+                return Err("Saved private key reference is invalid".into());
+            }
             let restored_passphrase = match passphrase {
-                Some(pp) if pp == ENCRYPTED_MARKER => {
-                    let key = vault_key(host, port, username, "passphrase");
-                    let vault = load_vault();
-                    vault
-                        .entries
-                        .get(&key)
-                        .and_then(|encrypted| decrypt(encrypted).ok())
-                }
-                Some(pp) if pp == LEGACY_KEYRING_MARKER => None,
-                Some(pp) => Some(pp.clone()),
+                Some(pp) => match ops_secret_name_from_marker(pp, OpsSecretField::Passphrase) {
+                    Some(name) => Some(
+                        load_secret(name)?
+                            .ok_or_else(|| "Saved passphrase not found".to_string())?,
+                    ),
+                    None if pp.starts_with(OPS_PASSPHRASE_PREFIX) => {
+                        return Err("Saved passphrase reference is invalid".into());
+                    }
+                    None => match pp.as_str() {
+                        ENCRYPTED_MARKER => {
+                            let key = vault_key(host, port, username, "passphrase");
+                            let vault = load_vault();
+                            vault
+                                .entries
+                                .get(&key)
+                                .and_then(|encrypted| decrypt(encrypted).ok())
+                        }
+                        LEGACY_KEYRING_MARKER => None,
+                        value => Some(value.to_string()),
+                    },
+                },
                 None => None,
             };
             Ok(AuthConfig::KeyFile {
@@ -408,11 +619,46 @@ pub fn restore_credential(
 #[cfg(test)]
 mod secret_tests {
     use super::secret_path;
+    use tempfile::tempdir;
 
     #[test]
     fn secret_names_cannot_escape_the_config_directory() {
         assert!(secret_path("../auth-token").is_err());
         assert!(secret_path("auth/token").is_err());
+    }
+
+    #[test]
+    fn ops_password_and_private_key_values_round_trip_only_through_protected_files() {
+        let temp = tempdir().unwrap();
+        let private_key = {
+            let mut rng = russh::keys::key::safe_rng();
+            russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)
+                .unwrap()
+                .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+                .unwrap()
+                .to_string()
+        };
+        for (field, value) in [
+            (
+                super::OpsSecretField::Password,
+                format!("synthetic-password-{}", uuid::Uuid::new_v4()),
+            ),
+            (super::OpsSecretField::PrivateKey, private_key.clone()),
+        ] {
+            let (marker, name) = super::new_ops_secret_marker(field).unwrap();
+            assert_eq!(super::ops_secret_name_from_marker(&marker, field), Some(name.as_str()));
+            super::store_secret_at(temp.path(), &name, &value).unwrap();
+            assert_eq!(super::load_secret_at(temp.path(), &name).unwrap(), Some(value.clone()));
+            if field == super::OpsSecretField::PrivateKey {
+                let restored = super::load_secret_at(temp.path(), &name).unwrap().unwrap();
+                russh::keys::decode_secret_key(&restored, None).unwrap();
+            }
+            let before = super::secret_version_at(temp.path(), &name).unwrap().unwrap();
+            let protected = std::fs::read(super::secret_path_at(temp.path(), &name).unwrap()).unwrap();
+            assert!(!String::from_utf8_lossy(&protected).contains(&value));
+            super::store_secret_at(temp.path(), &name, &format!("{value}-updated")).unwrap();
+            assert_ne!(before, super::secret_version_at(temp.path(), &name).unwrap().unwrap());
+        }
     }
 
     #[cfg(windows)]

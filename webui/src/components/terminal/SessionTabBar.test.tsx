@@ -14,7 +14,8 @@ vi.mock("./ipc", () => ({
   sshDisconnect: vi.fn().mockResolvedValue(undefined),
   sshOpenSftp: vi.fn().mockResolvedValue("new-sftp-session"),
   terminalLoadConnections: vi.fn().mockResolvedValue([]),
-  terminalSaveConnections: vi.fn().mockResolvedValue(undefined),
+  terminalUpsertConnection: vi.fn().mockResolvedValue([]),
+  terminalDeleteSavedConnection: vi.fn().mockResolvedValue([]),
   vncDisconnect: vi.fn().mockResolvedValue(undefined),
 }));
 

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Switch } from "@/components/ui/switch";
 import { invokeWithTimeout } from "@/lib/tauri";
 
 import { useBootHistory, useStartupChanges, useStartupItems, type StartupItem } from "./useSystemData";
@@ -260,7 +261,7 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
                     <td><StatusPill tone={item.scope === "user" ? "blue" : "violet"}>{scopeLabel(item.scope)}</StatusPill></td>
                     <td>{item.enabled ? <StatusPill tone="green">已启用</StatusPill> : <StatusPill tone="neutral">已禁用</StatusPill>}</td>
                     <td className="truncate" title={item.added || undefined}>{item.added ?? "—"}</td>
-                    <td className="text-right"><button role="switch" aria-checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onClick={() => toggleItem(item)} className={`relative h-5 w-9 rounded-full transition disabled:opacity-50 ${item.enabled ? "bg-info" : "bg-muted"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${item.enabled ? "left-[18px]" : "left-0.5"}`} /></button></td>
+                    <td className="text-right"><Switch size="sm" checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onCheckedChange={() => toggleItem(item)} /></td>
                   </tr>
                 ))}
               </tbody>

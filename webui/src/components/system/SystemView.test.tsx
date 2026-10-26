@@ -366,7 +366,7 @@ describe("SystemView", () => {
     const assistant = document.querySelector('aside[aria-label="Mona 系统管家"]')!;
     expect(assistant.getAttribute("aria-hidden")).toBe("true");
     const expandButton = screen.getByRole("button", { name: "展开 Mona 系统管家" });
-    expect(expandButton.querySelector('img[src="/brand/mona_app_icon.png"]')).toBeTruthy();
+    expect(expandButton.querySelector('img[src="/brand/mona_app_icon.png?v=a829e97b8751"]')).toBeTruthy();
     expect(screen.queryByRole("separator", { name: "调整系统管家宽度" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "展开 Mona 系统管家" }));

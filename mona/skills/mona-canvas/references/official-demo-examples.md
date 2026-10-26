@@ -35,6 +35,6 @@
 
 ## 从检查到局部修正
 
-若 `canvas.inspect` 返回 `text-overflow`，先针对对应节点使用 `updateNode` 修改 `size` 或插入合理换行；若返回 `edge-through-node`，只更新对应边的 handles/controlPoints，或移动相关节点。每次修正使用最新两个哈希。只改颜色时保持所有位置、尺寸和边路径；不要用 `reflow` 或 `replaceGraph` 处理单对象样式修改。
+若 `canvas(action="inspect")` 返回 `text-overflow`，先针对对应节点使用 `updateNode` 修改 `size` 或插入合理换行；若返回 `edge-through-node`，只更新对应边的 handles/controlPoints，或移动相关节点。每次修正使用最新两个哈希。只改颜色时保持所有位置、尺寸和边路径；不要用 `reflow` 或 `replaceGraph` 处理单对象样式修改。
 
 真实 DOM 检查为 `unavailable` 时，说明还没有完成视觉验收。根据工具的阶段化回执继续；工具负责连接恢复，不要猜测编辑器挂载状态、反复连接或重复同一个失败调用。不要把空 issue 列表当作通过。

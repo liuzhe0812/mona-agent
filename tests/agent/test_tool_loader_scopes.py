@@ -214,7 +214,7 @@ def _partner_definition() -> AgentDefinition:
     )
 
 
-def _subagent_manager(tmp_path, *, has_subscription: bool, tools_config=None):
+def _subagent_manager(tmp_path, *, tools_config=None):
     provider = MagicMock(spec=LLMProvider)
     provider.get_default_model.return_value = "test"
     return SubagentManager(
@@ -224,7 +224,6 @@ def _subagent_manager(tmp_path, *, has_subscription: bool, tools_config=None):
         model="test",
         max_tool_result_chars=16_000,
         tools_config=tools_config,
-        subscription_access_resolver=lambda: has_subscription,
     )
 
 
@@ -241,7 +240,6 @@ def _definition_names(definitions: list[dict]) -> set[str]:
 def test_subagent_tools_config_inherits_notes_controls(tmp_path):
     manager = _subagent_manager(
         tmp_path,
-        has_subscription=True,
         tools_config=ToolsConfig(notes_tools={"enabled": False, "allow_create": False}),
     )
 
@@ -251,22 +249,15 @@ def test_subagent_tools_config_inherits_notes_controls(tmp_path):
     assert config.notes_tools.allow_create is False
 
 
-def test_spawn_registry_keeps_local_knowledge_available_without_subscription(tmp_path):
-    active = _subagent_manager(tmp_path, has_subscription=True)._build_tools()
-    inactive = _subagent_manager(tmp_path, has_subscription=False)._build_tools()
-
-    assert "knowledge_search" in _definition_names(active.get_definitions())
-    tool, _, error = active.prepare_call("knowledge_search", {"query": "paper"})
-    assert tool is not None
-    assert error is None
-
-    assert "knowledge_search" in _definition_names(inactive.get_definitions())
-    tool, _, error = inactive.prepare_call("knowledge_search", {"query": "paper"})
+def test_spawn_registry_keeps_local_knowledge_available(tmp_path):
+    registry = _subagent_manager(tmp_path)._build_tools()
+    assert "knowledge_search" in _definition_names(registry.get_definitions())
+    tool, _, error = registry.prepare_call("knowledge_search", {"query": "paper"})
     assert tool is not None
     assert error is None
 
 
-def test_named_agent_registry_keeps_granted_knowledge_available_without_subscription(tmp_path):
+def test_named_agent_registry_keeps_granted_knowledge_available(tmp_path):
     definition = AgentDefinition(
         id="com.example.materials-runtime-scope-test",
         display_name="Materials test agent",
@@ -280,24 +271,10 @@ def test_named_agent_registry_keeps_granted_knowledge_available_without_subscrip
         task="Find the source evidence.",
     )
 
-    active = _subagent_manager(tmp_path, has_subscription=True)
-    active_tools = active._build_named_agent_tools(definition, job)
-    inactive = _subagent_manager(tmp_path, has_subscription=False)
-    inactive_tools = inactive._build_named_agent_tools(definition, job)
-
-    assert {"knowledge_search", "knowledge_read"} <= _definition_names(
-        active_tools.get_definitions()
-    )
-    tool, _, error = active_tools.prepare_call(
-        "knowledge_read", {"ref": "paper:1"}
-    )
-    assert tool is not None
-    assert error is None
-
-    assert {"knowledge_search", "knowledge_read"} <= _definition_names(
-        inactive_tools.get_definitions()
-    )
-    tool, _, error = inactive_tools.prepare_call(
+    manager = _subagent_manager(tmp_path)
+    tools = manager._build_named_agent_tools(definition, job)
+    assert {"knowledge_search", "knowledge_read"} <= _definition_names(tools.get_definitions())
+    tool, _, error = tools.prepare_call(
         "knowledge_read", {"ref": "paper:1"}
     )
     assert tool is not None
@@ -524,7 +501,6 @@ def test_mona_core_exposes_only_notes_and_agent_knowledge_business_tools(tmp_pat
         registry,
         scope="core",
     )
-    registry.set_subscription_access(True)
     assert registry.has("knowledge_search")
     assert registry.has("notes_search")
     assert registry.has("knowledge_read")

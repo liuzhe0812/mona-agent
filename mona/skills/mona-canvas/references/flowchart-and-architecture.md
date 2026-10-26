@@ -5,7 +5,7 @@ patch 时读取相关段落，不要把文档内存模型中没有 patch 写入�
 
 ## 工具与 Patch 顶层
 
-先调用轻量的 `canvas.open` 获取当前图和两个哈希，再把下面的对象作为 `canvas.apply.patch`。`canvas.apply` 只负责提交真实可编辑 patch 并返回阶段回执，不等待截图；视觉验收显式使用 `canvas.inspect(include_visual=true)`。旧笔记助手仍可能要求 `mona-flowchart-patch` fenced block；主会话工具路径不要在最终回复重复输出 fenced block。
+先调用轻量的 `canvas(action="open")` 获取当前图和两个哈希，再把下面的对象作为 `canvas(action="apply", patch=...)` 的 patch 参数。apply 只负责提交真实可编辑 patch 并返回阶段回执，不等待截图；视觉验收显式使用 `canvas(action="inspect", include_visual=true)`。旧笔记助手仍可能要求 `mona-flowchart-patch` fenced block；主会话工具路径不要在最终回复重复输出 fenced block。
 
 ```json
 {
@@ -18,7 +18,7 @@ patch 时读取相关段落，不要把文档内存模型中没有 patch 写入�
 `baseHash` 保护节点/边语义，`baseDocumentHash` 保护完整可见文档状态（不含 viewport），
 包括位置、尺寸、样式、图标、主题、分组和边路由。两个哈希可以直接放在 patch 内，也可以分别
 作为工具顶层的 `base_hash`、`base_document_hash` 传入；工具会统一归一化，若同时提供必须一致。
-当前 canvas 工具要求两个哈希都来自最近一次 `canvas.open`；不要猜测或复用旧哈希。
+当前 canvas 工具要求两个哈希都来自最近一次 `canvas(action="open")`；不要猜测或复用旧哈希。
 
 `patch` 必须是对象，不能把 JSON 字符串作为 `patch` 传入。`ops` 按声明顺序原子执行，最多 50 个
 操作，patch 序列化后不超过 64 KiB。`replaceGraph` 必须是唯一 op；它适合新图或大幅重组。局部

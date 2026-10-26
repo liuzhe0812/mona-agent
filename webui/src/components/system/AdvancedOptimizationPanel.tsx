@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 import {
@@ -88,22 +89,15 @@ export function PerformanceSection() {
                   <p className="mt-1 text-micro text-muted-foreground">{item.description}</p>
                   {item.currentDetail && <p className="mt-0.5 text-micro text-muted-foreground/70">{item.currentDetail}</p>}
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={enabled}
-                  aria-label={`${enabled ? "恢复" : "应用"}${item.label}`}
-                  disabled={isLoading}
-                  onClick={() => void handleToggle(item)}
-                  className={cn(
-                    "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40",
-                    enabled ? "bg-info" : "bg-muted-foreground/25",
-                  )}
-                >
-                  {isLoading
-                    ? <Loader2 className="h-5 w-5 animate-spin text-white" />
-                    : <span className={cn("h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-300", enabled ? "translate-x-5" : "translate-x-0")} />}
-                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Switch
+                    checked={enabled}
+                    aria-label={`${enabled ? "恢复" : "应用"}${item.label}`}
+                    disabled={isLoading}
+                    onCheckedChange={() => void handleToggle(item)}
+                  />
+                  {isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-info" aria-hidden="true" />}
+                </div>
               </div>
             );
           })}

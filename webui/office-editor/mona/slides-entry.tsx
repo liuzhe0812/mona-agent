@@ -33,7 +33,7 @@ import { nativeParagraphs, nativeBodyPr } from './slides-typography'
 import { expandSlideDesign } from './slides-design'
 import { colorOperations, inspectSlideColors } from './slides-colors'
 import { customPathXml } from '../vendor/genoffice/packages/pptx-engine/src/custom-path'
-import { runTxn, type Op } from '../vendor/genoffice/apps/slides/src/main/ops'
+import { runTxn, type Op, type OpRecord } from '../vendor/genoffice/apps/slides/src/main/ops'
 import {
   App as GenOfficeSlidesApp,
   type EmbeddedSlidesController,
@@ -58,11 +58,10 @@ import {
   type SlidesDocument,
 } from './slides-engine'
 import { composeSlide, isBlockingLayoutWarning, slideLayoutWarnings } from './slides-layout'
-import { expandPreset, rankPresets, presetCatalog, presetDiagnostics, findPreset, findPresetScenario, resolvePresetTheme, PRESET_ROLES, type PresetContent, type PresetRelation } from './slides-presets'
-import { PresetContentStore } from './slides-preset-content'
+import { expandPreset, type PresetContent } from './slides-presets'
+import { preparePresetContent } from './slides-preset-content'
 import { dataUrlImage, svgImage } from './slides-assets'
 import { getSlidesCapabilities } from './slides-capabilities'
-import { dashiOperation, dashiTemplateCatalog } from './slides-dashi'
 import {
   clearSlidePending,
   createSlidesReviewState,
@@ -375,6 +374,7 @@ function translateOperation(
   op?: Op
   ops?: Op[]
   targets: string[]
+  addedContent?: boolean
   chartStyles?: Array<{ opOffset: number; slideId: string; style: Record<string, unknown> }>
   preset?: {
     presetId: string
@@ -418,6 +418,7 @@ function translateOperation(
     return { ops, chartStyles, targets: [String(payload.slideId)] }
   }
   if (operation.op === 'slide_add_preset') {
+    if (payload.presetId === 'auto') throw new Error('请明确指定 presetId；设计方案由 Huashu Design 确定。')
     const unknown = Object.keys(payload).filter((key) => !['slideId','presetId','content'].includes(key))
     if (unknown.length) throw new Error(`slide_add_preset 不支持字段：${unknown.join(', ')}`)
     const slide = document.slides[slideIndex(document, payload.slideId)]!
@@ -425,7 +426,7 @@ function translateOperation(
     if (!isRecord(payload.content)) throw new Error('slide_add_preset 需要 content 对象。')
     const expanded = expandPreset({
       slideId: requiredText(payload.slideId, 'slideId'),
-      presetId: payload.presetId === undefined ? 'auto' : requiredText(payload.presetId, 'presetId'),
+      presetId: requiredText(payload.presetId, 'presetId'),
       content: payload.content as unknown as PresetContent,
       page: { width: slide.widthPx, height: slide.heightPx },
       // 预设按页面真实尺寸布局：EMU 比例取自当前文档，不假定所有预览尺度相同。
@@ -443,10 +444,6 @@ function translateOperation(
         design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor,
           scenario:(payload.content as unknown as PresetContent).scenario}, pendingChartStyles: expanded.pendingChartStyles },
     }
-  }
-  if (operation.op === 'slide_add_template') {
-    slideIndex(document, payload.slideId)
-    return {op: dashiOperation(payload), targets: [String(payload.slideId)]}
   }
   if (operation.op === 'slide_apply_txn') {
     if (!Array.isArray(payload.ops) || payload.ops.length === 0 || payload.ops.length > 50
@@ -636,6 +633,16 @@ function translateOperation(
     }
   }
   if (operation.op === 'slide_add') {
+    if (payload.content !== undefined) {
+      if (!isRecord(payload.content)) throw new Error('slide_add.content 必须是原生网格内容对象。')
+      if ('slideId' in payload.content || 'elementId' in payload.content) throw new Error('slide_add.content 不能包含 slideId 或 elementId；内容自动写入新页面。')
+      const content = translateOperation(document, { op: 'slide_compose', payload: { ...payload.content, slideId: target.slide } })
+      return {
+        ops: [{ op: 'addBlankSlide', target: { slide: target.slide } }, ...(content.ops ?? [])],
+        targets: [target.slide], addedContent: true,
+        chartStyles: content.chartStyles?.map((pending) => ({ ...pending, opOffset: pending.opOffset + 1 })),
+      }
+    }
     return { op: { op: 'addBlankSlide', target: { slide: target.slide } }, targets: [target.slide] }
   }
   if (operation.op === 'slide_duplicate') {
@@ -789,9 +796,6 @@ function MonaSlidesEditor(): React.JSX.Element {
   const selectionRef = useRef<SlidesSelectionState>({ slideIndex: 0, elementIds: [] })
   const revisionFilesRef = useRef(new Map<number, () => Promise<ArrayBuffer>>())
   const operationCacheRef = useRef(new Map<string, { fingerprint: string; result: unknown }>())
-  const presetContentsRef = useRef(new PresetContentStore())
-  const presetHistoryRef = useRef(new Map<string, { presetId: string; anchor: string }>())
-  const presetDesignRef = useRef<Pick<PresetContent, 'theme' | 'accentColor' | 'scenario'>>({})
   const undoRef = useRef<SlidesSnapshot[]>([])
   const redoRef = useRef<SlidesSnapshot[]>([])
   const deckListenersRef = useRef(new Set<(state: { slides: RenderSlide[]; size: { cx: number; cy: number } }) => void>())
@@ -879,7 +883,6 @@ function MonaSlidesEditor(): React.JSX.Element {
   }
 
   async function openDocument(message: OfficeOpenMessage): Promise<void> {
-    const sameSession = sessionRef.current?.sessionId === message.sessionId
     observedSlideVersionsRef.current.clear()
     if (message.documentType !== 'slides' || !isVersion(message.version)) {
       throw new Error('当前入口不能打开这个文档。')
@@ -899,9 +902,6 @@ function MonaSlidesEditor(): React.JSX.Element {
     revisionFilesRef.current.clear()
     revisionFilesRef.current.set(message.version.modelRevision, () => Promise.resolve(message.file.slice(0)))
     operationCacheRef.current.clear()
-    presetContentsRef.current.clear()
-    presetHistoryRef.current.clear()
-    if (!sameSession) presetDesignRef.current = {}
     undoRef.current = []
     redoRef.current = []
     await displayDocument(loaded)
@@ -1020,51 +1020,7 @@ function MonaSlidesEditor(): React.JSX.Element {
           : Array.isArray(command.query.operations)
             ? command.query.operations.map((operation, index) => requiredText(operation, `operations[${index}]`))
             : (() => { throw new Error('operations 必须是字符串数组。') })()
-        const capabilities = getSlidesCapabilities(elementType, requestedOperations)
-        if (command.query.presetScenario || command.query.templateId) Object.assign(capabilities, {templates: dashiTemplateCatalog(
-          typeof command.query.presetScenario === 'string' ? command.query.presetScenario : undefined,
-          typeof command.query.templateId === 'string' ? command.query.templateId : undefined,
-        )})
-        if (isRecord(command.query.presetContent) || typeof command.query.presetContentRef === 'string') {
-          const requestedContent = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
-          const content = {...presetDesignRef.current,...requestedContent}
-          if (typeof command.query.presetScenario === 'string') content.scenario = findPresetScenario(command.query.presetScenario).id
-          if (content.scenario !== presetDesignRef.current.scenario && requestedContent.theme === undefined) content.theme = undefined
-          if (typeof command.query.presetTheme === 'string') content.theme = command.query.presetTheme as PresetContent['theme']
-          content.theme = resolvePresetTheme(content).id
-          if (typeof command.query.presetRelation === 'string') {
-            if (content.relation && content.relation !== command.query.presetRelation) throw new Error('候选关系与原始内容声明不一致，请先确认本页真实关系。')
-            content.relation = command.query.presetRelation as PresetRelation
-          }
-          if (!content.role && typeof command.query.presetRole === 'string') content.role = command.query.presetRole
-          const used = document.opened.deck.slides.flatMap((slide) => {
-            const entry = presetHistoryRef.current.get(slideDurableId(slide))
-            return entry && slide.elements.some((element) => matchesElementRef(element, entry.anchor)) ? [entry.presetId] : []
-          })
-          const provided = Array.isArray(command.query.usedPresetIds) ? command.query.usedPresetIds.filter((id): id is string => typeof id === 'string') : []
-          const candidates = rankPresets(content, {
-            family: typeof command.query.presetFamily === 'string' ? command.query.presetFamily : undefined,
-            theme: typeof command.query.presetTheme === 'string' ? command.query.presetTheme : undefined,
-            role: typeof command.query.presetRole === 'string' ? command.query.presetRole : undefined,
-            relation: typeof command.query.presetRelation === 'string' ? command.query.presetRelation as PresetRelation : undefined,
-            usedPresetIds: provided.length ? provided : used,
-            limit: typeof command.query.presetLimit === 'number' ? command.query.presetLimit : undefined,
-          })
-          const presets: Array<Record<string,unknown>> = candidates.map(({preset,score,reasons})=>({id:preset.id,family:preset.family,theme:preset.theme,
-            roles:preset.roles,scenarios:preset.scenarios,relation:preset.relation,composition:preset.composition,capacity:preset.capacity,score,reasons}))
-          const diagnostics = candidates.length ? [] : presetDiagnostics(content,
-            typeof command.query.presetFamily === 'string' ? command.query.presetFamily : undefined, content.theme)
-          result = {...capabilities, contentRef: presetContentsRef.current.register(content),presets,
-            ...(diagnostics.length ? {presetDiagnostics:diagnostics} : {})}
-        } else {
-          const theme = typeof command.query.presetTheme === 'string' ? command.query.presetTheme : undefined
-          const scenario = typeof command.query.presetScenario === 'string' ? findPresetScenario(command.query.presetScenario) : undefined
-          result = {
-            ...capabilities,
-            presetRoles: PRESET_ROLES,
-            presets: presetCatalog().filter((item) => (!theme || item.theme === theme) && (!scenario || scenario.templateIds.includes(item.id))),
-          }
-        }
+        result = getSlidesCapabilities(elementType, requestedOperations)
       } else if (mode === 'summary') {
         const elementCount = document.slides.reduce(
           (sum, slide) => sum + slide.nodes.filter((node) => !node.decoration && !!node.durableId).length,
@@ -1173,27 +1129,14 @@ function MonaSlidesEditor(): React.JSX.Element {
           warnings: reviewWarnings(document, slideIdsOf(document)),
         }
       } else if (mode === 'visual' && Array.isArray(command.query.slideIds) && command.query.slideIds.length) {
-        if (command.query.slideIds.length > 12 || command.query.slideId || command.query.presetId || command.query.templateId || command.query.region || command.query.acceptWarnings || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('总览请只提供 1–12 个 slideIds；不能代替单页验收或接受警告。')
+        if (command.query.slideIds.length > 12 || command.query.slideId || command.query.presetId || command.query.region || command.query.acceptWarnings || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('总览请只提供 1–12 个 slideIds；不能代替单页验收或接受警告。')
         const indexes = pageIndexes(command.query)
         const pages = indexes.map((index) => ({ id: slideId(document, index), slide: document.slides[index]! }))
         const captured = await captureContactSheet(pages, version, () => versionRef.current, command.query.columns === undefined ? 2 : Number(command.query.columns))
         result = { mode: 'visual', ...captured, target: 'overview', overview: true, slideIds: pages.map((p) => p.id),
           warnings: reviewWarnings(document, pages.map((p) => p.id)), pendingVisualSlideIds: currentPendingVisualSlideIds(document) }
-      } else if (mode === 'visual' && command.query.templateId) {
-        if (command.query.acceptWarnings || command.query.region || command.query.presetId || command.query.slideId || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('模板候选只支持独立整页预览，不能接受当前文档审核提示。')
-        const scratch = await openSlidesDocument(await snapshotSlidesDocument(document.opened)())
-        const blank = runTxn(scratch.opened, {isolation:'atomic',ops:[{op:'addBlankSlide',target:{slide:0}}]})
-        if (!blank.applied) throw new Error('无法创建模板预览页。')
-        const prepared = refreshSlidesDocument(scratch)
-        const target = slideId(prepared, 1)
-        const op = dashiOperation({slideId:target,templateId:command.query.templateId,fields:command.query.templateFields,templateAssets:command.query.templateAssets})
-        const outcome = runTxn(prepared.opened, {isolation:'atomic',ops:[op]})
-        if (!outcome.applied) throw new Error(outcome.failures?.map((failure)=>failure.error).join('\n') || '模板预览失败。')
-        const rendered = refreshSlidesDocument(prepared).slides[1]!
-        const captured = await captureSlide(rendered,version,()=>versionRef.current)
-        result = {mode:'visual',...captured,target:`template:${String(command.query.templateId)}`,warnings:slideLayoutWarnings(rendered,slideElementIds(rendered))}
       } else if (mode === 'visual' && command.query.presetId) {
-        const content = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
+        const content = preparePresetContent(command.query.presetContent as PresetContent)
         if (command.query.acceptWarnings || command.query.region || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('预设候选只支持整页预览，不能接受当前文档的审核提示。')
         const scratch = await openSlidesDocument(await snapshotSlidesDocument(document.opened)())
         const blank = runTxn(scratch.opened, { isolation: 'atomic', ops: [{op:'addBlankSlide',target:{slide:0}}] })
@@ -1333,27 +1276,16 @@ function MonaSlidesEditor(): React.JSX.Element {
     if (command.operations.length === 0 || command.operations.length > 50) return
     let before: SlidesSnapshot | undefined
     try {
-      const resolved = command.operations.map((operation) => {
-        if (operation.op !== 'slide_add_preset' || !isRecord(operation.payload)) return operation
-        const {contentRef, content, ...payload} = operation.payload
-        const explicitPreset = typeof payload.presetId === 'string' ? findPreset(payload.presetId) : undefined
-        const requestedContent = presetContentsRef.current.resolve(content,contentRef)
-        const canonical = {...presetDesignRef.current,...(explicitPreset ? {theme:explicitPreset.theme} : {}), ...requestedContent}
-        if (canonical.scenario !== presetDesignRef.current.scenario && requestedContent.theme === undefined) canonical.theme = undefined
-        canonical.theme = resolvePresetTheme(canonical).id
-        const presetId = payload.presetId === undefined || payload.presetId === 'auto'
-          ? rankPresets(canonical,{theme:canonical.theme,usedPresetIds:[...presetHistoryRef.current.values()].map((entry)=>entry.presetId),limit:1})[0]?.preset.id ?? 'auto'
-          : payload.presetId
-        return {...operation, payload:{...payload,presetId,content:canonical}}
-      })
-      const preparedOperations = await Promise.all(resolved.map(preparePresetImage))
+      const preparedOperations = await Promise.all(command.operations.map(preparePresetImage))
       if (!sameVersion(versionRef.current, currentVersion)) throw new VisualVersionConflict('准备素材时文档已变化，请重新读取后编辑。')
       const translated = preparedOperations.map((operation) => translateOperation(document, operation))
       const ops: Op[] = []
       const presetPlans: Array<NonNullable<ReturnType<typeof translateOperation>['preset']> & {opOffset:number}> = []
+      const contentPlans: Array<{ opOffset: number; opCount: number; targets: string[] }> = []
       const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
       for (const item of translated) {
         const itemOps = item.ops ?? (item.op ? [item.op] : [])
+        if (item.addedContent) contentPlans.push({ opOffset: ops.length, opCount: itemOps.length, targets: item.targets })
         if (item.preset) presetPlans.push({ ...item.preset, opOffset: ops.length })
         for (const pending of item.chartStyles ?? []) chartStyles.push({ ...pending, opOffset: ops.length + pending.opOffset })
         ops.push(...itemOps)
@@ -1369,8 +1301,32 @@ function MonaSlidesEditor(): React.JSX.Element {
       if (ops.length === 0 || rawCount > 50 || ops.length + chartStyles.length > limit) throw new Error(`单次事务最多 50 个原始操作，设计组件展开后最多 ${limit} 个操作；请按页或区域提交。`)
       const paths = affectedSlidePaths(document, ops)
       before = takeSnapshot(document, paths)
-      const outcome = runTxn(document.opened, { isolation: 'atomic', ops })
-      if (!outcome.applied) throw new Error(outcome.failures?.map((failure) => failure.error).join('\n') || '幻灯片事务失败。')
+      const outcome = { records: [] as OpRecord[] }
+      const execute = (batch: Op[]): void => {
+        if (!batch.length) return
+        const result = runTxn(document.opened, { isolation: 'atomic', ops: batch })
+        if (!result.applied) throw new Error(result.failures?.map((failure) => failure.error).join('\n') || '幻灯片事务失败。')
+        outcome.records.push(...(result.records ?? []))
+      }
+      let cursor = 0
+      for (const plan of contentPlans) {
+        execute(ops.slice(cursor, plan.opOffset + 1))
+        const after = outcome.records[plan.opOffset]?.after
+        if (!isRecord(after) || !Number.isInteger(after.index)) throw new Error('无法定位新建幻灯片，已取消本次写入。')
+        // The native executor validates the whole batch before writing, so bind
+        // content only after the real page exists; the outer snapshot covers every stage.
+        const addedId = slideId(document, Number(after.index))
+        const end = plan.opOffset + plan.opCount
+        for (let index = plan.opOffset + 1; index < end; index += 1) {
+          ops[index] = { ...ops[index]!, target: { slide: addedId } }
+        }
+        for (const pending of chartStyles) {
+          if (pending.opOffset > plan.opOffset && pending.opOffset < end) pending.slideId = addedId
+        }
+        plan.targets.push(addedId)
+        cursor = plan.opOffset + 1
+      }
+      execute(ops.slice(cursor))
       const presetElementIds = new Map<string,string>()
       for (const plan of presetPlans) {
         const slide = document.opened.deck.slides[slideIndex(document,plan.slideId)]!
@@ -1467,9 +1423,6 @@ function MonaSlidesEditor(): React.JSX.Element {
           const created = outcome.records?.[plan.opOffset + position]?.created?.[0]
           if (created) elements[role] = presetElementIds.get(`${plan.slideId}/${created}`) ?? durableIdOf(created)
         })
-        const anchor = Object.values(elements)[0]
-        if (anchor) presetHistoryRef.current.set(plan.slideId, {presetId:plan.presetId,anchor})
-        presetDesignRef.current = plan.design
         return {
           presetId: plan.presetId,
           ...(plan.design.scenario ? {scenario:plan.design.scenario} : {}),
@@ -1864,7 +1817,7 @@ function MonaSlidesEditor(): React.JSX.Element {
         if (!current || !session || !currentVersion || operations.length === 0 || operations.length > 50) {
           return null
         }
-        const isolation = request.isolation === 'per_op' && !operations.some((operation) => operation.op === 'monaDashiTemplate') ? 'per_op' : 'atomic'
+        const isolation = request.isolation === 'per_op' ? 'per_op' : 'atomic'
         if (request.dryRun) {
           const preview = runTxn(current.opened, {
             ops: operations,

@@ -20,7 +20,7 @@ Use terminal-friendly plain text with minimal formatting.
 {% endif %}
 
 ## Language
-Use the USER.md language when set; otherwise follow the latest user message. Use that language for visible replies and reasoning.
+Use the shared user profile's language preference when available; otherwise follow the latest user message. Use that language for visible replies and reasoning.
 
 ## Personal Knowledge
 

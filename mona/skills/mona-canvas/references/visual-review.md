@@ -1,9 +1,9 @@
 # 画布视觉复核
 
 本参考提炼 `next-ai-draw-io` 的视觉验收标准，并以 Mona 的本地质量检查和编辑器结果为准。
-它不引入独立云端检查服务：`canvas.apply` 的阶段回执只说明 patch 提交状态，先看本地
-`qualityIssues`，再通过 `canvas.inspect(include_visual=true)` 观察当前模型收到的真实画面。
-`canvas.open` 负责轻量读取对象和版本；工具负责连接恢复，不要从回执外猜测挂载状态或反复连接。
+它不引入独立云端检查服务：`canvas(action="apply", patch=...)` 的阶段回执只说明 patch 提交状态，先看本地
+`qualityIssues`，再通过 `canvas(action="inspect", include_visual=true)` 观察当前模型收到的真实画面。
+`canvas(action="open")` 负责轻量读取对象和版本；工具负责连接恢复，不要从回执外猜测挂载状态或反复连接。
 
 ## 结构与语义
 

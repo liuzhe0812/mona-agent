@@ -90,18 +90,6 @@ COMMON_AGENT_TOOLS = frozenset({
     "video_extract_frame",
 })
 AGENT_EXCLUSIVE_TOOLS: dict[str, frozenset[str]] = {
-    "com.mona.a-share-analyst": frozenset({
-        "stock_context_read",
-        "stock_quote",
-        "stock_report_read",
-        "stock_research_status",
-        "stock_screen_compare",
-        "stock_screen_read",
-        "stock_screen_run",
-        "stock_screen_strategy_save",
-        "stock_screen_validation_read",
-        "stock_source_open",
-    }),
     "com.mona.academic-researcher": frozenset({
         "academic_search",
         "chart",
@@ -117,64 +105,6 @@ TOOL_AGENT_OWNERS: dict[str, frozenset[str]] = {
         for agent_id in ("com.mona.academic-researcher", "com.mona.musician")
         for name in AGENT_EXCLUSIVE_TOOLS[agent_id]
     },
-    "artifact_read": frozenset({
-        "com.mona.stock-bear-researcher",
-        "com.mona.stock-bull-researcher",
-        "com.mona.stock-referee",
-    }),
-    "stock_context_read": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_evidence_read": frozenset({
-        "com.mona.stock-bear-researcher",
-        "com.mona.stock-bull-researcher",
-        "com.mona.stock-diagnosis-semantic-researcher",
-        "com.mona.stock-fundamental-analyst",
-        "com.mona.stock-news-analyst",
-        "com.mona.stock-referee",
-        "com.mona.stock-tech-analyst",
-    }),
-    "stock_opportunity_submit": frozenset({"com.mona.stock-selection-analyst"}),
-    "stock_quote": frozenset({"com.mona.a-share-analyst"}),
-    "stock_report_read": frozenset({"com.mona.a-share-analyst"}),
-    "stock_research_status": frozenset({"com.mona.a-share-analyst"}),
-    "stock_screen_compare": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_screen_read": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_screen_run": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_screen_strategy_save": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_screen_validation_read": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "stock_source_open": frozenset({
-        "com.mona.a-share-analyst",
-        "com.mona.stock-news-analyst",
-        "com.mona.stock-selection-analyst",
-    }),
-    "submit_bear_case": frozenset({"com.mona.stock-bear-researcher"}),
-    "submit_bull_case": frozenset({"com.mona.stock-bull-researcher"}),
-    "submit_fundamental_view": frozenset({"com.mona.stock-fundamental-analyst"}),
-    "submit_news_view": frozenset({"com.mona.stock-news-analyst"}),
-    # Internal finalizer called by submit_stock_report_staged, never model-visible.
-    "submit_stock_report": frozenset(),
-    "submit_stock_diagnosis_semantic": frozenset({
-        "com.mona.stock-diagnosis-semantic-researcher",
-    }),
-    "submit_stock_report_staged": frozenset({"com.mona.stock-referee"}),
-    "submit_technical_view": frozenset({"com.mona.stock-tech-analyst"}),
 }
 
 

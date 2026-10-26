@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Hosted Shadow retains independent backtest results while withholding personal account returns, delta, and economic attribution without complete same-window opening-position, principal, and net-value evidence. Reports state the missing basis, and old hosted cache comparisons are projected to null without rewriting them.",
+  "files": [
+    {
+      "path": "agent/src/shadow_account/models.py",
+      "sha256": "514716a886485d2077a9b4c2e1f14645a1ce1a0b0b854b44324b02787540bed9",
+      "replacements": [
+        {
+          "before": "PRICE_FEATURES: tuple[str, ...] = (\"entry_rsi14\", \"prior_5d_return\")\n",
+          "after": "PRICE_FEATURES: tuple[str, ...] = (\"entry_rsi14\", \"prior_5d_return\")\n\nACCOUNT_COMPARISON_UNAVAILABLE_REASON = (\n    \"Account return, delta, and economic attribution were not calculated because \"\n    \"complete opening positions, principal, and net-value evidence for the same \"\n    \"backtest window are missing. The trade journal is transaction evidence only, \"\n    \"not an account-return series.\"\n)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/backtester.py",
+      "sha256": "3ff0408f2193e6152284430331059168e952f339079002650551462be57716ba",
+      "replacements": [
+        {
+          "before": "        \"journal_sha256\": _journal_cache_identity(journal_path),\n",
+          "after": "        \"journal_sha256\": _journal_cache_identity(journal_path),\n        \"comparison_policy\": \"account-comparison-unavailable-v1\",\n",
+          "count": 1
+        },
+        {
+          "before": "    cache_path = runs_dir(profile.shadow_id) / (\n        f\"shadow_result_{_cache_key(profile, window_start, window_end, cache_inputs=cache_inputs)}.json\"\n    )\n    if not cache_path.exists():\n        return None\n    try:\n        data = json.loads(cache_path.read_text(encoding=\"utf-8\"))\n    except (OSError, json.JSONDecodeError):\n        return None\n    if hosted and data.get(\"cache_inputs\") != cache_inputs:\n",
+          "after": "    cache_root = runs_dir(profile.shadow_id)\n    candidate_caches: list[tuple[Path, dict[str, Any] | None]] = [\n        (\n            cache_root / f\"shadow_result_{_cache_key(profile, window_start, window_end, cache_inputs=cache_inputs)}.json\",\n            cache_inputs,\n        )\n    ]\n    if hosted and cache_inputs is not None:\n        # Version-22 records contain the full request inputs but predate the\n        # hosted comparison policy. Read their Shadow metrics while projecting\n        # old account-comparison values away; never rewrite the source record.\n        legacy_inputs = {\n            key: value for key, value in cache_inputs.items()\n            if key != \"comparison_policy\"\n        }\n        candidate_caches.append(\n            (\n                cache_root / f\"shadow_result_{_cache_key(profile, window_start, window_end, cache_inputs=legacy_inputs)}.json\",\n                legacy_inputs,\n            )\n        )\n\n    data = None\n    for cache_path, expected_inputs in candidate_caches:\n        if not cache_path.is_file():\n            continue\n        try:\n            candidate = json.loads(cache_path.read_text(encoding=\"utf-8\"))\n        except (OSError, json.JSONDecodeError):\n            continue\n        if not isinstance(candidate, dict):\n            continue\n        if hosted and candidate.get(\"cache_inputs\") != expected_inputs:\n            continue\n        data = candidate\n        break\n    if data is None:\n",
+          "count": 1
+        },
+        {
+          "before": "        return None if value is None else float(value)\n",
+          "after": "        return None if value is None else float(value)\n\n    if hosted:\n        attribution = AttributionBreakdown(\n            missed_signals_pnl=None,\n            noise_trades_pnl=None,\n            early_exit_pnl=None,\n            late_exit_pnl=None,\n            overtrading_pnl=None,\n            counterfactual_trades=(),\n            excluded_currencies={},\n        )\n        real_total_pnl = None\n        delta_pnl = None\n    else:\n        attribution = AttributionBreakdown(\n            missed_signals_pnl=cached_float(attr.get(\"missed_signals_pnl\", 0.0)),\n            noise_trades_pnl=cached_float(attr.get(\"noise_trades_pnl\", 0.0)),\n            early_exit_pnl=cached_float(attr.get(\"early_exit_pnl\", 0.0)),\n            late_exit_pnl=cached_float(attr.get(\"late_exit_pnl\", 0.0)),\n            overtrading_pnl=cached_float(attr.get(\"overtrading_pnl\", 0.0)),\n            counterfactual_trades=tuple(attr.get(\"counterfactual_trades\") or ()),\n            excluded_currencies=dict(attr.get(\"excluded_currencies\") or {}),\n        )\n        real_total_pnl = cached_float(data.get(\"real_total_pnl\", 0.0))\n        delta_pnl = None if data.get(\"delta_pnl\") is None else float(data[\"delta_pnl\"])\n",
+          "count": 1
+        },
+        {
+          "before": "        attribution=AttributionBreakdown(\n            missed_signals_pnl=cached_float(attr.get(\"missed_signals_pnl\", 0.0)),\n            noise_trades_pnl=cached_float(attr.get(\"noise_trades_pnl\", 0.0)),\n            early_exit_pnl=cached_float(attr.get(\"early_exit_pnl\", 0.0)),\n            late_exit_pnl=cached_float(attr.get(\"late_exit_pnl\", 0.0)),\n            overtrading_pnl=cached_float(attr.get(\"overtrading_pnl\", 0.0)),\n            counterfactual_trades=tuple(attr.get(\"counterfactual_trades\") or ()),\n        ),\n",
+          "after": "        attribution=attribution,\n",
+          "count": 1
+        },
+        {
+          "before": "        real_total_pnl=cached_float(data.get(\"real_total_pnl\", 0.0)),\n        delta_pnl=None if data.get(\"delta_pnl\") is None else float(data[\"delta_pnl\"]),\n",
+          "after": "        real_total_pnl=real_total_pnl,\n        delta_pnl=delta_pnl,\n",
+          "count": 1
+        },
+        {
+          "before": "    shadow_pnl = _shadow_pnl_from_metrics(combined, initial_capital)\n",
+          "after": "    shadow_pnl = _shadow_pnl_from_metrics(combined, initial_capital)\n    if hosted:\n        return _zero_attribution(unavailable=True), shadow_pnl, None\n\n",
+          "count": 1
+        },
+        {
+          "before": "        return _zero_attribution(unavailable=hosted), shadow_pnl, None if hosted else 0.0\n",
+          "after": "        return _zero_attribution(), shadow_pnl, 0.0\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/reporter.py",
+      "sha256": "52fd5348a0ac26ccf0c4be6de045fb810f80b4531edb8efd2bf65d12a62f4c32",
+      "replacements": [
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "from src.shadow_account.models import ShadowBacktestResult, ShadowProfile\n",
+          "after": "from src.shadow_account.models import (\n    ACCOUNT_COMPARISON_UNAVAILABLE_REASON,\n    ShadowBacktestResult,\n    ShadowProfile,\n)\n",
+          "count": 1
+        },
+        {
+          "before": "        attribution_unavailable_reason = \"No usable journal/account input; real PnL and delta attribution were not calculated.\"\n",
+          "after": "        attribution_unavailable_reason = (\n            ACCOUNT_COMPARISON_UNAVAILABLE_REASON\n            if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n            else \"No usable journal/account input; real PnL and delta attribution were not calculated.\"\n        )\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/pdf_fallback.py",
+      "sha256": "667818a61869b58be0c695559607583cfe719be8b0c62f8fd4eb7b2d800fb4b4",
+      "replacements": [
+        {
+          "before": "        story.append(para(\"Real PnL and delta unavailable - no usable journal/account input.\", muted))\n",
+          "after": "        story.append(para(sections.get(\"attribution_unavailable_reason\") or \"Account comparison was not calculated.\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "        story.append(para(\n            \"Shadow PnL is available, but real account PnL, delta and economic attribution \"\n            \"were not calculated because no usable journal/account input was provided.\", muted,\n        ))\n",
+          "after": "        story.append(para(sections.get(\"attribution_unavailable_reason\") or \"Account comparison was not calculated.\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "                \"Counterfactual trades were not calculated because no usable journal/account input was provided.\",\n",
+          "after": "                \"Counterfactual analysis was not calculated. \"\n                + (sections.get(\"attribution_unavailable_reason\")\n                   or \"Account comparison was not calculated.\"),\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/templates/shadow_report.html",
+      "sha256": "0355d4bfc283a567aaf2c52d069e89ddea4662a7773455fde83a70ad2643f6ad",
+      "replacements": [
+        {
+          "before": "      <p class=\"muted\">Counterfactual trades were not calculated because no usable journal/account input was provided.</p>\n",
+          "after": "      <p class=\"muted\">Counterfactual analysis was not calculated. {{ attribution_unavailable_reason }}</p>\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/shadow_account_tool.py",
+      "sha256": "933f6d722f817f3a080569d8baabc42ee58a1c03c89bd13f1fa2b524d9885b5b",
+      "replacements": [
+        {
+          "before": "from src.shadow_account.scanner import (\n",
+          "after": "from src.shadow_account.models import ACCOUNT_COMPARISON_UNAVAILABLE_REASON\nfrom src.shadow_account.scanner import (\n",
+          "count": 1
+        },
+        {
+          "before": "_HOSTED_SHADOW_SOURCES = frozenset({\"auto\", \"tencent\", \"eastmoney\", \"local\"})\n",
+          "after": "_HOSTED_SHADOW_SOURCES = frozenset({\"auto\", \"tencent\", \"eastmoney\", \"local\"})\n_NO_SHADOW_METRICS_REASON = \"No usable Shadow performance metrics; account comparison was not calculated.\"\n",
+          "count": 1
+        },
+        {
+          "before": "            return _err(\"shadow_id is required\")\n        try:\n",
+          "after": "            return _err(\"shadow_id is required\")\n        hosted = os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n        try:\n",
+          "count": 1
+        },
+        {
+          "before": "        if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" and not _usable_metrics(result.combined):\n",
+          "after": "        if hosted and not _usable_metrics(result.combined):\n",
+          "count": 1
+        },
+        {
+          "before": "                attribution=asdict(result.attribution),\n",
+          "after": "                attribution=asdict(result.attribution),\n                account_comparison_status=\"unavailable\",\n                account_comparison_unavailable_reason=_NO_SHADOW_METRICS_REASON,\n",
+          "count": 1
+        },
+        {
+          "before": "        return _ok(\n            shadow_id=result.shadow_id,\n",
+          "after": "        response = dict(\n            shadow_id=result.shadow_id,\n",
+          "count": 1
+        },
+        {
+          "before": "            equity_points=len(result.equity_curves.get(\"combined\", [])),\n        )\n",
+          "after": "            equity_points=len(result.equity_curves.get(\"combined\", [])),\n        )\n        if hosted:\n            response.update(\n                account_comparison_status=\"unavailable\",\n                account_comparison_unavailable_reason=(\n                    _NO_SHADOW_METRICS_REASON\n                    if result.shadow_total_pnl is None\n                    else ACCOUNT_COMPARISON_UNAVAILABLE_REASON\n                ),\n            )\n        return _ok(**response)\n",
+          "count": 1
+        },
+        {
+          "before": "            payload[\"pdf_url\"] = f\"/shadow-reports/{profile.shadow_id}?format=pdf\"\n",
+          "after": "            payload[\"pdf_url\"] = f\"/shadow-reports/{profile.shadow_id}?format=pdf\"\n        if hosted:\n            payload.update(\n                shadow_total_pnl=result.shadow_total_pnl,\n                real_total_pnl=result.real_total_pnl,\n                attribution=asdict(result.attribution),\n                account_comparison_status=\"unavailable\",\n                account_comparison_unavailable_reason=(\n                    report[\"sections\"].get(\"attribution_unavailable_reason\")\n                    or ACCOUNT_COMPARISON_UNAVAILABLE_REASON\n                ),\n            )\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

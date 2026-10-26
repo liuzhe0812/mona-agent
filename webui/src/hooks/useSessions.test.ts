@@ -24,9 +24,9 @@ function row(key: string, hidden?: boolean): ChatSummary {
   };
 }
 
-describe("filterVisibleSessions (stock hidden-room fallback)", () => {
+describe("filterVisibleSessions", () => {
   it("drops hidden conversations even when the server leaks them", () => {
-    const rows = [row("plain"), row("room", false), row("stock_research", true)];
+    const rows = [row("plain"), row("room", false), row("system_room", true)];
 
     expect(filterVisibleSessions(rows).map((s) => s.chatId)).toEqual([
       "plain",

@@ -1,6 +1,19 @@
 # Mona Office Slides 操作示例
 
-以下 JSON 是当前 `office` 工具和 `slides-entry.tsx` 已支持的直接接口。示例中的 `session_id`、版本、页面 ID 和元素 ID 必须替换为最近一次返回的真实值；不要把示例 ID 当成稳定 ID。
+以下 JSON 只说明当前 `office` 工具的操作字段，不提供页面设计方案。文字、字号、颜色和坐标是参数示例，实际值来自当前文稿或共享 `mona-design` 的选定设计。示例中的 `session_id`、版本、页面 ID 和元素 ID 必须替换为最近一次返回的真实值；不要把示例 ID 当成稳定 ID。
+
+## 首次写入
+
+`open` 回执中的 `selection.slideId` 和 `version` 可直接用于第一批写入。将最近一次结果的完整 `version` 对象传给 `expected_version`；每项操作按 `{op, payload}` 组织，所有操作参数都在 `payload` 中：
+
+```text
+action = "apply"
+session_id = open.session_id
+expected_version = open.version
+operations = [{op: "当前操作名", payload: {slideId: open.selection.slideId, ...}}]
+```
+
+不要为已返回的 selection、ID 或版本重复 inspect。只在当前操作参数仍未知时，才对该操作名查询 `capabilities`；不必预读完整能力目录或所有操作参考。
 
 ## 1. 打开会话
 
@@ -99,11 +112,13 @@
 {
   "action": "inspect",
   "session_id": "<session-id>",
-  "query": { "mode": "capabilities", "elementType": "shape" }
+  "query": { "mode": "capabilities", "operations": ["slide_add", "slide_add_text", "slide_add_shape"] }
 }
 ```
 
 未指定 operations 时返回简短目录；指定实际名称时返回参数（最多3项，剩余 nextOperations 继续）。未知名称单独列在 unsupportedOperations，不影响已知项；availableOperations 可用于恢复。只读查询成功不代表未知操作存在，写入仍严格校验。改色见 [原位续编](in-place-editing.md)，不因查询出错关闭或新建文稿。
+
+同一操作的准确参数读取一次后复用，直接组织 `apply.operations` 批量提交；不为常规字段反复用终端、脚本或文件补丁加工完整 schema。只在参数未知或结果明确不完整时补读所需操作。
 
 `apply`、`inspect review` 和 `inspect visual` 可能返回布局警告。`[错误]` 会给出元素 ID 以及实际/可用文字尺寸或相互重叠范围，必须通过 `slide_set_geometry`、`slide_set_text` 或 `slide_set_font` 修复；`[需检查]` 会列出文字与图片的交叠元素，供真实画面审核。单独修改文字或字号可能改变换行，因此也会让页面重新进入视觉复核状态。`acceptWarnings: true` 只用于确有理由保留的非阻塞 `[需检查]`：必须先用同一版本、不带 `elementIds`/`region` 的 `visual` 查询获取整页画面，再以同一页面和版本传入非空 `reviewReason` 与 `acceptWarnings: true`；局部或过期截图不能代替前置观察，存在 `[错误]` 时不能接受。
 
@@ -160,7 +175,9 @@
 
 ## 4. 按完整区域小批次写入
 
-下面先放背景形状，再放标题和正文。一次 `apply` 最多 50 个操作；实际应按页内完整区域分成更小的有意义批次，并让侧栏及时显示。图片按页面阅读和使用顺序安排；图片尚未准备好时先提交文字/结构批次，不等待整套图片，也不要假设存在后台生图 API。
+下面演示同批添加形状和文字，不能当作版式套用。一次 `apply` 最多 50 个操作；按页或完整区域批量写入，不逐对象调用。图片按使用顺序准备；图片尚未就绪时先提交已准备的文字/结构批次，不等待整套图片，也不要假设存在后台生图 API。
+
+新稿先使用 `open` 回执中的现有空白页，按内容逐页追加并完成，不默认先建立整稿的空白页面。需要下一页时用 `slide_add`，沿用回执 `createdSlides` 的真实 ID 和最新 `version`；页数由用户要求和内容决定，不固定页数或创作批次数。
 
 ```json
 {
@@ -180,7 +197,7 @@
         "y": 52,
         "width": 1160,
         "height": 610,
-        "fillColor": "#F5F7FA"
+        "fillColor": "#FFFFFF"
       }
     },
     {
@@ -191,13 +208,12 @@
         "y": 78,
         "width": 1080,
         "height": 72,
-        "text": "客户续费率上升主要来自 onboarding 改版",
+        "text": "文字字段示例",
         "align": "left",
         "font": {
-          "fontFamily": "Microsoft YaHei",
           "fontSize": 28,
           "bold": true,
-          "color": "#172033"
+          "color": "#000000"
         },
         "strokeColor": null,
         "strokeWidthPt": 1
@@ -211,7 +227,7 @@
         "y": 190,
         "width": 620,
         "height": 150,
-        "text": "三项变化共同推动首月激活率提高，续费提升集中在新用户群。"
+        "text": "第二个独立文字对象。"
       }
     }
   ]
@@ -246,14 +262,14 @@
         "gridlines": true,
         "dataLabels": true,
         "valAxisTitle": "百分比（示例）",
-        "style": { "seriesColors": ["#25856B"], "textColor": "#172C2B", "axisLabelColor": "#5B6D68", "gridColor": "#DFE4DE", "axisLabelFontSize": 14 }
+        "style": { "seriesColors": ["#808080"], "textColor": "#000000", "axisLabelColor": "#000000", "gridColor": "#CCCCCC", "axisLabelFontSize": 14 }
       }
     }
   ]
 }
 ```
 
-复杂图表或需要深度修改已有图表数据时，再阅读 [advanced-operations.md](advanced-operations.md) 使用已验证的高级操作。不要用字符块、空格或重复符号模拟数据图表；对比对象应拆成独立模块。
+复杂图表或需要深度修改已有图表数据时，再阅读 [advanced-operations.md](advanced-operations.md) 使用已验证的高级操作。原生图表保留分类、系列和数值，字符块或图片不具备这些对象语义。
 
 ## 5. 修改已有元素
 
@@ -272,10 +288,9 @@
         "slideId": "<slide-id>",
         "elementId": "<text-element-id>",
         "font": {
-          "fontFamily": "Microsoft YaHei",
           "fontSize": 28,
           "bold": true,
-          "color": "#172033"
+          "color": "#000000"
         }
       }
     },
@@ -303,7 +318,7 @@
       "payload": {
         "slideId": "<slide-id>",
         "elementId": "<shape-element-id>",
-        "color": "#D8DEE9",
+        "color": "#000000",
         "widthPt": 1
       }
     }
@@ -342,7 +357,41 @@
 }
 ```
 
-`slide_add` 会在目标页后插入空白页；优先使用回执 `createdSlides` 的真实 ID，只有缺失时才检查相关页面。`slide_duplicate`、`slide_delete` 和 `slide_move` 同样以 `slideId` 为目标。删除前先核对确切 ID，并保留用户已经提交的修改。
+`slide_add` 可只传锚页 `slideId`，在其后插入空白页；也可在同一操作中传 `content`，一次新增页面并写入内容。`content` 复用 `slide_compose` 的 `columns`、`rows`、`gap`、`x`、`y`、`width`、`height` 和 `items` 字段，不包含 `slideId` 或 `elementId`。锚页必须是已有页面；新增页与其内容在同一原子事务中提交。展开后的新页、内容对象和图表样式写入仍受单次 `apply` 的 50 项原始操作上限约束。旧的空白页用法仍可用。
+
+```json
+{
+  "action": "apply",
+  "session_id": "<session-id>",
+  "expected_version": { "editorEpoch": "<latest-editor-epoch>", "modelRevision": 3 },
+  "operations": [
+    {
+      "op": "slide_add",
+      "payload": {
+        "slideId": "<existing-anchor-slide-id>",
+        "content": {
+          "columns": [1, 1],
+          "rows": [1, 1],
+          "items": [
+            { "type": "text", "column": 0, "row": 0, "columnSpan": 2, "text": "页面标题" },
+            { "type": "text", "column": 0, "row": 1, "text": "要点说明" },
+            {
+              "type": "chart",
+              "column": 1,
+              "row": 1,
+              "kind": "bar",
+              "categories": ["一", "二"],
+              "series": [{ "name": "示例", "values": [3, 5] }]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+新增页已包含本批内容时，后续步骤直接使用该次 `apply` 回执中的版本和新页 ID，无需再往返一次只为取得新页 ID。`slide_duplicate`、`slide_delete` 和 `slide_move` 同样以 `slideId` 为目标。删除前先核对确切 ID，并保留用户已经提交的修改。
 
 ## 7. 网格混排、SVG 和照片
 
@@ -367,8 +416,8 @@
             "column": 0,
             "row": 0,
             "columnSpan": 2,
-            "text": "续费提升主要来自 onboarding 改版",
-            "font": { "fontFamily": "Microsoft YaHei", "fontSize": 28, "bold": true, "color": "#172033" },
+            "text": "文字字段示例",
+            "font": { "fontSize": 28, "bold": true, "color": "#000000" },
             "align": "left"
           },
           {
@@ -376,7 +425,7 @@
             "column": 2,
             "row": 0,
             "rowSpan": 2,
-            "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 160 220\"><path fill=\"#D53F3F\" d=\"M8 8h144v204H8z\"/></svg>",
+            "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 160 220\"><path fill=\"#000000\" d=\"M8 8h144v204H8z\"/></svg>",
             "inset": 8
           },
           {
@@ -384,8 +433,8 @@
             "column": 0,
             "row": 1,
             "shape": "roundRect",
-            "fillColor": "#F5F7FA",
-            "strokeColor": "#D8DEE9",
+            "fillColor": "#FFFFFF",
+            "strokeColor": "#000000",
             "strokeWidthPt": 1,
             "inset": 8
           },
@@ -393,8 +442,8 @@
             "type": "text",
             "column": 0,
             "row": 1,
-            "text": "首月激活率 +12 个百分点",
-            "font": { "fontSize": 22, "bold": true, "color": "#172033" },
+            "text": "第二个文字字段",
+            "font": { "fontSize": 22, "bold": true, "color": "#000000" },
             "inset": 24
           },
           {
@@ -411,25 +460,17 @@
 }
 ```
 
-这里网格只提供对齐骨架：左侧标题占据更宽的两列，右侧 SVG 作为一个可移动、可缩放的整体图片，底部只使用一张照片和一个数字锚点，仍留出未填满的呼吸空间。`assetPath` 由 Gateway 在工作区范围内解析并转成图片 `dataUrl`；不要让模型为大照片直接输出 base64。SVG 需要是通过静态校验的封闭资源，不能把其中的路径描述为可逐项编辑。
+这里演示 columnSpan/rowSpan、同一区域叠放与独立对象的字段关系，不是推荐页面骨架。`assetPath` 由 Gateway 在工作区范围内解析并转成图片 `dataUrl`；不要让模型为大照片直接输出 base64。SVG 需要是通过静态校验的封闭资源，不能把其中的路径描述为可逐项编辑。
 
 单独添加 SVG 时使用 `slide_add_svg`，payload 需要 `slideId`、`svg`、`x`、`y`、`width`、`height`；它同样创建整体图片。单独添加照片可以使用 `slide_add_image` 的 `assetPath`，或在已准备好的图片 data URL 场景使用 `dataUrl`。图片和 SVG 都不能代替原生文本、形状或原生数据图表。
 
-## 7.0 可组合的原生设计
-
-`slide_add_design` 是同一个 Office 工具内的便捷操作，不是独立制作工作流。可创建完整设计页，也可以用 `region` 将指标、列表、图表解读、瀑布或流向作为局部组件，与原生对象混合。内容、受众与设计意图决定是否使用组件，不以参考图相似度决定质量。字段和真实渲染参考见 [components.md](components.md)。
+## 7.0 富文本、路径与总览
 
 `slide_add_text` 支持 `paragraphs`/`runs`、混合字号、局部颜色、基线与字距；创建时可明确 `body.insets`。`slide_add_path` 创建原生可编辑曲线形状，只接受结构化 M/L/C/Z，不接受任意 XML。数据驱动的信息图形与标准原生数据图表的编辑能力不同，交付时按实际对象说明。
 
+`paragraphs` 与 `text` 二选一，例如 `paragraphs:[{runs:[{text:"字段",bold:true},{text:"示例",baseline:0}],spaceAfter:0}]`。字号、字距和段距是 pt，位置与内边距为预览像素；`body` 是创建参数，不传给 `slide_set_text`。
+
 整稿总览使用 `query:{"mode":"visual","slideIds":["<ID1>","<ID2>"],"columns":2}`，由真实编辑器捕获，不是第二套画法。它不解除单页待检查状态；细节仍使用单页 `slideId` 检查。未完成时可以保存；模型不得自行使用 `allow_unreviewed` 跳过 PPT 验收，用户仍可直接从编辑器导出草稿。
-
-## 7.1 预设页面
-
-`slide_add_preset` 是可选的整页快捷操作，通过 `office.apply` 直接调用，payload 为 `slideId`、可选 `presetId` 和 `content`。省略预设 ID 时推荐匹配的具体设计；可以在不同页面复用相同版式。它只用于空白页，以免背景覆盖已有内容。
-
-没有匹配预设时，不把内容硬改成模板，也不反复试字段；直接使用 `slide_compose` 或原生操作完成所需表达。只有明确需要基础草稿时才指定 `auto-content`，它不是设计质量的默认兜底。
-
-`presetPages` 返回角色到真实元素 ID 的映射，后续文字、几何、图片和图表都可局部修改。通过 `inspect visual` 查看实际画面，按 `inspect review` 修正受影响页，再保存与导出；不需要独立审批工具。
 
 ## 8. 版本、冲突和交付
 

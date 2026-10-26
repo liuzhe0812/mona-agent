@@ -55,7 +55,7 @@ def tool_names(tools):
 
 def test_minimal_actual_toolset_has_no_business_tools(tmp_path):
     _, _, _, tools, _ = setup(tmp_path)
-    assert tool_names(tools) == {"read_file", "write_file", "edit_file", "list_dir", "grep", "find_files", "exec", "write_stdin", "list_exec_sessions"}
+    assert tool_names(tools) == {"read_file", "write_file", "edit_file", "list_dir", "grep", "find_files", "exec", "write_stdin", "list_exec_sessions", "development_design_resource"}
 
 
 @pytest.mark.parametrize("readonly,parent_id,enabled", [(False, None, True), (False, None, False), (True, None, True), (False, "parent_fixture", True)])
@@ -72,7 +72,7 @@ def test_delegation_policy_is_formal_parent_instruction_and_availability_stays_d
 @pytest.mark.asyncio
 async def test_readonly_is_tool_enforced_not_just_prompt(tmp_path):
     root, _, _, tools, _ = setup(tmp_path, readonly=True)
-    assert tool_names(tools) == {"read_file", "list_dir", "grep", "find_files"}
+    assert tool_names(tools) == {"read_file", "list_dir", "grep", "find_files", "development_design_resource"}
     denied = await tools.registry.execute("write_file", {"path": "should-not-exist", "content": "no"})
     assert "not found" in str(denied).lower() or "unknown" in str(denied).lower()
     assert not (root / "should-not-exist").exists()
@@ -128,6 +128,27 @@ async def test_production_runner_writes_and_tests_code_without_general_context(t
     assert checkpoints[0]["phase"] == "awaiting_tools"
     assert any(e["phase"] == "tools_partial" for e in checkpoints)
     assert "memory" not in tool_names(tools)
+
+
+@pytest.mark.asyncio
+async def test_readonly_coding_runner_receives_design_guidance_and_native_image(tmp_path):
+    root, project, session, tools, transcript = setup(tmp_path, readonly=True)
+    transcript.add_message("user", "Review the existing frontend with design references.")
+    provider = SequenceProvider([
+        LLMResponse("", tool_calls=[ToolCallRequest("guide", "development_design_resource", {"path": "SKILL.md"})]),
+        LLMResponse("", tool_calls=[ToolCallRequest("sample", "development_design_resource",
+            {"path": "assets/style-specimens/web/19-swiss-monochrome.jpg"})]),
+        LLMResponse("Reference received; project rules remain primary."),
+    ])
+    spec = build_coding_run_spec(load_project_context(project), session, transcript, tools,
+        model="test-coding", context_window_tokens=65536, defaults=CodingConfig(max_tool_iterations=5))
+    result = await AgentRunner(provider).run(spec)
+    assert result.stop_reason == "completed" and result.error is None
+    image_result = next(message["content"] for message in provider.requests[-1]["messages"]
+                        if message.get("tool_call_id") == "sample")
+    assert any(block.get("type") == "image_url" and block["image_url"]["url"].startswith("data:image/jpeg;base64,")
+               for block in image_result)
+    assert not (root / ".agents").exists() and not {"skill_read", "skill_script_run"} & tool_names(tools)
 
 
 @pytest.mark.asyncio

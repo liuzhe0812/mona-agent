@@ -68,6 +68,8 @@ class ProviderSpec:
 
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
+    # Retain tool declarations while explicitly disabling tool calls for summaries.
+    supports_prefix_compaction: bool = False
 
     # How to inject the thinking on/off toggle into extra_body.
     # ""              — no extra_body needed (default)
@@ -126,6 +128,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         chat_only=True,
         default_api_base="https://mona-ai.cn/v1",
+        supports_prefix_compaction=True,
         supports_tool_calling=True,
     ),
     # === Custom (direct OpenAI-compatible endpoint) ========================
@@ -390,6 +393,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="DeepSeek",
         backend="openai_compat",
         default_api_base="https://api.deepseek.com",
+        supports_prefix_compaction=True,
         thinking_style="thinking_type",
         supports_vision=False,
         supports_tool_calling=True,

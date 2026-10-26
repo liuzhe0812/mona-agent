@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from email import policy
 from email.message import EmailMessage
+from email.parser import BytesParser
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -124,3 +126,143 @@ async def test_extraction_routes_preserve_recipient_identity_and_save_task(
         assert "收件人（To）：其他负责人 <other@example.test>" in prompt
         assert "抄送人（Cc）：测试用户 <OWNER@example.test>" in prompt
     schedule_svc.stop()
+
+
+def test_draft_message_preserves_bcc_mime_parts_display_names_and_attachments():
+    message = api._build_draft_message(
+        {
+            "imapUsername": "sender@example.test",
+            "fromAddress": "sender@example.test",
+            "to": ["Doe, Jane <jane@example.test>"],
+            "cc": [],
+            "bcc": ["private@example.test"],
+            "subject": "Draft",
+            "bodyText": "plain body",
+            "bodyHtml": "<p>html body</p><img src=\"cid:inline-image-1\">",
+            "inReplyTo": "<original@example.test>",
+            "attachments": [
+                {
+                    "filename": "file.txt",
+                    "contentType": "text/plain",
+                    "data": "eA==",
+                },
+                {
+                    "filename": "inline.png",
+                    "contentType": "image/png",
+                    "data": "eA==",
+                    "contentId": "inline-image-1",
+                },
+            ],
+        },
+        "draft-request-123456",
+    )
+    parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
+
+    assert str(parsed["To"]) == '"Doe, Jane" <jane@example.test>'
+    assert parsed["Bcc"] == "private@example.test"
+    assert parsed["In-Reply-To"] == "<original@example.test>"
+    assert parsed["X-Mona-Draft-Request-ID"] == "draft-request-123456"
+    assert parsed.get_body(preferencelist=("plain",)).get_content().strip() == "plain body"
+    assert "html body" in parsed.get_body(preferencelist=("html",)).get_content()
+
+    attachments = [
+        part for part in parsed.walk()
+        if part.get_content_disposition() in {"attachment", "inline"}
+    ]
+    assert [part.get_filename() for part in attachments] == ["file.txt", "inline.png"]
+    assert attachments[0].get_payload(decode=True) == b"x"
+    assert attachments[1]["Content-ID"] == "<inline-image-1>"
+    assert attachments[1].get_content_disposition() == "inline"
+
+
+class _DraftImap:
+    capabilities = (b"IMAP4rev1", b"UIDPLUS")
+
+    def __init__(self) -> None:
+        self.messages = {"10": "old-draft-request-id"}
+        self.append_calls = 0
+        self.selected = ""
+        self.lose_first_append_response = True
+
+    def select(self, mailbox: str):
+        self.selected = mailbox
+        return "OK", [b"1"]
+
+    def uid(self, command: str, *args):
+        if command == "SEARCH":
+            request_id = str(args[-1])
+            found = [uid.encode() for uid, value in self.messages.items() if value == request_id]
+            return "OK", [b" ".join(found)]
+        if command == "STORE":
+            return "OK", [b"stored"]
+        if command == "EXPUNGE":
+            self.messages.pop(str(args[0]), None)
+            return "OK", [b"expunged"]
+        raise AssertionError(f"unexpected UID command: {command}")
+
+    def append(self, mailbox: str, flags: str, date_time, raw_bytes: bytes):
+        self.append_calls += 1
+        message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        self.messages["100"] = str(message["X-Mona-Draft-Request-ID"])
+        if self.lose_first_append_response:
+            self.lose_first_append_response = False
+            raise api.imaplib.IMAP4.abort("connection lost after APPEND")
+        return "OK", [b"[APPENDUID 1 100] APPEND completed"]
+
+
+def test_existing_draft_retry_finds_appended_uid_without_duplicate_append(monkeypatch):
+    fake_imap = _DraftImap()
+    monkeypatch.setattr(api, "_validate_mail_host", lambda *args: None)
+
+    def run_with_connection_retry(body, op):
+        try:
+            return op(fake_imap)
+        except (api.imaplib.IMAP4.abort, TimeoutError, ConnectionError, OSError):
+            return op(fake_imap)
+
+    monkeypatch.setattr(api.imap_pool_manager, "run", run_with_connection_retry)
+    body = {
+        "imapHost": "imap.example.test",
+        "imapUsername": "sender@example.test",
+        "fromAddress": "sender@example.test",
+        "draftUid": "10",
+        "draftFolder": "Drafts",
+        "draftRequestId": "draft-request-123456",
+        "to": ["jane@example.test"],
+        "subject": "Updated draft",
+        "bodyText": "plain",
+        "bodyHtml": "<p>html</p>",
+    }
+
+    with pytest.raises(RuntimeError, match="结果尚未确认"):
+        api._imap_save_draft(body)
+    assert fake_imap.append_calls == 1
+
+    retry = api._imap_save_draft(body)
+
+    assert retry == {"draftUid": "100", "draftFolder": "Drafts"}
+    assert fake_imap.append_calls == 1
+    assert "10" not in fake_imap.messages
+    assert fake_imap.messages["100"] == "draft-request-123456"
+
+
+async def test_save_draft_route_returns_new_uid_without_outer_retry(monkeypatch):
+    calls = {}
+
+    async def run_locked(body, func, max_retries):
+        calls["max_retries"] = max_retries
+        return {"draftUid": "100", "draftFolder": "Drafts"}
+
+    monkeypatch.setattr(api, "_run_imap_locked", run_locked)
+    request = SimpleNamespace(
+        json=AsyncMock(return_value={"draftRequestId": "draft-request-123456"})
+    )
+
+    response = await api.handle_email_save_draft(request)
+
+    assert calls["max_retries"] == 0
+    assert json.loads(response.text) == {
+        "status": "ok",
+        "draftUid": "100",
+        "draftFolder": "Drafts",
+    }

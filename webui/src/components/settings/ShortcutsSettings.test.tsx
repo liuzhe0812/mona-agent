@@ -67,4 +67,23 @@ describe("ShortcutsSettings", () => {
     expect(changed).toHaveBeenCalledTimes(1);
     window.removeEventListener("mona:send-message-shortcut", changed);
   });
+
+  it("removes sidebar shortcut editors while keeping quick ask settings and legacy preferences", async () => {
+    render(<ShortcutsSettings />);
+
+    expect(await screen.findByText("Message input")).toBeInTheDocument();
+    expect(screen.queryByText(/sidebar navigation shortcuts|侧边栏导航快捷键/i)).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/Alt\+[1-6]/)).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Ctrl+Alt+M")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /full|完整/i }));
+    fireEvent.change(screen.getByDisplayValue("Ctrl+Alt+M"), { target: { value: "Ctrl+Shift+M" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+
+    await waitFor(() => expect(mocks.updateDesktopSettings).toHaveBeenCalledWith({
+      ...baseSettings,
+      quick_ask_shortcut: "Ctrl+Shift+M",
+      quick_ask_mode: "full",
+    }));
+    expect(mocks.updateDesktopSettings.mock.calls[0][0].sidebar_shortcuts).toEqual(baseSettings.sidebar_shortcuts);
+  });
 });

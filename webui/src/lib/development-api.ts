@@ -58,7 +58,7 @@ export interface NativeProbe { state: string; reason: string; version?: string |
   modelCatalogState?: "unknown" | "ready" | "empty" | "unavailable"; modelDetails?: DevModel[]; defaultModel?: string | null }
 export interface NativeLoginStatus { loginId: string | null; state: "idle" | "starting" | "waiting" | "cancelling" | "succeeded" | "cancelled" | "failed" | "unknown"; authUrl: string; reason: string }
 export interface MessageSlice { messageId: string; content: string; sha256: string; offset: number; nextOffset: number | null; totalCharacters: number }
-export interface DevNativeBinding { id: string; turnHistory: boolean; steering?: boolean; hostSubagents?: boolean; replacesBindingId: string | null; replacementReason: "history_missing" | "user_requested" | "collaboration_updated" | null }
+export interface DevNativeBinding { id: string; turnHistory: boolean; steering?: boolean; hostSubagents?: boolean; replacesBindingId: string | null; replacementReason: "history_missing" | "user_requested" | "collaboration_updated" | "design_resources_updated" | null }
 export interface DevPlan { runId: string; explanation?: string; issue?: string; plan: { step: string; status: "pending" | "in_progress" | "completed" }[] }
 export interface DevBrowserBinding { id: string; tabId: string; origin: string }
 export interface DevBackgroundCommand {
@@ -118,6 +118,8 @@ export interface EngineResource {
   systemReason?: string;
   installed: boolean;
   managedInstalled: boolean;
+  desktopAppDetected?: boolean | null;
+  usingManaged?: boolean;
   managedExecutable?: string | null;
   managedVersion?: string | null;
   canDelete?: boolean;
@@ -272,7 +274,7 @@ export const developmentApi = {
   resources: (projectId: string) => request<ProjectResources>(`/projects/${id(projectId)}/context`),
 };
 export const isRunActive = (run?: DevRun | null) => !!run && !["succeeded", "failed", "interrupted", "unknown", "recovering", "closed_unknown"].includes(run.status);
-export const executorLabels: Record<ExecutorId, string> = { mona: "Mona Coding", codex: "Codex", claude: "Claude Code", codebuddy: "CodeBuddy" };
+export const executorLabels: Record<ExecutorId, string> = { mona: "Mona Coding", codex: "Codex", claude: "Claude Code", codebuddy: "WorkBuddy" };
 export const runLabels: Record<RunStatus, string> = {
   queued: "排队中", preparing: "准备中", running: "执行中", waiting_user: "等待确认", waiting_children: "等待子任务", interrupting: "正在中断",
   interrupted: "已中断", succeeded: "本轮结束", failed: "执行失败", unknown: "状态待核对", recovering: "恢复中", closed_unknown: "已结束 · 结果未确认",

@@ -28,6 +28,7 @@ PARTNER_VISIBLE_BUILTIN_SKILLS = frozenset({
     "mona-docx",
     "mona-xlsx",
     "mona-pptx",
+    "mona-design",
 })
 
 # Opening ---, YAML body (group 1), closing --- on its own line; supports CRLF.

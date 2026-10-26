@@ -53,8 +53,9 @@ def note_data(value):
 
 
 class NotesClient:
-    def __init__(self, invoke, binding: str, vault: str = ""):
+    def __init__(self, invoke, binding: str, vault: str = "", *, initialize: bool = False):
         self.invoke, self.binding, self.vault = invoke, binding, vault
+        self.initialize = initialize
 
     async def request(self, action, **args):
         try:
@@ -70,7 +71,7 @@ class NotesClient:
         return result
 
     async def index(self):
-        value = await self.request("index")
+        value = await self.request("index", **({"initialize": True} if self.initialize else {}))
         vault, rows = value.get("vault"), value.get("items")
         if (not isinstance(vault, str) or not HEX64.fullmatch(vault)
                 or not isinstance(rows, list) or len(rows) > 10_000):

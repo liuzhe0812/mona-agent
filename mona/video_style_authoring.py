@@ -225,6 +225,8 @@ def _sample_inputs(
         for path in (project / relative).rglob("*"):
             if path.is_file():
                 files.append(_within(project, path.relative_to(project).as_posix()))
+    if meta.get("authoringMode") == "huashu-motion":
+        files.append(_within(project, "composition/index.html"))
     if (project / "style" / "theme.css").is_file():
         files.append(_within(project, "style/theme.css"))
     return project, meta, list(dict.fromkeys(files)), frames, assets
@@ -272,7 +274,7 @@ def snapshot_style_sample(
     sample = {
         "schemaVersion": 1, "resolution": meta.get("resolution"), "scenes": meta["scenes"],
         "narrationEnabled": meta.get("narrationEnabled", False), "subtitleMode": meta.get("subtitleMode", "burned"),
-        "assets": assets,
+        "assets": assets, "authoringMode": meta.get("authoringMode"), "composition": meta.get("composition"),
         "styleInputHash": style_visual_hash(draft), "files": hashes,
         "observation": "sampled-frames", "creativeCertification": False,
     }

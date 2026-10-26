@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   CalendarDays,
   Code2,
@@ -102,18 +102,23 @@ function RailItem({
   active,
   badge,
   onClick,
+  shortcut,
+  showShortcutHint = false,
 }: {
   label: string;
   icon: ReactNode;
   active?: boolean;
   badge?: number;
   onClick: () => void;
+  shortcut?: string;
+  showShortcutHint?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
       aria-current={active ? "page" : undefined}
+      aria-keyshortcuts={shortcut}
       onClick={onClick}
       className={cn(
         "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-['']",
@@ -136,7 +141,9 @@ function RailItem({
           </span>
         )}
       </span>
-      <span className="max-w-full truncate text-[10px] leading-none">{label}</span>
+      <span className="max-w-full truncate text-[10px] leading-none">
+        {showShortcutHint && shortcut ? shortcut : label}
+      </span>
     </button>
   );
 }
@@ -147,6 +154,7 @@ export function AppRail(props: AppRailProps) {
   const emailUnreadCount = useEmailStore((s) => s.totalUnreadCount);
   const planInboxCount = useTodoStore((s) => s.inboxCount);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [showShortcutHints, setShowShortcutHints] = useState(false);
 
   const activeView = props.activeView === "ssh" ? "db" : props.activeView;
   const moduleHandlers: Record<string, () => void> = {
@@ -175,6 +183,58 @@ export function AppRail(props: AppRailProps) {
     .filter((d): d is NonNullable<typeof d> => Boolean(d))
     .filter((d) => !isMacOS() || !d.windowsOnly)
     .filter((d) => props.moduleAvailability?.[d.key] !== false);
+  const shortcuts = new Map(visible.slice(0, 9).map((item, index) => [item.key, `Alt+${(index + 2) % 10}`]));
+  const shortcutHandlers = useRef<Array<() => void>>([]);
+  // Use the latest navigation order without restarting the Alt hold timer.
+  shortcutHandlers.current = [props.onOpenMessages, ...visible.slice(0, 9).map((item) => moduleHandlers[item.key] ?? (() => {}))];
+
+  useEffect(() => {
+    let altHeld = false;
+    let timer: number | undefined;
+    const hide = () => {
+      window.clearTimeout(timer);
+      timer = undefined;
+      altHeld = false;
+      setShowShortcutHints(false);
+    };
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (!event.altKey && event.key !== "Alt") return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.getModifierState("AltGraph")) {
+        hide();
+        return;
+      }
+      if (event.key === "Alt") {
+        if (altHeld || event.repeat) return;
+        altHeld = true;
+        timer = window.setTimeout(() => setShowShortcutHints(true), 500);
+        return;
+      }
+      if (!event.altKey) return;
+      const digit = /^Digit([0-9])$/.exec(event.code)?.[1]
+        ?? (!event.code && /^[0-9]$/.test(event.key) ? event.key : undefined);
+      if (digit === undefined) return;
+      const handler = shortcutHandlers.current[digit === "0" ? 9 : Number(digit) - 1];
+      if (!handler) return;
+      event.preventDefault();
+      handler();
+    };
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.key === "Alt") hide();
+    };
+    const visibilityChanged = () => { if (document.hidden) hide(); };
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, []);
 
   // 直出槽位容量 = 中间区可用高度 ÷ 单槽位高度（运行时实测：首槽位 offsetHeight
   // + 列表 rowGap，避免样式演进后硬编码失配）。中间区 flex-1 min-h-0，其
@@ -224,6 +284,7 @@ export function AppRail(props: AppRailProps) {
         const label = t(`rail.modules.${item.key}`, item.label);
         return {
           text: badge ? `${label} (${badge > 99 ? "99+" : badge})` : label,
+          accelerator: shortcuts.get(item.key),
           checked: activeView === item.key,
           action: moduleHandlers[item.key] ?? (() => {}),
         };
@@ -279,6 +340,8 @@ export function AppRail(props: AppRailProps) {
             active={props.activeView === "chat"}
             badge={props.messageAttentionCount}
             onClick={props.onOpenMessages}
+            shortcut="Alt+1"
+            showShortcutHint={showShortcutHints}
           />
           {primary.map((item) => (
             <RailItem
@@ -288,6 +351,8 @@ export function AppRail(props: AppRailProps) {
               active={activeView === item.key}
               badge={moduleBadge(item.key)}
               onClick={moduleHandlers[item.key] ?? (() => {})}
+              shortcut={shortcuts.get(item.key)}
+              showShortcutHint={showShortcutHints}
             />
           ))}
           {secondary.length > 0 && (
@@ -316,6 +381,7 @@ export function AppRail(props: AppRailProps) {
                         {MODULE_ICONS[item.key] ?? item.icon}
                       </span>
                       <span>{t(`rail.modules.${item.key}`, item.label)}</span>
+                      {shortcuts.get(item.key) ? <span className="ml-auto text-caption text-muted-foreground">{shortcuts.get(item.key)}</span> : null}
                       {moduleBadge(item.key) ? (
                         <span className="ml-auto rounded-full bg-destructive px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white">
                           {(moduleBadge(item.key) ?? 0) > 99 ? "99+" : moduleBadge(item.key)}
@@ -351,7 +417,7 @@ export function AppRail(props: AppRailProps) {
                 <button
                   type="button"
                   aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("rail.account")}
-                  onClick={() => props.onOpenSettings("general")}
+                  onClick={() => props.onOpenSettings("account")}
                   className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sidebar-foreground/85 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.08)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <User className="h-4 w-4" />

@@ -506,6 +506,9 @@ mod local_http_auth_tests {
         assert!(needs_services_token("/api/video/voice-preview"));
         assert!(needs_services_token("/api/video/project/audio-preview"));
         assert!(needs_services_token("/api/video/series/example/style/reference"));
+        assert!(needs_services_token("/api/stock-vibe"));
+        assert!(needs_services_token("/api/stock-vibe/requests/id"));
+        assert!(!needs_services_token("/api/stock-vibe-other"));
         assert!(!needs_services_token("/api/video/series-other/style/reference"));
         assert!(!needs_services_token("/api/video/project/audio-preview-other"));
         assert!(!needs_services_token("/api/video/voice-preview-other"));
@@ -539,6 +542,8 @@ fn needs_services_token(path: &str) -> bool {
         || path.starts_with("/api/cloud-sync/")
         || path.starts_with("/api/profile")
         || (path.starts_with("/api/office") && path != "/api/office/ws")
+        || path == "/api/stock-vibe"
+        || path.starts_with("/api/stock-vibe/")
         || path == "/api/stock/research/preflight"
         || path == "/api/video/voice-preview"
         || path == "/api/video/project/audio-preview"
@@ -625,7 +630,7 @@ async fn perform_local_http_request(
     let client = local_http_client()?;
 
     // 受保护的 services 路由自动附带本地令牌：资料库、用户画像、Office、视频风格，
-    // 以及会触发外部抓取和写入预检上下文的精确股票预检路径。
+    // stock-vibe API、以及会触发外部抓取和写入预检上下文的精确股票预检路径。
     // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
     let needs_token = needs_services_token(parsed.path())
         && !headers
@@ -1033,6 +1038,9 @@ pub fn run() {
             terminal::commands::sftp_upload,
             terminal::commands::terminal_save_connections,
             terminal::commands::terminal_load_connections,
+            terminal::commands::terminal_load_connection_state,
+            terminal::commands::terminal_upsert_connection,
+            terminal::commands::terminal_delete_saved_connection,
             terminal::commands::ssh_trust_host_key,
             terminal::commands::ssh_remove_host_key,
             terminal::commands::terminal_list_sessions,
@@ -1197,10 +1205,7 @@ pub fn run() {
             contacts::contact_test_carddav,
             contacts::contact_sync_eas,
             contacts::contact_test_eas,
-            license::get_machine_id,
-            license::check_license,
-            license::license_has_access,
-            license::import_license,
+            license::check_account_status,
             license::get_pricing,
             license::auth_register,
             license::send_register_code,
@@ -1212,7 +1217,6 @@ pub fn run() {
             license::auth_reset_password,
             license::auth_change_password,
             license::get_auth_status,
-            license::bind_device,
             license::upload_image,
             license::list_notifications,
             license::get_unread_notification_count,

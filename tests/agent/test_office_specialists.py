@@ -95,6 +95,74 @@ async def test_word_advanced_helpers_roundtrip_via_skill_tool(tmp_path, monkeypa
         assert archive.testzip() is None
 
 
+@pytest.mark.asyncio
+async def test_source_picture_runs_through_skill_and_office_asset_pipeline(tmp_path, monkeypatch):
+    import base64
+
+    from docx import Document
+    from PIL import Image
+
+    from mona.agent.tools import skill_tools
+    from mona.runtime.agent_env import AgentEnvironmentManager, AgentEnvironmentResolution
+
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=SKILL_ROOT)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: loader)
+
+    class LocalTestRuntime:
+        async def prepare_for_skill(self, suffix, skill_dir, spec):
+            assert suffix == ".py"
+            requirements = AgentEnvironmentManager._python_requirements(spec, skill_dir)
+            assert {"defusedxml==0.7.1", "pillow==12.3.0", "pymupdf==1.28.2"} <= set(requirements)
+            return AgentEnvironmentResolution(executable=Path(sys.executable), env={})
+
+    photo = tmp_path / "原产品图.png"
+    Image.new("RGB", (40, 30), (24, 70, 110)).save(photo)
+    original_image = photo.read_bytes()
+    source = tmp_path / "产品介绍.docx"
+    document = Document()
+    document.add_paragraph("Product photograph and original dimensions")
+    document.add_picture(str(photo))
+    document.save(source)
+    source_bytes = source.read_bytes()
+    result = await skill_tools.SkillScriptRunTool(
+        track_usage=False, workspace=tmp_path, agent_environment=LocalTestRuntime(),
+    ).execute(
+        skill="mona-pptx", script="extract_source_images.py",
+        args='--input "产品介绍.docx" --output-dir "assets/产品原图"',
+    )
+    assert "[exit code: 0]" in result, result
+    extracted = json.loads(result.split("\n[exit code:", 1)[0])
+    asset = extracted["assets"][0]
+    assert (tmp_path / asset["assetPath"]).read_bytes() == original_image
+    assert source.read_bytes() == source_bytes
+
+    commands = []
+
+    class RecordingOfficeClient:
+        async def apply(self, command, *, owner_session_key):
+            commands.append(command)
+            return OfficeCommandSuccess(
+                ok=True, session_id=command.session_id, operation_id=command.operation_id,
+                version=DocumentVersion(editor_epoch="asset-epoch", model_revision=1),
+                changed_targets=["source-page"], summary="Inserted picture",
+            )
+
+    monkeypatch.setattr("mona.agent.tools.office.OfficeServiceClient.from_port", lambda _port: RecordingOfficeClient())
+    office = OfficeTool(workspace=tmp_path, restrict_to_workspace=True)
+    response = json.loads(await office.execute(
+        action="apply", session_id="source-assets-test",
+        expected_version={"editorEpoch": "asset-epoch", "modelRevision": 0},
+        operations=[{"op": "slide_add_image", "payload": {
+            "slideId": "source-page", "assetPath": asset["assetPath"],
+            "x": 80, "y": 80, "width": 400, "height": 300,
+        }}],
+    ))
+    assert response["ok"] is True
+    image_payload = commands[0].operations[0].payload
+    assert "assetPath" not in image_payload
+    assert base64.b64decode(image_payload["dataUrl"].split(",", 1)[1]) == original_image
+
+
 @pytest.fixture
 def builtin_loader_root() -> Path:
     return SKILL_ROOT
@@ -184,6 +252,44 @@ def test_specialist_guidance_uses_incremental_reads_and_domain_acceptance() -> N
     assert "REVIEW_REQUIRED" in contents["mona-xlsx"]
     assert "原生单元格/范围用于需要编辑和数据含义" in contents["mona-xlsx"]
     assert "不要求任意表格都变成原生对象" in contents["mona-docx"]
+
+
+@pytest.mark.asyncio
+async def test_ppt_design_entry_reads_shared_native_bridge_through_skill_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.agent.tools import skill_tools
+
+    loader = _loader(tmp_path, SKILL_ROOT, MONA_AGENT_ID)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: loader)
+    ppt = loader.load_skill("mona-pptx")
+    assert 'skill_reference_read(skill="mona-design", ref_path="native-pptx.md")' in ppt
+    bridge = SKILL_ROOT / "mona-design" / "references" / "native-pptx.md"
+    expected = bridge.read_text(encoding="utf-8")
+
+    result = await skill_tools.SkillReferenceReadTool(track_usage=False).execute(
+        skill="mona-design", ref_path="native-pptx.md",
+    )
+    assert isinstance(result, list)
+    page = json.loads(result[0]["text"])
+    assert page["content"] == expected
+    assert page["nextOffset"] is None
+    previews = [block for block in result if block.get("type") == "image_url"]
+    assert len(previews) == 2
+    assert all(block["image_url"]["url"].startswith("data:image/") for block in previews)
+    assert "office" in expected
+
+    ppt_root = SKILL_ROOT / "mona-pptx"
+    assert {path.name for path in (ppt_root / "references").rglob("*.md")} == {
+        "advanced-operations.md", "in-place-editing.md", "office-operations.md",
+        "visual-review.md", "source-images.md",
+    }
+    for path in ppt_root.rglob("*.md"):
+        for target in re.findall(r"\]\(([^)]+\.md)\)", path.read_text(encoding="utf-8")):
+            assert (path.parent / target).is_file(), (path, target)
+    for name in ("native", "presets", "design", "scenarios"):
+        assert not any(path.is_file() for path in (ppt_root / "assets" / name).rglob("*"))
+    assert not (ppt_root / "assets" / "previews.json").exists()
 
 
 def _office_json_examples() -> list[tuple[Path, dict[str, object]]]:

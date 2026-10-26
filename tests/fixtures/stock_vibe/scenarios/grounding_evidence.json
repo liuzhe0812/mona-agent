@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-15T16:00:00Z",
+  "identity": {"status": "locked"},
+  "session_symbols": ["600519.SH"],
+  "session_symbol_roots": ["600519.SH"],
+  "evidence": [
+    {
+      "call_id": "synthetic-market-call",
+      "tool": "get_market_data",
+      "symbol": "600519.SH",
+      "source": "tencent",
+      "timestamp": "2026-10-15",
+      "field": "close",
+      "value": 1512.5,
+      "status": "observed",
+      "currency": "CNY",
+      "venue": "SSE",
+      "currency_conversion": null,
+      "artifact": null,
+      "scope": null
+    }
+  ],
+  "tool_failures": [],
+  "analysis_completed": [],
+  "analysis_evidence": [],
+  "validations": [],
+  "released": null
+}

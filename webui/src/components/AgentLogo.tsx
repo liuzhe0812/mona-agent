@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { MONA_BRAND_AVATAR, MONA_BRAND_ICON } from "@/lib/brand-assets";
 
 type AgentLogoState = "working" | "idle" | "welcome";
 
@@ -17,7 +18,7 @@ const AGENT_LOGO_STYLES = `
     inset: -3px;
     z-index: 0;
     border: 1.5px solid transparent;
-    border-radius: 24%;
+    border-radius: 22%;
     pointer-events: none;
   }
   .mona-agent-logo--working::before {
@@ -44,7 +45,7 @@ export function AgentLogo({ state, variant = "scene", className, title }: AgentL
       : state === "welcome"
         ? "mona-agent-logo--welcome"
         : "mona-agent-logo--idle";
-  const imageSrc = variant === "avatar" ? "/brand/mona_avatar_white.png" : "/brand/mona_app_icon.png";
+  const imageSrc = variant === "avatar" ? MONA_BRAND_AVATAR : MONA_BRAND_ICON;
 
   return (
     <span
@@ -61,9 +62,8 @@ export function AgentLogo({ state, variant = "scene", className, title }: AgentL
         draggable={false}
         className={cn(
           "relative z-[1] block h-full w-full object-contain",
-          variant === "scene" && "rounded-[24%]",
+          variant === "scene" && "rounded-[22%]",
         )}
-        style={variant === "scene" ? { clipPath: "inset(0 round 24%)" } : undefined}
       />
     </span>
   );

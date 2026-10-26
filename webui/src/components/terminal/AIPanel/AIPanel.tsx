@@ -19,6 +19,8 @@ type PanelTab = "task" | "history";
 export function AIPanel({ sessionId, sessionType }: Props) {
   const [tab, setTab] = useState<PanelTab>("task");
   const [messageKey, setMessageKey] = useState(0);
+  const [activeTaskLoadFailed, setActiveTaskLoadFailed] = useState(false);
+  const [activeTaskRefreshKey, setActiveTaskRefreshKey] = useState(0);
   const setAiStreaming = useTerminalStore((s) => s.setAiStreaming);
   const setAiChatId = useTerminalStore((s) => s.setAiChatId);
   const setActiveMaintenanceTask = useTerminalStore((s) => s.setActiveMaintenanceTask);
@@ -32,13 +34,17 @@ export function AIPanel({ sessionId, sessionType }: Props) {
     let cancelled = false;
     terminalMaintenanceGetActive(sessionId)
       .then((detail) => {
-        if (!cancelled) setActiveMaintenanceTask(sessionId, detail);
+        if (cancelled) return;
+        setActiveMaintenanceTask(sessionId, detail);
+        setActiveTaskLoadFailed(false);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setActiveTaskLoadFailed(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, setActiveMaintenanceTask]);
+  }, [sessionId, setActiveMaintenanceTask, activeTaskRefreshKey]);
 
   // 重置会话：解绑当前 AI 会话并重新挂载 AIChat，由它创建新的可见会话。
   const handleResetChat = useCallback(() => {
@@ -87,6 +93,20 @@ export function AIPanel({ sessionId, sessionType }: Props) {
       <div className="flex min-h-0 flex-1 flex-col">
         {tab === "task" ? (
           <>
+            {activeTaskLoadFailed && (
+              <div role="alert" className="flex shrink-0 items-center justify-between gap-2 border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-caption text-destructive">
+                <span>无法加载当前维护任务，任务状态可能不是最新的。</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => setActiveTaskRefreshKey((value) => value + 1)}
+                  className="shrink-0"
+                >
+                  重试
+                </Button>
+              </div>
+            )}
             {activeTask && (
               <div className="shrink-0 border-b border-border/50 px-2.5 py-2">
                 {/* 按任务 id 重建，让新任务的步骤卡片回到展开状态。 */}

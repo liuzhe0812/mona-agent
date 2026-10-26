@@ -65,8 +65,6 @@ _MAX_LENGTH_RECOVERIES = 3
 _MAX_INJECTIONS_PER_TURN = 3
 _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
-_MICROCOMPACT_KEEP_RECENT = 10
-_MICROCOMPACT_MIN_CHARS = 500
 _TOOL_REPEAT_WARNING_AT = 3
 _TOOL_REPEAT_BLOCK_AT = 5
 _POLLING_REPEAT_WARNING_AT = 5
@@ -74,7 +72,7 @@ _POLLING_REPEAT_BLOCK_AT = 10
 _MAX_TOOL_REPEAT_PERIOD = 4
 _TOOL_LOOP_FINALIZATION_TIMEOUT_S = 30
 _POLLING_TOOLS = frozenset(
-    {"list_exec_sessions", "stock_research_status", "terminal_output", "write_stdin"}
+    {"list_exec_sessions", "terminal_output", "write_stdin"}
 )
 _PAGINATION_ARGUMENTS = frozenset({"cursor", "offset", "pages"})
 _GENERATED_MEDIA_TOOLS = frozenset({"generate_image", "generate_video"})
@@ -137,18 +135,6 @@ def _definition_matches(definition: Any, names: set[str]) -> bool:
     return isinstance(name, str) and name in names
 
 
-_COMPACTABLE_TOOLS = frozenset(
-    {
-        "read_file",
-        "exec",
-        "grep",
-        "find_files",
-        "web_search",
-        "web_fetch",
-        "list_dir",
-        "list_exec_sessions",
-    }
-)
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
 
 
@@ -186,6 +172,7 @@ class AgentRunSpec:
     injection_callback: Any | None = None
     model_context_callback: Any | None = None
     context_limit_callback: Any | None = None
+    request_snapshot_callback: Any | None = None
     strict_injections: bool = False
     max_injection_cycles: int = _MAX_INJECTION_CYCLES
     llm_timeout_s: float | None = None
@@ -452,6 +439,7 @@ class AgentRunner:
         injection_cycles = 0
         context_recovery_used = False
         force_context_compaction = False
+        snipped_prefix_count = 0
 
         def reset_repeat_guard() -> None:
             tool_call_rounds.clear()
@@ -480,9 +468,17 @@ class AgentRunner:
                 messages_for_model = self._drop_orphan_tool_results(prepared if prepared is not None else messages)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 if prepared is None:
-                    messages_for_model = self._microcompact(messages_for_model)
+                    messages_for_model = self._retain_snipped_history_prefix(
+                        messages_for_model,
+                        snipped_prefix_count,
+                    )
                     messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                    messages_for_model = self._snip_history(spec, messages_for_model)
+                    before_snip = messages_for_model
+                    messages_for_model = self._snip_history(spec, before_snip)
+                    snipped_prefix_count += self._snipped_prefix_delta(
+                        before_snip,
+                        messages_for_model,
+                    )
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
@@ -1213,6 +1209,8 @@ class AgentRunner:
             )
         if progress_state and progress_state.get("reasoning_open"):
             await hook.emit_reasoning_end()
+        if spec.request_snapshot_callback is not None and response.finish_reason != "error":
+            spec.request_snapshot_callback(messages=messages, tools=tool_defs)
         return response
 
     async def _request_finalization_retry(
@@ -1237,7 +1235,7 @@ class AgentRunner:
         try:
             response = await self._request_finalization_retry(
                 spec,
-                messages if preserve_context else self._snip_history(spec, self._microcompact(messages)),
+                messages if preserve_context else self._snip_history(spec, messages),
                 require_image=preserve_context and any(
                     isinstance(message.get("content"), list)
                     and any(isinstance(block, dict) and block.get("type") == "image_url"
@@ -1323,13 +1321,16 @@ class AgentRunner:
     ) -> dict[str, Any]:
         """Add request-local context details without changing billing counters."""
         result: dict[str, Any] = dict(usage)
-        if "prompt_tokens" not in usage:
+        if "prompt_tokens" not in usage and "context_tokens" not in usage:
             return result
-        result["context_tokens"] = usage.get("prompt_tokens", 0) + usage.get(
-            "completion_tokens", 0
+        # Native engines may bill several internal requests in one response.
+        result.setdefault(
+            "context_tokens",
+            usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
         )
         if (
-            spec.context_window_verified
+            not usage.get("context_window_tokens")
+            and spec.context_window_verified
             and spec.context_window_tokens
             and spec.context_window_tokens > 0
         ):
@@ -1999,32 +2000,6 @@ class AgentRunner:
             offset += 1
         return updated
 
-    @staticmethod
-    def _microcompact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Replace old compactable tool results with one-line summaries."""
-        compactable_indices: list[int] = []
-        for idx, msg in enumerate(messages):
-            if msg.get("role") == "tool" and msg.get("name") in _COMPACTABLE_TOOLS:
-                compactable_indices.append(idx)
-
-        if len(compactable_indices) <= _MICROCOMPACT_KEEP_RECENT:
-            return messages
-
-        stale = compactable_indices[: len(compactable_indices) - _MICROCOMPACT_KEEP_RECENT]
-        updated: list[dict[str, Any]] | None = None
-        for idx in stale:
-            msg = messages[idx]
-            content = msg.get("content")
-            if not isinstance(content, str) or len(content) < _MICROCOMPACT_MIN_CHARS:
-                continue
-            name = msg.get("name", "tool")
-            summary = f"[{name} result omitted from context]"
-            if updated is None:
-                updated = [dict(m) for m in messages]
-            updated[idx]["content"] = summary
-
-        return updated if updated is not None else messages
-
     def _apply_tool_result_budget(
         self,
         spec: AgentRunSpec,
@@ -2045,6 +2020,26 @@ class AgentRunner:
                     updated = [dict(m) for m in messages]
                 updated[idx]["content"] = normalized
         return updated
+
+    @staticmethod
+    def _retain_snipped_history_prefix(
+        messages: list[dict[str, Any]],
+        dropped_prefix_count: int,
+    ) -> list[dict[str, Any]]:
+        if dropped_prefix_count <= 0:
+            return messages
+        system = [message for message in messages if message.get("role") == "system"]
+        history = [message for message in messages if message.get("role") != "system"]
+        return system + history[min(dropped_prefix_count, max(0, len(history) - 1)) :]
+
+    @staticmethod
+    def _snipped_prefix_delta(
+        before: list[dict[str, Any]],
+        after: list[dict[str, Any]],
+    ) -> int:
+        before_count = sum(message.get("role") != "system" for message in before)
+        after_count = sum(message.get("role") != "system" for message in after)
+        return max(0, before_count - after_count)
 
     def _snip_history(
         self,
@@ -2073,7 +2068,7 @@ class AgentRunner:
             return messages
 
         system_tokens = sum(estimate_message_tokens(msg) for msg in system_messages)
-        remaining_budget = max(128, budget - system_tokens)
+        remaining_budget = max(128, int((budget - system_tokens) * 0.8))
         kept: list[dict[str, Any]] = []
         kept_tokens = 0
         for message in reversed(non_system):

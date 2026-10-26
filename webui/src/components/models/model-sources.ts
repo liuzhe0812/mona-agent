@@ -38,7 +38,7 @@ export function sourceId(provider: string, builtin = false): string {
   return provider;
 }
 export function sourceLabel(provider: string, fallback?: string): string {
-  return ({ mona_managed: "Mona AI", openai: "OpenAI", anthropic: "Anthropic", "native:codebuddy": "CodeBuddy" } as Record<string, string>)[sourceId(provider)] ?? fallback ?? provider;
+  return ({ mona_managed: "Mona AI", openai: "OpenAI", anthropic: "Anthropic", "native:codebuddy": "WorkBuddy" } as Record<string, string>)[sourceId(provider)] ?? fallback ?? provider;
 }
 export function modelKey(option: Pick<ModelOption, "provider" | "model" | "executor" | "selectionId">): string {
   return JSON.stringify([option.provider, option.model, option.executor ?? "mona", option.selectionId ?? ""]);

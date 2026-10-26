@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -20,6 +22,7 @@ def _archive(
     version: str,
     entrypoints: dict[str, str] | None = None,
     requirements: bool = False,
+    environment: str = "official",
 ) -> Path:
     entrypoints = entrypoints or {}
     manifest: dict[str, object] = {
@@ -35,6 +38,7 @@ def _archive(
                 "pythonRequirements": "requirements.lock",
                 "pythonWheelhouse": "wheels",
                 "healthImports": ["numpy", "pandas.io"],
+                "pythonEnvironment": environment,
             }
         )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -198,3 +202,84 @@ async def test_failed_upgrade_keeps_previous_environment_active(tmp_path: Path) 
             failing._resolve_components(["python-base@3.12", "scientific@2"]),
         )
     ).exists()
+
+
+async def test_financial_environment_does_not_merge_scientific_packs(tmp_path: Path) -> None:
+    root = tmp_path / "runtimes"
+    store = RuntimeComponentStore(root)
+    _install_base(store, tmp_path)
+    for component, environment in (("scientific", "official"), ("stock-vibe", "stock-vibe")):
+        store.install_archive(_archive(
+            tmp_path / f"{component}.zip", component_id=component, version="1",
+            requirements=True, environment=environment,
+        ))
+    builder = PythonEnvironmentBuilder(root, store, runner=FakeRunner(), current_platform="win32")
+    scientific = await builder.ensure(["python-base@3.12", "scientific@1"])
+    financial = builder.for_environment("stock-vibe")
+    vibe = await financial.ensure(["python-base@3.12", "stock-vibe@1"])
+    assert builder.current() == scientific
+    assert financial.current() == vibe
+    assert vibe.packs == ["python-base@3.12", "stock-vibe@1"]
+    assert builder.python_for(["stock-vibe@1"]) is None
+    assert financial.python_for(["scientific@1"]) is None
+    with pytest.raises(RuntimeManagerError, match="different environment"):
+        await builder.ensure(["python-base@3.12", "stock-vibe@1"])
+    with pytest.raises(ValueError):
+        builder.for_environment("../outside")
+
+
+async def test_busy_old_environment_does_not_fail_new_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = tmp_path / "runtimes"
+    store = RuntimeComponentStore(root)
+    _install_base(store, tmp_path)
+    builder = PythonEnvironmentBuilder(root, store, runner=FakeRunner(), current_platform="win32")
+
+    generations = []
+    for version in ("1", "2"):
+        store.install_archive(
+            _archive(
+                tmp_path / f"scientific-v{version}.zip",
+                component_id="scientific",
+                version=version,
+                requirements=True,
+            )
+        )
+        generations.append(await builder.ensure(["python-base@3.12", f"scientific@{version}"]))
+
+    oldest, rollback = generations
+    oldest_path = builder.environments_root / oldest.generation
+    rollback_path = builder.environments_root / rollback.generation
+    original_rmtree = shutil.rmtree
+
+    def rmtree_with_busy_old_generation(path: str | Path, *args: object, **kwargs: object) -> None:
+        if Path(path) == oldest_path:
+            raise PermissionError(13, "file in use")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("mona.runtime.python_env.shutil.rmtree", rmtree_with_busy_old_generation)
+    caplog.set_level(logging.WARNING, logger="mona.runtime.python_env")
+
+    store.install_archive(
+        _archive(
+            tmp_path / "scientific-v3.zip",
+            component_id="scientific",
+            version="3",
+            requirements=True,
+        )
+    )
+    ready = await builder.ensure(["python-base@3.12", "scientific@3"])
+
+    current = builder.current()
+    assert current == ready
+    assert json.loads(builder.current_path.read_text(encoding="utf-8"))["generation"] == ready.generation
+    assert (builder.environments_root / ready.generation / "environment.json").is_file()
+    assert rollback_path.is_dir()
+    assert oldest_path.is_dir()
+    assert any(
+        "Could not prune inactive Python environment generation " + oldest.generation in record.message
+        for record in caplog.records
+    )

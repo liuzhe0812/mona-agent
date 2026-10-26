@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from mona.agent import agent_management, partners, skill_usage
-from mona.agent.partners import BUILTIN_AGENTS_DIR, MONA_AGENT_ID, AgentRegistry
+from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
 from mona.agent.skills import SkillsLoader
 from mona.agent.tools.context import ToolContext
 from mona.agent.tools.loader import ToolLoader
@@ -32,18 +32,9 @@ from mona.agent.tools.skill_tools import (
 )
 from mona.config import paths as config_paths
 
-ANALYST = "com.mona.a-share-analyst"
 XHS = "com.mona.xhs-operator"
-ANALYST_PACKAGE_SKILL = "stock-report-explaining"
-ANALYST_PACKAGE_SKILLS = {
-    "stock-data-query",
-    "stock-analysis",
-    "market-briefing",
-    "stock-screening",
-    "stock-report-explaining",
-}
 XHS_PACKAGE_SKILL = "xhs-content-operations"
-PRIVATE_AGENT_IDS = (MONA_AGENT_ID, ANALYST, XHS)
+PRIVATE_AGENT_IDS = (MONA_AGENT_ID, XHS)
 EXPERT_SOURCE_ROOT = Path(__file__).parents[2] / "expert-library" / "agents"
 
 
@@ -55,16 +46,8 @@ def combined_package_sources(
     combined = tmp_path / "package-sources"
     combined.mkdir()
     shutil.copytree(
-        BUILTIN_AGENTS_DIR / "com.mona.a-share-team",
-        combined / "com.mona.a-share-team",
-    )
-    shutil.copytree(
         EXPERT_SOURCE_ROOT / XHS,
         combined / XHS,
-    )
-    shutil.copytree(
-        EXPERT_SOURCE_ROOT / ANALYST,
-        combined / ANALYST,
     )
     monkeypatch.setattr(partners, "BUILTIN_AGENTS_DIR", combined)
     return combined
@@ -128,13 +111,10 @@ async def _create_skill(agent_id: str, name: str, body: str) -> str:
 
 
 class TestRealManifestLoading:
-    def test_real_builtin_manifests_load(self, registry: AgentRegistry) -> None:
-        assert registry.get(ANALYST) is not None
+    def test_real_package_manifests_load(self, registry: AgentRegistry) -> None:
         assert registry.get(XHS) is not None
 
     def test_registry_lists_package_skills(self, registry: AgentRegistry) -> None:
-        names = {e["name"] for e in _loader(registry, ANALYST).list_skills(filter_unavailable=False)}
-        assert ANALYST_PACKAGE_SKILLS <= names
         names = {e["name"] for e in _loader(registry, XHS).list_skills(filter_unavailable=False)}
         assert XHS_PACKAGE_SKILL in names
 
@@ -143,11 +123,11 @@ class TestRealAllowlist:
     def test_tool_loader_registers_skill_resource_tools_from_real_allowlist(
         self, registry: AgentRegistry, tmp_path: Path
     ) -> None:
-        definition = registry.require(ANALYST)
+        definition = registry.require(XHS)
         assert "skill_read" in definition.tool_allowlist
         assert "skill_reference_read" in definition.tool_allowlist
 
-        ctx = ToolContext(config=SimpleNamespace(), workspace=str(tmp_path / "ws"), agent_id=ANALYST)
+        ctx = ToolContext(config=SimpleNamespace(), workspace=str(tmp_path / "ws"), agent_id=XHS)
         tools = ToolRegistry()
         registered = ToolLoader().load(
             ctx, tools, scope="subagent", tool_allowlist=definition.tool_allowlist
@@ -161,7 +141,7 @@ class TestRealAllowlist:
         self, registry: AgentRegistry, tmp_path: Path
     ) -> None:
         # Naming a Mona-only tool in the allowlist must not register it.
-        definition = registry.require(ANALYST)
+        definition = registry.require(XHS)
         registered = ToolLoader().load(
             ToolContext(config=SimpleNamespace(), workspace=str(tmp_path / "ws")),
             ToolRegistry(),
@@ -171,34 +151,30 @@ class TestRealAllowlist:
         assert "delegate_agent" not in registered
 
 class TestPackageSkillAccess:
-    async def test_analyst_reads_own_package_skill(self, registry: AgentRegistry) -> None:
-        content = await SkillReadTool(agent_id=ANALYST).execute(name=ANALYST_PACKAGE_SKILL)
+    async def test_xhs_reads_own_package_skill(self, registry: AgentRegistry) -> None:
+        content = await SkillReadTool(agent_id=XHS).execute(name=XHS_PACKAGE_SKILL)
         assert "not found" not in content
-        assert "stock" in content.lower()
+        assert "小红书内容运营" in content
 
-    async def test_analyst_reads_own_package_reference(self, registry: AgentRegistry) -> None:
-        content = await SkillReferenceReadTool(agent_id=ANALYST).execute(
-            skill="stock-analysis",
-            ref_path="technical-analysis.md",
+    async def test_xhs_reads_own_package_reference(self, registry: AgentRegistry) -> None:
+        content = await SkillReferenceReadTool(agent_id=XHS).execute(
+            skill=XHS_PACKAGE_SKILL,
+            ref_path="title-copy.md",
         )
         assert "Error:" not in content
-        assert "# 技术分析指南" in content
+        assert "# 标题、选题与正文模板库" in content
 
-    async def test_other_agent_cannot_read_analyst_package_reference(
+    async def test_mona_cannot_read_xhs_package_reference(
         self, registry: AgentRegistry
     ) -> None:
-        content = await SkillReferenceReadTool(agent_id=XHS).execute(
-            skill="stock-analysis",
-            ref_path="technical-analysis.md",
+        content = await SkillReferenceReadTool(agent_id=MONA_AGENT_ID).execute(
+            skill=XHS_PACKAGE_SKILL,
+            ref_path="title-copy.md",
         )
-        assert "not found" in content
-
-    async def test_xhs_cannot_read_analyst_package_skill(self, registry: AgentRegistry) -> None:
-        content = await SkillReadTool(agent_id=XHS).execute(name=ANALYST_PACKAGE_SKILL)
         assert "not found" in content
 
     async def test_mona_cannot_read_partner_package_skill(self, registry: AgentRegistry) -> None:
-        content = await SkillReadTool(agent_id=MONA_AGENT_ID).execute(name=ANALYST_PACKAGE_SKILL)
+        content = await SkillReadTool(agent_id=MONA_AGENT_ID).execute(name=XHS_PACKAGE_SKILL)
         assert "not found" in content
 
 
@@ -207,50 +183,50 @@ class TestSelfCreatedSkillLifecycle:
         self, registry: AgentRegistry, private_roots: dict[str, Path]
     ) -> None:
         expected = await _create_skill(
-            ANALYST, "my-research-checklist", "# checklist\n"
+            XHS, "my-research-checklist", "# checklist\n"
         )
 
         # A later run/tool instance resolves it through the same chain.
-        content = await SkillReadTool(agent_id=ANALYST).execute(name="my-research-checklist")
+        content = await SkillReadTool(agent_id=XHS).execute(name="my-research-checklist")
         assert content == expected
 
     async def test_created_skill_invisible_to_other_agents(
         self, registry: AgentRegistry, private_roots: dict[str, Path]
     ) -> None:
-        await _create_skill(ANALYST, "my-research-checklist", "# checklist\n")
-        for agent_id in (XHS, MONA_AGENT_ID):
-            content = await SkillReadTool(agent_id=agent_id).execute(name="my-research-checklist")
-            assert "not found" in content, agent_id
+        await _create_skill(XHS, "my-research-checklist", "# checklist\n")
+        content = await SkillReadTool(agent_id=MONA_AGENT_ID).execute(
+            name="my-research-checklist"
+        )
+        assert "not found" in content, MONA_AGENT_ID
 
     async def test_private_skill_cannot_shadow_package_skill(
         self, registry: AgentRegistry, private_roots: dict[str, Path]
     ) -> None:
-        result = await SkillCreateTool(agent_id=ANALYST).execute(
-            name=ANALYST_PACKAGE_SKILL,
-            content=_skill_content(ANALYST_PACKAGE_SKILL, "# private override\n"),
+        result = await SkillCreateTool(agent_id=XHS).execute(
+            name=XHS_PACKAGE_SKILL,
+            content=_skill_content(XHS_PACKAGE_SKILL, "# private override\n"),
         )
         assert "conflicts with a package or platform skill" in result
-        content = await SkillReadTool(agent_id=ANALYST).execute(name=ANALYST_PACKAGE_SKILL)
-        assert "# 报告解释与研究边界" in content
+        content = await SkillReadTool(agent_id=XHS).execute(name=XHS_PACKAGE_SKILL)
+        assert "# 小红书内容运营" in content
 
 
 class TestIsolationSurvivesRestart:
     async def test_package_and_private_isolation_after_reload(
         self, registry: AgentRegistry, private_roots: dict[str, Path]
     ) -> None:
-        await _create_skill(ANALYST, "my-research-checklist", "# checklist\n")
+        await _create_skill(XHS, "my-research-checklist", "# checklist\n")
 
         # Simulate a process restart: fresh registry + fresh loaders.
         fresh_registry = AgentRegistry(
             builtin_dir=partners.BUILTIN_AGENTS_DIR,
-            installed_dir=private_roots[ANALYST].parent.parent / "no-installed",
+            installed_dir=private_roots[XHS].parent.parent / "no-installed",
         )
-        analyst = _loader(fresh_registry, ANALYST)
-        names = {e["name"] for e in analyst.list_skills(filter_unavailable=False)}
-        assert {ANALYST_PACKAGE_SKILL, "my-research-checklist"} <= names
-
         xhs = _loader(fresh_registry, XHS)
         xhs_names = {e["name"] for e in xhs.list_skills(filter_unavailable=False)}
-        assert ANALYST_PACKAGE_SKILL not in xhs_names
-        assert "my-research-checklist" not in xhs_names
-        assert XHS_PACKAGE_SKILL in xhs_names
+        assert {XHS_PACKAGE_SKILL, "my-research-checklist"} <= xhs_names
+
+        mona = _loader(fresh_registry, MONA_AGENT_ID)
+        mona_names = {e["name"] for e in mona.list_skills(filter_unavailable=False)}
+        assert XHS_PACKAGE_SKILL not in mona_names
+        assert "my-research-checklist" not in mona_names

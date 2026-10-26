@@ -2,11 +2,12 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { EmailAccount, EmailAnalysis, EmailAttachment, EmailBatchAction, EmailFolder, EmailMessage } from "../lib/types";
 import * as api from "../lib/emailApi";
-import { sortFolders } from "../lib/folderUtils";
+import { getFolderUnreadCount, isSentFolder, sortFolders } from "../lib/folderUtils";
 import { showNotification } from "@/lib/tauri";
 
 // 正在进行的 fetchBody 请求去重，避免 useEffect + selectMessage 预取重复触发 IPC
 const inflightBodyLoads = new Set<string>();
+const notifiedNewMailKeys = new Set<string>();
 
 function calcTotalUnread(foldersByAccount: Record<string, EmailFolder[]>): number {
   let total = 0;
@@ -32,6 +33,13 @@ async function notifyNewMail(
   accountDisplayName: string,
   firstMessage: EmailMessage,
 ): Promise<void> {
+  const key = `${firstMessage.accountId}:${firstMessage.folder}:${firstMessage.uid}`;
+  if (notifiedNewMailKeys.has(key)) return;
+  notifiedNewMailKeys.add(key);
+  if (notifiedNewMailKeys.size > 500) {
+    const oldest = notifiedNewMailKeys.values().next().value;
+    if (oldest) notifiedNewMailKeys.delete(oldest);
+  }
   try {
     const title = count === 1 ? "新邮件" : `${count} 封新邮件`;
     const body =
@@ -55,7 +63,14 @@ async function notifyNewMail(
     });
   } catch {
     // 通知不可用时静默忽略
+    notifiedNewMailKeys.delete(key);
   }
+}
+
+interface EmailMailboxUpdate {
+  accountId: string;
+  folder: string;
+  version: number;
 }
 
 interface EmailState {
@@ -96,6 +111,7 @@ interface EmailState {
   loadingMore: boolean;
   // 是否处于统一收件箱模式（聚合所有账号 INBOX）
   isUnifiedInbox: boolean;
+  lastMailboxUpdate: EmailMailboxUpdate | null;
   // 联系人邮箱→名称映射（小写 email → displayName），用于地址显示解析
   contactsByEmail: Record<string, string>;
   contactsLoaded: boolean;
@@ -123,11 +139,22 @@ interface EmailState {
   selectUnifiedInbox: () => Promise<void>;
   syncMail: (gatewayUrl: string, mailbox?: string) => Promise<void>;
   // 全局同步所有账号 INBOX，返回每个账号的新邮件数；silent 为 true 时不弹通知
-  syncAllAccounts: (gatewayUrl: string, silent?: boolean) => Promise<Record<string, number>>;
+  syncAllAccounts: (
+    gatewayUrl: string,
+    silent?: boolean,
+    accountId?: string,
+    mailbox?: string,
+  ) => Promise<Record<string, number>>;
   // 启动所有账号的 IMAP IDLE 实时监听
   startAllIdle: (gatewayUrl: string) => Promise<void>;
   // 停止所有账号的 IDLE 监听
   stopAllIdle: (gatewayUrl: string) => Promise<void>;
+  refreshMailboxFromDb: (accountId: string, folder: string) => Promise<void>;
+  notifyBackgroundNewMail: (
+    accountId: string,
+    newCount: number,
+    newMessages: EmailMessage[],
+  ) => Promise<void>;
   selectMessage: (message: EmailMessage | null) => void;
   // 按需拉取邮件正文：纯本地 Tauri IPC（读 .eml + mailparse），不依赖 HTTP 服务
   fetchBody: (message: EmailMessage) => Promise<void>;
@@ -156,6 +183,40 @@ interface EmailState {
   selectRange: (message: EmailMessage, orderedList: EmailMessage[]) => void;
   clearSelection: () => void;
   batchOperate: (gatewayUrl: string, action: EmailBatchAction, destFolder?: string) => Promise<void>;
+}
+
+function emailMessageKey(message: Pick<EmailMessage, "accountId" | "folder" | "uid">): string {
+  return `${message.accountId}:${message.folder}:${message.uid}`;
+}
+
+function sameEmailIdentity(fresh: EmailMessage, existing: EmailMessage | undefined): boolean {
+  if (!existing) return false;
+  const freshMessageId = fresh.messageId?.trim();
+  const existingMessageId = existing.messageId?.trim();
+  if (freshMessageId && existingMessageId) return freshMessageId === existingMessageId;
+  return fresh.date === existing.date && fresh.subject === existing.subject && fresh.rawSize === existing.rawSize;
+}
+
+function canReuseEmailBody(fresh: EmailMessage, existing: EmailMessage | undefined): boolean {
+  return fresh.bodyFetched !== false && sameEmailIdentity(fresh, existing);
+}
+
+function mergeRefreshedMessage(
+  fresh: EmailMessage,
+  existing: EmailMessage | undefined,
+  cached: EmailState["bodyCache"][string] | undefined,
+): EmailMessage {
+  const canReuseBody = canReuseEmailBody(fresh, existing);
+  const loadedBody = canReuseBody ? cached ?? (existing?.bodyFetched ? existing : undefined) : undefined;
+  return {
+    ...existing,
+    ...fresh,
+    bodyText: loadedBody ? loadedBody.bodyText : fresh.bodyText,
+    bodyHtml: loadedBody ? loadedBody.bodyHtml : fresh.bodyHtml,
+    attachments: loadedBody?.attachments ?? fresh.attachments,
+    bodyFetched: Boolean(loadedBody) || Boolean(fresh.bodyFetched),
+    bodyError: loadedBody || fresh.bodyFetched || !canReuseBody ? null : existing?.bodyError ?? fresh.bodyError,
+  };
 }
 
 // 监听 Rust 端 email-body-stage 事件：本地 .eml 未命中时切为 'network' 阶段
@@ -246,6 +307,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   hasMore: false,
   loadingMore: false,
   isUnifiedInbox: false,
+  lastMailboxUpdate: null,
   contactsByEmail: {},
   contactsLoaded: false,
   selectedUids: new Set<string>(),
@@ -405,7 +467,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const merged = sortFolders(
         localFolders.map((f) => ({
           ...f,
-          unreadCount: localCounts[f.name] ?? 0,
+          unreadCount: getFolderUnreadCount(f.name, localCounts),
         })),
       );
       set((state) => {
@@ -448,7 +510,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         const merged = sortFolders(
           synced.map((f) => ({
             ...f,
-            unreadCount: localCounts[f.name] ?? 0,
+            unreadCount: getFolderUnreadCount(f.name, localCounts),
           })),
         );
         set((state) => {
@@ -485,10 +547,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       set((state) => {
         const cached = state.foldersByAccount[accountId] ?? state.folders;
         const prevUnread = cached.find((f) => f.name === selectedFolder)?.unreadCount ?? 0;
-        const newUnread = localCounts[selectedFolder] ?? 0;
+        const newUnread = getFolderUnreadCount(selectedFolder, localCounts);
         const merged = cached.map((f) => ({
           ...f,
-          unreadCount: localCounts[f.name] ?? 0,
+          unreadCount: getFolderUnreadCount(f.name, localCounts),
         }));
         const nextFoldersByAccount = { ...state.foldersByAccount, [accountId]: merged };
         const total = calcTotalUnread(nextFoldersByAccount);
@@ -531,7 +593,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     for (const account of accounts) {
       try {
         const counts = await api.getUnreadCounts(account.id);
-        for (const cnt of Object.values(counts)) {
+        for (const [folder, cnt] of Object.entries(counts)) {
+          if (isSentFolder(folder)) continue;
           total += cnt;
         }
       } catch {
@@ -584,19 +647,91 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
+  refreshMailboxFromDb: async (accountId, folder) => {
+    const initial = get();
+    const refreshUnifiedInbox = initial.isUnifiedInbox && folder === "INBOX";
+    const matchesScope = (state: EmailState) =>
+      refreshUnifiedInbox
+        ? state.isUnifiedInbox
+        : !state.isUnifiedInbox && state.selectedAccountId === accountId && state.selectedFolder === folder;
+
+    if (refreshUnifiedInbox || matchesScope(initial)) {
+      try {
+        const loadPage = (limit: number) =>
+          refreshUnifiedInbox
+            ? api.getUnifiedInbox(null, limit)
+            : api.getMessages(accountId, folder, null, limit);
+        let limit = Math.max(initial.messages.length, 50);
+        let refreshed = await loadPage(limit);
+        let current = get();
+        if (matchesScope(current) && current.messages.length > limit) {
+          limit = current.messages.length;
+          refreshed = await loadPage(limit);
+          current = get();
+        }
+        if (matchesScope(current)) {
+          const existingByKey = new Map(current.messages.map((message) => [emailMessageKey(message), message]));
+          const selected = current.selectedMessage;
+          const selectedKey = selected ? emailMessageKey(selected) : null;
+          const nextBodyCache = { ...current.bodyCache };
+          let selectedFresh: EmailMessage | undefined;
+          let selectedNeedsBodyFetch = false;
+          const mergedMessages = refreshed.map((message) => {
+            const key = emailMessageKey(message);
+            const existing = existingByKey.get(key) ?? (selectedKey === key && selected ? selected : undefined);
+            const bodyCacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
+            const canReuseBody = canReuseEmailBody(message, existing);
+            if (!canReuseBody) delete nextBodyCache[bodyCacheKey];
+            const merged = mergeRefreshedMessage(
+              message,
+              existing,
+              canReuseBody ? nextBodyCache[bodyCacheKey] : undefined,
+            );
+            if (selectedKey === key && selected) {
+              const canReuseSelectedBody = canReuseEmailBody(message, selected);
+              selectedFresh = mergeRefreshedMessage(
+                message,
+                selected,
+                canReuseSelectedBody ? nextBodyCache[bodyCacheKey] : undefined,
+              );
+              selectedNeedsBodyFetch = !canReuseSelectedBody;
+            }
+            return merged;
+          });
+          set({
+            messages: mergedMessages,
+            selectedMessage: selectedFresh ?? selected,
+            bodyCache: nextBodyCache,
+            hasMore: refreshed.length === limit,
+          });
+          if (selectedNeedsBodyFetch && selectedFresh) void get().fetchBody(selectedFresh);
+        }
+      } catch (e) {
+        console.warn("[email] mailbox refresh failed", accountId, folder, e);
+      }
+    }
+
+    set((state) => ({
+      lastMailboxUpdate: {
+        accountId,
+        folder,
+        version: (state.lastMailboxUpdate?.version ?? 0) + 1,
+      },
+    }));
+  },
+
   loadMore: async () => {
     // 防止重复加载 / 已无更多 / 正在加载
     if (get().loadingMore || !get().hasMore) return;
     if (get().isUnifiedInbox) {
-      // 统一收件箱模式：使用 date 作为游标（uid 跨账号会冲突）
+      // 统一收件箱通过时间和 (accountId, uid) 游标续页。
       const { messages } = get();
       if (messages.length === 0) return;
-      // 取列表中最早的 date 作为游标
-      const oldestDate = messages.reduce((min, m) => (m.date < min ? m.date : min), messages[0].date);
+      const oldest = messages[messages.length - 1];
       set({ loadingMore: true });
       try {
         const PAGE_SIZE = 50;
-        const older = await api.getUnifiedInbox(oldestDate, PAGE_SIZE);
+        const older = await api.getUnifiedInbox(oldest.date, PAGE_SIZE, oldest.accountId, oldest.uid);
         if (get().isUnifiedInbox) {
           // 去重：避免相同 (accountId, uid) 重复
           const existingKeys = new Set(get().messages.map((m) => `${m.accountId}:${m.uid}`));
@@ -710,18 +845,19 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  syncAllAccounts: async (gatewayUrl, silent = false) => {
-    const accounts = get().accounts;
+  syncAllAccounts: async (gatewayUrl, silent = false, accountId, mailbox) => {
+    const accounts = get().accounts.filter((account) => !accountId || account.id === accountId);
+    const targetMailbox = mailbox || "INBOX";
     if (accounts.length === 0 || !gatewayUrl) return {};
     const result: Record<string, number> = {};
     // 后台同步用 backgroundSyncing，不阻塞 UI（不显示"正在收取..."，不禁用按钮）
     set({ backgroundSyncing: true, error: null });
-    // 并行同步所有账号 INBOX：各账号 IMAP 连接独立，互不阻塞
-    // 单账号失败不影响其他账号；result 在每个 task 内部独立写入（无并发写竞态）
+    // 并行同步目标账号/文件夹；各账号 IMAP 连接独立，互不阻塞。
+    // 单账号失败不影响其他账号；result 在每个 task 内部独立写入（无并发写竞态）。
     await Promise.all(
       accounts.map(async (account) => {
         try {
-          const syncResult = await api.syncEmail(gatewayUrl, account, "INBOX");
+          const syncResult = await api.syncEmail(gatewayUrl, account, targetMailbox);
           // 用本地数据库刷新未读数
           await get().refreshUnreadCounts(account.id);
           result[account.id] = syncResult.newCount;
@@ -729,12 +865,12 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           if (!silent && syncResult.newCount > 0 && syncResult.newMessages.length > 0) {
             await notifyNewMail(syncResult.newCount, account.displayName, syncResult.newMessages[0]);
           }
-          // 如果当前选中的是 INBOX，增量 prepend 新邮件
+          // 如果当前列表就是目标文件夹，增量 prepend 新邮件
           const selectedAccountId = get().selectedAccountId;
           const selectedFolder = get().selectedFolder;
           if (
             selectedAccountId === account.id &&
-            selectedFolder === "INBOX"
+            selectedFolder === targetMailbox
           ) {
             if (syncResult.newMessages.length > 0) {
               const prevUids = new Set(get().messages.map((m) => m.uid));
@@ -748,7 +884,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             // 兜底：如果 syncResult.newMessages 为空但 newCount > 0，
             // 或当前列表为空，从 SQLite 重新加载，避免新邮件不显示
             if (syncResult.newCount > 0 && syncResult.newMessages.length === 0) {
-              await get().loadMessages(account.id, "INBOX");
+              await get().refreshMailboxFromDb(account.id, targetMailbox);
             }
           }
         } catch (e) {
@@ -762,11 +898,23 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     await get().loadTotalUnreadFromDb();
     await setTrayUnreadCount(get().totalUnreadCount);
     set({ backgroundSyncing: false });
-    // 统一收件箱模式：同步后重新加载聚合列表以显示新邮件
-    if (get().isUnifiedInbox) {
-      await get().selectUnifiedInbox();
+    // 统一收件箱：从本地刷新列表并保留当前选中邮件和已加载正文。
+    if (get().isUnifiedInbox && targetMailbox === "INBOX") {
+      await get().refreshMailboxFromDb(accounts[0].id, targetMailbox);
     }
     return result;
+  },
+
+  notifyBackgroundNewMail: async (accountId, newCount, newMessages) => {
+    if (newCount <= 0 || newMessages.length === 0) return;
+    const firstMessage = newMessages[0];
+    if (firstMessage.accountId !== accountId) return;
+    let account = get().accounts.find((item) => item.id === accountId);
+    if (!account) {
+      await get().loadAccounts();
+      account = get().accounts.find((item) => item.id === accountId);
+    }
+    await notifyNewMail(newCount, account?.displayName || "邮箱", firstMessage);
   },
 
   startAllIdle: async (gatewayUrl) => {
@@ -947,6 +1095,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   fetchBody: async (message) => {
     const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
+    const messageKey = emailMessageKey(message);
+    let identityChangedDuringLoad = false;
     // 邮件服务 URL（用于本地 .eml 失败时回退到 HTTP 拉取，变量名历史遗留叫 gatewayUrl）
     const serviceUrl = get().gatewayUrl;
     // 1. 先查内存缓存（SQLite 不存正文，但解析过的正文缓存在 store 中）
@@ -1006,6 +1156,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         message.folder,
         serviceUrl,
       );
+      const current = get();
+      const currentMessage = current.messages.find((item) => emailMessageKey(item) === messageKey)
+        ?? (current.selectedMessage && emailMessageKey(current.selectedMessage) === messageKey
+          ? current.selectedMessage
+          : undefined);
+      if (currentMessage && !sameEmailIdentity(currentMessage, message)) {
+        identityChangedDuringLoad = true;
+        return;
+      }
       // 写入内存缓存 + 更新本地消息对象
       const header = result.header;
       // Rust 端自动修复：若本地 uid 与服务器不一致（存量分裂邮件），Rust 会触发 sync_folder_internal
@@ -1026,7 +1185,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             }
           : state.bodyCache,
         messages: state.messages.map((m) =>
-          m.uid === message.uid && m.accountId === message.accountId
+          emailMessageKey(m) === messageKey
             ? {
                 ...m,
                 uid: finalUid,
@@ -1049,7 +1208,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             : m,
         ),
         selectedMessage:
-          state.selectedMessage?.uid === message.uid
+          state.selectedMessage && emailMessageKey(state.selectedMessage) === messageKey
             ? {
                 ...state.selectedMessage,
                 uid: finalUid,
@@ -1074,17 +1233,24 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const errMsg = e instanceof Error ? e.message : String(e);
       console.error("fetchBody failed:", errMsg);
       // 记录错误到 UI 状态，避免永远 loading；用户可重新点击邮件触发重试
-      set((state) => ({
-        messages: state.messages.map((m) =>
-          m.uid === message.uid && m.accountId === message.accountId
-            ? { ...m, bodyError: errMsg }
-            : m,
-        ),
-        selectedMessage:
-          state.selectedMessage?.uid === message.uid
-            ? { ...state.selectedMessage, bodyError: errMsg }
-            : state.selectedMessage,
-      }));
+      const current = get();
+      const currentMessage = current.messages.find((item) => emailMessageKey(item) === messageKey)
+        ?? (current.selectedMessage && emailMessageKey(current.selectedMessage) === messageKey
+          ? current.selectedMessage
+          : undefined);
+      if (currentMessage && !sameEmailIdentity(currentMessage, message)) {
+        identityChangedDuringLoad = true;
+      } else {
+        set((state) => ({
+          messages: state.messages.map((m) =>
+            emailMessageKey(m) === messageKey ? { ...m, bodyError: errMsg } : m,
+          ),
+          selectedMessage:
+            state.selectedMessage && emailMessageKey(state.selectedMessage) === messageKey
+              ? { ...state.selectedMessage, bodyError: errMsg }
+              : state.selectedMessage,
+        }));
+      }
     } finally {
       inflightBodyLoads.delete(cacheKey);
       // 清除加载阶段标记
@@ -1093,6 +1259,16 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         delete next[cacheKey];
         return { bodyLoadingStage: next };
       });
+      const selected = get().selectedMessage;
+      if (
+        identityChangedDuringLoad &&
+        selected &&
+        emailMessageKey(selected) === messageKey &&
+        !sameEmailIdentity(selected, message) &&
+        !get().bodyCache[cacheKey]
+      ) {
+        void get().fetchBody(selected);
+      }
     }
   },
 

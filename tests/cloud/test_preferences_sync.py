@@ -88,6 +88,49 @@ async def test_second_device_receives_preferences_then_both_continue_without_ver
 
 
 @pytest.mark.asyncio
+async def test_new_device_receives_preferences_without_uploading_local_changes(pair):
+    service, a, b = pair
+    a[2].data["default_view"] = "note"
+    await start(a)
+    before_versions, before_objects = sum(map(len, service.versions.values())), set(service.objects)
+    assert before_versions == 1
+
+    b[2].data["quick_ask_mode"] = "full"
+    initial = b[0].preferences.read()
+    assert initial.enabled is True and initial.upload_enabled is None
+    await b[0].pause()
+    paused = b[0].preferences.read()
+    assert paused.enabled is False and paused.upload_enabled is False
+    await b[0].run_once()
+    assert b[2].data["quick_ask_mode"] == "full"
+    assert sum(map(len, service.versions.values())) == before_versions
+
+    await b[0].resume()
+    receiving = b[0].preferences.read()
+    assert receiving.enabled is True and receiving.upload_enabled is False
+    await b[0].run_once()
+    assert b[0].problem is None
+    assert b[2].data["default_view"] == "note"
+    assert b[2].data["quick_ask_mode"] == "compact"
+    assert b[0].preferences.read().sync_preferences is False
+    assert sum(map(len, service.versions.values())) == before_versions
+    assert set(service.objects) == before_objects
+
+    b[2].data["quick_ask_mode"] = "full"
+    a[2].data["default_view"] = "schedule"
+    await a[0].run_once()
+    assert sum(map(len, service.versions.values())) == 2
+    after_source_objects = set(service.objects)
+    await b[0].run_once()
+    assert b[0].problem is None
+    assert b[2].data["default_view"] == "schedule"
+    assert b[2].data["quick_ask_mode"] == "full"
+    assert b[0].preferences.read().upload_enabled is False
+    assert sum(map(len, service.versions.values())) == 2
+    assert set(service.objects) == after_source_objects
+
+
+@pytest.mark.asyncio
 async def test_independent_field_edits_merge_without_losing_local_pending_changes(pair):
     _, a, b = pair
     await start(a)
@@ -117,15 +160,25 @@ async def test_same_field_conflict_keeps_unpublished_local_edit_then_converges(p
 
 
 @pytest.mark.asyncio
-async def test_later_opt_in_catches_previously_skipped_preferences(pair):
-    _, a, b = pair
+async def test_pause_stays_paused_and_resume_does_not_reauthorize_preferences(pair):
+    service, a, b = pair
     a[2].data["default_view"] = "note"
     await start(a)
     await start(b, a[1].recovery, selected=False)
-    assert b[2].data["default_view"] == "chat"
-    await b[0].pause()
-    await start(b, a[1].recovery, selected=True)
     assert b[2].data["default_view"] == "note"
+    await b[0].pause()
+    a[2].data["default_view"] = "schedule"
+    await a[0].run_once()
+    assert a[0].problem is None and sum(map(len, service.versions.values())) == 2
+    await b[0].run_once()
+    assert b[0].preferences.read().enabled is False
+    assert b[2].data["default_view"] == "note"
+    await b[0].resume()
+    config = b[0].preferences.read()
+    assert config.enabled is True and config.upload_enabled is True and config.sync_preferences is False
+    await b[0].run_once()
+    assert b[2].data["default_view"] == "schedule"
+    assert sum(map(len, service.versions.values())) == 2
 
 
 @pytest.mark.asyncio
@@ -177,7 +230,8 @@ async def test_account_switch_never_sends_previous_accounts_preferences(pair):
     a[1].account_id = "2"
     a[2].data["quick_ask_mode"] = "full"
     await a[0].run_once()
-    assert a[0].problem["code"] == "account_changed"
+    assert a[0].problem is None
+    assert (await a[0].status())["upload_enabled"] is False
     assert sum(map(len, service.versions.values())) == count
 
 

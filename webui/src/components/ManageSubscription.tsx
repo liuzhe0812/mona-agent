@@ -73,7 +73,11 @@ function formatDate(iso: string | null): string {
 
 export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
   const [sub, setSub] = useState<SubscriptionInfo | null>(null);
+  const [subscriptionLoaded, setSubscriptionLoaded] = useState(false);
+  const [subscriptionReadFailed, setSubscriptionReadFailed] = useState(false);
   const [renewals, setRenewals] = useState<RenewalItem[]>([]);
+  const [renewalsLoaded, setRenewalsLoaded] = useState(false);
+  const [renewalsReadFailed, setRenewalsReadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -84,21 +88,35 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
 
   const fetchData = useCallback(async () => {
     if (!isTauri()) {
-      setErrorMsg("请在 Mona 桌面客户端中操作");
+      setSubscriptionReadFailed(true);
+      setRenewalsReadFailed(true);
       setLoading(false);
       return;
     }
     setErrorMsg("");
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const [subRes, renewalsRes] = await Promise.all([
-        invoke<SubscriptionInfo>("get_subscription_info"),
+      const [subRes, renewalsRes] = await Promise.allSettled([
+        invoke<SubscriptionInfo | null>("get_subscription_info"),
         invoke<{ renewals: RenewalItem[] }>("list_renewals"),
       ]);
-      setSub(subRes);
-      setRenewals(renewalsRes.renewals ?? []);
-    } catch (e) {
-      setErrorMsg(String(e));
+      if (subRes.status === "fulfilled") {
+        setSub(subRes.value ?? null);
+        setSubscriptionLoaded(true);
+        setSubscriptionReadFailed(false);
+      } else {
+        setSubscriptionReadFailed(true);
+      }
+      if (renewalsRes.status === "fulfilled") {
+        setRenewals(renewalsRes.value.renewals ?? []);
+        setRenewalsLoaded(true);
+        setRenewalsReadFailed(false);
+      } else {
+        setRenewalsReadFailed(true);
+      }
+    } catch {
+      setSubscriptionReadFailed(true);
+      setRenewalsReadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -126,8 +144,8 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
       setConfirmOpen(false);
       setCancelReason("");
       await fetchData();
-    } catch (e) {
-      setErrorMsg(String(e));
+    } catch {
+      setErrorMsg("关闭自动续费失败，请稍后重试。");
     } finally {
       setCancelling(false);
     }
@@ -155,6 +173,7 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
           onClick={handleRefresh}
           disabled={refreshing}
           className="ml-auto h-8 w-8"
+          aria-label="刷新订阅信息"
         >
           <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
         </Button>
@@ -169,52 +188,67 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
               <h2 className="text-sm font-medium">当前订阅</h2>
             </div>
 
-            {!sub || sub.status === "expired" ? (
-              <div className="py-4 text-center">
-                <p className="text-sm text-muted-foreground">暂无有效订阅</p>
-                <Button variant="outline" size="sm" className="mt-3" onClick={onBack}>
-                  去订阅
-                </Button>
-              </div>
+            {subscriptionReadFailed && !subscriptionLoaded ? (
+              <p role="alert" className="py-4 text-center text-sm text-muted-foreground">
+                {isTauri()
+                  ? "订阅信息暂时无法获取，请点击右上角刷新重试。"
+                  : "请在 Mona 桌面客户端中查看订阅信息。"}
+              </p>
             ) : (
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">套餐</span>
-                  <span className="font-medium">
-                    {sub.plan_code ? PLAN_NAMES[sub.plan_code] ?? sub.plan_code : "-"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">状态</span>
-                  <Badge variant="secondary" className={STATUS_COLORS[sub.status] ?? ""}>
-                    {STATUS_LABELS[sub.status] ?? sub.status}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">到期时间</span>
-                  <span>{formatDate(sub.current_period_end)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">自动续费</span>
-                  {sub.auto_renew ? (
-                    <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">
-                      已开启
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="bg-gray-100 text-gray-700">
-                      {sub.cancelled_at ? "已关闭" : "未开启"}
-                    </Badge>
-                  )}
-                </div>
-                {sub.agreement_status && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">协议状态</span>
-                    <span className="text-xs">
-                      {sub.agreement_status === "active" ? "有效" : sub.agreement_status === "cancelled" ? "已解约" : "已过期"}
-                    </span>
+              <>
+                {!sub || sub.status === "expired" ? (
+                  <div className="py-4 text-center">
+                    <p className="text-sm text-muted-foreground">暂无有效订阅</p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={onBack}>
+                      去订阅
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">套餐</span>
+                      <span className="font-medium">
+                        {sub.plan_code ? PLAN_NAMES[sub.plan_code] ?? sub.plan_code : "-"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">状态</span>
+                      <Badge variant="secondary" className={STATUS_COLORS[sub.status] ?? ""}>
+                        {STATUS_LABELS[sub.status] ?? sub.status}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">到期时间</span>
+                      <span>{formatDate(sub.current_period_end)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">自动续费</span>
+                      {sub.auto_renew ? (
+                        <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">
+                          已开启
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                          {sub.cancelled_at ? "已关闭" : "未开启"}
+                        </Badge>
+                      )}
+                    </div>
+                    {sub.agreement_status && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">协议状态</span>
+                        <span className="text-xs">
+                          {sub.agreement_status === "active" ? "有效" : sub.agreement_status === "cancelled" ? "已解约" : "已过期"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+                {subscriptionReadFailed && (
+                  <p role="alert" className="pt-3 text-sm text-muted-foreground">
+                    订阅信息暂时无法更新，当前显示上次成功读取的状态。请点击右上角刷新重试。
+                  </p>
+                )}
+              </>
             )}
           </div>
 
@@ -249,11 +283,20 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
               <h2 className="text-sm font-medium">续费扣款记录</h2>
             </div>
 
-            {renewals.length === 0 ? (
+            {renewalsReadFailed && (
+              <p role="alert" className="py-3 text-center text-sm text-muted-foreground">
+                {isTauri()
+                  ? renewalsLoaded
+                    ? "续费记录暂时无法更新，当前显示上次成功读取的记录。请点击右上角刷新重试。"
+                    : "续费记录暂时无法获取，请点击右上角刷新重试。"
+                  : "请在 Mona 桌面客户端中查看续费记录。"}
+              </p>
+            )}
+            {renewals.length === 0 && (renewalsLoaded || !renewalsReadFailed) ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
                 暂无续费记录
               </p>
-            ) : (
+            ) : renewals.length > 0 ? (
               <div className="space-y-2">
                 {renewals.map((r) => (
                   <div
@@ -275,7 +318,7 @@ export function ManageSubscription({ onBack }: ManageSubscriptionProps) {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

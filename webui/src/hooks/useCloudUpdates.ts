@@ -19,6 +19,7 @@ export function useCloudUpdates(onUpdate: (value: CloudUpdate) => void): void {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenOperations: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const keys = new Set<string>();
     let planning = false;
@@ -36,10 +37,17 @@ export function useCloudUpdates(onUpdate: (value: CloudUpdate) => void): void {
           callback.current(value);
         }, 75);
       });
-      if (disposed) unlisten();
+      if (disposed) { unlisten(); return; }
+      unlistenOperations = await listen("operations-connections-changed", () => {
+        if (disposed) return;
+        void import("@/components/terminal/store/terminalStore")
+          .then(({ useTerminalStore }) => useTerminalStore.getState().loadSavedConnections())
+          .catch(() => { if (!disposed) console.warn("Saved host list could not be refreshed."); });
+      });
+      if (disposed) unlistenOperations();
     }).catch(() => {
       if (!disposed) console.warn("Cloud view updates unavailable; reopen the view to refresh.");
     });
-    return () => { disposed = true; if (timer !== undefined) clearTimeout(timer); unlisten?.(); };
+    return () => { disposed = true; if (timer !== undefined) clearTimeout(timer); unlisten?.(); unlistenOperations?.(); };
   }, []);
 }

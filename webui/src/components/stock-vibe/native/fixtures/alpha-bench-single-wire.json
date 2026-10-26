@@ -1,0 +1,78 @@
+{
+  "provenance": {
+    "evidence_file": ".codex_tmp/alpha-native-real-evidence.json",
+    "evidence_sha256": "91228d38a3eafbd726ade1aa5cbee48fd498879eb67b56a2b6191e8c8d47db12",
+    "native_result_raw_sha256": "ca0006805daf62a80b60ce55cb99de6d940afa885bc2c29ae187b89b29cb1737",
+    "scope": "Native REST runner output produced with a deterministic synthetic market-data loader; UI replay only, not evidence of live-market factor effectiveness."
+  },
+  "request": {
+    "alpha_id": "qlib158_roc5",
+    "period": "2020-2020",
+    "top": 20,
+    "universe": "csi300",
+    "zoo": "qlib158"
+  },
+  "operation_id": "af8ef0fd07894488b65f8d3eae5381ae",
+  "result": {
+    "alive": 1,
+    "reversed": 0,
+    "dead": 0,
+    "top5_by_ir": [
+      {
+        "id": "qlib158_roc5",
+        "ic_mean": 0.80608,
+        "ir": 8.3227,
+        "theme": [
+          "momentum"
+        ],
+        "formula_latex": "\\\\mathrm{close}_t / \\\\mathrm{close}_{{t-5}} - 1",
+        "category": "alive"
+      }
+    ],
+    "dead_examples": [
+      {
+        "id": "qlib158_roc5",
+        "ic_mean": 0.80608,
+        "ir": 8.3227,
+        "theme": [
+          "momentum"
+        ],
+        "formula_latex": "\\\\mathrm{close}_t / \\\\mathrm{close}_{{t-5}} - 1",
+        "category": "alive"
+      }
+    ],
+    "by_theme": {
+      "momentum": {
+        "alive": 1,
+        "reversed": 0,
+        "dead": 0,
+        "count": 1
+      }
+    },
+    "n_alphas_tested": 1,
+    "meta": {
+      "universe": "csi300",
+      "requested_instruments": 8,
+      "fetched_instruments": 8,
+      "missing_instruments": [],
+      "data_diagnostics": {
+        "fixture": "deterministic_synthetic_ohlcv"
+      },
+      "price_sources": [
+        "synthetic_fixture"
+      ],
+      "survivorship_bias": false,
+      "pit_membership": true,
+      "degraded": false,
+      "constituent_source": "synthetic point-in-time test cohort",
+      "constituent_source_date": "2020-01-02",
+      "constituent_count": 8,
+      "price_adjustment": "qfq",
+      "sector_source": null,
+      "sector_coverage": 0.0
+    },
+    "skipped": 0,
+    "n_skipped": 0,
+    "status": "ok"
+  }
+}

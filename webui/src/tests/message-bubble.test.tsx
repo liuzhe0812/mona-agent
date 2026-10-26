@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MessageBubble } from "@/components/MessageBubble";
+import { MessageBubble, TraceGroup } from "@/components/MessageBubble";
 import { resources } from "@/i18n";
 import type { UIMessage } from "@/lib/types";
 
@@ -48,6 +48,30 @@ function selectText(element: HTMLElement): void {
 }
 
 describe("MessageBubble", () => {
+  it("renders inline activity rows with accurate command states and expandable details", () => {
+    const message: UIMessage = {
+      id: "inline-tools", role: "tool", kind: "trace", createdAt: 1, content: "",
+      traces: ['exec({"command":"sample"})', 'exec({"command":"failed"})', "web_search()", "edit_file()", "Review task completed"],
+      toolEvents: [
+        { call_id: "command-ok", name: "exec", arguments: { command: "sample" }, phase: "end" },
+        { call_id: "command-failed", name: "exec", arguments: { command: "failed" }, phase: "error", error: "Example failure" },
+        { call_id: "search", name: "web_search", phase: "end" },
+        { call_id: "edit", name: "edit_file", phase: "end" },
+      ],
+      fileEdits: [{ call_id: "edit", tool: "edit_file", path: "src/video.py", status: "done", added: 1, deleted: 0 }],
+    };
+    render(<TraceGroup message={message} animClass="" inline />);
+    expect(screen.getByRole("button", { name: "Ran command" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Used tool" })).toBeInTheDocument();
+    const failed = screen.getByRole("button", { name: "Command failed" });
+    expect(screen.getByRole("button", { name: "Review task completed" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(4);
+    expect(screen.queryByText("Example failure")).not.toBeInTheDocument();
+    fireEvent.click(failed);
+    expect(failed).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Example failure/)).toHaveTextContent('exec({"command":"failed"})');
+  });
+
   it("uses group-chat wording in the visible room labels", () => {
     expect(resources.en.common.chat.newRoom).toBe("New group chat");
     expect(resources.en.common.room.panel.title).toBe("Group chat");
@@ -331,6 +355,53 @@ describe("MessageBubble", () => {
     expect(screen.getByRole("menuitem", { name: "Save as note" })).toBeInTheDocument();
   });
 
+  it("keeps reply actions and timing visible while the real actions menu is open", async () => {
+    const createdAt = new Date(2026, 9, 24, 10, 5).getTime();
+    const message: UIMessage = {
+      id: "a-menu-open",
+      role: "assistant",
+      content: "A reply with timing metadata.",
+      createdAt,
+      latencyMs: 1_500,
+    };
+
+    render(<MessageBubble message={message} onQuote={vi.fn()} />);
+
+    const actions = screen.getByTestId("direct-message-actions");
+    expect(actions).toHaveClass(
+      "opacity-0",
+      "group-hover/message:opacity-100",
+      "group-focus-within/message:opacity-100",
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const menu = await screen.findByRole("menu");
+    expect(await screen.findByRole("menuitem", { name: "Reply" })).toBeInTheDocument();
+    expect(menu).toContainElement(document.activeElement as HTMLElement);
+    expect(actions).toHaveClass("opacity-100");
+    expect(actions).not.toHaveClass("opacity-0");
+    expect(actions).toHaveTextContent("10-24 10:05");
+    expect(actions).not.toHaveTextContent(/1\.5/);
+
+    fireEvent.keyDown(document.activeElement ?? menu, {
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+    });
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "More actions" })).toHaveFocus();
+    expect(actions).toHaveClass(
+      "opacity-0",
+      "group-hover/message:opacity-100",
+      "group-focus-within/message:opacity-100",
+    );
+  });
+
   it("saves a shared reply image through the desktop file picker", async () => {
     const message: UIMessage = {
       id: "a-share",
@@ -387,24 +458,6 @@ describe("MessageBubble", () => {
     expect(collapsedBody).not.toContainElement(screen.getByLabelText(/video attachment/i));
     expect(screen.getByText("report.md")).toBeInTheDocument();
     expect(screen.getByLabelText(/video attachment/i)).toBeInTheDocument();
-  });
-
-  it("keeps actionable stock confirmation cards expanded", () => {
-    const content = [
-      "[[stock-deep-research XSHG:600519 贵州茅台]]",
-      ...Array.from({ length: 30 }, (_, index) => `research line ${index}`),
-    ].join("\n");
-    const message: UIMessage = {
-      id: "a-stock-confirm",
-      role: "assistant",
-      content,
-      createdAt: Date.now(),
-    };
-
-    render(<MessageBubble message={message} isGroupChat />);
-
-    expect(screen.getByRole("button", { name: "启动深度投研" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
   });
 
   it("keeps long streaming replies expanded and still copies the full source", async () => {

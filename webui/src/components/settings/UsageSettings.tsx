@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BarChart3, Loader2, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useLicense } from "@/hooks/useLicense";
 import { getGatewayHttpBase } from "@/lib/api";
 import { getCreditUsage, httpFetch, type ManagedCreditUsage } from "@/lib/tauri";
 import { formatBalanceAmount } from "@/lib/money";
@@ -54,6 +55,14 @@ export function formatTokens(value: number): string {
   if (absolute >= 100_000_000) return `${formatter.format(value / 100_000_000)}亿`;
   if (absolute >= 10_000) return `${formatter.format(value / 10_000)}万`;
   return formatter.format(value);
+}
+
+function formatCacheHitRate(cachedTokens: number, inputTokens: number): string {
+  if (inputTokens <= 0 || cachedTokens < 0 || cachedTokens > inputTokens) return "—";
+  const percentage = Number(((cachedTokens / inputTokens) * 100).toFixed(1));
+  if (cachedTokens < inputTokens && percentage === 100) return "<100%";
+  if (cachedTokens > 0 && percentage === 0) return "<0.1%";
+  return `${percentage.toFixed(1)}%`;
 }
 
 function formatDate(value: string, withTime = false): string {
@@ -132,42 +141,65 @@ function formatAxisDate(value: string): string {
 
 const ACTIVITY_CELL_CLASSES = [
   "bg-muted/65",
-  "bg-foreground/15",
-  "bg-foreground/30",
-  "bg-foreground/50",
-  "bg-foreground/75",
+  "bg-[hsl(var(--data-1)/0.2)]",
+  "bg-[hsl(var(--data-1)/0.4)]",
+  "bg-[hsl(var(--data-1)/0.65)]",
+  "bg-[hsl(var(--data-1)/0.9)]",
 ];
 
 export function UsageSettings() {
+  const { loggedIn, licenseInfo } = useLicense();
+  const dataOwnerKey = loggedIn
+    ? `${licenseInfo?.account ?? ""}:${licenseInfo?.email ?? ""}`
+    : "";
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [managedUsage, setManagedUsage] = useState<ManagedCreditUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [billingError, setBillingError] = useState("");
+  const dataOwnerRef = useRef(dataOwnerKey);
+  dataOwnerRef.current = dataOwnerKey;
 
   const load = useCallback(async (background = false) => {
+    const requestedOwner = dataOwnerKey;
     background ? setRefreshing(true) : setLoading(true);
     setError("");
+    setBillingError("");
     try {
       const base = await getGatewayHttpBase();
       if (!base) throw new Error("本机用量服务未启动");
       const timezoneOffset = -new Date().getTimezoneOffset();
-      const [response, managed] = await Promise.all([
+      const [localResult, billingResult] = await Promise.allSettled([
         httpFetch(`${base}/api/usage?tz_offset_minutes=${timezoneOffset}`),
-        getCreditUsage(timezoneOffset).catch(() => null),
-      ]);
+        loggedIn ? getCreditUsage(timezoneOffset) : Promise.resolve(null),
+      ] as const);
+      if (dataOwnerRef.current !== requestedOwner) return;
+      if (loggedIn && billingResult.status === "rejected") {
+        setManagedUsage(null);
+        setBillingError("Mona AI 费用暂时无法查询，请刷新重试。");
+      } else {
+        setManagedUsage(billingResult.status === "fulfilled" ? billingResult.value : null);
+        setBillingError("");
+      }
+      if (localResult.status === "rejected") throw localResult.reason;
+      const response = localResult.value;
       if (!response.ok) throw new Error("本机用量服务暂不可用");
       setUsage(await response.json() as UsageResponse);
-      setManagedUsage(managed);
     } catch (reason) {
+      if (dataOwnerRef.current !== requestedOwner) return;
       setError(String(reason).replace(/^Error:\s*/, ""));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (dataOwnerRef.current === requestedOwner) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [dataOwnerKey, loggedIn]);
 
   useEffect(() => {
+    setManagedUsage(null);
+    setBillingError("");
     void load();
   }, [load]);
 
@@ -179,15 +211,17 @@ export function UsageSettings() {
     );
   }
 
+  const displayError = [error, billingError].filter(Boolean).join("；");
+
   if (!usage) {
     return (
       <div className="space-y-5">
         <header>
           <h1 className="text-title-lg">用量统计</h1>
-          <p className="mt-1 text-body text-muted-foreground">查看本机近 30 天所有模型调用的 Token。余额与费用以余额与充值页面为准。</p>
+          <p className="mt-1 text-body text-muted-foreground">查看本机近 30 天已记录的模型 Token 用量。余额与费用以余额与充值页面为准。</p>
         </header>
-        <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-5 text-body text-destructive">
-          {error || "用量服务暂不可用"}
+        <div role="alert" className="rounded-2xl border border-destructive/25 bg-destructive/5 p-5 text-body text-destructive">
+          {displayError || "用量服务暂不可用"}
         </div>
       </div>
     );
@@ -206,7 +240,7 @@ export function UsageSettings() {
       <header className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="text-title-lg">用量统计</h1>
-          <p className="mt-1 text-body text-muted-foreground">本机统计所有模型调用，包含我的 API Key 和 Mona AI。</p>
+          <p className="mt-1 text-body text-muted-foreground">本机已记录的模型用量，包含我的 API Key 和 Mona AI；Code 中的原生模型调用暂未计入。</p>
         </div>
         <Button variant="outline" className="rounded-full" disabled={refreshing} onClick={() => void load(true)}>
           {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
@@ -220,7 +254,7 @@ export function UsageSettings() {
           {[
             [formatTokens(usage.today_tokens), "今日 Token"],
             [formatTokens(usage.period_tokens), "近 30 天 Token"],
-            [String(usage.request_count), "模型调用"],
+            [String(usage.request_count), "调用记录"],
             [String(usage.model_count), "用到的模型"],
             [String(usage.provider_count), "模型供应商"],
             ...(managedUsage ? [
@@ -228,8 +262,8 @@ export function UsageSettings() {
               [String(generatedImages), "生成图片"],
               [`${generatedVideoSeconds}秒`, "生成视频"],
             ] : []),
-          ].map(([value, label]) => (
-            <div key={label} className="rounded-lg bg-muted/55 px-3 py-2.5">
+          ].map(([value, label], index) => (
+            <div key={label} className={`rounded-lg px-3 py-2.5 ${index === 0 ? "bg-[hsl(var(--data-1)/0.08)]" : "bg-muted/55"}`}>
               <p className="whitespace-nowrap text-[16px] font-semibold tabular-nums">{value}</p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{label}</p>
             </div>
@@ -243,7 +277,7 @@ export function UsageSettings() {
             <h2 id="media-usage-title" className="text-heading">图片与视频用量</h2>
             <p className="mt-1 text-caption text-muted-foreground">按百炼最终返回的实际张数、秒数和分辨率结算。</p>
           </div>
-          <div className="overflow-x-auto border-t border-border/60">
+          <div className="scrollbar-thin scrollbar-track-transparent overflow-x-auto border-t border-border/60">
             <table className="w-full min-w-[620px] text-left text-caption">
               <thead className="bg-muted/30 text-muted-foreground">
                 <tr><th className="px-3.5 py-2.5 font-medium">时间</th><th className="px-3 py-2.5 font-medium">模型</th><th className="px-3 py-2.5 font-medium">类型</th><th className="px-3 py-2.5 font-medium">实际用量</th><th className="px-3 py-2.5 text-right font-medium">金额</th><th className="px-3 py-2.5 font-medium">状态</th></tr>
@@ -283,7 +317,7 @@ export function UsageSettings() {
         <div className="mt-3.5 flex flex-wrap items-start gap-5">
           <div className="min-w-[300px] shrink-0">
             <div className="mb-1.5 text-[11px] text-muted-foreground">活跃热力图 <span className="ml-1 font-normal text-muted-foreground/70">近 20 周</span></div>
-            <div className="overflow-x-auto pb-1">
+            <div className="scrollbar-thin scrollbar-track-transparent overflow-x-auto pb-1">
               <div className="flex w-fit flex-col gap-1.5">
                 <div className="relative h-[14px]" style={{ width: 20 * 15 - 3 }}>
                   {Array.from({ length: 20 }, (_, column) => {
@@ -320,7 +354,13 @@ export function UsageSettings() {
           </div>
 
           <div className="min-w-[300px] flex-1 self-stretch border-l border-border/60 pl-5">
-            <div className="mb-1.5 text-[11px] text-muted-foreground">近 30 天每日 Token</div>
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-micro text-muted-foreground">
+              <span>近 30 天每日 Token</span>
+              <div className="flex items-center gap-3" aria-label="Token 图例">
+                <span className="inline-flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--data-1))]" aria-hidden="true" />输入 Token</span>
+                <span className="inline-flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--data-2))]" aria-hidden="true" />输出 Token</span>
+              </div>
+            </div>
             <div role="img" aria-label="近 30 天 Token 柱状图">
               <div className="relative flex h-24 items-end gap-[3px] border-b border-border/60 pl-8">
                 {tokenTicks(maxDailyTokens).map((tick) => (
@@ -341,8 +381,8 @@ export function UsageSettings() {
                       >
                         {item.total_tokens > 0 ? (
                           <>
-                            <div className="absolute inset-x-0 bottom-0 bg-foreground/80" style={{ height: `${inputShare}%` }} />
-                            <div className="absolute inset-x-0 top-0 bg-foreground/35" style={{ height: `${100 - inputShare}%` }} />
+                            <div className="absolute inset-x-0 bottom-0 bg-[hsl(var(--data-1))]" style={{ height: `${inputShare}%` }} />
+                            <div className="absolute inset-x-0 top-0 bg-[hsl(var(--data-2))]" style={{ height: `${100 - inputShare}%` }} />
                           </>
                         ) : null}
                       </div>
@@ -371,7 +411,7 @@ export function UsageSettings() {
       <section aria-labelledby="model-usage-title" className="overflow-hidden rounded-xl border border-border/70 bg-card">
         <div className="p-3.5">
           <h2 id="model-usage-title" className="text-heading">按模型</h2>
-          <p className="mt-1 text-caption text-muted-foreground">近 30 天本机记录的 Token 用量。</p>
+          <p className="mt-1 text-caption text-muted-foreground">近 30 天本机记录的 Token 用量；命中率 = 缓存读取 ÷ 输入 Token，未返回缓存读取量的调用按 0 统计。</p>
         </div>
         {usage.by_model.length === 0 ? (
           <div className="border-t border-border/60 px-3.5 py-6 text-center">
@@ -379,8 +419,8 @@ export function UsageSettings() {
             <p className="mt-2 text-caption text-muted-foreground">近 30 天暂无模型用量</p>
           </div>
         ) : (
-          <div className="overflow-x-auto border-t border-border/60">
-            <table className="w-full min-w-[700px] text-left text-caption">
+          <div className="scrollbar-thin scrollbar-track-transparent overflow-x-auto border-t border-border/60">
+            <table className="w-full min-w-[760px] text-left text-caption">
               <thead className="bg-muted/30 text-caption text-muted-foreground">
                 <tr>
                   <th className="px-3.5 py-2.5 font-medium">供应商</th>
@@ -390,7 +430,8 @@ export function UsageSettings() {
                   <th className="px-3 py-2.5 text-right font-medium">输入</th>
                   <th className="px-3 py-2.5 text-right font-medium">输出</th>
                   <th className="px-3 py-2.5 text-right font-medium">缓存读取</th>
-                  <th className="px-3 py-2.5 text-right font-medium">调用</th>
+                  <th className="px-3 py-2.5 text-right font-medium">缓存命中率</th>
+                  <th className="px-3 py-2.5 text-right font-medium">记录</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -401,7 +442,7 @@ export function UsageSettings() {
                     <td className="w-36 px-3 py-2.5">
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                          <div className="h-full rounded-full bg-foreground/75" style={{ width: `${Math.max(2, (item.total_tokens / maxModelTokens) * 100)}%` }} />
+                          <div className="h-full rounded-full bg-[hsl(var(--data-1))]" style={{ width: `${Math.max(2, (item.total_tokens / maxModelTokens) * 100)}%` }} />
                         </div>
                         <span className="w-10 text-right text-[11px] tabular-nums text-muted-foreground">{Math.round((item.total_tokens / Math.max(usage.period_tokens, 1)) * 100)}%</span>
                       </div>
@@ -410,6 +451,9 @@ export function UsageSettings() {
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-muted-foreground">{formatTokens(item.prompt_tokens)}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-muted-foreground">{formatTokens(item.completion_tokens)}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-muted-foreground">{formatTokens(item.cached_tokens)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                      {formatCacheHitRate(item.cached_tokens, item.prompt_tokens)}
+                    </td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{item.request_count}</td>
                   </tr>
                 ))}
@@ -420,7 +464,7 @@ export function UsageSettings() {
       </section>
 
       <p className="text-right text-micro text-muted-foreground">数据更新于 {formatDate(usage.updated_at, true)}</p>
-      {error ? <div className="rounded-xl border border-destructive/25 bg-destructive/5 p-3 text-body text-destructive">{error}</div> : null}
+      {displayError ? <div role="alert" className="rounded-xl border border-destructive/25 bg-destructive/5 p-3 text-body text-destructive">{displayError}</div> : null}
     </div>
   );
 }

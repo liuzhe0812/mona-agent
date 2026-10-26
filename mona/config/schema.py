@@ -77,11 +77,6 @@ class DreamConfig(Base):
     max_batch_size: int = Field(default=20, ge=1)  # Max history entries per run
     # Bumped from 10 to 15 in #3212 (exp002: +30% dedup, no accuracy loss; >15 plateaus).
     max_iterations: int = Field(default=15, ge=1)  # Max tool calls per Phase 2
-    # Per-line git-blame age annotation in Phase 1 prompt (see #3212). Default
-    # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
-    # to the `← Nd` suffix or you want deterministic, git-independent prompts.
-    annotate_line_ages: bool = True
-
     # Skill lifecycle (see docs/design/skill-lifecycle-design.md).
     # Automatic archival is OFF by default — users opt in after a dry-run.
     # Stats, capacity cap, manual archive/restore and `mona skill prune`
@@ -176,6 +171,12 @@ class AgentModelBinding(Base):
         if self.executor != "mona" and self.provider is not None:
             raise ValueError("Only Mona model bindings may specify a provider")
         return self
+
+
+class StockVibeModelBinding(AgentModelBinding):
+    """Native account-engine binding for stock research."""
+
+    executor: Literal["codex", "claude", "codebuddy"]
 
 
 class AgentDefaults(Base):
@@ -334,29 +335,76 @@ class ProvidersConfig(Base):
         return None
 
 
-class StockConfig(Base):
-    """Stock module configuration (design §13).
+StockVibeDataSource = Literal[
+    "tencent", "eastmoney", "baostock", "akshare", "tushare", "gildata", "local"
+]
 
-    The watchlist is user data stored under ``~/.mona/stock/`` and never
-    enters ``config.json``.
+
+class StockVibeConfig(Base):
+    """Settings for the isolated Vibe-backed stock module.
+
+    The runtime starts on demand. These settings choose the model, data and
+    reminder preferences; notification times use Asia/Shanghai.
     """
 
-    # On by default (design §13): the module must be reachable out of the
-    # box — a shipped feature hidden behind a switch reads as "not built".
-    # Users who never want it flip the toggle once in Settings → Stock.
-    enabled: bool = True
-    # Automatic daily review is opt-in; enabling the stock module only makes
-    # the workspace and manual research features available.
-    auto_review_enabled: bool = False
-    review_time: str = Field(
-        default="15:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
-    )  # Asia/Shanghai, daily review trigger time
-    # Daily-review coverage (design §11): all watchlist instruments or only
-    # focus-marked ones — never silently widens the analysis scope.
-    review_scope: Literal["all", "focus"] = "focus"
-    push_notification: bool = True  # desktop notification for review digest
-    push_email: bool = False  # optional email delivery for review digest
-    quote_refresh_sec: int = Field(default=30, ge=5, le=3600)
+    model_config = ConfigDict(extra="forbid")
+
+    model_preset: str | None = Field(default=None, min_length=1)
+    model_binding: StockVibeModelBinding | None = None
+    tushare_token: str = Field(default="", repr=False)
+    idle_timeout_sec: int = Field(default=300, ge=60, le=3600)
+    proactive_mode: Literal["manual", "important_changes", "continuous"] = "important_changes"
+    watched_symbols: list[str] = Field(default_factory=list, max_length=50)
+    notification_start: str = Field(default="09:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    notification_end: str = Field(default="15:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    attention_interval_sec: int = Field(default=900, ge=300, le=86_400)
+    data_sources: list[StockVibeDataSource] = Field(
+        default_factory=lambda: ["tencent", "eastmoney"],
+        max_length=7,
+    )
+
+    @field_validator("model_preset")
+    @classmethod
+    def _trim_model_preset(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("stock_vibe.model_preset must not be blank")
+        return value
+
+    @field_validator("data_sources")
+    @classmethod
+    def _require_unique_data_sources(
+        cls, value: list[StockVibeDataSource]
+    ) -> list[StockVibeDataSource]:
+        if len(value) != len(set(value)):
+            raise ValueError("stock_vibe.data_sources must not contain duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_model_selection(self) -> "StockVibeConfig":
+        if self.model_preset is not None and self.model_binding is not None:
+            raise ValueError("stock_vibe.model_preset and model_binding are mutually exclusive")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_notification_window(self) -> "StockVibeConfig":
+        if self.notification_start >= self.notification_end:
+            raise ValueError("stock_vibe.notification_start must be before notification_end")
+        return self
+
+    @field_validator("watched_symbols")
+    @classmethod
+    def _validate_watched_symbols(cls, value: list[str]) -> list[str]:
+        import re
+
+        normalized = [item.strip().upper() for item in value]
+        if any(not re.fullmatch(r"[0-9]{6}\.(SH|SZ|BJ)", item) for item in normalized):
+            raise ValueError("stock_vibe.watched_symbols must use explicit A-share exchange codes")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("stock_vibe.watched_symbols must not contain duplicates")
+        return normalized
 
 
 class HeartbeatConfig(Base):
@@ -707,9 +755,11 @@ class DevelopmentConfig(Base):
 
 
 class CloudSyncConfig(Base):
-    """Local opt-in only; keys stay in the desktop credential store."""
+    """Receive account data automatically; local uploads require confirmation."""
 
-    enabled: bool = False
+    enabled: bool = True
+    # None marks legacy settings until the first authenticated account binding.
+    upload_enabled: bool | None = None
     account_id: str = Field(default="", max_length=32)
     vault_id: str = Field(default="", max_length=32)
     interval_seconds: int = Field(default=60, ge=30, le=3600)
@@ -718,6 +768,8 @@ class CloudSyncConfig(Base):
     sync_planning: bool = False
     sync_notes: bool = False
     sync_preferences: bool = False
+    sync_operations: bool = False
+    sync_operations_credentials: bool = False
     notes_vault_token: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
     excluded_session_keys: list[str] = Field(default_factory=list, max_length=10_000)
 
@@ -735,7 +787,11 @@ class Config(BaseSettings):
     video: VideoModuleConfig = Field(default_factory=VideoModuleConfig)
     profile: ProfileConfig = Field(default_factory=ProfileConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    stock: StockConfig = Field(default_factory=StockConfig)
+    stock_vibe: StockVibeConfig = Field(
+        default_factory=StockVibeConfig,
+        validation_alias=AliasChoices("stockVibe", "stock_vibe"),
+        serialization_alias="stockVibe",
+    )
     development: DevelopmentConfig = Field(default_factory=DevelopmentConfig)
     cloud_sync: CloudSyncConfig = Field(default_factory=CloudSyncConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
@@ -753,6 +809,10 @@ class Config(BaseSettings):
         for fallback in self.agents.defaults.fallback_models:
             if isinstance(fallback, str) and fallback not in self.model_presets:
                 raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")
+        stock_vibe_preset = self.stock_vibe.model_preset
+        if stock_vibe_preset is not None:
+            if stock_vibe_preset != "default" and stock_vibe_preset not in self.model_presets:
+                raise ValueError(f"stock_vibe.model_preset {stock_vibe_preset!r} not found in model_presets")
         return self
 
     def resolve_default_preset(self) -> ModelPresetConfig:

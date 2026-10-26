@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { StatusNotice } from "@/components/ui/status-notice";
+import { Switch } from "@/components/ui/switch";
 
 import {
   applyConfigurationItem,
@@ -133,17 +134,14 @@ function SettingSwitch({ item, onAction }: { item: ConfigurationAuditItem; onAct
     );
   }
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label={`${enabled ? "恢复" : "应用"}${featureTitle(item.id, item.title)}`}
-      disabled={!canChange}
-      onClick={(event) => { event.stopPropagation(); onAction({ item, mode }); }}
-        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-info" : "bg-muted-foreground/25"}`}
-    >
-      <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-300 ${enabled ? "translate-x-5" : "translate-x-0"}`} />
-    </button>
+    <span onClick={(event) => event.stopPropagation()}>
+      <Switch
+        checked={enabled}
+        aria-label={`${enabled ? "恢复" : "应用"}${featureTitle(item.id, item.title)}`}
+        disabled={!canChange}
+        onCheckedChange={() => onAction({ item, mode })}
+      />
+    </span>
   );
 }
 

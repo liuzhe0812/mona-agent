@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "reason": "Real Shadow output liquidated an A-share on its opening day at end_of_backtest. Enforce native market rules and preserve unexecutable holdings in terminal equity/positions.",
+  "files": [
+    {
+      "path": "agent/backtest/engines/base.py",
+      "sha256": "56c2c512d98f2fabd70956ac5f4514926641452f69e314e80060374c85345654",
+      "replacements": [
+        {
+          "before": "                self._active_symbol = c\n                exit_price = self.apply_slippage(mark_price, -pos.direction)\n                self._close_position(c, exit_price, last_ts, \"end_of_backtest\")\n",
+          "after": "                self._active_symbol = c\n                frame = data_map.get(c)\n                if frame is None or last_ts not in frame.index:\n                    self.plan_rejections[(c, \"terminal_no_bar\")] += 1\n                    continue\n                terminal_bar = frame.loc[last_ts].copy()\n                if pd.isna(terminal_bar.get(\"close\")):\n                    self.plan_rejections[(c, \"terminal_no_bar\")] += 1\n                    continue\n                # Terminal fills use the close, so check rules at that same price.\n                terminal_bar[\"open\"] = mark_price\n                if not self.can_execute(c, 0, terminal_bar):\n                    self.plan_rejections[(c, \"terminal_market_rule\")] += 1\n                    continue\n                exit_price = self.apply_slippage(mark_price, -pos.direction)\n                self._close_position(c, exit_price, last_ts, \"end_of_backtest\")\n",
+          "count": 1
+        },
+        {
+          "before": "            # The final snapshot feeds metrics and artifacts.  Replace its\n            # pre-liquidation mark with post-liquidation cash so terminal\n            # slippage and exit commission are reflected in reported equity.\n            if self.equity_snapshots:\n                self.equity_snapshots[-1] = EquitySnapshot(\n                    timestamp=last_ts,\n                    capital=self.capital,\n                    unrealized=0.0,\n                    equity=self.capital,\n                    positions=0,\n                )\n            if self.actual_position_snapshots:\n                self.actual_position_snapshots[-1] = (\n                    last_ts, {code: 0.0 for code in codes}\n                )\n",
+          "after": "            # Unexecutable terminal exits remain open and marked, never cash.\n            final_equity = self._calc_equity(close_df, last_ts)\n            remaining_margin = sum(\n                self._calc_margin(symbol, position.size, position.entry_price, position.leverage)\n                for symbol, position in self.positions.items()\n            )\n            if self.equity_snapshots:\n                self.equity_snapshots[-1] = EquitySnapshot(\n                    timestamp=last_ts,\n                    capital=self.capital,\n                    unrealized=final_equity - self.capital - remaining_margin,\n                    equity=final_equity,\n                    positions=len(self.positions),\n                )\n            if self.actual_position_snapshots:\n                self.actual_position_snapshots[-1] = (\n                    last_ts, self._actual_weights(close_df, last_ts, codes, final_equity)\n                )\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

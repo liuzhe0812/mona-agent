@@ -74,17 +74,28 @@ def complete(owner, turn_id, status="completed"):
 def host_call(owner, turn_id, step, arguments):
     call_id = f"host-{turn_id}-{step}"
     host_calls[call_id] = (owner, turn_id, step)
+    tool = "development_design_resource" if step.startswith("design-") else "development_collaboration"
     notification("item/started", {"threadId": owner, "turnId": turn_id, "item": {
-        "type": "dynamicToolCall", "id": call_id, "tool": "development_collaboration",
+        "type": "dynamicToolCall", "id": call_id, "tool": tool,
         "arguments": arguments, "contentItems": None}})
     emit({"id": call_id, "method": "item/tool/call", "params": {"threadId": owner,
-        "turnId": turn_id, "callId": call_id, "tool": "development_collaboration", "arguments": arguments}})
+        "turnId": turn_id, "callId": call_id, "tool": tool, "arguments": arguments}})
 
 
 def host_reply(identifier, reply):
     owner, turn_id, step = host_calls.pop(identifier)
     if not reply.get("success"):
         complete(owner, turn_id, "failed")
+        return
+    if step.startswith("design-"):
+        notification("item/completed", {"threadId": owner, "turnId": turn_id, "item": {
+            "type": "dynamicToolCall", "id": identifier, "tool": "development_design_resource",
+            "success": True, "contentItems": reply["contentItems"]}})
+        paths = turns[turn_id]["designPaths"]
+        if paths:
+            host_call(owner, turn_id, f"design-{len(paths)}", {"path": paths.pop(0)})
+        else:
+            complete(owner, turn_id)
         return
     value = json.loads(reply["contentItems"][0]["text"])
     notification("item/completed", {"threadId": owner, "turnId": turn_id, "item": {
@@ -279,6 +290,11 @@ for raw in sys.stdin.buffer:
             turn["skipWait"] = text == "delegate_early"
             result(identifier, {"turn": dict(turn)})
             host_call(owner, turn_id, "presets", {"action": "presets"})
+            continue
+        if text.startswith("design_resource:"):
+            turn["designPaths"] = json.loads(text.partition(":")[2])
+            result(identifier, {"turn": dict(turn)})
+            host_call(owner, turn_id, "design-first", {"path": turn["designPaths"].pop(0)})
             continue
         if text == "instant" or (mode == "complete_requests" and text not in {"hold", "approve", "approve_similar", "disconnect", "lost_ack"}):
             complete(owner, turn_id)

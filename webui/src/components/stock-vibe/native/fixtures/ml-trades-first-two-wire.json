@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "evidence_file": ".codex_tmp/native-ml-workflow-evidence.json",
+    "evidence_sha256": "e36474b7234ae75dccae7f9dd36a6c146c6416cc76fe2581c50a1ba47e4d7b91",
+    "native_trades_csv_sha256": "a9290bab0440892660120dce65818aa647aa6c88e763469b44da0d3d9269a07d",
+    "scope": "First two rows of the recorded native ML workflow trades.csv; UI protocol replay only, not a claim of market effectiveness."
+  },
+  "run_id": "swarm-fa5996b6400e6afd4c1dfb2c9d69daf5",
+  "rows": [
+    {
+      "timestamp": "2022-12-26",
+      "code": "000001.SZ",
+      "side": "buy",
+      "price": "35.1463",
+      "qty": "1300",
+      "reason": "signal",
+      "pnl": "0.0",
+      "holding_days": "0",
+      "holding_bars": "0.0",
+      "return_pct": "0.0",
+      "event": "entry"
+    },
+    {
+      "timestamp": "2023-01-09",
+      "code": "000001.SZ",
+      "side": "sell",
+      "price": "37.5968",
+      "qty": "1300",
+      "reason": "signal",
+      "pnl": "3185.5809",
+      "holding_days": "14",
+      "holding_bars": "10.0",
+      "return_pct": "6.97",
+      "event": "exit"
+    }
+  ]
+}

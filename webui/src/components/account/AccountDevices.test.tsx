@@ -23,6 +23,7 @@ describe("account devices in settings", () => {
     expect(screen.getByLabelText("设备名额")).toHaveTextContent("2 / 3 台");
     expect(screen.getByText("当前设备")).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("此电脑");
+    expect(screen.queryByRole("button", { name: "移除 此电脑" })).not.toBeInTheDocument();
     expect(screen.getAllByText(/Windows · 最近使用/)).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "管理设备" })).not.toBeInTheDocument();
   });
@@ -33,13 +34,14 @@ describe("account devices in settings", () => {
     render(<AccountDevices />);
     fireEvent.click(await screen.findByRole("button", { name: "移除 办公室电脑" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("本地资料和任务不会删除");
+    expect(screen.getByRole("dialog")).toHaveTextContent("将退出“办公室电脑”的账号登录并释放名额");
     expect(mocks.removeLoginDevice).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
     await waitFor(() => expect(mocks.removeLoginDevice).toHaveBeenCalledTimes(1));
     expect(mocks.removeLoginDevice).toHaveBeenCalledWith({ id: device.id, revision: 2 });
     await waitFor(() => expect(screen.getByLabelText("设备名额")).toHaveTextContent("1 / 3 台"));
     expect(screen.queryByRole("button", { name: "移除 办公室电脑" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "移除 此电脑" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除 此电脑" })).not.toBeInTheDocument();
   });
 
   it("cancel never sends a removal", async () => {
@@ -51,16 +53,14 @@ describe("account devices in settings", () => {
     expect(screen.getByLabelText("设备名额")).toHaveTextContent("2 / 3 台");
   });
 
-  it("supports the free account and warns when removing this device", async () => {
+  it("keeps the current device visible without a removal action", async () => {
     mocks.invoke.mockResolvedValue({ devices: [local], device_limit: 1, plan: "free" });
-    mocks.removeLoginDevice.mockResolvedValue({ ...removed, device_id: local.id, current_device_removed: true });
     render(<AccountDevices />);
-    fireEvent.click(await screen.findByRole("button", { name: "移除 此电脑" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("移除当前设备？");
-    expect(screen.getByRole("dialog")).toHaveTextContent("将退出当前设备的账号登录");
-    fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
-    await waitFor(() => expect(mocks.removeLoginDevice).toHaveBeenCalledTimes(1));
-    expect(mocks.removeLoginDevice).toHaveBeenCalledWith({ id: local.id, revision: local.revision });
+    expect(await screen.findByText("此电脑")).toBeInTheDocument();
+    expect(screen.getByText("当前设备")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除 此电脑" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mocks.removeLoginDevice).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
   });
 

@@ -58,8 +58,7 @@ for line in sys.stdin:
         event('item/completed', {'threadId': 'work-thread', 'turnId': 'work-turn',
             'item': {'id': 'answer', 'type': 'agentMessage', 'text': 'HOST_RESULT: ' + text}})
         event('thread/tokenUsage/updated', {'threadId': 'work-thread', 'turnId': 'work-turn',
-            'tokenUsage': {'total': {'inputTokens': 100, 'outputTokens': 9},
-                'last': {'totalTokens': 109}, 'modelContextWindow': 32768}})
+            'tokenUsage': json.loads(os.environ['PEER_TOKEN_USAGE'])})
         event('turn/completed', {'threadId': 'work-thread', 'turn': {'id': 'work-turn', 'status': 'completed'}})
         continue
     result = None
@@ -108,7 +107,7 @@ for line in sys.stdin:
 '''
 
 
-def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure=""):
+def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure="", token_usage=None):
     root = tmp_path / "work"
     root.mkdir()
     peer = tmp_path / "native-peer.py"
@@ -134,9 +133,16 @@ def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure=""):
     effective["model_providers"] = {"mona_work_openai": {"name": "OpenAI", "wire_api": "responses",
         "requires_openai_auth": True, "supports_websockets": False}}
     output = tmp_path / "outside.txt" if outside else root / "result.txt"
+    if token_usage is None:
+        token_usage = {
+            "total": {"inputTokens": 100, "outputTokens": 9},
+            "last": {"totalTokens": 109},
+            "modelContextWindow": 32768,
+        }
     profile = CodexProfile((sys.executable, "-u", str(peer)), tmp_path, root,
         {**os.environ, "PEER_CONFIG": json.dumps(effective), "PEER_PATH": str(output),
-         "PEER_HOLD": "1" if hold else "0", "PEER_FAILURE": failure},
+         "PEER_HOLD": "1" if hold else "0", "PEER_FAILURE": failure,
+         "PEER_TOKEN_USAGE": json.dumps(token_usage)},
         work_model_catalog=catalog)
     monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile", lambda *_: (profile, catalog))
     return config, root, output, catalog
@@ -237,6 +243,152 @@ async def test_native_tool_calls_use_work_runner_and_workspace_permissions(tmp_p
     assert start["model"] == "native-fixture" and turn["effort"] == "high"
     assert "EARLIER_RESPONSE" in json.dumps(turn["input"])
     assert result.usage["prompt_tokens"] == 100 and result.usage["completion_tokens"] == 9
+
+
+def test_runner_preserves_native_context_usage_and_reported_window():
+    spec = AgentRunSpec(
+        [], ToolRegistry(), "native-model", 1, 16000,
+        context_window_tokens=32_000,
+        context_window_verified=True,
+        context_provider="codex",
+    )
+
+    usage = AgentRunner._contextualize_usage({
+        "prompt_tokens": 5_500_000,
+        "completion_tokens": 41_000,
+        "context_tokens": 80_000,
+        "context_window_tokens": 1_000_000,
+    }, spec)
+
+    assert usage["prompt_tokens"] + usage["completion_tokens"] == 5_541_000
+    assert usage["context_tokens"] == 80_000
+    assert usage["context_window_tokens"] == 1_000_000
+    assert usage["context_model"] == "native-model"
+    assert usage["context_provider"] == "codex"
+
+
+@pytest.mark.parametrize(
+    "native_usage,expected_prompt,cached",
+    [
+        ({"input_tokens": 100, "cache_read_input_tokens": 25,
+          "cache_creation_input_tokens": 10, "output_tokens": 20}, 135, 25),
+        ({"inputTokens": 135, "cachedInputTokens": 25,
+          "cache_creation_input_tokens": 10, "outputTokens": 20}, 135, 25),
+    ],
+)
+def test_native_work_usage_normalizes_cache_without_double_counting(
+    tmp_path, native_usage, expected_prompt, cached,
+):
+    provider = NativeWorkProvider(Config(), tmp_path)
+
+    provider._update_usage({"usage": native_usage})
+    response = provider._response("done")
+
+    assert response.usage["prompt_tokens"] == expected_prompt
+    assert response.usage["cached_tokens"] == cached
+    assert response.usage["total_tokens"] == expected_prompt + 20
+
+
+def test_native_work_usage_diffs_cumulative_cache_updates():
+    provider = NativeWorkProvider.__new__(NativeWorkProvider)
+    provider._usage = {}
+    provider._reported_usage = {}
+    provider._context_usage = {}
+
+    provider._update_usage({"usage": {
+        "input_tokens": 90,
+        "cache_read_input_tokens": 10,
+        "cache_creation_input_tokens": 4,
+        "output_tokens": 5,
+    }})
+    first = provider._response("first")
+    provider._update_usage({"usage": {
+        "input_tokens": 140,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 8,
+        "output_tokens": 9,
+    }})
+    second = provider._response("second")
+    repeated = provider._response("same cumulative snapshot")
+
+    assert first.usage == {"prompt_tokens": 104, "cached_tokens": 10, "completion_tokens": 5, "total_tokens": 109}
+    assert second.usage == {"prompt_tokens": 74, "cached_tokens": 20, "completion_tokens": 4, "total_tokens": 78}
+    assert repeated.usage == {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def test_runner_treats_zero_native_context_usage_as_reported():
+    spec = AgentRunSpec([], ToolRegistry(), "native-model", 1, 16000)
+
+    usage = AgentRunner._contextualize_usage({
+        "prompt_tokens": 5_500_000,
+        "completion_tokens": 41_000,
+        "context_tokens": 0,
+    }, spec)
+
+    assert usage["context_tokens"] == 0
+
+
+def test_runner_binds_context_metadata_without_billing_fields():
+    spec = AgentRunSpec(
+        [], ToolRegistry(), "native-model", 1, 16000, context_provider="codex",
+    )
+
+    usage = AgentRunner._contextualize_usage({"context_tokens": 80_000}, spec)
+
+    assert usage["context_tokens"] == 80_000
+    assert usage["context_model"] == "native-model"
+    assert usage["context_provider"] == "codex"
+    assert "prompt_tokens" not in usage
+    assert "completion_tokens" not in usage
+
+
+@pytest.mark.asyncio
+async def test_native_work_keeps_cumulative_billing_separate_from_last_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        NativeWorkProvider,
+        "estimate_prompt_tokens",
+        lambda *args, **kwargs: (10_000, "test"),
+        raising=False,
+    )
+    config, root, output, _ = use_peer(tmp_path, monkeypatch, token_usage={
+        "total": {"inputTokens": 5_500_000, "outputTokens": 41_000},
+        "last": {"totalTokens": 80_000},
+        "modelContextWindow": 1_000_000,
+    })
+    tools = ToolRegistry()
+    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    progress = []
+
+    async def progress_callback(_content, *, token_usage=None):
+        if token_usage:
+            progress.append(token_usage)
+
+    provider = NativeWorkProvider(config, root)
+    async with asyncio.timeout(10):
+        result = await AgentRunner(provider).run(AgentRunSpec(
+            [{"role": "system", "content": "MONA_PERSONALITY"},
+             {"role": "user", "content": "Write once"}],
+            tools,
+            "native-fixture",
+            5,
+            16000,
+            workspace=root,
+            reasoning_effort="high",
+            context_window_tokens=32_000,
+            context_window_verified=True,
+            context_provider="codex",
+            progress_callback=progress_callback,
+        ))
+
+    assert result.stop_reason == "completed"
+    assert output.read_text() == "native work"
+    assert result.usage["prompt_tokens"] == 5_500_000
+    assert result.usage["completion_tokens"] == 41_000
+    assert result.usage["total_tokens"] == 5_541_000
+    assert result.final_usage["context_tokens"] == 80_000
+    assert result.final_usage["context_window_tokens"] == 1_000_000
+    assert progress[-1]["context_tokens"] == 80_000
+    assert progress[-1]["context_window_tokens"] == 1_000_000
 
 
 @pytest.mark.asyncio

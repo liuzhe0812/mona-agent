@@ -29,9 +29,9 @@ export function ViewSwitcher({
           type="button"
           onClick={() => onChange(m.value)}
           className={cn(
-            "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-full px-2 text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+            "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-full px-3 text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
             mode === m.value
-              ? "bg-background text-foreground shadow-sm hover:bg-background hover:text-foreground"
+              ? "border border-border/70 bg-background text-foreground hover:bg-background hover:text-foreground"
               : "text-muted-foreground hover:bg-transparent hover:text-foreground",
           )}
         >

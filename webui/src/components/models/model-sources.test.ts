@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { orderedSources, useModelPreferences } from "./model-sources";
+import { modelKey, orderedSources, sourceId, sourceLabel, useModelPreferences } from "./model-sources";
+import { executorLabels } from "@/lib/development-api";
 
 beforeEach(() => {
   useModelPreferences.setState({ hiddenNative: [], providerOrder: [] });
+});
+
+it("displays WorkBuddy while preserving CodeBuddy routing and saved model keys", () => {
+  expect(executorLabels.codebuddy).toBe("WorkBuddy");
+  expect(sourceLabel("native:codebuddy", "CodeBuddy")).toBe("WorkBuddy");
+  expect(sourceId("native:codebuddy")).toBe("native:codebuddy");
+  expect(modelKey({ provider: "native:codebuddy", model: "deepseek-v4.1-flash", executor: "codebuddy" }))
+    .toBe('["native:codebuddy","deepseek-v4.1-flash","codebuddy",""]');
 });
 
 describe("orderedSources", () => {

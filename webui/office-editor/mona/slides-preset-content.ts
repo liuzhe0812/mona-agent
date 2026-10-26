@@ -41,28 +41,3 @@ export function missingRequiredFacts(content: PresetContent, visibleText: string
     && !visible.includes(normalizeFactText(fact.text)))
     .map((fact) => fact.id)
 }
-
-/** References belong to the editor session, not the user's saved presentation. */
-export class PresetContentStore {
-  private readonly contents = new Map<string, PresetContent>()
-
-  register(content: PresetContent): string {
-    const value = preparePresetContent(content)
-    const ref = `preset-content:${crypto.randomUUID()}`
-    this.contents.set(ref, value)
-    if (this.contents.size > 128) this.contents.delete(this.contents.keys().next().value!)
-    return ref
-  }
-
-  resolve(content: unknown, ref: unknown): PresetContent {
-    if (ref !== undefined && ref !== null) {
-      if (content !== undefined && content !== null) throw new Error('使用 contentRef 时不要重传或改写 content；重新规划请从原始内容查询候选。')
-      if (typeof ref !== 'string' || !this.contents.has(ref)) throw new Error('内容引用已失效，请使用原始内容重新查询候选。')
-      return structuredClone(this.contents.get(ref)!)
-    }
-    if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('需要 content 或有效的 contentRef。')
-    return preparePresetContent(content as PresetContent)
-  }
-
-  clear(): void { this.contents.clear() }
-}

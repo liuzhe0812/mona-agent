@@ -1,0 +1,28 @@
+[Unit]
+Description=Notebook Relay
+After=network.target
+
+[Service]
+Type=simple
+User=notebook-relay
+Group=notebook-relay
+WorkingDirectory=/opt/notebook-relay
+Environment=NOTEBOOK_RELAY_HOST=127.0.0.1
+Environment=NOTEBOOK_RELAY_PORT=8800
+Environment=NOTEBOOK_RELAY_UPSTREAM_PROVIDER=opencode_native
+Environment=NOTEBOOK_RELAY_OPENCODE_EXECUTABLE=/opt/notebook-relay/runtime/opencode
+LoadCredentialEncrypted=relay-api-key:/etc/credstore.encrypted/notebook-relay.key
+ExecStart=/bin/sh /opt/notebook-relay/deploy/start.sh
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=notebook-relay
+MemoryMax=2G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

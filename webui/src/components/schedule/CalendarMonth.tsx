@@ -84,9 +84,9 @@ export function CalendarMonth({
   return (
     <div className="flex h-full flex-col bg-editor-surface">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-y-1.5 px-3 py-1.5 border-b border-border/40">
+      <div className="flex flex-wrap items-center justify-between gap-y-1.5 px-4 py-2 border-b border-border/60">
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
+          <Button variant="ghost" size="icon" onClick={goPrev} className="h-7 w-7">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
           <DropdownMenu
@@ -100,7 +100,7 @@ export function CalendarMonth({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 min-w-[104px] gap-0.5 px-1.5 text-body font-semibold"
+                className="h-7 min-w-[104px] gap-0.5 px-1.5 text-body-lg font-semibold"
               >
                 {monthLabel}
                 <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -150,10 +150,10 @@ export function CalendarMonth({
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button variant="ghost" size="icon" onClick={goNext} className="h-6 w-6">
+          <Button variant="ghost" size="icon" onClick={goNext} className="h-7 w-7">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="h-6 ml-1 px-2 text-caption">
+          <Button variant="outline" size="sm" onClick={goToday} className="h-7 ml-1.5 rounded-full px-3 text-caption">
             今天
           </Button>
         </div>
@@ -163,9 +163,9 @@ export function CalendarMonth({
       </div>
 
       {/* Weekday header */}
-      <div className="grid grid-cols-7 border-b text-caption text-muted-foreground">
+      <div className="grid grid-cols-7 border-b border-border/60 text-caption text-muted-foreground">
         {WEEKDAY_HEADERS.map((d) => (
-          <div key={d} className="py-1.5 text-center font-medium">
+          <div key={d} className="py-2 text-center font-medium">
             {d}
           </div>
         ))}
@@ -184,8 +184,10 @@ export function CalendarMonth({
                 onSelectDate(date);
               }}
               className={cn(
-                "group border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent transition-colors overflow-hidden",
+                "group border-b border-r border-border/50 min-h-[80px] p-1.5 cursor-pointer hover:bg-accent transition-colors overflow-hidden",
+                "[&:nth-child(7n)]:border-r-0",
                 !inMonth && "text-muted-foreground",
+                isToday && "bg-info/[0.04] ring-1 ring-inset ring-info/30",
               )}
             >
               <div className="flex items-center justify-between mb-0.5">
@@ -225,18 +227,31 @@ export function CalendarMonth({
                       onSelectItem(item);
                     }}
                     className={cn(
-                      "flex w-full items-center gap-1 rounded-xs px-1 py-0.5 text-left text-micro hover:bg-accent",
+                      "flex w-full items-center gap-1 rounded-xs px-1.5 py-0.5 text-left text-micro transition-colors",
+                      inMonth
+                        ? "bg-info/10 text-info hover:bg-info/20"
+                        : "bg-muted text-muted-foreground hover:bg-accent",
                       (item.done || !item.enabled) && "opacity-50",
                     )}
                     title={item.title}
                   >
                     {!item.allDay && (
-                      <span className="font-mono text-micro text-muted-foreground">
+                      <span
+                        className={cn(
+                          "font-mono text-micro",
+                          inMonth ? "text-info/80" : "text-muted-foreground",
+                        )}
+                      >
                         {formatTime(item.startAtMs)}
                       </span>
                     )}
                     {item.kind === "ai_task" && (
-                      <Bot className="h-3 w-3 flex-shrink-0 text-primary" />
+                      <Bot
+                        className={cn(
+                          "h-3 w-3 flex-shrink-0",
+                          inMonth ? "text-info" : "text-muted-foreground",
+                        )}
+                      />
                     )}
                     <span className={cn("truncate", item.done && "line-through")}>
                       {item.title}

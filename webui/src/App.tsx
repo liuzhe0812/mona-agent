@@ -1,4 +1,5 @@
 import { useDesktopPreferenceUpdates } from "@/hooks/useDesktopPreferenceUpdates";
+import type { StockVibeNotificationTarget } from "@/components/stock-vibe/StockVibeSavedResearch";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -39,6 +40,7 @@ import { BrowserTabView } from "@/components/browser/BrowserTabView";
 import { HistoryPage } from "@/components/browser/HistoryPage";
 import { DownloadsPage } from "@/components/browser/DownloadsPage";
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
+import { listenForBrowserUrls } from "@/lib/browser-ipc";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 import { useDbStore } from "@/components/db/store/dbStore";
 import { useMdReaderStore } from "@/components/md-reader/mdReaderStore";
@@ -56,6 +58,7 @@ import { LicenseProvider, useLicense } from "@/hooks/useLicense";
 import { LoginDialog } from "@/components/LoginDialog";
 import { UpdateNotification } from "@/components/UpdateNotification";
 import { useEmailStore } from "@/components/email/store/emailStore";
+import type { EmailMessage } from "@/components/email/lib/types";
 import { useTodoStore } from "@/components/schedule/todoStore";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useCloudUpdates } from "@/hooks/useCloudUpdates";
@@ -75,7 +78,7 @@ import { warmNativeProviderConnections } from "@/lib/native-provider-bootstrap";
 import type { ProfileArtifact, ProfileStartRequest } from "@/lib/profile-api";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ArtifactRef, ChatSummary, DeliveredFile } from "@/lib/types";
-import { isTauri, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { VideoConversationRequest } from "@/components/doc/DocMakerView";
@@ -174,9 +177,9 @@ const DevelopmentView = lazy(() =>
   import("@/components/development/DevelopmentView").then((module) => ({ default: module.DevelopmentView })),
 );
 
-const StockView = lazy(() =>
-  import("@/components/stock/StockView").then((module) => ({
-    default: module.StockView,
+const StockWorkspace = lazy(() =>
+  import("@/components/StockEntry").then((module) => ({
+    default: module.StockEntry,
   })),
 );
 
@@ -218,35 +221,6 @@ function isMailPreviewRoute(): boolean {
 
 function isDownloadsRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/browser-downloads");
-}
-
-function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
-  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return null;
-  const parts: string[] = [];
-  if (event.ctrlKey) parts.push("Ctrl");
-  if (event.altKey) parts.push("Alt");
-  if (event.shiftKey) parts.push("Shift");
-  if (event.metaKey) parts.push("Meta");
-
-  let key = event.key;
-  if (/^[a-z]$/i.test(key)) {
-    key = key.toUpperCase();
-  } else if (key === " ") {
-    key = "Space";
-  } else {
-    const aliases: Record<string, string> = {
-      Escape: "Esc",
-      ArrowUp: "Up",
-      ArrowDown: "Down",
-      ArrowLeft: "Left",
-      ArrowRight: "Right",
-    };
-    key = aliases[key] ?? key;
-  }
-
-  if (!key || key.length > 12) return null;
-  parts.push(key);
-  return parts.join("+");
 }
 
 function AuthForm({
@@ -633,6 +607,21 @@ function Shell({
     toggleDarkMode,
     openDevtools,
   } = useBrowserTabs();
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listenForBrowserUrls(() => setView("chat")).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    }).catch(() => {
+      console.warn("[browser] 网页链接入口初始化失败");
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
   const [sidebarBrowserTabId, setSidebarBrowserTabId] = useState<string | null>(null);
   const [sidebarBrowserVisible, setSidebarBrowserVisible] = useState(false);
   const [developmentBrowserIds, setDevelopmentBrowserIds] = useState<string[]>([]);
@@ -748,19 +737,11 @@ function Shell({
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
   const [sidebarModules, setSidebarModules] = useState<SidebarModuleConfig[] | null>(null);
-  // 复盘通知点击聚焦的 runId（T20）：StockView 消费后清空
-  const [stockFocusRunId, setStockFocusRunId] = useState<string | null>(null);
-  // 私聊确认卡带入的标的（T22d）：StockView 自选命中后自动启动深度投研
+  // 股票通知带入标的后，工作台会消费并清空。
   const [stockAutoRunSymbol, setStockAutoRunSymbol] = useState<string | null>(null);
+  const [stockNotificationTarget, setStockNotificationTarget] = useState<StockVibeNotificationTarget | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
-  const sidebarShortcutsRef = useRef<SidebarShortcuts>({
-    mona: "Alt+1",
-    note: "Alt+2",
-    ssh: "Alt+3",
-    email: "Alt+4",
-    schedule: "Alt+5",
-    db: "Alt+6",
-  });
+  const emailActionDialogOpenRef = useRef(false);
 
   // 全局邮件自动同步 + IMAP IDLE 实时推送
   // 策略：gateway 就绪后首次静默同步 → 启动 IDLE 实时监听 → 兜底轮询 10 分钟
@@ -770,10 +751,78 @@ function Shell({
     let ws: WebSocket | null = null;
     let wsReconnectTimer = 0;
     let startupTimer = 0;
+    const unlisteners: (() => void)[] = [];
     const loadAccounts = useEmailStore.getState().loadAccounts;
     const syncAllAccounts = useEmailStore.getState().syncAllAccounts;
     const startAllIdle = useEmailStore.getState().startAllIdle;
     const stopAllIdle = useEmailStore.getState().stopAllIdle;
+
+    const refreshMailbox = (payload: { accountId?: string; folder?: string }) => {
+      if (!payload.accountId || !payload.folder) return;
+      const store = useEmailStore.getState();
+      void store.refreshUnreadCounts(payload.accountId);
+      void store.refreshMailboxFromDb(payload.accountId, payload.folder);
+    };
+
+    const showEmailActionRequired = async (message: string) => {
+      const safeMessage = message.trim().slice(0, 240);
+      if (!safeMessage || emailActionDialogOpenRef.current) return;
+      emailActionDialogOpenRef.current = true;
+      try {
+        const { message: showMessage } = await import("@tauri-apps/plugin-dialog");
+        await showMessage(safeMessage, { title: "邮件需要处理", kind: "warning" });
+      } catch {
+        console.error("[email] action-required dialog unavailable");
+      } finally {
+        emailActionDialogOpenRef.current = false;
+      }
+    };
+
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        async function listenFor<T>(eventName: string, handler: (payload: T) => void) {
+          try {
+            const unlisten = await listen<T>(eventName, (event) => handler(event.payload));
+            if (cancelled) unlisten();
+            else unlisteners.push(unlisten);
+          } catch {
+            if (!cancelled) console.error(`[email] failed to listen for ${eventName}`);
+          }
+        }
+
+        await Promise.all([
+          listenFor<{ accountId?: string; folder?: string }>(
+            "email-mailbox-updated",
+            refreshMailbox,
+          ),
+          listenFor<{
+            accountId?: string;
+            folder?: string;
+            newCount?: number;
+            newMessages?: EmailMessage[];
+          }>("email-bg-sync", (payload) => {
+            refreshMailbox(payload);
+            if (
+              payload.accountId &&
+              (payload.newCount ?? 0) > 0 &&
+              payload.newMessages?.length
+            ) {
+              void useEmailStore.getState().notifyBackgroundNewMail(
+                payload.accountId,
+                payload.newCount!,
+                payload.newMessages,
+              );
+            }
+          }),
+          listenFor<{ message?: string }>("email-action-required", (payload) => {
+            if (payload.message) void showEmailActionRequired(payload.message);
+          }),
+        ]);
+      } catch {
+        if (!cancelled) console.error("[email] global event listeners unavailable");
+      }
+    })();
 
     const connectIdleWs = (gatewayUrl: string) => {
       if (cancelled || !gatewayUrl) return;
@@ -787,10 +836,14 @@ function Shell({
         try {
           const data = JSON.parse(event.data);
           if (data.type === "new-mail") {
-            // IDLE 收到新邮件通知，触发同步（非静默，会弹通知）
+            // IDLE 携带账号和文件夹范围，只同步触发更新的邮箱。
             // eslint-disable-next-line no-console
             console.log("[email] IDLE new-mail event", data.accountId);
-            void syncAllAccounts(gatewayUrl, false);
+            if (typeof data.accountId === "string" && typeof data.mailbox === "string") {
+              void syncAllAccounts(gatewayUrl, false, data.accountId, data.mailbox);
+            } else {
+              void syncAllAccounts(gatewayUrl, false);
+            }
           }
         } catch {
           // 忽略解析错误
@@ -853,6 +906,7 @@ function Shell({
     }, 1_500);
     return () => {
       cancelled = true;
+      unlisteners.forEach((unlisten) => unlisten());
       if (startupTimer) window.clearTimeout(startupTimer);
       if (intervalId) window.clearInterval(intervalId);
       if (wsReconnectTimer) window.clearTimeout(wsReconnectTimer);
@@ -1590,9 +1644,6 @@ function Shell({
   useEffect(() => {
     if (!isTauri()) return;
     getDesktopSettings().then((s) => {
-      if (s.sidebar_shortcuts) {
-        sidebarShortcutsRef.current = s.sidebar_shortcuts;
-      }
       if (s.sidebar_modules) {
         setSidebarModules(s.sidebar_modules);
       }
@@ -1608,42 +1659,6 @@ function Shell({
   }, []);
 
   useDesktopPreferenceUpdates((settings) => setSidebarModules(settings.sidebar_modules));
-
-  // 私聊确认卡（T22d）：跳转股票工作台并自动启动单股深度投研
-  useEffect(() => {
-    const onOpenStockEvent = (event: Event) => {
-      const detail = (event as CustomEvent<{ symbol?: string }>).detail;
-      if (detail?.symbol) setStockAutoRunSymbol(detail.symbol);
-      onOpenStock();
-    };
-    window.addEventListener("mona-open-stock", onOpenStockEvent);
-    return () => {
-      window.removeEventListener("mona-open-stock", onOpenStockEvent);
-    };
-  }, [onOpenStock]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-    const shortcutToView: Record<string, () => void> = {
-      [sidebarShortcutsRef.current.mona]: onNewChat,
-      [sidebarShortcutsRef.current.note]: onOpenNote,
-      [sidebarShortcutsRef.current.ssh]: onOpenSSH,
-      [sidebarShortcutsRef.current.email]: onOpenEmail,
-      [sidebarShortcutsRef.current.schedule]: onOpenSchedule,
-      [sidebarShortcutsRef.current.db]: onOpenDb,
-    };
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      const shortcut = shortcutFromKeyboardEvent(event);
-      if (!shortcut) return;
-      const handler = shortcutToView[shortcut];
-      if (!handler) return;
-      event.preventDefault();
-      handler();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenNote, onOpenSSH, onOpenEmail, onOpenSchedule, onOpenDb]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1712,8 +1727,19 @@ function Shell({
           } else if (action === "open-email") onOpenEmail();
           else if (action === "open-schedule") onOpenSchedule();
           else if (action === "open-stock") {
-            // 股票复盘通知（T20）：携带 runId 时聚焦对应复盘简报。
-            setStockFocusRunId((data as { runId?: string } | undefined)?.runId ?? null);
+            const target = data as Record<string, unknown> | undefined;
+            const symbol = typeof target?.symbol === "string" ? target.symbol : undefined;
+            const objectId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+            if ((typeof target?.artifact_id === "string" && /^[a-f0-9]{32}$/.test(target.artifact_id) && symbol && /^\d{6}\.(SH|SZ|BJ)$/.test(symbol))
+              || (objectId(target?.session_id) && objectId(target?.attempt_id))) {
+              setStockAutoRunSymbol(null);
+              setStockNotificationTarget({ symbol,
+                artifact_id: typeof target?.artifact_id === "string" && /^[a-f0-9]{32}$/.test(target.artifact_id) ? target.artifact_id : undefined,
+                session_id: objectId(target?.session_id) ? target.session_id : undefined,
+                attempt_id: objectId(target?.attempt_id) ? target.attempt_id : undefined });
+            } else {
+              if (symbol) setStockAutoRunSymbol(symbol);
+            }
             onOpenStock();
           }
         }
@@ -1957,8 +1983,11 @@ function Shell({
     if (runtimeStatus === "connecting") {
       setStartupSceneVisible(true);
       setStartupSceneExiting(false);
-    } else if (startupSceneVisible) {
+    } else if (runtimeStatus === "ready" && startupSceneVisible) {
       setStartupSceneExiting(true);
+    } else if (runtimeStatus !== "ready") {
+      setStartupSceneVisible(false);
+      setStartupSceneExiting(false);
     }
   }, [runtimeStatus, startupSceneHostVisible, startupSceneVisible]);
   const browserSurfaceVisible =
@@ -2326,12 +2355,13 @@ function Shell({
               {view === "stock" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开股票工作台" />}>
-                    <StockView
-                      focusRunId={stockFocusRunId}
-                      onConsumeFocusRun={() => setStockFocusRunId(null)}
+                    <StockWorkspace
                       autoRunSymbol={stockAutoRunSymbol}
+                      notificationTarget={stockNotificationTarget}
+                      onConsumeNotification={() => setStockNotificationTarget(null)}
                       onConsumeAutoRun={() => setStockAutoRunSymbol(null)}
                       onOpenSubscribe={onOpenSubscribe}
+                      onOpenSettings={onOpenSettings}
                     />
                   </Suspense>
                 </div>
@@ -2479,7 +2509,6 @@ function Shell({
           <EmailExtractionSettingsDialog
             open={emailExtractionOpen}
             onOpenChange={setEmailExtractionOpen}
-            onOpenSubscribe={onOpenSubscribe}
             onOpenEmail={() => { setEmailExtractionOpen(false); onOpenEmail(); }}
             onAddEmailAccount={() => {
               setEmailExtractionOpen(false);

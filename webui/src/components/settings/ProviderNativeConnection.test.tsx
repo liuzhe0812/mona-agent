@@ -24,7 +24,7 @@ afterEach(cleanup);
 describe("native catalog presentation", () => {
   it("preserves the empty-ID default choice and shares its visibility with the developer selector", () => {
     render(<ProviderNativeConnection executor={readyBuddy} onChanged={vi.fn()} />);
-    const toggle = screen.getByRole("switch", { name: "CodeBuddy 默认模型 在选择器中显示" });
+    const toggle = screen.getByRole("switch", { name: "WorkBuddy 默认模型 在选择器中显示" });
     const option = developmentModels([readyBuddy])[0];
     expect(developmentModelRoute(option)).toEqual({ executor: "codebuddy", model: null, provider: null, effort: null });
     expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -33,18 +33,18 @@ describe("native catalog presentation", () => {
     const hiddenSection = screen.getByRole("button", { name: "未显示 1" });
     expect(hiddenSection).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(hiddenSection);
-    const hiddenToggle = screen.getByRole("switch", { name: "CodeBuddy 默认模型 在选择器中显示" });
+    const hiddenToggle = screen.getByRole("switch", { name: "WorkBuddy 默认模型 在选择器中显示" });
     expect(hiddenToggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(hiddenToggle);
     expect(useModelPreferences.getState().hiddenNative).not.toContain(modelKey(option));
-    expect(screen.getByRole("switch", { name: "CodeBuddy 默认模型 在选择器中显示" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "WorkBuddy 默认模型 在选择器中显示" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("已连接")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "断开连接" })).not.toBeInTheDocument();
     expect(developmentApi.login).not.toHaveBeenCalled();
     expect(developmentApi.logout).not.toHaveBeenCalled();
   });
 
-  it("keeps unconfirmed CodeBuddy authorization visible without claiming connection", async () => {
+  it("keeps unconfirmed WorkBuddy authorization visible without claiming connection", async () => {
     render(<ProviderNativeConnection executor={buddy} onChanged={vi.fn()} />);
     await screen.findByText("已授权");
     expect(screen.getByText("未连接")).toBeInTheDocument();
@@ -61,21 +61,21 @@ describe("native catalog presentation", () => {
     useModelPreferences.setState({ hiddenNative: [secondKey], providerOrder: [] });
     const { rerender } = render(<ProviderNativeConnection executor={{ ...buddy, models }} onChanged={vi.fn()} />);
     await screen.findByText("已授权");
-    const first = screen.getByRole("switch", { name: "CodeBuddy 目录模型一 在选择器中显示" });
+    const first = screen.getByRole("switch", { name: "WorkBuddy 目录模型一 在选择器中显示" });
     const hiddenSection = screen.getByRole("button", { name: "未显示 1" });
     expect(hiddenSection).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(hiddenSection);
-    const second = screen.getByRole("switch", { name: "CodeBuddy 目录模型二 在选择器中显示" });
+    const second = screen.getByRole("switch", { name: "WorkBuddy 目录模型二 在选择器中显示" });
     expect(first).toHaveAttribute("aria-checked", "false");
     expect(first).toBeDisabled();
     expect(second).toHaveAttribute("aria-checked", "false");
     expect(second).toBeDisabled();
     expect(useModelPreferences.getState().hiddenNative).toEqual([secondKey]);
-    expect(screen.getByRole("button", { name: "CodeBuddy 全部显示" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "WorkBuddy 全部显示" })).toBeDisabled();
 
     rerender(<ProviderNativeConnection executor={{ ...readyBuddy, models }} onChanged={vi.fn()} />);
-    expect(screen.getByRole("switch", { name: "CodeBuddy 目录模型一 在选择器中显示" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("switch", { name: "CodeBuddy 目录模型二 在选择器中显示" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "WorkBuddy 目录模型一 在选择器中显示" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "WorkBuddy 目录模型二 在选择器中显示" })).toHaveAttribute("aria-checked", "false");
     expect(useModelPreferences.getState().hiddenNative).toEqual([secondKey]);
     expect(useModelPreferences.getState().hiddenNative).not.toContain(firstKey);
   });
@@ -91,7 +91,7 @@ describe("native catalog presentation", () => {
     render(<ProviderNativeConnection executor={executor} onChanged={vi.fn()} />);
     expect(screen.getAllByRole("switch")).toHaveLength(3);
     const option = developmentModels([executor])[1];
-    fireEvent.click(screen.getByRole("switch", { name: "CodeBuddy 目录模型一 在选择器中显示" }));
+    fireEvent.click(screen.getByRole("switch", { name: "WorkBuddy 目录模型一 在选择器中显示" }));
     expect(useModelPreferences.getState().hiddenNative).toEqual([modelKey(option)]);
     expect(developmentModelRoute(option).model).toBe("fixture-one");
   });
@@ -113,7 +113,7 @@ describe("native catalog presentation", () => {
     await user.click(await screen.findByRole("menuitem", { name: "刷新连接与模型" }));
     await waitFor(() => expect(developmentApi.probe).toHaveBeenCalledWith(undefined, "codebuddy"));
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("检测到本机 CodeBuddy")).not.toBeInTheDocument();
+    expect(screen.queryByText("检测到本机 WorkBuddy")).not.toBeInTheDocument();
   });
 
   it("does not add a connection details dialog", () => {
@@ -122,7 +122,7 @@ describe("native catalog presentation", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("does not expose unsupported CodeBuddy logout when connected", () => {
+  it("does not expose unsupported WorkBuddy logout when connected", () => {
     render(<ProviderNativeConnection executor={readyBuddy} onChanged={vi.fn()} />);
     expect(screen.getByText("已连接")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "断开连接" })).not.toBeInTheDocument();

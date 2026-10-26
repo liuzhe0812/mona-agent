@@ -4394,7 +4394,7 @@ const enUS: Record<string, string> = {
   "settingsSync.agent.traeCn": "Trae CN",
   "settingsSync.agent.kiroCli": "Kiro CLI",
   "settingsSync.agent.roo": "Roo Code",
-  "settingsSync.agent.codeBuddy": "CodeBuddy",
+  "settingsSync.agent.codeBuddy": "WorkBuddy",
   "settingsSync.agent.agents": "Shared .agents",
   "settingsSync.category.providers": "Providers",
   "settingsSync.category.providers.description": "Models and credentials",

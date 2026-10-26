@@ -3,7 +3,6 @@ import {
   Archive,
   ArchiveRestore,
   ChevronLeft,
-  FileClock,
   ImagePlus,
   LoaderCircle,
   MessageSquarePlus,
@@ -46,6 +45,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -58,7 +58,6 @@ import {
   fetchAutomationStatus,
   getAgentDetail,
   fetchSettings,
-  listAgentInstructionHistory,
   listAgentInstructions,
   listAgentSkills,
 } from "@/lib/api";
@@ -70,7 +69,6 @@ import type {
   AgentModelBinding,
   AgentDetailPayload,
   AgentInstruction,
-  AgentInstructionHistoryItem,
   AgentSkill,
   AgentSkillSetupJob,
   AutomationStatus,
@@ -81,12 +79,11 @@ type Tab = "overview" | "identity" | "knowledge" | "permissions" | "skills";
 type SkillAction = "enable" | "disable" | "archive" | "restore" | "pin" | "unpin";
 const MAX_AVATAR_FILE_BYTES = 2 * 1024 * 1024;
 
-const INSTRUCTION_LABELS: Record<AgentInstruction["key"], string> = {
-  soul: "个性",
-  agents: "规则",
-  user: "用户偏好",
+const INSTRUCTION_LABELS = {
+  soul: "人设",
   memory: "长期记忆",
 };
+type InstructionKey = keyof typeof INSTRUCTION_LABELS;
 
 const MANAGEMENT_TAB_CLASS =
   "relative after:pointer-events-none after:absolute after:inset-x-2 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-transparent after:content-[''] data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:bg-[hsl(var(--brand-red))]";
@@ -208,25 +205,7 @@ const TOOL_LABELS: Record<string, string> = {
   schedule: "日程管理",
   scientific_tool: "科学工具",
   skill_create: "创建技能",
-  stock_context_read: "读取股票研究上下文",
-  stock_evidence_read: "读取股票研究证据",
-  stock_opportunity_submit: "提交股票机会研究",
-  stock_quote: "查询股票行情",
-  stock_report_read: "读取股票报告",
-  stock_research_status: "查看股票研究进度",
-  stock_screen_compare: "比较选股候选",
-  stock_screen_read: "读取选股结果",
-  stock_screen_run: "运行选股分析",
-  stock_screen_strategy_save: "保存选股策略",
-  stock_screen_validation_read: "读取策略验证",
-  stock_source_open: "查看股票数据来源",
-  submit_bear_case: "提交看空观点",
-  submit_bull_case: "提交看多观点",
-  submit_fundamental_view: "提交基本面观点",
-  submit_news_view: "提交资讯观点",
-  submit_stock_diagnosis_semantic: "提交股票语义分析",
-  submit_stock_report_staged: "分步提交股票报告",
-  submit_technical_view: "提交技术面观点",
+  stock_vibe_task: "股票研究任务",
   todo: "待办事项",
   terminal_exec: "执行终端命令",
   terminal_output: "读取终端输出",
@@ -318,25 +297,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   schedule: "创建、查看、修改或删除个人提醒和自动执行任务。",
   scientific_tool: "发现、查看或运行受支持的科学数据与计算工具。",
   skill_create: "为当前智能体创建并启用私有技能。",
-  stock_context_read: "构建并读取可追溯的 A 股研究上下文和数据质量信息。",
-  stock_evidence_read: "读取当前研究流程准备的股票证据包及其来源。",
-  stock_opportunity_submit: "提交候选股票的结构化机会、风险和不同周期判断。",
-  stock_quote: "查询一只 A 股或 ETF 的实时价格、涨跌幅和成交量。",
-  stock_report_read: "按报告编号读取已生成的股票研究报告或复盘摘要。",
-  stock_research_status: "查看多智能体股票研究的当前步骤、完成情况和失败信息。",
-  stock_screen_compare: "使用结构化指标和风险比较多个候选股票。",
-  stock_screen_read: "读取已经保存的选股分析结果。",
-  stock_screen_run: "运行确定性的股票筛选流程并保存结果。",
-  stock_screen_strategy_save: "保存用户确认的结构化选股策略。",
-  stock_screen_validation_read: "读取选股策略的真实历史验证指标或不可用原因。",
-  stock_source_open: "查看股票研究数据来源、时间和内容校验信息。",
-  submit_bear_case: "提交包含短期、中期和长期判断及证据的看空观点。",
-  submit_bull_case: "提交包含短期、中期和长期判断及证据的看多观点。",
-  submit_fundamental_view: "提交公司质量、财务质量、估值和长期价值判断。",
-  submit_news_view: "提交行业、政策、周期和事件日历分析。",
-  submit_stock_diagnosis_semantic: "提交公司、行业、政策、周期、治理和风险语义分析。",
-  submit_stock_report_staged: "分阶段保存股票深度研究内容，并在完成后执行完整校验。",
-  submit_technical_view: "提交价格成交、趋势、市场环境、资金和交易性分析。",
+  stock_vibe_task: "提交受控股票研究、查询固定宿主记录或取消已有研究。",
   todo: "添加、查看、完成或整理统一待办事项。",
   terminal_exec: "在当前终端维护任务中执行一个命令步骤。",
   terminal_output: "读取当前终端或长时间运行会话的输出。",
@@ -394,7 +355,7 @@ function toolGroupId(name: string): ToolGroupId {
   if (name.startsWith("generate_")) return "media";
   if (
     ["academic_search", "chart", "dataframe_query", "research_record", "scientific_tool"].includes(name)
-    || name.startsWith("stock_")
+    || name === "stock_vibe_task"
     || name.startsWith("submit_")
   ) return "research";
   if (name.startsWith("db_")) return "database";
@@ -478,7 +439,7 @@ function ConfigFields({
               : null;
         return [{
           value: modelBindingValue(binding),
-          label: `${executor.name} · ${model.label || model.id}`,
+          label: `${executorLabels[executor.id]} · ${model.label || model.id}`,
           disabled: Boolean(disabled),
           binding,
         }];
@@ -486,7 +447,7 @@ function ConfigFields({
     if (modelBinding && !native.some((option) => option.value === modelBindingValue(modelBinding))) {
       native.push({
         value: modelBindingValue(modelBinding),
-        label: `${modelExecutors.find((executor) => executor.id === modelBinding.executor)?.name ?? executorLabels[modelBinding.executor]} · ${modelBinding.model}`,
+        label: `${executorLabels[modelBinding.executor]} · ${modelBinding.model}`,
         disabled: true,
         binding: modelBinding,
       });
@@ -779,19 +740,13 @@ function PermissionFields({
                       {row.key === "computer_automation" ? <p className="mt-1 text-caption leading-4 text-muted-foreground">{computerStatusText(automationStatus?.computerUse ?? null, checked)}</p> : null}
                       {!row.available ? <p className="text-caption leading-4 text-amber-600">当前运行配置不可用</p> : null}
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      role="switch"
+                    <Switch
+                      size="sm"
                       aria-label={`${row.label}工具`}
-                      aria-checked={checked}
+                      checked={checked}
                       disabled={saving}
-                      onClick={() => void toggleTool(row.names, !checked)}
-                      className={`relative h-5 w-9 shrink-0 rounded-full p-0 transition-colors ${checked ? "bg-info hover:bg-info/90 active:bg-info/80" : "bg-muted-foreground/25 hover:bg-muted-foreground/35 active:bg-muted-foreground/40"} disabled:opacity-55`}
-                    >
-                      <span className={`absolute left-0 top-0.5 h-4 w-4 rounded-full bg-background shadow-sm transition-transform ${checked ? "translate-x-4" : "translate-x-0.5"}`} />
-                    </Button>
+                      onCheckedChange={(next) => void toggleTool(row.names, next)}
+                    />
                   </div>
                 );
               })}
@@ -1035,9 +990,8 @@ export function AgentManagementView({
   const [detail, setDetail] = useState<AgentDetailPayload | null>(null);
   const [instructions, setInstructions] = useState<AgentInstruction[]>([]);
   const [skills, setSkills] = useState<AgentSkill[]>([]);
-  const [selectedInstruction, setSelectedInstruction] = useState<AgentInstruction["key"]>("soul");
+  const [selectedInstruction, setSelectedInstruction] = useState<InstructionKey>("soul");
   const [draftInstruction, setDraftInstruction] = useState("");
-  const [history, setHistory] = useState<AgentInstructionHistoryItem[]>([]);
   const [editingSkill, setEditingSkill] = useState<AgentSkill | null>(null);
   const [skillDraft, setSkillDraft] = useState("");
   const [skillEditorLoading, setSkillEditorLoading] = useState(false);
@@ -1095,7 +1049,7 @@ export function AgentManagementView({
         listAgentSkills(token, agentId),
       ]);
       setDetail(nextDetail);
-      setInstructions(nextInstructions);
+      setInstructions(nextInstructions.filter(({ key }) => key === "soul" || key === "memory"));
       setSkills(nextSkills);
       setError(null);
     } catch (cause) {
@@ -1146,9 +1100,7 @@ export function AgentManagementView({
   }, [agentId, pendingMaterialOpen]);
   useEffect(() => {
     setDraftInstruction(selected?.content ?? "");
-    if (!token) return;
-    void listAgentInstructionHistory(token, agentId, selectedInstruction).then(setHistory).catch(() => setHistory([]));
-  }, [agentId, selected, selectedInstruction, token]);
+  }, [agentId, selected, selectedInstruction]);
   useEffect(() => {
     if (!client) return;
     return client.onAgentsUpdated((changedAgentId) => {
@@ -1173,9 +1125,9 @@ export function AgentManagementView({
       await reload();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "保存指令失败"); }
   };
-  const restoreInstruction = async (commit: string) => {
+  const restoreInstruction = async () => {
     if (!client) return;
-    try { await client.restoreAgentInstruction(agentId, selectedInstruction, commit); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "恢复版本失败"); }
+    try { await client.restoreAgentInstruction(agentId, selectedInstruction); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "恢复上一版失败"); }
   };
   const actOnSkill = async (name: string, action: SkillAction) => {
     if (!client) return;
@@ -1280,10 +1232,10 @@ export function AgentManagementView({
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="flex min-h-0 flex-1 flex-col">
          <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8 !bg-transparent p-0"><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="overview">概览</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="identity">个性化</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="knowledge">知识</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="permissions">工具</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="skills">技能</TabsTrigger></TabsList></div>
         <TabsContent value="overview" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；记忆可在“个性化”中查看、编辑和恢复历史。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
+          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；人设和长期记忆可在“个性化”中查看、编辑和恢复上一版。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
         </TabsContent>
         <TabsContent value="identity" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as AgentInstruction["key"][]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">手动和 AI 修改都会自动记录版本，可随时恢复。</p></div><Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /><section className="mt-5"><h3 className="mb-2 flex items-center gap-1.5 text-ui font-medium"><FileClock className="h-4 w-4" />版本历史</h3><div className="grid gap-1">{history.length ? history.map((item) => <div key={item.sha} className="flex items-center gap-2 rounded-md border border-border/55 px-3 py-2 text-caption"><span className="min-w-0 flex-1 truncate">{item.message}</span><span className="shrink-0 text-muted-foreground">{item.timestamp}</span><Button size="sm" variant="ghost" onClick={() => void restoreInstruction(item.sha)}>恢复</Button></div>) : <p className="text-caption text-muted-foreground">保存后将显示版本历史。</p>}</div></section></div></div>
+          <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as InstructionKey[]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">保存时自动保留上一版。</p></div><div className="flex items-center gap-2">{selected?.hasPrevious ? <Button size="sm" variant="ghost" onClick={() => void restoreInstruction()}>恢复上一版</Button> : null}<Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /></div></div>
         </TabsContent>
         <TabsContent value="knowledge" className="m-0 min-h-0 flex-1 overflow-hidden">
           <ResizablePanelGroup

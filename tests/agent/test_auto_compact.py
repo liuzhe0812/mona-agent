@@ -167,8 +167,22 @@ class TestAgentLoopTTLParam:
         loop = _make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:direct")
         session.get_history = MagicMock(return_value=[])
-        loop.context.build_messages = MagicMock(return_value=[])
-        loop._run_agent_loop = AsyncMock(return_value=("ok", [], [], "stop", False))
+
+        def build_messages(**kwargs):
+            return [
+                {"role": "system", "content": "Fixed test system."},
+                *kwargs["history"],
+                {"role": "user", "content": kwargs["current_message"]},
+            ]
+
+        async def run_agent(initial_messages, **_kwargs):
+            return (
+                "ok", [], [*initial_messages, {"role": "assistant", "content": "done"}],
+                "stop", False,
+            )
+
+        loop.context.build_messages = MagicMock(side_effect=build_messages)
+        loop._run_agent_loop = AsyncMock(side_effect=run_agent)
         loop._save_turn = MagicMock()
 
         msg = InboundMessage(
@@ -183,6 +197,7 @@ class TestAgentLoopTTLParam:
         assert isinstance(kwargs.get("max_tokens"), int)
         assert kwargs["max_tokens"] > 0
         assert kwargs["include_timestamps"] is True
+        assert kwargs["model_view"] is True
 
     @pytest.mark.asyncio
     async def test_session_file_cap_archives_and_trims_old_messages(self, tmp_path):

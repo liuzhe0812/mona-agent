@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Inbox as InboxIcon, Mail, Plus } from "lucide-react";
+import { Inbox as InboxIcon, Mail } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -115,15 +115,6 @@ export function ScheduleView({ onOpenInbox, onOpenEmailExtraction }: ScheduleVie
           </span>
         )}
       </Button>
-      <Button
-        type="button"
-        size="sm"
-        className="h-7 gap-1 px-2.5 text-caption"
-        onClick={() => openCreate(selectedDate)}
-      >
-        <Plus className="h-3.5 w-3.5" />
-        新建日程
-      </Button>
     </>
   );
 
@@ -164,13 +155,14 @@ export function ScheduleView({ onOpenInbox, onOpenEmailExtraction }: ScheduleVie
       </div>
 
       {/* Right panel: day plan */}
-      <div className="hidden w-[320px] flex-shrink-0 flex-col border-l border-border/40 bg-card md:flex">
+      <div className="hidden w-[320px] flex-shrink-0 flex-col border-l border-border/60 bg-muted/40 md:flex">
         <DayPlanPanel
           date={selectedDate}
           scheduleItems={items}
           onSelectScheduleItem={openEdit}
           onCompleteSchedule={handleComplete}
           onToggleSchedule={handleToggle}
+          onCreate={() => openCreate(selectedDate)}
         />
       </div>
 

@@ -40,6 +40,31 @@ export function getFolderDisplayName(name: string): string {
   return FOLDER_DISPLAY_NAMES[key] ?? decoded;
 }
 
+// 「已发送」类文件夹：发出去的邮件不存在未读语义，UI 不展示未读标识
+export function isSentFolder(name: string): boolean {
+  if (!name) return false;
+  const decoded = decodeImapUtf7(name).toLowerCase().trim();
+  return (
+    decoded.includes("sent") ||
+    decoded.includes("已发送") ||
+    decoded.includes("已发邮件")
+  );
+}
+
+// 是否应展示为未读：已发送文件夹的邮件一律视为已读
+export function isUnreadMessage(message: { isRead: boolean; folder: string }): boolean {
+  return !message.isRead && !isSentFolder(message.folder);
+}
+
+// 文件夹未读数：已发送文件夹恒为 0
+export function getFolderUnreadCount(
+  folderName: string,
+  counts: Record<string, number>,
+): number {
+  if (isSentFolder(folderName)) return 0;
+  return counts[folderName] ?? 0;
+}
+
 // 稳定排序：按预定义优先级 + 名称字母序，保证本地缓存与 IMAP 同步后顺序一致
 export function sortFolders<T extends { name: string }>(folders: T[]): T[] {
   return [...folders].sort((a, b) => {

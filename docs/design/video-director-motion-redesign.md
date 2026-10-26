@@ -1,5 +1,6 @@
 # 视频导演台与口播动画重设计
 
+> 2026-10-24 更新：创作资源与运行时已统一为 Huashu Motion。本文涉及 Dashi、旧 huashu-art-motion 或 Remotion 的实现说明仅保留为历史记录；当前边界以 docs/architecture/module-invariants.md 和 docs/plans/video-huashu-motion-replacement.md 为准。
 整体改造与后续实施见 [Mona 视频工作台整体改造方案](video-workbench-rebuild.md)。本文保留已有修复和实测记录；新方案的能力以实施与验收结果为准。
 
 日期：2026-10-13。依据用户明确纠偏及当前源码审计。

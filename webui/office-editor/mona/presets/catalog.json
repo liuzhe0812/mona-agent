@@ -3,7 +3,7 @@
   "themes": {
     "dark-product": {
       "id": "dark-product",
-      "reference": "dashi theme02 炫光紫绿（产品科技深色）",
+      "reference": "原生深色绘制参数",
       "fontFamily": "Microsoft YaHei",
       "background": "#0B1020",
       "surface": "#141B30",
@@ -43,7 +43,7 @@
     },
     "light-editorial": {
       "id": "light-editorial",
-      "reference": "dashi theme07 冷白调研（研究报告）",
+      "reference": "原生浅色绘制参数",
       "fontFamily": "Microsoft YaHei",
       "background": "#F5F3ED",
       "surface": "#FFFFFF",

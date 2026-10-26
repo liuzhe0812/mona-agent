@@ -1,6 +1,3 @@
-import {
-  buildMindMapFreeformPrompt,
-} from "@/components/notes/notes-ai";
 import type { OperationNote } from "@/components/notes/notes-data";
 import { nowTimestamp } from "@/components/notes/notes-data";
 import {
@@ -40,7 +37,7 @@ export type ConversationCanvasApplyResult =
 
 const FLOWCHART_KIND_RE = /(?:流程图|架构图|系统图|拓扑图|泳道图|关系图|示意图|一张图|画成图|整理成图|可视化|flow\s*chart|architecture\s*diagram|system\s*diagram|\bdiagram\b)/i;
 const MINDMAP_KIND_RE = /(?:思维导图|思维图|脑图|mind\s*map)/i;
-const CREATE_RE = /^(?:(?:你好[,，]?\s*)?(?:请|麻烦)?(?:帮我|给我)?\s*(?:画|绘制|创建|生成|制作|做|新建|整理|转换|draw|create|generate|make|visualize)|(?:把|将)[\s\S]{0,200}?(?:整理|转换|画)成)/i;
+const CREATE_RE = /^(?:随便\s*)?(?:(?:你好[,，]?\s*)?(?:请|麻烦)?(?:帮我|给我)?\s*(?:画|绘制|创建|生成|制作|做|新建|整理|转换|draw|create|generate|make|visualize)|(?:把|将)[\s\S]{0,200}?(?:整理|转换|画)成)/i;
 const GENERIC_DIAGRAM_CREATE_RE = /(?:画|绘制|创建|生成|制作|做|新建)\s*(?:一个|一张|一份)?\s*([^,，。.!！?？:：\n]{2,60}图)(?=[\s,，。.!！?？:：]|$)/iu;
 const OFFICE_DELIVERABLE_RE = /(?:\bpptx?\b|power\s*point|幻灯片|演示文稿|\bdocx?\b|\bword\b|\bxlsx?\b|\bexcel\b)/i;
 const NON_DIAGRAM_RE = /(?:图片|图像|截图|地图|图标|封面图|配图|插图|图表)$/u;
@@ -68,8 +65,8 @@ export function deriveConversationCanvasTitle(
   const kindLabel = kind === "flowchart" ? "流程图" : "思维导图";
   let title = content
     .replace(/[。！？!?]+$/g, "")
-    .replace(/^(?:你好[,，]?\s*)?(?:请|麻烦)?(?:帮我|给我)?\s*/i, "")
-    .replace(/^(?:画|绘制|创建|生成|制作|做|新建)\s*(?:一个|一张|一份)?\s*/i, "")
+    .replace(/^(?:随便\s*)?(?:你好[,，]?\s*)?(?:请|麻烦)?(?:帮我|给我)?\s*/i, "")
+    .replace(/^(?:画|绘制|创建|生成|制作|做|新建)\s*(?:一个|一张|一份|个|张|份)?\s*/i, "")
     .replace(/^(?:draw|create|generate|make)\s+(?:a|an)?\s*/i, "")
     .trim();
   const marker = kind === "flowchart" ? FLOWCHART_KIND_RE : MINDMAP_KIND_RE;
@@ -119,21 +116,14 @@ export function conversationCanvasBaseHash(note: OperationNote): string {
 }
 
 export function buildConversationCanvasPrompt(note: OperationNote, question: string): string {
-  const baseHash = conversationCanvasBaseHash(note);
-  if (note.type === "flowchart") {
-    return `用户正在 Mona 主会话右侧的可编辑画布中工作。
+  return `用户正在 Mona 主会话右侧的可编辑${note.type === "mindmap" ? "思维导图" : "流程图"}画布中工作。
 
 用户要求：
 ${question}
 
 当前画布 ID：${note.id}
 
-请按 mona-canvas skill 处理；修改通过 canvas 工具在当前编辑器中完成。只讨论内容时直接回答。`;
-  }
-  const prompt = buildMindMapFreeformPrompt(note, question, null, baseHash);
-  return `${prompt}
-
-这是 Mona 主会话右侧正在打开的可编辑画布。请在自然语言说明之后严格输出上述结构化块；不要向用户解释内部协议、baseHash 或 JSON 字段。`;
+请读取 mona-canvas skill；创建或修改时先调用 canvas(action="open")，按返回的 kind 使用对应修改协议。修改通过 canvas 工具在当前编辑器中完成，不在回复中输出内部结构化块。工具失败时说明画布未完成，不生成内嵌 SVG 或其它替代产物，也不要要求用户先打开面板。只讨论内容时直接回答。`;
 }
 
 export function applyConversationCanvasResponse(

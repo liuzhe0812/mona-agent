@@ -1,0 +1,9 @@
+{
+  "identifier": "main-browser-links",
+  "description": "Allow the main window to restore and focus when the user opens a web link",
+  "webviews": ["main"],
+  "permissions": [
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus"
+  ]
+}

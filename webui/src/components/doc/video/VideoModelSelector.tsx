@@ -5,7 +5,7 @@ import { buildComposerNativeOptions, buildComposerProviderOptions } from "@/comp
 import { sourceLabel } from "@/components/models/model-sources";
 import { cn } from "@/lib/utils";
 import { fetchSettings } from "@/lib/api";
-import { developmentApi, type DevExecutor } from "@/lib/development-api";
+import { developmentApi, executorLabels, type DevExecutor } from "@/lib/development-api";
 import { useNativeProviderState } from "@/lib/native-provider-state";
 import type { AgentModelBinding, SettingsPayload } from "@/lib/types";
 import type { ModelOption } from "@/components/models/model-sources";
@@ -35,7 +35,7 @@ function preservedOption(binding: AgentModelBinding, settings: SettingsPayload |
   const provider = executor === "mona" ? binding.provider ?? "mona_managed" : `native:${executor}`;
   const providerLabel = executor === "mona"
     ? settings?.chat_providers?.find((item) => item.name === provider)?.label ?? (binding.provider ? binding.provider : "Mona AI")
-    : sourceLabel(provider, native?.name ?? (executor === "codex" ? "Codex" : executor === "claude" ? "Claude Code" : "CodeBuddy"));
+    : sourceLabel(provider, native?.name ?? executorLabels[executor]);
   const disabledReason = executor !== "mona" && !native
     ? "此引擎当前不可用，已保留原选择。请重新连接或选择其他模型。"
     : executor === "mona" && !settings

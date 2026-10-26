@@ -142,7 +142,7 @@ describe("AppRail", () => {
     expect(screen.getByRole("button", { name: "Notes" })).toBeInTheDocument();
   });
 
-  it("opens general settings directly when the signed-in user area is clicked", () => {
+  it("opens account settings directly when the signed-in user area is clicked", () => {
     mockLicense.loggedIn = true;
     mockLicense.licenseInfo = { account: "mona-user", email: "user@example.com" };
     const onOpenSettings = vi.fn();
@@ -150,7 +150,7 @@ describe("AppRail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "mona-user" }));
 
-    expect(onOpenSettings).toHaveBeenCalledWith("general");
+    expect(onOpenSettings).toHaveBeenCalledWith("account");
   });
 
   it("shows a breathing red update icon when an update is available", () => {

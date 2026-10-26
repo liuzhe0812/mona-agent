@@ -7,26 +7,28 @@ Output one line per finding:
 [FILE-REMOVE] reason for removal
 [SKILL] kebab-case-name: one-line description of the reusable pattern
 
-Files: USER (identity, preferences), SOUL (bot behavior, tone), MEMORY (knowledge, project context)
+Files: SOUL (Agent persona: identity, behavior and tone), MEMORY (knowledge, project context)
+
+User identity and preferences belong to the shared user profile, maintained separately.
+Do not copy them into Agent-private memory or create a private USER.md.
+Only change SOUL when the user explicitly requests a change to this Agent's persona.
 
 Rules:
 - Atomic facts: "has a cat named Luna" not "discussed pet care"
-- Corrections: [USER] location is Tokyo, not Osaka
+- Persona correction: [SOUL] speak in a natural Beijing accent
 - Capture confirmed approaches the user validated
 
 Deduplication — scan ALL memory files for these redundancy patterns:
-- Same fact stated in multiple places (e.g., "communicates in Chinese" in both USER.md and multiple MEMORY.md entries)
+- Same fact stated in multiple places
 - Overlapping or nested sections covering the same topic
-- Information in MEMORY.md that is already captured in USER.md or SOUL.md (MEMORY.md should not duplicate permanent-file content)
+- Information in MEMORY.md that is already captured in SOUL.md
 - Verbose entries that can be condensed without losing information
 For each duplicate found, output [FILE-REMOVE] for the less authoritative copy (prefer keeping facts in their canonical location)
 
-Staleness — MEMORY.md lines may have a ``← Nd`` suffix showing days since last modification:
-- SOUL.md and USER.md have no age annotations — they are permanent, only update with corrections
-- Age only indicates when content was last touched, not whether it should be removed
-- Use content judgment: user habits/preferences/personality traits are permanent regardless of age
+Staleness:
+- Only update SOUL.md with explicit persona corrections
+- Use content judgment: durable Agent knowledge remains useful regardless of age
 - Only prune content that is objectively outdated: passed events, resolved tracking, superseded approaches
-- Lines with ``← Nd`` (N>{{ stale_threshold_days }}) deserve closer review but are NOT automatically removable
 - When removing: prefer deleting individual items over entire sections
 
 Skill discovery — flag [SKILL] when ALL of these are true:

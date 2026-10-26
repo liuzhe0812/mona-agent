@@ -1,47 +1,47 @@
 ---
 name: mona-pptx
 description: >
-  制作、修改、美化 PPT、演示文稿、幻灯片、汇报材料时使用。通过 Mona Office
-  实时编辑器生成原生可编辑的 PPTX。Use for creating, editing or designing
+  制作、修改、美化 PPT、演示文稿、幻灯片、汇报材料时使用。以 Mona Design
+  的视觉设计资料指导 Mona Office 实时编辑器，生成原生可编辑 PPTX。Use for creating, editing or designing
   presentations, slides, PowerPoint files and reports. 不用于只需要图片原型的任务。
 ---
 
 # Mona PPTX
 
-用 `office` 实时制作原生可编辑 PPT。根据用户内容、受众和展示场景，选择适合的场景模板或自由构图；可直接复用模板的版式、装饰和配色，同时保留真实内容与证据。用实际预览检查主次、比例和细节。你负责叙事和视觉判断，组件减少机械排版；不需要审批、冻结主题或额外 design brief。
+设计使用共享 `mona-design` 资源，制作和编辑只使用当前 `office` 会话。用户看到的是持续更新的原生可编辑 PPT，不另建 HTML 文稿、PDF 中转或第二套导出流程。
 
-## 设计判断
+## 设计入口
 
-按用途选择场景，而不是先选浅色或深色。`presetScenario` 可筛出该场景选定的8个 Dashi 原生页；当前共96个场景引用、81个唯一页 ID，是从12个来源主题中筛出的可用子集，不代表全部1020个来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 看候选；指定 `templateId` 再读取实际文本字段、例值和字数上限。需要预览时用 `inspect` 的 `mode:"visual"`、`templateId` 和 `templateFields`，它会在隔离副本中渲染，不改当前文稿。字段名必须照能力回执填写，例如实际返回的 `titleTop` 或 `meta[0].label`；再用 `slide_add_template` 写入空白16:9页。文字和形状保持可编辑；部分复杂 SVG 图形以图片保留，不含原生图表数据表，不能绑定其中的数字；需要可编辑数据时改用原生图表。场景内容与真实证据优先，不为套模板改变事实或教学内容；不适配时使用通用原生构图。场景与页型见 [场景目录](references/scenarios.md)。
+新稿和涉及风格、配色、字体或构图判断的修改，先用 `skill_reference_read(skill="mona-design", ref_path="native-pptx.md")` 读取 Mona 原生 PPT 适配，再按该入口读取与内容相关的样张和设计资料。共享资源是唯一设计指导；不要执行设计资源包原始的 HTML 制作流程，也不添加强制三方向选择、代表页批准或冻结主题的步骤。普通改字、改数和用户已给出明确样式值的修改，只读取当前对象所需的操作资料，不重新启动设计。
 
-围绕用户目的、受众、资料和页数组织整稿。每页明确主信息与证据，用构图表现信息权重：主图表、大数字、对照、时间线、关系图、案例大图或编辑式文字均可。统一字体层级、配色、对齐与图片处理，变化来自内容，不为求变化硬换版式；比较同类信息时可以重复构图。
+本 Skill 只说明 Office 操作和验收契约，不提供模板、组件搭配、配色、字体或构图建议。样张效果需落实为真实可支持的对象，不把 CSS 效果当成已实现的原生效果。只有实际取得的素材才能填写路径。
 
-高设计感来自清楚的焦点、恰当的比例和有意义的留白，不是给每段文字套圆角卡片。信息密集时调整分组和布局，不靠持续缩字。标题结论需有证据；数字、单位、基期和来源保留，真实关系不能为套模板改写。用户素材优先，只有实际取得的图片才填写素材路径，不用生成图冒充产品截图或数据证据。
+## 用户资料中的图片
+
+根据带图文档制作时，主动检查与内容相关的原图并按 Mona Design 的素材原则复用；不只提文字，也不把所有图片机械搬进 PPT。按需读取 [原图提取与复用](references/source-images.md)：通过本 Skill 的 `extract_source_images.py` 导出 DOCX/PPTX 内嵌图片、PDF 位图或完整图区域，再看实际图片并用返回的 `assetPath` 插入。保留来源与图文对应，不能把未取得的图片、页面截图或图片图表冒称为原图或原生数据图表。
 
 ## 实时制作
 
 已有 PPT 的改色、改字、字体和布局调整直接在当前会话修改，不关闭、不重建。`open(session_id)` 恢复原会话；无活动文稿时 `open(document_type="slides")` 新建，已有活动文稿时仍复用它，只有用户明确要另一份新稿才用 `new_document:true`。用回执的真实 ID 与最新 version 执行 apply。
 
+`open` 回执已含 `selection.slideId` 和 `version` 时，直接把它们用于第一批 `apply`，无需重复 inspect。`expected_version` 使用最近一次结果的完整 `version`；`operations` 中每项为 `{op, payload}`，操作参数都放在 `payload`。只有当前操作参数未知时，才用 `inspect capabilities` 指定该操作；不默认读取完整能力目录或全部操作参考。紧凑起步骨架和新增页示例见 [Office 操作](references/office-operations.md)。
+
+按任务读取 `selection`、`slides`、`search` 或 `outline`。回执已覆盖目标时不换入口重复读取；明确 `partial` 时只补读缺失页面或元素，范围不重叠。用户要求保留全部资料时建立“事实/步骤/数据项 → 页面对象”的覆盖清单。公开操作数组最多50项；字段未知时用 `inspect capabilities` 并指定 `operations: ["具体操作名"]`，不靠失败猜字段。
+
 品牌改色先 `inspect` 的 `query:{mode:"palette"}` 读取实际颜色与对象，再 `slide_replace_colors`，如 `payload:{replacements:[{from:"#实际旧色",to:"#实际橙色"}]}`；可用 slideIds/elementIds/excludeElementIds 限定范围。只改品牌强调色，保留正负值、警告、正文对比度与人工特殊配色；不重放原设计内容。`palette` 是创建参数，不是已有文稿自动换肤开关。详见 [原位续编](references/in-place-editing.md)。
 
-内容适合时，用 `slide_add_design` 复用已打磨的表达：`statement` 大观点、`metric` 主指标、`evidence` 图表解读、`waterfall` 变化瀑布、`sankey` 流向、`agenda` 信息地图、`comparison` 对照、`roadmap` 路线、`matrix` 象限、`image` 主图、`items` 编辑式列表。它不是填空模板：可改 palette、focusIndex，或指定 region 组合局部区域。详细字段与构图说明见 [原生设计组件](references/components.md)。简单调用形式是 `{op:"slide_add_design",payload:{slideId:"真实ID",design:"metric",content:{title:"有证据的判断",metric:{label:"指标名",value:实际值,unit:"单位",detail:"解释"},items:[{label:"辅助指标",value:实际值,unit:"单位"}],source:"真实来源"}}}`。
+使用原生文字、形状、路径、图片、数据图表或 `slide_compose` 完成 Mona Design 设计；具体操作参数按需查询能力回执，不从旧模板或预设目录选择视觉方案。
 
-组件只是起点：即使能够套入，也可以为更好的叙事自由组合、修改或原生定制；不要把所有任务都压成经营汇报，不为使用组件改变内容。不重复试字段。`slide_compose` 提供网格，原生文字支持 paragraphs/runs、局部强调、基线和内边距；`slide_add_path` 可创建独立曲线形状。标准图表保留数据模型；瀑布/桑基等组件是可编辑形状与文本，不能声称具有 PowerPoint 原生图表数据表。
+原生文字支持 paragraphs/runs、局部强调、基线和内边距；`slide_add_path` 可创建独立曲线。需要可编辑分类与数值时用原生图表，瀑布/桑基组件不能声称具有 PowerPoint 标准图表数据表。原生表格/图表用于数据或编辑需求，不要求把任意表格都改成原生对象。
 
-按页或完整区域推进，保留已完成内容，不等所有素材、所有页面都准备好才开始。预设不适配时根据具体原因换表达，或直接原生定制；不为通过匹配删事实、反复试字段或把整稿退化为通用双栏。明确的总页数约束仍需遵守。
+按页或完整区域推进，保留已完成内容，不等所有素材、所有页面都准备好才开始。内容数量和总页数遵守用户要求，不因工具参数限制删改事实。
 
-用 `inspect` 的 `query:{mode:"visual",slideIds:[真实ID...],columns:2}` 看整稿节奏（每批最多12页）；总览不替代单页可读性验收。用 `query:{mode:"visual",slideId:"真实ID"}` 看真实整页，判断主次、裁切、图表与解释，而不仅是对象有没有写入。`inspect review` 定位待检查页，修正后只复查受影响内容。有意叠字需看图说明；溢出/重叠要实际修复，不能靠截图成功证明设计合格。
+设计质量按共享 Mona Design 评审资料结合用户要求判断，Office 验收负责当前文稿的实际结果。用 `inspect` 的 `query:{mode:"visual",slideIds:[真实ID...],columns:2}` 看整稿节奏（每批最多12页）；总览不替代单页可读性验收。用 `query:{mode:"visual",slideId:"真实ID"}` 看真实整页。`inspect review` 定位待检查页，修正后只复查受影响内容。有意叠字需看图说明；溢出/重叠要实际修复，不能靠截图成功证明设计合格。
 
-完成后保存并正常导出原生 PPTX。Agent 不能用 allow_unreviewed 自行跳过 PPT 验收；未完成时 save 保留进度，用户仍可从编辑器直接导出草稿。版本冲突先读受影响页，断线恢复同一会话，不重建覆盖用户改动。交付说明必须与实际成品和审核状态一致。
+完成后保存并正常导出原生 PPTX。Agent 不能用 allow_unreviewed 自行跳过 PPT 验收；未完成时 save 保留进度并明确说明草稿状态，用户仍可从编辑器直接导出。版本冲突先读受影响页，断线恢复同一会话，不重建覆盖用户改动。交付说明必须与实际成品和审核状态一致。
 
 ## 按需资源
 
-- [12个用途场景](references/scenarios.md)：场景定位、Dashi 源模板页 ID 与按需 Office 预览流程。
-- [Dashi 设计规则](references/dashi-design-profiles.md)：12 个来源主题的真实配色、字体层级、间距、图表和装饰规则，用于模板之外的原生构图。
-
-- [原生设计组件](references/components.md)：成熟构图、内容字段和在隔离文稿中按需查看 Office 预览的方法。
-- [视觉语言与构图](references/visual-recipes.md)：两类设计方向、层级和页面表达；不是风格限制。
-- [完整原生设计示例](references/native-design-examples.md)：可组合、可调整的原生构图与隔离文稿预览步骤。
-- [预设预览索引](references/preset-index.md)：按能力回执选择候选，并通过 Office 实际渲染预览；不依赖静态 PNG 路径。
+- 共享设计：`skill_reference_read(skill="mona-design", ref_path="native-pptx.md")`，继续按需读取完整设计资源，不在本 Skill 复制第二套视觉规则。
 - [Office 操作](references/office-operations.md)：打开、构建、检查和导出。`capabilities` 默认给短目录；指定实际 operations 获取参数。未知名称看 unsupportedOperations 和 availableOperations，剩余参数见 nextOperations；查询失败不代表文稿不能修改。
-- [内容设计](references/design-method.md)、[高级对象](references/advanced-operations.md)、[审核与恢复](references/visual-review.md)：按问题选读，不必全部加载。
+- [原位续编](references/in-place-editing.md)、[高级对象](references/advanced-operations.md)、[审核与恢复](references/visual-review.md)：按问题选读，不必全部加载。

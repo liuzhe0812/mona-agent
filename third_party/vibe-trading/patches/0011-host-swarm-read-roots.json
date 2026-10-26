@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Allow hosted Swarm workers to read sibling evidence under the private Swarm run root without widening write roots or standalone file roots.",
+  "files": [
+    {
+      "path": "agent/src/tools/path_utils.py",
+      "sha256": "202c17eccf6cf7247f4666a04e84c2a2ec8fd412e7a458642652bfcf9e402e42",
+      "replacements": [
+        {
+          "before": "def _default_file_roots() -> list[Path]:\n    \"\"\"Return default roots for uploaded/imported user files.\"\"\"\n    from src.config.paths import get_runtime_root\n",
+          "after": "def _default_file_roots() -> list[Path]:\n    \"\"\"Return default roots for uploaded/imported user files.\"\"\"\n    from src.config.paths import get_runtime_root, get_swarm_runs_dir\n",
+          "count": 1
+        },
+        {
+          "before": "        return [runtime_root / \"uploads\", runtime_root / \"runs\", runtime_root / \"imports\"]\n",
+          "after": "        return [runtime_root / \"uploads\", runtime_root / \"runs\", runtime_root / \"imports\", get_swarm_runs_dir()]\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {}
+}

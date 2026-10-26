@@ -128,6 +128,16 @@ async def settle(*devices, rounds=2):
             assert coordinator.problem is None, coordinator.problem
 
 
+async def receive_without_upload(device):
+    coordinator = device[0]
+    config = coordinator.preferences.read()
+    assert config.enabled is True and config.upload_enabled is None
+    await coordinator.run_once()
+    config = coordinator.preferences.read()
+    assert config.enabled is True and config.upload_enabled is False
+    assert coordinator.problem is None, coordinator.problem
+
+
 def versions(service):
     return sum(map(len, service.versions.values()))
 
@@ -152,6 +162,24 @@ async def test_real_encryption_two_devices_preserve_text_assets_and_followup_edi
     await settle(a, b)
     assert versions(service) == count == 2
     assert len(service.uploads) == len(set(service.uploads))
+
+
+@pytest.mark.asyncio
+async def test_new_device_receives_notes_without_uploading_its_private_notes(notes_pair):
+    service, a, b = notes_pair
+    a[2].put(content="REMOTE_NOTE")
+    await enable(a)
+    b[2].put("private-note", content="LOCAL_PRIVATE_NOTE")
+    before_versions, before_objects = versions(service), set(service.objects)
+
+    await receive_without_upload(b)
+
+    assert b[0].preferences.read().sync_notes is False
+    assert b[2].rows["private-note"]["content"] == "LOCAL_PRIVATE_NOTE"
+    assert any(row["content"] == "REMOTE_NOTE" for row in b[2].rows.values())
+    assert versions(service) == before_versions == 1
+    assert set(service.objects) == before_objects
+    assert b"LOCAL_PRIVATE_NOTE" not in b"".join(service.objects.values())
 
 
 @pytest.mark.asyncio
@@ -190,7 +218,7 @@ async def test_empty_title_syncs_with_other_notes_and_can_be_renamed(notes_pair)
 
 
 @pytest.mark.asyncio
-async def test_notes_are_opt_in_and_disabling_does_not_delete_local_or_cloud_data(notes_pair):
+async def test_note_upload_scope_does_not_control_receiving_or_delete_local_or_cloud_data(notes_pair):
     service, a, b = notes_pair
     a[2].put()
     await enable(a, notes=False)
@@ -201,24 +229,41 @@ async def test_notes_are_opt_in_and_disabling_does_not_delete_local_or_cloud_dat
     await b[0].select([], sync_notes=False)
     a[2].rows["note-a"]["title"] = "新标题"
     await settle(a, b)
-    assert next(iter(b[2].rows.values()))["title"] == "第一课"
+    assert next(iter(b[2].rows.values()))["title"] == "新标题"
+    b[2].put("private-note", content="LOCAL_ONLY_NOTE")
+    before_versions, before_objects = versions(service), set(service.objects)
+    await b[0].run_once()
+    assert versions(service) == before_versions == 2
+    assert set(service.objects) == before_objects
     await b[0].select([], sync_notes=True)
     await settle(b, a)
-    assert next(iter(b[2].rows.values()))["title"] == "新标题"
-    assert versions(service) == 2
+    assert any(row["title"] == "新标题" for row in b[2].rows.values())
+    assert any(row["content"] == "LOCAL_ONLY_NOTE" for row in a[2].rows.values())
+    assert versions(service) == 3
 
 
 @pytest.mark.asyncio
-async def test_enabling_notes_when_resuming_catches_up_previously_skipped_history(notes_pair):
+async def test_pause_stays_paused_and_resume_keeps_note_upload_authorization(notes_pair):
     service, a, b = notes_pair
     a[2].put()
     await enable(a)
     await enable(b, a[1].recovery, notes=False)
-    assert b[2].rows == {} and b[0].store.cursor(service.space["vault_id"]) > 0
-    await b[0].pause()
-    await enable(b, a[1].recovery, notes=True)
     assert list(b[2].rows.values()) == [a[2].rows["note-a"]]
-    assert versions(service) == 1
+    assert b[0].store.cursor(service.space["vault_id"]) > 0
+    await b[0].pause()
+    a[2].rows["note-a"]["title"] = "暂停期间的云端更新"
+    await a[0].run_once()
+    assert a[0].problem is None and versions(service) == 2
+    await b[0].run_once()
+    assert b[0].preferences.read().enabled is False
+    assert next(iter(b[2].rows.values()))["title"] == "第一课"
+    await b[0].resume()
+    resumed = b[0].preferences.read()
+    assert resumed.enabled is True and resumed.upload_enabled is True and resumed.sync_notes is False
+    await b[0].run_once()
+    assert b[0].problem is None
+    assert list(b[2].rows.values()) == [a[2].rows["note-a"]]
+    assert versions(service) == 2
 
 
 @pytest.mark.asyncio

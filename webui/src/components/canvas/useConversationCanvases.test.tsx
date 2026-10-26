@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SavedWorkspaceCanvas, WorkspaceCanvasDocument } from "@/lib/tauri";
+import type { UIMessage } from "@/lib/types";
 
 const mocks = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -137,5 +138,38 @@ describe("useConversationCanvases workspace persistence", () => {
 
     expect(result.current.tabs).toHaveLength(0);
     expect(result.current.activeCanvasId).toBeNull();
+  });
+
+  it("creates, saves, and completes a mindmap updated through the canvas tool", async () => {
+    const onOpenCanvas = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ messages, isStreaming }: { messages: UIMessage[]; isStreaming: boolean }) =>
+        useConversationCanvases(hookOptions({ messages, isStreaming, onOpenCanvas })),
+      { initialProps: { messages: [] as UIMessage[], isStreaming: true } },
+    );
+    let routed: ReturnType<typeof result.current.routeMessage>;
+    act(() => {
+      routed = result.current.routeMessage("随便做个思维导图测试一下");
+    });
+    const id = result.current.activeCanvas!.note.id;
+    expect(routed!.canvasId).toBe(id);
+    expect(routed!.content).toContain('canvas(action="open")');
+    expect(onOpenCanvas).toHaveBeenCalledWith(`canvas:${id}`, true);
+    await act(async () => { await routed!.canvasPathReady; });
+
+    const markdown = "# 测试思维导图\n- 分支\n  - 叶子";
+    act(() => {
+      result.current.updateCanvasContent(id, { contentMarkdown: markdown, plainText: "测试思维导图 分支 叶子" });
+    });
+    rerender({ messages: [{
+      id: "completed-mindmap", role: "assistant", content: "已创建可编辑思维导图。", createdAt: Date.now(),
+    }], isStreaming: false });
+
+    expect(result.current.activeCanvas?.generationStatus).toBe("idle");
+    expect(result.current.activeCanvas?.error).toBeUndefined();
+    expect(result.current.activeCanvas?.note.contentMarkdown).toBe(markdown);
+    await waitFor(() => expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledWith(
+      WORKSPACE_ROOT, expect.objectContaining({ id, kind: "mindmap", contentMarkdown: markdown, originChatId: CHAT_ID }),
+    ));
   });
 });

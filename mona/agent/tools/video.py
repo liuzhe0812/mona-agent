@@ -35,8 +35,8 @@ class VideoTool(Tool, ContextAware):
         "after approval use audio to obtain actual narration timings and write scene composition code "
         "using file tools, then sync it. Preview returns real sampled images: inspect them "
         "and fix composition, clipping, captions and pacing before export. "
-        "sync accepts a default-exported Remotion React TSX component. Motion must explain "
-        "the approved narration; use frame-based animation, actual speech cues and free composition. "
+        "sync saves one complete HTML + GSAP/OM film composition. Motion must explain "
+        "the approved narration; use one global timeline, actual speech cues and free composition. "
         "Preview includes an animation contact sheet and static-visual diagnostics, not creative certification. "
         "Pixel changes or the absence of still intervals do not certify quality. "
         "Review actual object/action/meaning, legibility, subtitle overlap and time after speech ends; "
@@ -68,9 +68,9 @@ class VideoTool(Tool, ContextAware):
     @property
     def parameters(self) -> dict[str, Any]:
         return {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["inspect", "style", "style_rules", "plan", "edit", "audio", "sync", "preview", "remove", "reorder", "settings", "assets", "export", "status", "cancel"], "description": "style selects an available style before plan confirmation, with style_id and current plan_revision; respect fixed user choices. style_rules is only for an inspected styleAuthoring sample: save reusable visual/motion rules in instruction and optional tokens/subtitle/backgrounds/mode in settings before implementing the sample. edit, audio, preview and sync require top-level scene_index and plan_revision. edit applies only the user's explicit change to an existing approved scene. For audio do not pass a scene object: read approved narration from the existing scene. Honor retryable=false errors; do not repeat failed operations or change voice to diagnose a component/service error."},
+            "action": {"type": "string", "enum": ["inspect", "style", "style_rules", "plan", "edit", "audio", "sync", "preview", "remove", "reorder", "settings", "assets", "export", "status", "cancel"], "description": "style selects an available style before plan confirmation, with style_id and current plan_revision; respect fixed user choices. style_rules is only for an inspected styleAuthoring sample: save reusable visual/motion rules in instruction and optional tokens/subtitle/backgrounds/mode in settings before implementing the sample. edit, audio and preview require top-level scene_index and plan_revision; sync requires plan_revision and one whole-film source_file. edit applies only the user's explicit change to an existing approved scene. For audio do not pass a scene object: read approved narration from the existing scene. Honor retryable=false errors; do not repeat failed operations or change voice to diagnose a component/service error."},
             "name": {"type": "string", "description": "The existing video project name supplied by the current workbench."},
-            "scene_index": {"type": "integer", "minimum": 1, "description": "REQUIRED for audio, preview, sync and remove. The numeric index of the existing scene, never put this inside scene."},
+            "scene_index": {"type": "integer", "minimum": 1, "description": "REQUIRED for audio, preview and remove; optional for sync only when appending scene assets. The numeric index of the existing scene, never put this inside scene."},
             "plan_revision": {"type": "integer", "minimum": 0, "description": "Current planRevision from inspect. Required for sync, audio and preview in projects requiring plan approval."},
             "timestamps": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "number", "minimum": 0}, "description": "Optional for preview only: up to 8 scene-relative timestamps in seconds, each inside the current scene duration. Selected samples are partial observations and do not update a complete motion review."},
             "instruction": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "For edit, or a user-requested style change: preserve the current user's explicit request. Never use edit for an unrequested change, question, automatic code refinement, or a new overall plan."},
@@ -83,8 +83,8 @@ class VideoTool(Tool, ContextAware):
                 }, "required": ["title", "duration", "visual", "animation", "narration"], "additionalProperties": False,
             }},
             "order": {"type": "array", "items": {"type": "integer"}, "description": "For reorder: each existing scene index exactly once in the new order."},
-            "source_file": {"type": "string", "description": "Project-local drafts/scene_NN.tsx with a default React component (Remotion). Read old sourcePath first and keep canonical scenes/scene_sources untouched."},
-            "scene": {"type": "object", "description": "For edit: only the fields the user requested to change. For sync: matching approved fields; authorized generated asset IDs may be added without replacing existing assets. Leave out for audio/preview.", "properties": {
+            "source_file": {"type": "string", "description": "Project-local drafts/film.html: the complete HTML + GSAP/OM composition with one continuous global timeline. Read the existing film sourcePath first, preserve stable data-om-id anchors, and keep canonical files untouched."},
+            "scene": {"type": "object", "description": "For edit: only the fields the user requested to change. For sync: omit scene; only assets may be appended to a specified scene_index for approved visual intent. Leave out for audio/preview.", "properties": {
                 "title": {"type": "string"}, "duration": {"type": "number", "exclusiveMinimum": 0},
                 "narration": {"type": "string"}, "visual": {"type": "string"},
                 "animation": {"type": "string"},
@@ -103,7 +103,7 @@ class VideoTool(Tool, ContextAware):
             if (action != "preview" or not isinstance(timestamps, list) or not 1 <= len(timestamps) <= 8
                     or any(not _is_finite_timestamp(value) or value < 0 for value in timestamps)):
                 return json.dumps({"ok": False, "error": "审片时间需为 1 到 8 个有限的非负秒数，并且只能用于 preview。", "code": "VIDEO_ARGUMENTS_INVALID"}, ensure_ascii=False)
-        if action in {"edit", "audio", "preview", "sync", "remove"} and (isinstance(kwargs.get("scene_index"), bool) or not isinstance(kwargs.get("scene_index"), int) or kwargs["scene_index"] < 1):
+        if action in {"edit", "audio", "preview", "remove"} and (isinstance(kwargs.get("scene_index"), bool) or not isinstance(kwargs.get("scene_index"), int) or kwargs["scene_index"] < 1):
             return json.dumps({"ok": False, "error": "请使用顶层 scene_index 指定片段编号；配音读取该片段已确认的旁白，不接收 scene 对象。", "code": "VIDEO_ARGUMENTS_INVALID"}, ensure_ascii=False)
         if self._context is None:
             return json.dumps({"ok": False, "error": "请从当前视频工作区发起制作任务"}, ensure_ascii=False)

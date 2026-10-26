@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Bind hosted Shadow result caches and reports to the complete backtest input identity. Hosted report cache misses require a matching run and never trigger an implicit backtest.",
+  "files": [
+    {
+      "path": "agent/src/shadow_account/backtester.py",
+      "sha256": "dd44ca3f9110423f2d452176fa1d82695821aad4097936e2ce00e71eeb6c6776",
+      "replacements": [
+        {
+          "before": "    selection = select_multi_market_codes(\n",
+          "after": "    cache_inputs = (\n        _cache_inputs(\n            profile,\n            window_start=window_start,\n            window_end=window_end,\n            source=source,\n            markets=markets,\n            per_market_count=per_market_count,\n            journal_path=journal_path,\n        )\n        if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n        else None\n    )\n    selection = select_multi_market_codes(\n",
+          "count": 1
+        },
+        {
+          "before": "        profile=profile, window_start=window_start, window_end=window_end,\n",
+          "after": "        profile=profile, window_start=window_start, window_end=window_end,\n        cache_inputs=cache_inputs,\n",
+          "count": 1
+        },
+        {
+          "before": "def _cache_key(profile: ShadowProfile, window_start: str, window_end: str) -> str:\n    \"\"\"Digest for the result cache: window plus the journal hash the profile\n    was extracted from, so a re-render with a different window or an edited\n    journal cannot silently reuse a stale run.\"\"\"\n",
+          "after": "def _journal_cache_identity(journal_path: str | Path | None) -> str:\n    if journal_path is None:\n        return \"missing\"\n    digest = hashlib.sha256()\n    try:\n        with Path(journal_path).open(\"rb\") as stream:\n            for chunk in iter(lambda: stream.read(1024 * 1024), b\"\"):\n                digest.update(chunk)\n    except OSError:\n        return \"missing\"\n    return digest.hexdigest()\n\n\ndef _cache_inputs(\n    profile: ShadowProfile,\n    *,\n    window_start: str,\n    window_end: str,\n    source: str,\n    markets: tuple[str, ...],\n    per_market_count: int,\n    journal_path: str | Path | None,\n) -> dict[str, Any]:\n    return {\n        \"window_start\": window_start,\n        \"window_end\": window_end,\n        \"profile_journal_hash\": profile.journal_hash,\n        \"source\": source,\n        \"markets\": list(markets),\n        \"per_market_count\": per_market_count,\n        \"journal_sha256\": _journal_cache_identity(journal_path),\n    }\n\n\ndef _cache_key(\n    profile: ShadowProfile,\n    window_start: str,\n    window_end: str,\n    *,\n    cache_inputs: dict[str, Any] | None = None,\n) -> str:\n    \"\"\"Build a hosted full-input key or the historical standalone key.\"\"\"\n    if cache_inputs is not None:\n        raw = json.dumps(cache_inputs, sort_keys=True, separators=(\",\", \":\"))\n        return hashlib.sha256(raw.encode(\"utf-8\")).hexdigest()[:12]\n",
+          "count": 1
+        },
+        {
+          "before": ") -> ShadowBacktestResult | None:\n",
+          "after": "    source: str | None = None,\n    markets: tuple[str, ...] | None = None,\n    per_market_count: int | None = None,\n    journal_path: str | Path | None = None,\n) -> ShadowBacktestResult | None:\n",
+          "count": 1
+        },
+        {
+          "before": "    cache_path = runs_dir(profile.shadow_id) / f\"shadow_result_{_cache_key(profile, window_start, window_end)}.json\"\n",
+          "after": "    hosted = os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n    cache_inputs = None\n    if hosted:\n        if source is None or markets is None or per_market_count is None:\n            return None\n        cache_inputs = _cache_inputs(\n            profile,\n            window_start=window_start,\n            window_end=window_end,\n            source=source,\n            markets=markets,\n            per_market_count=per_market_count,\n            journal_path=journal_path,\n        )\n    cache_path = runs_dir(profile.shadow_id) / (\n        f\"shadow_result_{_cache_key(profile, window_start, window_end, cache_inputs=cache_inputs)}.json\"\n    )\n",
+          "count": 1
+        },
+        {
+          "before": "    except (OSError, json.JSONDecodeError):\n",
+          "after": "    except (OSError, json.JSONDecodeError):\n        return None\n    if hosted and data.get(\"cache_inputs\") != cache_inputs:\n",
+          "count": 1
+        },
+        {
+          "before": ") -> None:\n",
+          "after": "    cache_inputs: dict[str, Any] | None = None,\n) -> None:\n",
+          "count": 1
+        },
+        {
+          "before": "    payload = _asdict(result)\n",
+          "after": "    payload = _asdict(result)\n    if cache_inputs is not None:\n        payload[\"cache_inputs\"] = cache_inputs\n",
+          "count": 1
+        },
+        {
+          "before": "        (run_dir / f\"shadow_result_{_cache_key(profile, window_start, window_end)}.json\").write_text(\n",
+          "after": "        (run_dir / f\"shadow_result_{_cache_key(profile, window_start, window_end, cache_inputs=cache_inputs)}.json\").write_text(\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/shadow_account_tool.py",
+      "sha256": "39ad24866e27e2260e5cbf9711f3770ccb052ec442c3c6a9fddd82998b17774d",
+      "replacements": [
+        {
+          "before": "from src.shadow_account.backtester import _usable_metrics, load_cached_result\n",
+          "after": "from src.shadow_account.backtester import (\n    SUPPORTED_MARKETS,\n    _usable_metrics,\n    load_cached_result,\n)\n",
+          "count": 1
+        },
+        {
+          "before": "logger = logging.getLogger(__name__)\n",
+          "after": "logger = logging.getLogger(__name__)\n_HOSTED_SHADOW_SOURCES = frozenset({\"auto\", \"tencent\", \"eastmoney\", \"local\"})\n",
+          "count": 1
+        },
+        {
+          "before": "        \"Requires a backtest to have been run; otherwise the report renders \"\n        \"with empty metrics. Returns paths to html/pdf + structured JSON.\"\n",
+          "after": "        \"Hosted reports require the same explicit inputs as a completed backtest. \"\n        \"Returns paths to html/pdf + structured JSON.\"\n",
+          "count": 1
+        },
+        {
+          "before": "            \"window_end\": {\"type\": \"string\"},\n",
+          "after": "            \"window_end\": {\"type\": \"string\"},\n            \"source\": {\"type\": \"string\", \"enum\": sorted(_HOSTED_SHADOW_SOURCES)},\n            \"markets\": {\n                \"type\": \"array\",\n                \"items\": {\"type\": \"string\", \"enum\": list(SUPPORTED_MARKETS)},\n            },\n            \"per_market_count\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 100},\n",
+          "count": 1
+        },
+        {
+          "before": "        try:\n            profile = load_profile(shadow_id)\n        except FileNotFoundError as exc:\n            return _err(str(exc))\n\n        try:\n",
+          "after": "        hosted = os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n        try:\n            profile = load_profile(shadow_id)\n        except FileNotFoundError as exc:\n            return _err(str(exc))\n\n        try:\n",
+          "count": 1
+        },
+        {
+          "before": "        except ValueError as exc:\n            return _err(str(exc))\n\n",
+          "after": "        except ValueError as exc:\n            return _err(str(exc))\n\n        if hosted:\n            required_inputs = (\"window_start\", \"window_end\", \"source\", \"markets\", \"per_market_count\")\n            missing = [key for key in required_inputs if key not in kwargs]\n            if missing:\n                return _err(\n                    \"hosted reports require the explicit inputs used by the backtest.\",\n                    reason=\"report_inputs_required\",\n                    missing_inputs=missing,\n                )\n",
+          "count": 1
+        },
+        {
+          "before": "        result = load_cached_result(\n",
+          "after": "        if not isinstance(window_start, str) or not isinstance(window_end, str):\n            return _err(\"window_start and window_end must be ISO dates\")\n        try:\n            start_date = date.fromisoformat(window_start)\n            end_date = date.fromisoformat(window_end)\n        except ValueError:\n            return _err(\"window_start and window_end must be ISO dates\")\n        if start_date > end_date:\n            return _err(\"window_start must not be after window_end\")\n\n        source_raw = kwargs.get(\"source\", \"auto\")\n        if not isinstance(source_raw, str) or not source_raw.strip():\n            return _err(\"source must be a non-empty string\")\n        source = source_raw.strip().lower()\n        if hosted and source not in _HOSTED_SHADOW_SOURCES:\n            return _err(\"source is not supported\")\n        markets_raw = kwargs.get(\"markets\", SUPPORTED_MARKETS)\n        if not isinstance(markets_raw, (list, tuple)):\n            return _err(\"markets must be an array of supported markets\")\n        markets = tuple(markets_raw)\n        if not markets or any(\n            not isinstance(market, str) or market not in SUPPORTED_MARKETS\n            for market in markets\n        ):\n            return _err(\"markets must contain supported markets\")\n        if len(set(markets)) != len(markets):\n            return _err(\"markets must contain unique supported markets\")\n        count_raw = kwargs.get(\"per_market_count\")\n        if isinstance(count_raw, bool):\n            return _err(\"per_market_count must be an integer in [1, 100]\")\n        try:\n            per_market_count = _int_arg(count_raw, \"per_market_count\", 5)\n        except ValueError as exc:\n            return _err(str(exc))\n        if not 1 <= per_market_count <= 100:\n            return _err(\"per_market_count must be in [1, 100]\")\n\n        result = load_cached_result(\n",
+          "count": 1
+        },
+        {
+          "before": "            profile, window_start=window_start, window_end=window_end,\n",
+          "after": "            profile,\n            window_start=window_start,\n            window_end=window_end,\n            source=source,\n            markets=markets,\n            per_market_count=per_market_count,\n            journal_path=journal_path,\n",
+          "count": 1
+        },
+        {
+          "before": "        if result is None:\n",
+          "after": "        if result is None:\n            if hosted:\n                return _err(\n                    \"No cached Shadow backtest matches these inputs; run the backtest with the same window, source, markets, basket count, and journal first.\",\n                    reason=\"backtest_cache_miss\",\n                    shadow_id=profile.shadow_id,\n                    window=[window_start, window_end],\n                    source=source,\n                    markets=list(markets),\n                    per_market_count=per_market_count,\n                )\n",
+          "count": 1
+        },
+        {
+          "before": "                    window_end=window_end,\n",
+          "after": "                    window_end=window_end,\n                    markets=markets,\n                    per_market_count=per_market_count,\n                    source=source,\n",
+          "count": 1
+        },
+        {
+          "before": "            \"shadow_id\": profile.shadow_id,\n",
+          "after": "            \"shadow_id\": profile.shadow_id,\n            \"window\": [window_start, window_end],\n            \"source\": source,\n            \"markets\": list(markets),\n            \"per_market_count\": per_market_count,\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/mona_operations.py",
+      "sha256": "07e77f88ca6cb67c7ae573085f75b79b90878a7350e060956dbe0188b1d082ce",
+      "replacements": [
+        {
+          "before": "            \"window_start\", \"window_end\", \"include_today_signals\", \"upload_id\",\n",
+          "after": "            \"window_start\", \"window_end\", \"source\", \"markets\", \"per_market_count\",\n            \"include_today_signals\", \"upload_id\",\n",
+          "count": 1
+        },
+        {
+          "before": "            _date_range(clean)\n",
+          "after": "            _date_range(clean)\n            if operation == \"render_shadow_report\" and os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n                required_report_inputs = {\n                    \"window_start\", \"window_end\", \"source\", \"markets\", \"per_market_count\",\n                }\n                if not required_report_inputs <= set(clean):\n                    raise HTTPException(\n                        status_code=422,\n                        detail=\"hosted Shadow reports require the matching backtest inputs\",\n                    )\n",
+          "count": 1
+        },
+        {
+          "before": "            _strict_int(clean, \"per_market_count\", 1, 100)\n",
+          "after": "            _strict_int(clean, \"per_market_count\", 1, 100)\n        elif operation == \"render_shadow_report\":\n            markets = clean.get(\"markets\")\n            if \"markets\" in clean and (\n                not isinstance(markets, list)\n                or not markets\n                or any(not isinstance(value, str) or value not in _MARKET_ENUM for value in markets)\n                or len(set(markets)) != len(markets)\n            ):\n                raise HTTPException(status_code=422, detail=\"markets contains an unsupported market\")\n            if \"source\" in clean and (\n                not isinstance(clean[\"source\"], str) or clean[\"source\"] not in _SOURCE_ENUM\n            ):\n                raise HTTPException(status_code=422, detail=\"source is not supported\")\n            _strict_int(clean, \"per_market_count\", 1, 100)\n            if \"include_today_signals\" in clean and type(clean[\"include_today_signals\"]) is not bool:\n                raise HTTPException(status_code=422, detail=\"include_today_signals must be boolean\")\n",
+          "count": 1
+        },
+        {
+          "before": "        elif operation == \"render_shadow_report\":\n            if \"include_today_signals\" in clean and type(clean[\"include_today_signals\"]) is not bool:\n                raise HTTPException(status_code=422, detail=\"include_today_signals must be boolean\")\n",
+          "after": "",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

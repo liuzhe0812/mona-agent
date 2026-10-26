@@ -29,6 +29,7 @@ from mona.agent.tools.shell import ExecTool, ExecToolConfig
 from mona.config.schema import CodingConfig
 from mona.development.context import ProjectContext, build_coding_messages
 from mona.development.contracts import DevelopmentSession, ExecutorId, PermissionMode
+from mona.development.design_resources import DesignResourceTool
 from mona.development.store import DevelopmentError
 from mona.session.manager import Session
 
@@ -205,6 +206,7 @@ class CodingTools:
         self.file_states = FileStates()
         self.exec_sessions = _ProjectExecSessions(observe_output=True)
         self.registry = _CodingRegistry()
+        self.registry.register(DesignResourceTool())
         file_args = {"workspace": self.root, "allowed_dir": self.root, "file_states": self.file_states}
         self.registry.register(_ProjectRead(**file_args))
         self.registry.register(_ProjectList(**file_args))

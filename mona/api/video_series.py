@@ -50,44 +50,21 @@ from mona.video_style import (
 from mona.video_timeline import VideoTimelineError, build_motion_plan, build_subtitle_track
 
 _ASSET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_DASHI_ASSET_ROOT = (
+_HUASHU_ASSET_ROOT = (
     Path(__file__).resolve().parents[1]
     / "skills"
     / "mona-video"
     / "assets"
-    / "dashi-animationstyle"
+    / "huashu-motion"
 )
-_DASHI_TEMPLATE_PREVIEWS: dict[str, dict[str, tuple[str, str]]] = {
-    "dashi-notebook": {
-        "poster": ("styles/手绘笔记/静帧/手绘笔记_12.85s.jpg", "JPEG"),
-        "motion": ("docs/7_手绘笔记.gif", "GIF"),
-    },
-    "dashi-flow": {
-        "poster": ("styles/扁平流程图/静帧/扁平流程图_12.40s.jpg", "JPEG"),
-        "motion": ("docs/6_扁平流程图.gif", "GIF"),
-    },
-    "dashi-cartoon": {
-        "poster": ("styles/立体卡通/静帧/立体卡通_13.68s.jpg", "JPEG"),
-        "motion": ("docs/1_立体卡通.gif", "GIF"),
-    },
-    "dashi-collage": {
-        "poster": ("styles/超现实拼贴/静帧/超现实拼贴_12.55s.jpg", "JPEG"),
-        "motion": ("docs/3_超现实拼贴.gif", "GIF"),
-    },
-    "dashi-paper": {
-        "poster": ("styles/复古剪纸/静帧/复古剪纸_13.70s.jpg", "JPEG"),
-        "motion": ("docs/4_复古剪纸.gif", "GIF"),
-    },
-    "dashi-editorial": {
-        "poster": ("styles/复古报刊/静帧/复古报刊_13.68s.jpg", "JPEG"),
-        "motion": ("docs/5_复古报刊.gif", "GIF"),
-    },
-    "dashi-tech": {
-        "poster": ("styles/黑底科技/静帧/黑底科技_13.75s.jpg", "JPEG"),
-        "motion": ("docs/2_黑底科技.gif", "GIF"),
-    },
+_HUASHU_TEMPLATE_PREVIEWS: dict[str, dict[str, tuple[str, str]]] = {
+    f"huashu-{style}": {
+        "poster": (f"previews/{style}/poster.png", "PNG"),
+        "motion": (f"previews/{style}/motion.gif", "GIF"),
+    }
+    for style in ("keynote", "whiteboard", "finance", "math", "type", "collage", "science", "3d", "ui-space")
 }
-_PREVIEW_MIME_TYPES = {"JPEG": (".jpg", "image/jpeg"), "GIF": (".gif", "image/gif")}
+_PREVIEW_MIME_TYPES = {"PNG": (".png", "image/png"), "GIF": (".gif", "image/gif")}
 _STYLE_REFERENCE_IMAGE_TYPES = {
     "PNG": "image/png",
     "JPEG": "image/jpeg",
@@ -120,7 +97,7 @@ async def handle_video_style_templates(request: web.Request) -> web.Response:
     for template in list_builtin_templates():
         item = dict(template)
         template_id = str(item.get("id") or "")
-        if template_id in _DASHI_TEMPLATE_PREVIEWS:
+        if template_id in _HUASHU_TEMPLATE_PREVIEWS:
             item["preview"] = {
                 kind: f"/api/video/style/templates/{template_id}/preview?kind={kind}"
                 for kind in ("poster", "motion")
@@ -137,7 +114,7 @@ async def handle_video_style_template_preview(request: web.Request) -> web.Strea
             {"error": "STYLE_PREVIEW_KIND_INVALID", "message": "预览类型无效"},
             status=400,
         )
-    preview = _DASHI_TEMPLATE_PREVIEWS.get(template_id)
+    preview = _HUASHU_TEMPLATE_PREVIEWS.get(template_id)
     if preview is None:
         return web.json_response(
             {"error": "STYLE_PREVIEW_NOT_FOUND", "message": "风格预览不存在"},
@@ -152,7 +129,7 @@ async def handle_video_style_template_preview(request: web.Request) -> web.Strea
             status=500,
         )
     expected_extension, mime_type = extension_and_mime
-    asset_root = _DASHI_ASSET_ROOT.resolve()
+    asset_root = _HUASHU_ASSET_ROOT.resolve()
     path = (asset_root / relative_path).resolve()
     if not path.is_relative_to(asset_root):
         return web.json_response(
@@ -296,7 +273,7 @@ async def handle_video_series_create(request: web.Request) -> web.Response:
             template_id=str(
                 body.get("templateId")
                 or body.get("baseTemplateId")
-                or "minimal-business"
+                or "huashu-keynote"
             ),
             default_aspect_ratio=str(body.get("defaultAspectRatio") or "16:9"),
         )
@@ -708,6 +685,7 @@ def _load_style_sample_seed(root: Path, series_id: str, version: int) -> dict[st
             if allowed:
                 frame_counts[index] += 1
         allowed = allowed or raw_relative == "style/theme.css"
+        allowed = allowed or raw_relative in {"scene_sources/film.html", "composition/index.html"}
         allowed = allowed or raw_relative.startswith("style/assets/") or raw_relative.startswith("style/draft/assets/")
         allowed = allowed or raw_relative in asset_paths
         if not allowed:
@@ -722,13 +700,19 @@ def _load_style_sample_seed(root: Path, series_id: str, version: int) -> dict[st
     for index in indexes:
         scene_data = next(item for item in scenes if int(item["index"]) == index)
         source_suffix = ".tsx" if scene_data.get("authoredRuntime") == "remotion" else ".html"
+        source_relative = (
+            "scene_sources/film.html"
+            if scene_data.get("authoredRuntime") == "huashu-motion"
+            else f"scene_sources/scene_{index:02d}{source_suffix}"
+        )
         if (
-            f"scene_sources/scene_{index:02d}{source_suffix}" not in resolved_files
+            source_relative not in resolved_files
             or f"scenes/scene_{index:02d}.html" not in resolved_files
+            or (scene_data.get("authoredRuntime") == "huashu-motion" and "composition/index.html" not in resolved_files)
             or frame_counts[index] < 2
         ):
             raise VideoStyleError("风格样片文件不完整", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
-        if scene_data.get("sourceHash") != files.get(f"scene_sources/scene_{index:02d}{source_suffix}"):
+        if scene_data.get("sourceHash") != files.get(source_relative):
             raise VideoStyleError("风格样片源码校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
 
     try:
@@ -789,7 +773,7 @@ def _refresh_input_signature(meta: dict[str, Any]) -> str:
             key: meta.get(key)
             for key in (
                 "styleAuthoring", "resolution", "language", "narrationEnabled",
-                "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "audioTracks", "scenes",
+                "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "audioTracks", "scenes", "composition",
             )
         },
         ensure_ascii=False,
@@ -821,7 +805,7 @@ def _copy_refresh_inputs(
                 if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
                     raise VideoStyleError("样片素材路径无效", code="STYLE_SAMPLE_PATH_INVALID")
                 target_file = destination / filename
-                if source_dir.name == "scenes":
+                if source_dir.name in {"scenes", "composition"}:
                     shutil.copy2(path, target_file)
                     continue
                 try:
@@ -829,7 +813,7 @@ def _copy_refresh_inputs(
                 except OSError:
                     shutil.copy2(path, target_file)
 
-    for directory in ("assets", "audio", "scene_sources", "scenes", "style"):
+    for directory in ("assets", "audio", "scene_sources", "scenes", "composition", "style"):
         copy_tree(source / directory, target / directory)
         (target / directory).mkdir(exist_ok=True)
     (target / "renders" / "previews").mkdir(parents=True)
@@ -841,8 +825,9 @@ def _apply_style_sample_seed(project: Path, meta: dict[str, Any], seed: dict[str
 
     sample = seed["sample"]
     for directory, pattern in (
-        (project / "scene_sources", re.compile(r"scene_\d+\.(?:tsx|html)$")),
+        (project / "scene_sources", re.compile(r"(?:scene_\d+|film)\.(?:tsx|html)$")),
         (project / "scenes", re.compile(r"scene_\d+\.html$")),
+        (project / "composition", re.compile(r"index\.html$")),
         (project / "audio", re.compile(r"scene_\d+\.(?:mp3|timing\.json)$")),
     ):
         if directory.is_dir():
@@ -887,8 +872,12 @@ def _apply_style_sample_seed(project: Path, meta: dict[str, Any], seed: dict[str
         scene.pop("motionReviewSourceHash", None)
         scene.pop("confirmedAt", None)
         scene.pop("confirmedMtime", None)
-        scene["sourcePath"] = f"scene_sources/scene_{index:02d}{source_suffix}"
-        source = project / "scene_sources" / f"scene_{index:02d}{source_suffix}"
+        scene["sourcePath"] = (
+            "scene_sources/film.html"
+            if scene.get("authoredRuntime") == "huashu-motion"
+            else f"scene_sources/scene_{index:02d}{source_suffix}"
+        )
+        source = project / scene["sourcePath"]
         if hashlib.sha256(source.read_bytes()).hexdigest() != scene["sourceHash"]:
             raise VideoStyleError("风格样片源码校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
         scene["htmlStatus"] = "previewing"
@@ -896,6 +885,15 @@ def _apply_style_sample_seed(project: Path, meta: dict[str, Any], seed: dict[str
         scene.pop("htmlMtime", None)
 
     meta["scenes"] = scenes
+    if any(scene.get("authoredRuntime") == "huashu-motion" for scene in scenes):
+        meta["composition"] = {
+            **copy.deepcopy(sample.get("composition") or {}),
+            "sourcePath": "scene_sources/film.html",
+            "htmlPath": "composition/index.html",
+            "sourceHash": seed["hashes"]["scene_sources/film.html"],
+        }
+    else:
+        meta.pop("composition", None)
     meta["resolution"] = sample["resolution"]
     meta["narrationEnabled"] = bool(sample.get("narrationEnabled"))
     meta["subtitleMode"] = sample.get("subtitleMode") or "burned"
@@ -1048,7 +1046,7 @@ async def _refresh_bound_style_sample(
             bound_meta = copy.deepcopy(live_meta)
             try:
                 if seeded:
-                    for directory in ("assets", "audio", "scene_sources", "scenes", "style"):
+                    for directory in ("assets", "audio", "scene_sources", "scenes", "composition", "style"):
                         replacements.append(
                             _replace_refresh_output(
                                 stage_project / directory,
@@ -1064,6 +1062,14 @@ async def _refresh_bound_style_sample(
                         )
                     )
                 else:
+                    if staged_meta.get("composition"):
+                        replacements.append(
+                            _replace_refresh_output(
+                                stage_project / "composition" / "index.html",
+                                project / "composition" / "index.html",
+                                backup_root / "composition" / "index.html",
+                            )
+                        )
                     for scene in staged_scenes:
                         index = int(scene["index"])
                         staged_html = stage_project / "scenes" / f"scene_{index:02d}.html"
@@ -1236,7 +1242,9 @@ def _style_sample_editable_fields(
                     root,
                     series_id,
                     version,
-                    f"authoring/scene_sources/scene_{index:02d}{suffix}",
+                    "authoring/scene_sources/film.html"
+                    if scene.get("authoredRuntime") == "huashu-motion"
+                    else f"authoring/scene_sources/scene_{index:02d}{suffix}",
                 )
             code = source.read_text(encoding="utf-8")
         except (OSError, UnicodeError, TypeError, ValueError, VideoStyleError):

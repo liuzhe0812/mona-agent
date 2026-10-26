@@ -1,6 +1,6 @@
 [project]
 name = "mona-ai"
-version = "1.8.1"
+version = "1.8.2"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "LICENSE", content-type = "text/plain" }
 requires-python = ">=3.11"
@@ -43,8 +43,6 @@ dependencies = [
     "msgpack>=1.1.0,<2.0.0",
     "qq-botpy>=1.2.0,<2.0.0",
     "python-socks[asyncio]>=2.8.0,<3.0.0; sys_platform != 'win32'",
-    "prompt-toolkit>=3.0.50,<4.0.0",
-    "questionary>=2.0.0,<3.0.0",
     "mcp>=1.26.0,<2.0.0",
     "json-repair>=0.57.0,<1.0.0",
     "chardet>=3.0.2,<6.0.0",
@@ -120,7 +118,7 @@ allow-direct-references = true
 
 [tool.hatch.build]
 exclude = ["mona/web/**"]
-artifacts = ["mona/skills/mona-video/runtime/**"]
+artifacts = ["mona/skills/mona-video/runtime/**", "mona/skills/mona-design/**"]
 include = [
     "mona/**/*.py",
     "mona/templates/**/*.md",
@@ -141,33 +139,18 @@ include = [
     "mona/skills/**/*.html",
     "mona/skills/**/*.css",
     "mona/skills/**/*.js",
-    "mona/skills/mona-video/references/examples/*.tsx",
-    "mona/skills/mona-video/references/huashu/LICENSE",
-    "mona/skills/mona-video/assets/dashi-animationstyle/**",
+    "mona/skills/mona-design/**",
+    "mona/skills/mona-video/references/huashu-motion/**",
+    "mona/skills/mona-video/assets/huashu-motion/**",
     "mona/skills/**/*.ttf",
     "mona/skills/**/*.txt",
     "mona/skills/**/*.toml",
-    "mona/agents/com.mona.a-share-team/**/*.json",
-    "mona/agents/com.mona.a-share-team/**/*.md",
     "mona/skills/**/*.xml",
     "mona/skills/**/*.xsd",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["mona"]
-exclude = [
-    "mona/skills/mona-pptx/assets/previews.json",
-    "mona/skills/mona-pptx/assets/dashi/templates.json",
-    "mona/skills/mona-pptx/assets/native/editorial-evidence.png",
-    "mona/skills/mona-pptx/assets/native/parallel-five.png",
-    "mona/skills/mona-pptx/assets/native/product-story.png",
-    "mona/skills/mona-pptx/assets/presets/*.png",
-    "mona/skills/mona-pptx/assets/presets/**/*.png",
-    "mona/skills/mona-pptx/assets/design/*.png",
-    "mona/skills/mona-pptx/assets/design/**/*.png",
-    "mona/skills/mona-pptx/assets/scenarios/*.png",
-    "mona/skills/mona-pptx/assets/scenarios/**/*.png",
-]
 
 [tool.hatch.build.targets.wheel.sources]
 "mona" = "mona"
@@ -186,6 +169,7 @@ exclude = [
     "mona/skills/mona-docx/scripts",
     "mona/skills/pdf/scripts",
     "mona/skills/html-report/diagrams",
+    "mona/skills/mona-design",
 ]
 
 [tool.ruff.lint]

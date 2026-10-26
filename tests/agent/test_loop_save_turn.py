@@ -77,6 +77,10 @@ def test_conversation_background_is_not_saved_as_user_input(tmp_path, with_media
     assert "Previous task background." not in saved
     assert "A revision is still pending." not in saved
     assert ContextBuilder._RUNTIME_CONTEXT_TAG not in saved
+    model_input = json.dumps(session.get_history(model_view=True)[0]["content"], ensure_ascii=False)
+    assert "Previous task background." in model_input
+    assert "A revision is still pending." in model_input
+    assert "data:image/" not in json.dumps(session.metadata)
     if with_media:
         assert "chart.png" in saved
 
@@ -1119,7 +1123,6 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
     loop._refresh_provider_snapshot = MagicMock()  # type: ignore[method-assign]
     loop._refresh_mona_user_config = MagicMock()  # type: ignore[method-assign]
     loop._refresh_media_generation_tools = MagicMock()  # type: ignore[method-assign]
-    loop._refresh_subscription_access = AsyncMock()  # type: ignore[method-assign]
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
     def build_test_messages(**kwargs):
         history = list(kwargs.get("history") or [])

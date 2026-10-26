@@ -17,7 +17,7 @@ from mona.runtime.desktop_process import start_parent_stdin_watchdog
 
 start_parent_stdin_watchdog()
 
-# The private SDK owner starts before general CLI configuration.
+# The private SDK owner starts before desktop backend configuration.
 if __name__ == "__main__" and sys.argv[1:] == ["--development-sdk-worker"]:
     from mona.development.executors.sdk_worker import main
 

@@ -13,7 +13,6 @@ from PyInstaller.utils.hooks import (
 )
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from mona.office.ppt_packaging import should_include_mona_pptx_package_resource
 
 datas = []
 binaries = []
@@ -35,7 +34,6 @@ for package in (
                 str(item[1]).replace("\\", "/").rstrip("/") == "mona/web/dist"
                 or str(item[1]).replace("\\", "/").startswith("mona/web/dist/")
             )
-            and should_include_mona_pptx_package_resource(item[0], item[1])
             and "ai-image-comparison" not in str(item[0]).lower()
             and "ai-image-comparison" not in str(item[1]).lower()
         ]
@@ -88,9 +86,13 @@ datas = [
 
 # Skills execute these files by path; Python's import archive is not sufficient.
 skill_root = Path("mona/skills")
+design_resources = skill_root / "mona-design"
+if not (design_resources / "provenance.json").is_file():
+    raise FileNotFoundError("Mona Design resources missing")
+datas.append((str(design_resources), design_resources.as_posix()))
 video_runtime = skill_root / "mona-video/runtime"
-if not (video_runtime / "remotion.js").is_file():
-    raise FileNotFoundError("Video animation runtime missing: run npm run build:video-runtime in webui")
+if not (video_runtime / "mona-player.js").is_file():
+    raise FileNotFoundError("Huashu Motion preview bridge missing")
 datas.append((str(video_runtime), video_runtime.as_posix()))
 for path in sorted(skill_root.rglob("*.py")):
     if not {"tests", "test", "__pycache__", "node_modules", ".git"}.intersection(

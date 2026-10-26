@@ -35,6 +35,18 @@ def current_bootstrap_content(name: str, content: str) -> str:
     return content
 
 
+def persona_content(soul: str, legacy_agents: str) -> str:
+    """Expose old custom Agent rules as part of the Agent's single persona."""
+    soul = current_bootstrap_content("SOUL.md", soul)
+    rules = current_bootstrap_content("AGENTS.md", legacy_agents).strip()
+    if not rules:
+        return soul
+    default_rules = (_TEMPLATES_ROOT / "AGENTS.md").read_text(encoding="utf-8").strip()
+    if rules == default_rules:
+        return soul
+    return "\n\n".join(part for part in (soul.rstrip(), "## 行为要求\n\n" + rules) if part)
+
+
 @lru_cache
 def _environment() -> Environment:
     # Plain-text prompts: do not HTML-escape variable values.

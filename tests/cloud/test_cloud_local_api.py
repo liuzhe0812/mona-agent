@@ -17,6 +17,7 @@ from mona.cloud import api
 async def local_api(desktops, monkeypatch):
     _, create = desktops
     coordinator, boundary = create("local-api")
+    await coordinator.pause()
     app = web.Application()
     app["agent_loop"] = coordinator.loop
     app[api.RUNTIME_KEY] = coordinator
@@ -35,7 +36,7 @@ async def local_api(desktops, monkeypatch):
 @pytest.mark.asyncio
 async def test_unauthorized_calls_never_reach_account_or_setup(local_api):
     client, coordinator, boundary, _ = local_api
-    for path in ["status", "prepare", "enable", "pause", "sync"]:
+    for path in ["status", "prepare", "enable", "pause", "resume", "sync"]:
         response = await (client.get("/api/cloud-sync/" + path) if path == "status"
                           else client.post("/api/cloud-sync/" + path, json={}))
         assert response.status == 401
@@ -61,7 +62,7 @@ async def test_request_body_stream_is_read_completely_before_enabling(local_api)
     session = add_conversation(coordinator)
     result = await client.post("/api/cloud-sync/prepare", headers=headers, json={})
     draft = await result.json()
-    assert draft["recovery"] and boundary.server.space is None
+    assert "recovery" not in draft and boundary.server.space is None
     payload = json.dumps({"draft_id": draft["draft_id"], "session_keys": [session.key], "confirmed": True}).encode()
     async def stream():
         for start in range(0, len(payload), 7):
@@ -108,6 +109,42 @@ async def test_sync_disabled_is_not_reported_as_scheduled(local_api):
     response = await client.post("/api/cloud-sync/sync", headers=headers, json={})
     assert response.status == 409
     assert (await response.json())["error"]["code"] == "sync_disabled"
+
+
+@pytest.mark.asyncio
+async def test_operations_credentials_require_explicit_host_scope_and_default_off(local_api):
+    client, coordinator, _, headers = local_api
+    assert not coordinator.preferences.read().sync_operations
+    assert not coordinator.preferences.read().sync_operations_credentials
+    draft = await (await client.post("/api/cloud-sync/prepare", headers=headers, json={})).json()
+    payload = {"draft_id": draft["draft_id"], "confirmed": True,
+               "sync_operations_credentials": True}
+    rejected = await client.post("/api/cloud-sync/enable", headers=headers, json=payload)
+    assert rejected.status == 409
+    assert (await rejected.json())["error"]["code"] == "invalid_scope"
+    accepted = await client.post("/api/cloud-sync/enable", headers=headers,
+                                 json={**payload, "sync_operations": True})
+    assert accepted.status == 200
+    status = await (await client.get("/api/cloud-sync/status", headers=headers)).json()
+    assert status["sync_operations"] is True and status["sync_operations_credentials"] is True
+    changed = await client.post("/api/cloud-sync/scope", headers=headers,
+                                json={"sync_operations": False})
+    assert changed.status == 200
+    assert coordinator.preferences.read().sync_operations_credentials is False
+
+
+@pytest.mark.asyncio
+async def test_resume_requires_local_auth_and_does_not_grant_upload(local_api):
+    from mona.cloud.crypto import VaultCipher
+
+    client, coordinator, boundary, headers = local_api
+    cipher = VaultCipher.generate()
+    boundary.server.control("POST", "/space", {"vault_id": cipher.vault_id,
+        "key_check": cipher.key_check(), "recovery": cipher.recovery_text()})
+    response = await client.post("/api/cloud-sync/resume", headers=headers, json={})
+    assert response.status == 200 and (await response.json())["enabled"] is True
+    assert coordinator.preferences.read().upload_enabled is False
+    assert not boundary.server.uploads and not boundary.server.versions
 
 
 @pytest.mark.asyncio

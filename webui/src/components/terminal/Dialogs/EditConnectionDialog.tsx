@@ -12,6 +12,10 @@ interface Props {
   onClose: () => void;
 }
 
+const savedPasswordMarker = /^__mona_ops_password__:ops_pass_[a-f0-9]{64}$/i;
+const savedPrivateKeyMarker = /^__mona_ops_private_key__:ops_key_[a-f0-9]{64}$/i;
+const savedPassphraseMarker = /^__mona_ops_passphrase__:ops_phrase_[a-f0-9]{64}$/i;
+
 export function EditConnectionDialog({ config, mode, onClose }: Props) {
   const saveConnection = useTerminalStore((state) => state.saveConnection);
   const [id] = useState(() => mode === "copy" ? crypto.randomUUID() : config.id);
@@ -22,7 +26,7 @@ export function EditConnectionDialog({ config, mode, onClose }: Props) {
     username: config.username,
     authType: (config.auth.type === "key" ? "key" : "password") as "password" | "key",
     password: "",
-    keyPath: config.auth.type === "key" ? config.auth.keyPath : "",
+    keyPath: config.auth.type === "key" && !savedPrivateKeyMarker.test(config.auth.keyPath) ? config.auth.keyPath : "",
     passphrase: "",
   }));
   const [saving, setSaving] = useState(false);
@@ -31,11 +35,19 @@ export function EditConnectionDialog({ config, mode, onClose }: Props) {
   const port = Number(form.port);
   // Saved credentials are scoped to the target, not the connection's display name or id.
   const sameTarget = form.host.trim() === config.host && port === config.port && form.username.trim() === config.username;
-  const savedPassword = sameTarget && config.auth.type === "password" ? config.auth.password : "";
-  const savedPassphrase = sameTarget && config.auth.type === "key" && form.keyPath.trim() === config.auth.keyPath
+  const canKeepCredential = mode === "edit" && sameTarget;
+  const savedPassword = canKeepCredential && config.auth.type === "password" ? config.auth.password : "";
+  const hasSavedPrivateKey = canKeepCredential && config.auth.type === "key"
+    && savedPrivateKeyMarker.test(config.auth.keyPath) && !form.keyPath.trim();
+  const hasSavedKeyPath = canKeepCredential && config.auth.type === "key"
+    && !savedPrivateKeyMarker.test(config.auth.keyPath) && form.keyPath.trim() === config.auth.keyPath;
+  const savedPassphrase = canKeepCredential && config.auth.type === "key" && (hasSavedPrivateKey || hasSavedKeyPath)
     ? config.auth.passphrase : undefined;
+  const retainedKeyPath = hasSavedPrivateKey && config.auth.type === "key" ? config.auth.keyPath : "";
+  const copyNeedsPassphrase = mode === "copy" && config.auth.type === "key" && !!config.auth.passphrase;
   const canSave = !!form.host.trim() && !!form.username.trim() && Number.isInteger(port) && port > 0 && port <= 65535
-    && (form.authType === "password" ? !!(form.password || savedPassword) : !!form.keyPath.trim());
+    && (form.authType === "password" ? !!(form.password || savedPassword)
+      : !!(form.keyPath.trim() || hasSavedPrivateKey) && (!copyNeedsPassphrase || !!form.passphrase));
 
   const close = () => { if (!savingRef.current) onClose(); };
   const save = async () => {
@@ -45,15 +57,18 @@ export function EditConnectionDialog({ config, mode, onClose }: Props) {
     setError(null);
     const auth: AuthConfig = form.authType === "password"
       ? { type: "password", password: form.password || savedPassword }
-      : { type: "key", keyPath: form.keyPath.trim(), passphrase: form.passphrase || savedPassphrase || undefined };
+      : { type: "key", keyPath: form.keyPath.trim() || retainedKeyPath,
+        passphrase: form.passphrase || savedPassphrase || undefined };
     try {
-      await saveConnection({
+      const saved: ConnectionConfig = {
         ...config, id, name: form.name.trim() || `${form.username.trim()}@${form.host.trim()}`,
         host: form.host.trim(), port, username: form.username.trim(), auth,
-      });
+      };
+      if (mode === "copy") delete saved.storageRevision;
+      await saveConnection(saved);
       onClose();
     } catch {
-      setError("保存连接失败，请重试。原连接未更改。");
+      setError("保存连接失败，连接列表已刷新；请重新打开后重试。原连接未更改。");
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -87,14 +102,14 @@ export function EditConnectionDialog({ config, mode, onClose }: Props) {
             </div>
             {form.authType === "password" ? (
               <Input aria-label="密码" type="password" autoComplete="new-password" value={form.password}
-                placeholder={savedPassword ? "密码（留空则保持原密码）" : "密码"}
+                placeholder={savedPassword ? savedPasswordMarker.test(savedPassword) ? "已保存的密码（留空则保留）" : "密码（留空则保持原密码）" : "密码"}
                 onChange={(event) => setForm((old) => ({ ...old, password: event.target.value }))} />
             ) : (
               <div className="space-y-2">
-                <Input aria-label="密钥路径" placeholder="密钥路径" value={form.keyPath}
+                <Input aria-label="密钥路径" placeholder={hasSavedPrivateKey ? "已保存的私钥（留空则保留）" : "密钥路径"} value={form.keyPath}
                   onChange={(event) => setForm((old) => ({ ...old, keyPath: event.target.value }))} />
                 <Input aria-label="密钥密码" type="password" autoComplete="new-password" value={form.passphrase}
-                  placeholder={savedPassphrase ? "密钥密码（留空则保持原密码）" : "密钥密码（可选）"}
+                  placeholder={savedPassphrase ? savedPassphraseMarker.test(savedPassphrase) ? "已保存的密钥密码（留空则保留）" : "密钥密码（留空则保持原密码）" : copyNeedsPassphrase ? "密钥密码（复制时请重新输入）" : "密钥密码（可选）"}
                   onChange={(event) => setForm((old) => ({ ...old, passphrase: event.target.value }))} />
               </div>
             )}

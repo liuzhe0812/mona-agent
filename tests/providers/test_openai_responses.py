@@ -1,5 +1,6 @@
 ﻿"""Tests for the shared openai_responses converters and parsers."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -436,6 +437,38 @@ class TestParseResponseOutput:
         assert result.usage["completion_tokens"] == 50
         assert result.usage["total_tokens"] == 150
 
+    @pytest.mark.parametrize("details", [
+        {"cached_tokens": 40},
+        SimpleNamespace(cached_tokens=40),
+    ])
+    def test_usage_maps_cached_input_tokens_without_adding_them_twice(self, details):
+        usage = parse_response_output({
+            "output": [],
+            "status": "completed",
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": details,
+                "output_tokens": 25,
+                "total_tokens": 125,
+            },
+        }).usage
+
+        assert usage == {
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "cached_tokens": 40,
+        }
+
+    def test_usage_omits_zero_or_missing_cached_input_tokens(self):
+        for details in ({"cached_tokens": 0}, {}):
+            usage = parse_response_output({
+                "output": [], "status": "completed",
+                "usage": {"input_tokens": 100, "input_tokens_details": details},
+            }).usage
+            assert usage["prompt_tokens"] == 100
+            assert "cached_tokens" not in usage
+
 
 # ======================================================================
 # parsing - consume_sdk_stream
@@ -560,6 +593,34 @@ class TestConsumeSdkStream:
 
         _, _, _, usage, _ = await consume_sdk_stream(stream())
         assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+
+    @pytest.mark.parametrize("details, expected_cached", [
+        (SimpleNamespace(cached_tokens=40), 40),
+        (SimpleNamespace(cached_tokens=0), 0),
+        (None, 0),
+    ])
+    async def test_cached_usage_extracted_from_stream_terminal_event(self, details, expected_cached):
+        usage_obj = SimpleNamespace(
+            input_tokens=100,
+            input_tokens_details=details,
+            output_tokens=25,
+            total_tokens=125,
+        )
+        event = MagicMock(
+            type="response.completed",
+            response=SimpleNamespace(status="completed", usage=usage_obj, output=[]),
+        )
+
+        async def stream():
+            yield event
+
+        _, _, _, usage, _ = await consume_sdk_stream(stream())
+        assert usage["prompt_tokens"] == 100
+        assert usage["total_tokens"] == 125
+        if expected_cached:
+            assert usage["cached_tokens"] == expected_cached
+        else:
+            assert "cached_tokens" not in usage
 
     @pytest.mark.asyncio
     async def test_reasoning_extracted(self):

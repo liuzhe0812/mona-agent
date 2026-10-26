@@ -76,6 +76,7 @@ export interface EmailMessage {
   fromName?: string | null;
   toAddresses: string;
   ccAddresses?: string | null;
+  bccAddresses?: string | null;
   date: string;
   bodyText: string;
   bodyHtml?: string | null;
@@ -96,6 +97,8 @@ export interface EmailAttachment {
   contentType: string;
   size: number;
   partId: string;
+  contentId?: string | null;
+  isInline?: boolean;
 }
 
 export interface EmailFolder {

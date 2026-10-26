@@ -1,0 +1,6 @@
+{
+  "references": {
+    "native-pptx.md": ["style-specimens/sheet-ppt.jpg", "style-specimens/sheet-east.jpg"],
+    "mona-web.md": ["style-specimens/sheet-web.jpg", "style-specimens/sheet-east.jpg"]
+  }
+}

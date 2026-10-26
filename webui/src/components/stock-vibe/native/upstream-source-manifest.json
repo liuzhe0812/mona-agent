@@ -1,0 +1,366 @@
+{
+  "source_root": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src",
+  "scope": "Original Vibe factor browser, factor jobs, report comparison shared charts and original RunDetail execution-event trade display. No original API implementation, auth, trading writes or global application shell copied.",
+  "files": [
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\pages\\AlphaZoo.tsx",
+      "source_sha256": "9c8c65c975b7becd1aef56f1bc2070c3b447f67fdfa288b8eb4289394ce9087b",
+      "destination": "pages/AlphaZoo.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "c005165260b35bf9772fba7212bb8a623a8420ae23afcfd9d62dcde257370db8"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\pages\\Compare.tsx",
+      "source_sha256": "01d071a108f681d8279ca3d9bf8022c21e5c79e3064d9e1c62bdb56a89a092de",
+      "destination": "pages/Compare.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "2b04a09a98a91aa5ee29fc17d9b27b9d92725ce0aea36d44ca58227891c10fea"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\EquityChart.tsx",
+      "source_sha256": "9a49567c2ba67d0109918a0c0665b618e326d0c33fd13459a16d407239930a5f",
+      "destination": "components/charts/EquityChart.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "2b4ca1aa675e97695fbc3808b8ab0e63a19d7778faf9d58ea21e5ff9216707f4"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\FactorResearchPanel.tsx",
+      "source_sha256": "f884a7118742ba1fea1543e6148b4aba6f7963718bf8574020e1dc5d2df242b1",
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "80d7e9c45ab4eaa960b1346c92fc4484c840b6897ad88dceaeeea2a47095aa59"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\ValidationPanel.tsx",
+      "source_sha256": "89523665698d0e4e9138ad1357f52d81eeff152cf9e70547cd7fccf039f46fcd",
+      "destination": "components/charts/ValidationPanel.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "4bc9cea8e00d0a60d337ee7f89143998f0c1027ae173259cde631b2bca2ae195"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\CorrelationMatrix.tsx",
+      "source_sha256": "d4f9f1269aa709ec869c69fbd01753927ef3fb891c380d5b30c4044928b198c1",
+      "destination": "components/charts/CorrelationMatrix.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "51239bed77d7d9f42f4cffba82438248eaa505401ea97cd574d063ee8b02a8da"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\DistributionChart.tsx",
+      "source_sha256": "3574b3908f613a6dd2f471a678d77d13fe725ffa8025b73cb82bbd4186bb9c65",
+      "destination": "components/charts/DistributionChart.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "80a49ce841e18f2db1372a7e765d15150f1e29b1e1bf42f9129b3bfedb2dfd74"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\MonteCarloPathsChart.tsx",
+      "source_sha256": "4524d559f97f19afdf31e4c633c4d279163a19fcd618547b4806bca9403f11d0",
+      "destination": "components/charts/MonteCarloPathsChart.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "de41a9918a5bea769087c188cf1e328b8589f38827f2dd96881ba35dfd093080"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\charts\\WalkForwardChart.tsx",
+      "source_sha256": "4dd66cfd682b5894995f0eb4d3d8ead99aa65cd6011ac5ba1cab2856489dd07a",
+      "destination": "components/charts/WalkForwardChart.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "f8f353512448b3d419467423125ed47b53ace79c1e7dad5698272fa360f75137"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\run\\RunCard.tsx",
+      "source_sha256": "56722738aa4e8345cc3acaf3ee82da849cda99fc91649323c97247e86f2d5468",
+      "destination": "components/run/RunCard.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "9e8a3b61b96af77f88a3fe9f33cb465533461132bee51f06a438f08800d0f8bc"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\components\\common\\Skeleton.tsx",
+      "source_sha256": "cc3e06f375098c25aef09e34cbe2ccfd5b1c4563b36a3c9ee953e4ddcf6465ec",
+      "destination": "components/common/Skeleton.tsx",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "e5372778e150aab3bc5de2621b952022ae97173d90124e48de34d0a46f8da9e7"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\hooks\\useChartLifecycle.ts",
+      "source_sha256": "9abe5c1dc9a84e5fceabf2d726088891d698045bb17e5752861f3d51916bf8d9",
+      "destination": "hooks/useChartLifecycle.ts",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "82f48f1b21a6062d3a22dbfa0ba997b5b371b3caa24cfad07f8e1917f893c7ba"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\hooks\\useAnalysisState.ts",
+      "source_sha256": "136975fd779012bbb35112acc5f55c5c8721b4201db4672cba0936232461f8b7",
+      "destination": "hooks/useAnalysisState.ts",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "5ccac3b5e1beb96df1a68b7faf6a0b241bc0c24f6084f363e0b36e0307c979be"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\formatters.ts",
+      "source_sha256": "186e755139b4664de69ef33a45da14bd545ad834bfdae7aae2774cde2f27b106",
+      "destination": "lib/formatters.ts",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "573537e0e1b701bdf788597dedd4175d4fdb6ed1bc0c00127adbd00d618ae69b"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\escapeHtml.ts",
+      "source_sha256": "8a3b1547e80625e2e4b4afc8e009c434f2a471f397ab03847b16794c65de6909",
+      "destination": "lib/escapeHtml.ts",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "fe198e542d077fc56551d94f1094b8db9e191dafc44329e97d8508451edf204d"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\echarts.ts",
+      "source_sha256": "7f2267d1c7c074db351ee5b1b70bbf3f4b5042c8b698c9094f75e1623e18219a",
+      "destination": "lib/echarts.ts",
+      "adaptation": "Local imports, Mona semantic presentation; original chart, metric and factor result logic retained.",
+      "destination_sha256": "efd1938c1292ed8b1439a13f43929dc60e79af2c776aa494a6302b5babbfa05d"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\i18n\\locales\\zh-CN.json",
+      "source_sha256": "df5d7adacf8323cd7013d25d3852693357150298ccfd3fa6b454560769b2f25a",
+      "destination": "i18n/locales/zh-CN.json",
+      "adaptation": "Only namespaces referenced by migrated components: layout, reports, connection, runDetail, compare, correlation, alphaZoo, validation, charts, factor, analysis Translation-only: dead_examples is labeled lower-ranked examples; row categories remain original, including alive.",
+      "destination_sha256": "0009fb79246239ce497486fb77e91baa123aa074c24bb14f50dbf0ada80d3f58"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\i18n\\locales\\en.json",
+      "source_sha256": "8cfaaec14606700b3e6f4a29bf6127a2e49d7e130d70b2b2323c92491f9afe80",
+      "destination": "i18n/locales/en.json",
+      "adaptation": "Only namespaces referenced by migrated components: charts, layout, reports, connection, runDetail, compare, correlation, alphaZoo, validation, factor, analysis",
+      "destination_sha256": "f1a9fa6a4f8d46a796e928daf73bcd65b2ace5977e99c6d53e40fc08308bb3ce"
+    },
+    {
+      "source": "D:/liuzhe/Desktop/code/Vibe-Trading/frontend/src/lib/api.ts",
+      "source_sha256": "5d2e2460ce464e9ba1e8b28b05360b762120e2887908dfc637a9725c8175baf6",
+      "destination": "lib/types.ts",
+      "adaptation": "Extracted original type declarations and recursive dependencies: AlphaBenchRequest, AlphaBenchResult, AlphaBenchTopRow, AlphaCompareRequest, AlphaCompareResult, AlphaCompareRow, AlphaCompareSkip, AlphaDataMeta, AlphaDetail, AlphaDetailResponse, AlphaJobSnapshot, AlphaListParams, AlphaListResponse, AlphaProgress, AlphaReadiness, AlphaSummary, ArtifactInfo, BacktestMetrics, EquityPoint, FactorIcStats, FactorReportPayload, FactorResult, IndicatorPoint, MonteCarloEquityPaths, PriceBar, RebalanceNotesPayload, RiskXRayPayload, RunCard, RunCardArtifact, RunCardCitation, RunCardToolTrace, RunData, RunListItem, TradeMarker, ValidationData",
+      "destination_sha256": "5e468abd1ff5b49ca7b6322cccd89e4e59c86f5ddbf23120297a729e48adbe56"
+    },
+    {
+      "source": "D:/liuzhe/Desktop/code/Vibe-Trading/frontend/src/lib/tearsheet.ts",
+      "source_sha256": "c1427f5dfd89bd2aa218ea97e4c5a048954fa9d7032c57b4f80fd485485d01b2",
+      "destination": "lib/tearsheet.ts",
+      "adaptation": "Extracted original DrawdownZone interface only; no unused calculations migrated.",
+      "destination_sha256": "607ddb2005e7f188cd4021643f71bb694c88fc5ff7dbd132622033001c47727b"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\pages\\Reports.tsx",
+      "source_sha256": "d473d72017799b0d5bd303640afabccc2dd9d99e284978ccb6f8d8391dd866ad",
+      "destination": "pages/Reports.tsx",
+      "adaptation": "Local imports, semantic UI, embedded-host navigation. Original 100-run scan, backtest-report filtering, date/search/status filters and sorting retained; no invented server pagination.",
+      "destination_sha256": "8c313d98413383b9249e73c62a2aff0c65e8f16c38efcb7298b62caacd5ff124"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\hooks\\useAlphaJob.ts",
+      "source_sha256": "c7af341c0fa2412df85fdf4180ce7f5368884d36f2ecbfb65953727737da66c6",
+      "destination": "hooks/useAlphaJob.ts",
+      "adaptation": "Original hook contract retained; EventSource and repeated POST recovery replaced with durable operation polling and signed GET receipt recovery.",
+      "destination_sha256": "dbfa16a3bf095466a48bb0764041c23a735e81c64a031091c5117c34f46aa7c2"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\chart-theme.ts",
+      "source_sha256": "ed8b1c4267c34e197756c8406f7c7ef2bd22b6d9c464c21d5960072bc63966dd",
+      "destination": "lib/chart-theme.ts",
+      "adaptation": "Theme-only adapter reads Mona semantic colors; financial calculations are not implemented here.",
+      "destination_sha256": "195b3a297832cecac05308656daa1ddfb4e7904de9ad54bf6a818511ebc83ae4"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\theme-store.ts",
+      "source_sha256": "e26c7add9bcb1189a7f4b772e1cd911471ab04588a5a537ffe7aa4748d18adde",
+      "destination": "lib/theme-store.ts",
+      "adaptation": "Local listener for the existing HTML dark class; original application store is not imported.",
+      "destination_sha256": "513f15b9e0b3b350621b465d8ff1e99ae531b5ef28e4e133cae89919a0f40086"
+    },
+    {
+      "source": "D:/liuzhe/Desktop/code/Vibe-Trading/LICENSE",
+      "source_sha256": "b155549b8bc4e43a9b96b2288dbf4eb1bc0c697f14b3f5ec6b36bf64d5a18679",
+      "destination": "UPSTREAM_LICENSE",
+      "adaptation": "Original MIT attribution and permission notice retained verbatim.",
+      "destination_sha256": "b155549b8bc4e43a9b96b2288dbf4eb1bc0c697f14b3f5ec6b36bf64d5a18679"
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\pages\\RunDetail.tsx",
+      "source_sha256": "3507188d4ba9617b81a82e371e61b3cf229e7d9c087b7544908090fff7dc3d66",
+      "destination": "components/NativeTrades.tsx",
+      "destination_sha256": "fe4d086c650f04881e107fcc1a5d9bbf39ea19fc16489b9fd74ffdc5e73149c1",
+      "adaptation": "Extracted original RunDetail TradesTab and its display/sort/filter/paging/number helpers. Only export name, local imports, Chinese reason text and semantic colors/fonts adapted; no trade pairing, return calculation or CSV field rewriting added."
+    },
+    {
+      "source": "D:\\liuzhe\\Desktop\\code\\Vibe-Trading\\frontend\\src\\lib\\runReports.ts",
+      "source_sha256": "82c58592ea1e534c5fcc1ceed508ef7292b3e4a434ac6e9319dd6df7ffb44d4d",
+      "destination": "lib/runReports.ts",
+      "destination_sha256": "ffa5491281b13d0adcf6d239848eaab09e9d89dcda6b31d432d95bdec6bca551",
+      "adaptation": "Original read-only runTrades selector, retaining full native CSV rows before capped trade_log; import path adapted only."
+    }
+  ],
+  "contract_differences": [
+    "Original source UI hardcodes 2020-2025 and caps the displayed top form at 5. Original REST BenchRequest instead requires zoo/universe/period, has top default 20 and bounds 1..500. The migrated form reads the original REST schema; required fields without defaults stay unspecified, while an explicitly selected factor/universe is carried forward. The original result summary still shows at most five rows.",
+    "Original Reports scans at most 100 native runs and filters reports with metrics. It provides client-side search, creation-date/status filters and sorting, but no offset or full-directory pagination. The migrated view labels this scope explicitly.",
+    "The factor bench operation invokes the same original REST bench_runner.run_bench result contract, not the different AlphaBenchTool top-row result. Compare retains the original compare_alphas result.",
+    "Router, i18n, draft keys, chart theme and host errors are scoped locally. Original API runtime, auth, global settings shell, internal server URLs, SSE and live trading writes are not imported. Unknown writes only reconcile signed receipts with GET.",
+    "Native dead_examples may contain a category=alive row in a single-factor run. The local Chinese table heading names lower-ranked examples; row badges and all native classification/calculation results stay unchanged.",
+    "Native ML trades.csv records execution-event rows using timestamp/code/side/price/qty/reason/pnl/holding_days/holding_bars/return_pct/event. NativeTrades uses the original RunDetail presenter. return_pct is already in percentage units and is formatted without multiplying by 100; no entry/exit pairing is synthesized."
+  ],
+  "unchanged_functions": [
+    {
+      "destination": "pages/Compare.tsx",
+      "name": "fmt",
+      "sha256": "4ac502969c0e41c1644ac07df83eadf70613c543ecf24104fa3c1647c86b22f9"
+    },
+    {
+      "destination": "pages/Compare.tsx",
+      "name": "diffStr",
+      "sha256": "aed2ec00723e9b1092cc0367eccf9d97e66f954ae6c2ed672741f78014803f9e"
+    },
+    {
+      "destination": "pages/Compare.tsx",
+      "name": "truncatePrompt",
+      "sha256": "b5f7cc0e3ffad63a2d6250fca0518cd628d27f8e91099ff70ac5913dfc91f533"
+    },
+    {
+      "destination": "pages/Compare.tsx",
+      "name": "runLabel",
+      "sha256": "229a8456b887e204ed5940e5c146151673cd8d62cd96405055099777ff936780"
+    },
+    {
+      "destination": "pages/Compare.tsx",
+      "name": "resolveMetric",
+      "sha256": "84bbaeacac195859ff8dad461ae2ae2f4b507bd95fab67e94cb04d32e84dff3b"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "isBacktestReportRun",
+      "sha256": "fc956c969338036327bb850ed3c27867b95505ed4111b69d8059326343d284b5"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "compareRuns",
+      "sha256": "f145e8e9905afbb965b0d57a77818bfb75cf21811613cdfdd2f528eeed11cc3d"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "metric",
+      "sha256": "1a58fb68d6958b5a04e654a4545f937aa1f408815b6b4ff4c7808e017964d4b9"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "formatOptionalMetric",
+      "sha256": "edff70164b23f6dd27398346c693d176e6cb096c740818257e6ac0ec61a5c2ec"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "dateMs",
+      "sha256": "9786ffd94cb9c87c7f62ad13b422d4b81ebb7bb8721aacf7b69a75aa2da1874c"
+    },
+    {
+      "destination": "pages/Reports.tsx",
+      "name": "formatRunDate",
+      "sha256": "94893eb2d71c8e4cf69543f2c11767d2b32d8e3ea1aac289a9a7dfb82d0b13be"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "num",
+      "sha256": "bf300fb4590fcccf424185d55d2f4e1c53067409c1d88f2ffffee74a038ef584"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "fixed",
+      "sha256": "1e8bd893b3f0a39c7620c339e8c67b6fa8a9f144cdbd84fa54733686be611329"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "pct",
+      "sha256": "93c1074b5cdb7d6394a378e358428b28a761d8c118beeec43d2212bb9b005e17"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "signedPct",
+      "sha256": "af899fdbb95d870b0b4d35e4df155a6b45fe92c2ebcdf6f798c2f4d6f5aab4b6"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "signTone",
+      "sha256": "e624570fc74f8762235f5e74867577772fcda66511f246e583ea1620df166f87"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "downsample",
+      "sha256": "72cc858a18a8b72a18cb877c37dd03e46c77bc661841caf56ed2f448fcebfd2d"
+    },
+    {
+      "destination": "components/charts/FactorResearchPanel.tsx",
+      "name": "movingAverage",
+      "sha256": "e9091413d39bf84bf0a8126cebe9398c4a7d792be0642f16679aa47711997229"
+    },
+    {
+      "destination": "components/charts/ValidationPanel.tsx",
+      "name": "pctFmt",
+      "sha256": "99cd2e03e1f1db08d8464bf712c2ce407fad39ea6e1005950db5fdc6ee10f728"
+    },
+    {
+      "destination": "components/charts/ValidationPanel.tsx",
+      "name": "barStyle",
+      "sha256": "9be05bfd0ca52a27d15a44170d59fd6098faf3b46cf3f57a089b3a7ab665b85c"
+    },
+    {
+      "destination": "components/charts/ValidationPanel.tsx",
+      "name": "markerStyle",
+      "sha256": "8b3427a1822243173eacc1f51221ae524bbc3408a17c455f9339497d977d3cca"
+    },
+    {
+      "destination": "lib/formatters.ts",
+      "name": "formatMetricVal",
+      "sha256": "c23579c5828cd8d6957f4bb9bf7d1d8c87ce63cd28e0990b45d4b00a0922d4f2"
+    },
+    {
+      "destination": "lib/formatters.ts",
+      "name": "metricSentiment",
+      "sha256": "e54ce8f1d76e67c3e1a8ad62e2539596dd7c3a1ebc4b974bd4645ce69a212a58"
+    },
+    {
+      "destination": "lib/formatters.ts",
+      "name": "getMetricLabel",
+      "sha256": "498c74dfa2345379cbd5d9e3c8b17825bb2cde917f98dabd0e902431fc03d0dd"
+    },
+    {
+      "destination": "lib/formatters.ts",
+      "name": "abbreviateNum",
+      "sha256": "98da68ef5e9e9fa68c8f02743cf7346d97446dcbb61370fdf18748191197e225"
+    },
+    {
+      "destination": "components/NativeTrades.tsx",
+      "name": "tradeTime",
+      "sha256": "5db80ea676b3355c5584bb0443dfe41695456752568e622c1980c09721124257"
+    },
+    {
+      "destination": "components/NativeTrades.tsx",
+      "name": "compareTradeTime",
+      "sha256": "4d46adb5d29020154490c7c76bceb26a6263f89d90ecbd6d10904d5357537fed"
+    },
+    {
+      "destination": "components/NativeTrades.tsx",
+      "name": "normalizeSide",
+      "sha256": "40fdfd40e737b33d53f49934802ca3efea4fc8054258d8375eab4860b2d199dc"
+    },
+    {
+      "destination": "components/NativeTrades.tsx",
+      "name": "parseTradeNumber",
+      "sha256": "cb0b043d2d4684ef3b103b42ac703730473cdf97ab2ffbda406e444f88e2c38a"
+    },
+    {
+      "destination": "components/NativeTrades.tsx",
+      "name": "formatSigned",
+      "sha256": "6c9a7ef0a0b0b98fc8d82d3c6aa209d015747ac5e43248af35766d1e05d03a41"
+    },
+    {
+      "destination": "lib/runReports.ts",
+      "name": "runTrades",
+      "sha256": "fe061114a3a06fedc1c0fe944c89a74f77eb9185608ea643bb398238d5c489ca"
+    }
+  ],
+  "host_adapters": {
+    "lib/api.ts": "Mona authenticated read/write adapter; exports only the required extracted original types.",
+    "lib/toast.tsx": "Mona onError and optional existing settings callback.",
+    "i18n/index.ts": "Independent i18next instance and hook binding, with source namespace subsets.",
+    "native-tools.css": "Scoped host presentation tokens only."
+  }
+}

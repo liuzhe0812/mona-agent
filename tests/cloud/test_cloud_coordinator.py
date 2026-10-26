@@ -187,7 +187,7 @@ async def test_unready_cloud_reports_service_problem_without_enabling(desktops, 
     with pytest.raises(CloudTransferError) as failure:
         await coordinator.prepare()
     assert failure.value.code == code
-    assert not coordinator.preferences.read().enabled
+    assert not coordinator.preferences.read().upload_enabled
     assert service.space is None and not service.objects and native.recovery is None
 
 
@@ -197,12 +197,13 @@ async def test_disabled_and_prepare_never_upload_until_explicit_confirmation(des
     a, native = create("a")
     session = add_conversation(a)
     await a.run_once()
-    assert native.calls == [] and service.space is None
+    assert set(native.calls) == {"cloud_sync_context"} and service.space is None
+    assert not a.preferences.read().upload_enabled
     draft = await a.prepare()
     assert "recovery" not in draft and service.space is None and not service.objects
     with pytest.raises(CloudTransferError):
         await a.enable(draft["draft_id"], [session.key], False)
-    assert not a.preferences.read().enabled
+    assert not a.preferences.read().upload_enabled
     await a.enable(draft["draft_id"], [session.key], True)
     config = json.loads(a.preferences.path.read_text(encoding="utf-8"))
     assert config["unrelated"] == {"keep": True}
@@ -295,7 +296,7 @@ async def test_pause_and_deselection_do_not_delete_and_reselection_catches_up(de
     add_message(a, akey, "remote while excluded")
     await a.run_once()
     await b.run_once()
-    assert b.manager.read_session_file(bkey)["messages"][-1]["content"] == "first answer"
+    assert b.manager.read_session_file(bkey)["messages"][-1]["content"] == "remote while excluded"
     await b.select([bkey])
     await b.run_once()
     assert b.problem is None
@@ -360,16 +361,129 @@ async def test_same_account_on_new_device_automatically_recovers_key(desktops):
 
 
 @pytest.mark.asyncio
-async def test_switching_account_stops_sync_and_does_not_adopt_old_histories(desktops):
+async def test_new_device_receives_without_enabling_or_uploading_local_histories(desktops):
+    service, create = desktops
+    a, _ = create("source")
+    source = add_conversation(a)
+    await enable(a, [source.key])
+    await a.run_once()
+    b, _ = create("receiver")
+    private = add_conversation(b, key="websocket:local-only", text="PRIVATE_LOCAL_ONLY", attachment=False)
+    before = len(service.uploads), copy.deepcopy(service.versions)
+    await b.run_once()
+    assert b.problem is None and b.last_sync is not None
+    state = await b.status()
+    assert state["enabled"] is True and state["upload_enabled"] is False
+    assert state["selected_keys"] == []
+    assert len(b.manager.list_sessions()) == 2
+    assert b.manager.read_session_file(private.key)["messages"][0]["content"] == "PRIVATE_LOCAL_ONLY"
+    assert (len(service.uploads), service.versions) == before
+    assert not list(b.media_root.rglob("data.txt"))
+    with pytest.raises(CloudTransferError, match="确认允许上传"):
+        await b.select([private.key])
+    await enable(b, [private.key])
+    await b.run_once()
+    assert b.problem is None and len(service.versions) == 2
+
+
+@pytest.mark.asyncio
+async def test_paused_receiver_stays_paused_after_restart_and_resume_grants_no_upload(desktops):
+    service, create = desktops
+    a, _ = create("source")
+    source = add_conversation(a, attachment=False)
+    await enable(a, [source.key])
+    await a.run_once()
+    b, native = create("receiver")
+    await b.run_once()
+    imported = b.manager.list_sessions()[0]["key"]
+    await b.pause()
+    add_message(a, source.key, "changed while receiver paused")
+    await a.run_once()
+    calls = len(native.calls)
+    restarted = CloudCoordinator(b.loop, config_path=b.preferences.path, state_path=b.store.path,
+        media_root=b.media_root, transcript_for=b.transcript_for, invoke=native.invoke,
+        transport_factory=native.transport)
+    await restarted.run_once()
+    assert len(native.calls) == calls
+    assert b.manager.read_session_file(imported)["messages"][-1]["content"] == "first answer"
+    await restarted.resume()
+    before = len(service.uploads)
+    await restarted.run_once()
+    assert restarted.problem is None and restarted.preferences.read().upload_enabled is False
+    assert b.manager.read_session_file(imported)["messages"][-1]["content"] == "changed while receiver paused"
+    assert len(service.uploads) == before
+
+
+@pytest.mark.asyncio
+async def test_pause_before_first_binding_is_not_mistaken_for_legacy_default(desktops):
+    _, create = desktops
+    coordinator, native = create("receiver")
+    await coordinator.pause()
+    await coordinator.run_once()
+    assert native.calls == []
+    assert coordinator.preferences.read().enabled is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paused", [False, True])
+async def test_legacy_upload_authorization_is_migrated_once_without_reupload(desktops, paused):
+    service, create = desktops
+    a, _ = create("legacy")
+    session = add_conversation(a, attachment=False)
+    await enable(a, [session.key])
+    await a.run_once()
+    data = json.loads(a.preferences.path.read_text(encoding="utf-8"))
+    data["cloud_sync"].pop("uploadEnabled")
+    data["cloud_sync"]["enabled"] = not paused
+    a.preferences.path.write_text(json.dumps(data), encoding="utf-8")
+    before = len(service.uploads), copy.deepcopy(service.versions)
+    await a.run_once()
+    if paused:
+        assert a.preferences.read().enabled is False
+        await a.resume()
+        await a.run_once()
+    assert a.problem is None and a.preferences.read().upload_enabled is True
+    assert a.preferences.read().session_keys == [session.key]
+    assert (len(service.uploads), service.versions) == before
+
+
+@pytest.mark.asyncio
+async def test_account_switch_receives_new_account_without_sending_old_local_data(desktops):
+    server_a, create = desktops
+    a, native_a = create("account-a")
+    first = add_conversation(a, text="ACCOUNT_A_LOCAL", attachment=False)
+    await enable(a, [first.key])
+    await a.run_once()
+    server_b = CloudService()
+    source_b, boundary_b = create("account-b-source")
+    boundary_b.server = server_b
+    second = add_conversation(source_b, text="ACCOUNT_B_CLOUD", attachment=False)
+    await enable(source_b, [second.key])
+    await source_b.run_once()
+    before_a, before_b = copy.deepcopy(server_a.versions), copy.deepcopy(server_b.versions)
+    native_a.server, native_a.account_id, native_a.binding, native_a.recovery = server_b, "2", "f" * 64, None
+    await a.run_once()
+    assert a.problem is None and a.preferences.read().upload_enabled is False
+    assert a.preferences.read().session_keys == []
+    assert a.manager.read_session_file(first.key)["messages"][0]["content"] == "ACCOUNT_A_LOCAL"
+    assert any(a.manager.read_session_file(row["key"])["messages"][0]["content"] == "ACCOUNT_B_CLOUD"
+        for row in a.manager.list_sessions())
+    assert server_a.versions == before_a and server_b.versions == before_b
+
+
+@pytest.mark.asyncio
+async def test_switching_account_revokes_local_upload_authorization(desktops):
     service, a, _, native_a, _, akey, _ = await initial_pair(desktops)
     before = len(service.controls)
     native_a.account_id = "2"
     native_a.binding = "f" * 64
     await a.run_once()
-    assert a.problem["code"] == "account_changed"
-    assert len(service.controls) == before
+    assert a.problem is None
+    assert all(method == "GET" or path.endswith("/download")
+        for method, path, _ in service.controls[before:])
     state = await a.status()
-    assert state["enabled"] is False and state["selected_keys"] == []
+    assert state["enabled"] is True and state["selected_keys"] == []
+    assert state["upload_enabled"] is False
     assert a.manager.read_session_file(akey)
 
 
@@ -467,14 +581,20 @@ async def test_status_never_returns_native_credentials_or_stored_recovery(deskto
 
 
 @pytest.mark.asyncio
-async def test_background_worker_is_opt_in_and_closes_without_leaking_tasks(desktops):
+async def test_background_receiver_starts_without_upload_authorization_and_closes(desktops):
     _, create = desktops
     a, native = create("a")
     await a.start()
-    await asyncio.sleep(0.02)
-    assert native.calls == []
     task = a.task
-    await asyncio.wait_for(a.close(), 2)
+    async def bound():
+        while a.preferences.read().upload_enabled is not False:
+            await asyncio.sleep(0.01)
+    try:
+        await asyncio.wait_for(bound(), 5)
+        assert set(native.calls) == {"cloud_sync_context"}
+        assert a.preferences.read().upload_enabled is False
+    finally:
+        await asyncio.wait_for(a.close(), 5)
     assert task.done() and a.task is None
 
 
@@ -524,7 +644,7 @@ async def test_concurrent_starts_share_exactly_one_worker(desktops):
     await asyncio.gather(a.start(), a.start(), a.start())
     assert len([task for task in asyncio.all_tasks() if task.get_name() == "work-cloud-sync"]) == 1
     await a.close()
-    assert native.calls == []
+    assert set(native.calls) == {"cloud_sync_context"}
 
 
 @pytest.mark.asyncio

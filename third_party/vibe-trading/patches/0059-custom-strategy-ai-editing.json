@@ -1,0 +1,38 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "description": "Allow managed AI strategy changes only from an undeleted custom strategy at its current native version; keep new creation and ordinary built-in research available.",
+  "files": [
+    {
+      "path": "agent/src/api/mona_strategy_library.py",
+      "sha256": "f90d394025dd03badbf336f9c3754448c8881d6b2537f70a83b9b96d815ce853",
+      "replacements": [
+        {
+          "before": "需要历史事件数据配置，请用AI补齐事件数据来源后保存为策略。",
+          "after": "该示例缺少必需的历史事件数据配置，当前无法运行。请选择其他策略。",
+          "count": 1
+        },
+        {
+          "before": "原生静态方法装饰器不符合当前受控运行器要求，请用AI适配并另存为策略。",
+          "after": "该示例暂不兼容当前运行环境，无法运行。请选择其他策略。",
+          "count": 1
+        },
+        {
+          "before": "This strategy's parameters are read-only; create a modified strategy with AI",
+          "after": "该内置策略的参数只读，请选择其他策略。",
+          "count": 1
+        },
+        {
+          "before": "def creation_context(config: dict[str, Any]) -> str:\n    if config.get(\"mona_strategy_creation\") is not True:\n        return \"\"\n    origin = config.get(\"mona_native_research\") or {}\n    detail = strategy_detail(origin[\"strategy_id\"]) if origin.get(\"strategy_id\", \"\").startswith((\"builtin:\", \"sdm:\")) else None\n    source = \"\"\n    if detail and detail.get(\"deleted\"):\n        raise HTTPException(409, \"This strategy was deleted and cannot be modified\")\n    if detail and detail[\"source\"] == \"builtin\":\n        row = _builtin(detail[\"strategy_id\"].split(\":\", 1)[1])\n        _raw, code, relative = _builtin_code(row)\n        source = \"\\nOriginal bundled strategy (read only): \" + str((_AGENT / relative).resolve()) + \"\\n\" + code.decode(\"utf-8\")\n    elif detail and detail.get(\"linked_run\"):\n        source = \"\\nOriginal strategy run (read only): \" + str((get_runs_dir() / detail[\"linked_run\"][\"run_id\"]).resolve())\n",
+          "after": "def _creation_parent(config: dict[str, Any]) -> dict[str, Any] | None:\n    origin = config.get(\"mona_native_research\") or {}\n    identifier = origin.get(\"strategy_id\")\n    if identifier is None:\n        return None\n    detail = strategy_detail(identifier)\n    if detail[\"source\"] != \"custom\":\n        raise HTTPException(422, \"内置策略只读，不能通过AI修改；请选择自定义策略。\")\n    if detail.get(\"deleted\"):\n        raise HTTPException(409, \"This strategy was deleted and cannot be modified\")\n    if origin.get(\"strategy_version\") != detail[\"version\"]:\n        raise HTTPException(409, \"自定义策略版本已更新，请重新打开后再修改。\")\n    return detail\n\n\ndef creation_context(config: dict[str, Any]) -> str:\n    if config.get(\"mona_strategy_creation\") is not True:\n        return \"\"\n    origin = config.get(\"mona_native_research\") or {}\n    detail = _creation_parent(config)\n    source = \"\"\n    if detail and detail.get(\"linked_run\"):\n        source = \"\\nOriginal strategy run (read only): \" + str((get_runs_dir() / detail[\"linked_run\"][\"run_id\"]).resolve())\n",
+          "count": 1
+        },
+        {
+          "before": "    from backtest.runner import BacktestConfigSchema, _validate_signal_engine_source\n",
+          "after": "    _creation_parent(session.config)\n    from backtest.runner import BacktestConfigSchema, _validate_signal_engine_source\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

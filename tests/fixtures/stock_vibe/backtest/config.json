@@ -1,0 +1,13 @@
+{
+  "codes": [
+    "local:600000.SH"
+  ],
+  "end_date": "2025-06-09",
+  "engine": "daily",
+  "initial_cash": 10000,
+  "interval": "1D",
+  "position_adjustment": "hold",
+  "slippage": 0.0,
+  "source": "local",
+  "start_date": "2025-06-02"
+}

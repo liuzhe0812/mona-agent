@@ -1,0 +1,28 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Use the already locked curl Chrome transport only for fixed Eastmoney scope metadata, retaining shared throttling, current system proxies, certificate verification, bounded retries and the validated directory cache.",
+  "files": [
+    {
+      "path": "agent/src/api/mona_strategy_scope.py",
+      "sha256": "f7daa41bdd76c7ec6d7ea7fdbc2821ef63a06a31dfd7d3a4c18fc65ea89485de",
+      "replacements": [
+        {
+          "before": "_INDUSTRY_CACHE_LOCK = threading.Lock()\n",
+          "after": "_INDUSTRY_CACHE_LOCK = threading.Lock()\n_SCOPE_SESSION_LOCAL = threading.local()\n",
+          "count": 1
+        },
+        {
+          "before": "def _scope_json(url: str, *, params: dict[str, Any]) -> Any:\n    from backtest.loaders.eastmoney_client import get_json\n    from requests.exceptions import ConnectionError as RequestConnectionError\n    from requests.exceptions import SSLError, Timeout\n\n    for attempt in range(3):\n        try:\n            return get_json(url, params=params)\n        except (RequestConnectionError, Timeout) as exc:\n            if isinstance(exc, SSLError) or attempt == 2:\n                raise\n            time.sleep(0.25 * 2**attempt)\n\n\ndef _complete_rows(fs: str) -> list[dict[str, Any]]:\n    from src.tools.market_screener_tool import _CLIST_URL\n\n",
+          "after": "def _scope_json(*, params: dict[str, Any]) -> Any:\n    from backtest.loaders._http import _THROTTLE\n    from backtest.loaders.eastmoney_client import _HOST_KEY, _min_interval\n    from curl_cffi import requests as curl_requests\n    from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError\n    from curl_cffi.requests.exceptions import ProxyError, SSLError, Timeout\n    from requests.utils import get_environ_proxies\n    from src.tools.market_screener_tool import _CLIST_URL\n\n    session = getattr(_SCOPE_SESSION_LOCAL, \"session\", None)\n    if session is None:\n        session = curl_requests.Session(trust_env=False, verify=True, impersonate=\"chrome\")\n        _SCOPE_SESSION_LOCAL.session = session\n    for attempt in range(3):\n        try:\n            proxies = {key: value for key, value in get_environ_proxies(_CLIST_URL).items()\n                if key in {\"http\", \"https\", \"all\"}}\n            _THROTTLE.wait(_HOST_KEY, _min_interval())\n            response = session.get(_CLIST_URL, params=params, proxies=proxies, timeout=15, allow_redirects=False)\n            response.raise_for_status()\n            return response.json()\n        except (CurlConnectionError, ProxyError, Timeout) as exc:\n            if isinstance(exc, SSLError) or attempt == 2:\n                raise\n            time.sleep(0.25 * 2**attempt)\n\n\ndef _complete_rows(fs: str) -> list[dict[str, Any]]:\n",
+          "count": 1
+        },
+        {
+          "before": "            payload = _scope_json(_CLIST_URL, params={",
+          "after": "            payload = _scope_json(params={",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

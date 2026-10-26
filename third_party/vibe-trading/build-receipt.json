@@ -1,0 +1,33 @@
+{
+  "base_pack": "python-base@3.13.15",
+  "pip_version": "26.2.1",
+  "source_date_epoch": 1767225600,
+  "build_requirements_sha256": "c5f69684416628f7b2e949c2eba9a54d1eeeddd9188b548586f25d4fa52ebc8a",
+  "upstream_requirements_sha256": "e3198d6e1d4dc9899f4416e2d4becf5c44fe7e9fd7e80fafe8ea8e5c37fddbb6",
+  "source_builds": [
+    {
+      "name": "jsonpath",
+      "version": "0.82.2",
+      "command_flags": [
+        "--require-hashes",
+        "--no-deps",
+        "--no-cache-dir",
+        "--no-binary=jsonpath",
+        "--no-build-isolation"
+      ],
+      "source_allowed_sha256": [
+        "d87ef2bcbcded68ee96bc34c1809b69457ecec9b0c4dd471658a12bd391002d1"
+      ],
+      "wheel": "jsonpath-0.82.2-py3-none-any.whl",
+      "sha256": "19923a4eafd28915e6d89d1b8170dc12627a813f64abaf5713d0c15bec7f2efd",
+      "size": 5682,
+      "replaces_uncontrolled_cache_build_sha256": "a26211904e6df5c9a4b12e475341b59ea68031e2933ed6213e0ef783bd5da1f6"
+    }
+  ],
+  "platform_wheel_lock": {
+    "path": "requirements-windows-cp313.lock",
+    "sha256": "861295cd158d7bb028f41a03b54b9845db0cc1914ae5181063c83a3ad7b88648",
+    "wheel_count": 187,
+    "platform": "Windows x64 CPython 3.13"
+  }
+}

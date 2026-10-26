@@ -10,11 +10,13 @@ import os
 import platform
 import shutil
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 from mona.config.schema import DevelopmentConfig
 from mona.development.contracts import ExecutorId
 from mona.development.executors.base import ExecutorProbe
+from mona.development.executors.workbuddy_application import discover_workbuddy_cli
 from mona.runtime.executors import managed_executor_path
 from mona.runtime.manager import RuntimeManagerError
 
@@ -49,6 +51,26 @@ def _codex_package_binary(entry: Path) -> Path | None:
     return None
 
 
+def _claude_package_binary(entry: Path) -> Path | None:
+    """Reuse Anthropic's installed native binary without running npm wrappers."""
+    if entry.name.lower() not in {"claude", "claude.cmd", "claude.ps1", "cli.js"}:
+        return None
+    for root in (entry.parent / "node_modules/@anthropic-ai/claude-code", entry.parent.parent):
+        try:
+            with (root / "package.json").open(encoding="utf8") as file:
+                metadata = json.loads(file.read(65537))
+            native_entry = "bin/claude.exe" if os.name == "nt" else "bin/claude"
+            if metadata.get("name") != "@anthropic-ai/claude-code" or metadata.get("bin", {}).get("claude") != native_entry:
+                continue
+            candidate = root / native_entry
+            if (candidate.is_file() and candidate.resolve().is_relative_to(root.resolve())
+                    and (os.name == "nt" or os.access(candidate, os.X_OK))):
+                return candidate.resolve()
+        except (OSError, ValueError, AttributeError):
+            continue
+    return None
+
+
 def resolve_executable(executor: ExecutorId, path: Path) -> tuple[Path, bool]:
     """An explicit path never falls back to another installation."""
     candidate = path.expanduser()
@@ -59,6 +81,9 @@ def resolve_executable(executor: ExecutorId, path: Path) -> tuple[Path, bool]:
     if executor == ExecutorId.CODEX and (script or candidate.name == "codex"):
         native = _codex_package_binary(candidate)
         if native:
+            return native, True
+    if executor == ExecutorId.CLAUDE and (script or candidate.name == "claude"):
+        if native := _claude_package_binary(candidate):
             return native, True
     if script:
         raise ValueError("unsupported_launcher")
@@ -74,9 +99,9 @@ def _standard_candidates(executor: ExecutorId, home: Path) -> list[Path]:
         local = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
         if executor == ExecutorId.CODEBUDDY:
             candidates.append(local / "codebuddy" / "bin" / name)
-        if executor == ExecutorId.CODEX:
+        if executor in {ExecutorId.CODEX, ExecutorId.CLAUDE}:
             roaming = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
-            candidates.append(roaming / "npm" / "codex.cmd")
+            candidates.append(roaming / "npm" / f"{executor.value}.cmd")
     else:
         candidates.extend(Path(directory) / name for directory in ("/opt/homebrew/bin", "/usr/local/bin"))
     return candidates
@@ -98,6 +123,31 @@ def _codex_desktop_candidates(home: Path) -> list[Path]:
     return []
 
 
+def _executable_candidates(executor: ExecutorId, configured: str | None, search_path: str | None,
+                           include_managed: bool) -> Iterator[tuple[Path, str]]:
+    if configured is not None:
+        yield Path(configured), "configured"
+        return
+    if search_path is None:
+        if executor == ExecutorId.CODEX:
+            for path in _codex_desktop_candidates(Path.home()):
+                if path.is_file():
+                    yield path, "desktop_application"
+        elif executor == ExecutorId.CODEBUDDY:
+            if app_cli := discover_workbuddy_cli():
+                yield app_cli, "desktop_application"
+    located = shutil.which(executor.value, path=search_path) if search_path != "" else None
+    if located:
+        yield Path(located), "path"
+    if search_path is None:
+        # A stale PATH wrapper must not hide a usable native installation.
+        for path in _standard_candidates(executor, Path.home()):
+            if path.is_file():
+                yield path, "standard_location"
+        if include_managed and (managed := managed_executor_path(executor.value)):
+            yield managed, "managed_runtime"
+
+
 def discover_executors(config: DevelopmentConfig, *, search_path: str | None = None,
                        include_managed: bool = True) -> list[ExecutorProbe]:
     result: list[ExecutorProbe] = []
@@ -106,43 +156,27 @@ def discover_executors(config: DevelopmentConfig, *, search_path: str | None = N
         (ExecutorId.CLAUDE, config.claude_path),
         (ExecutorId.CODEBUDDY, config.codebuddy_path),
     ):
-        source = "configured" if configured is not None else "path"
-        located = configured
-        if configured is None and search_path is None and executor == ExecutorId.CODEX:
-            located = next((str(p) for p in _codex_desktop_candidates(Path.home()) if p.is_file()), None)
-            if located:
-                source = "desktop_application"
-        if configured is None and located is None:
-            located = shutil.which(executor.value, path=search_path) if search_path != "" else None
-            if not located and search_path is None:
-                # Desktop launches often omit a newly installed CLI's PATH. Only
-                # inspect documented install locations, never shell profiles.
-                located = next((str(p) for p in _standard_candidates(executor, Path.home()) if p.is_file()), None)
-                source = "standard_location"
-        if include_managed and configured is None and not located and search_path is None:
-            try:
-                managed = managed_executor_path(executor.value)
-                if managed:
-                    located, source = str(managed), "managed_runtime"
-            except RuntimeManagerError:
-                result.append(ExecutorProbe(executor=executor, state="unavailable", source="managed_runtime",
-                    error_code="managed_runtime_invalid", reason="Mona 管理的模型引擎程序需要修复。",
-                    next_action="在对应模型来源的引擎管理中修复程序。"))
-                continue
-        if not located:
-            result.append(ExecutorProbe(executor=executor, state="not_detected", error_code="executable_not_found",
-                reason="尚未找到此执行者的本地程序。", next_action="选择已安装的原生程序路径，或先按官方说明安装。"))
-            continue
+        probe = None
         try:
-            native, projected = resolve_executable(executor, Path(located))
-        except (OSError, ValueError) as exc:
-            code = "unsupported_launcher" if isinstance(exc, ValueError) and str(exc) == "unsupported_launcher" else (
-                "executable_access_denied" if isinstance(exc, PermissionError) else "invalid_executable")
-            result.append(ExecutorProbe(executor=executor, state="invalid_path", executable=str(located), source=source,
-                error_code=code, reason="所选入口不能作为原生程序启动；没有改用其他安装。",
-                next_action="选择该执行者的原生可执行文件；不会执行任意终端包装脚本。" if code == "unsupported_launcher" else "核对程序路径与访问权限，然后重新检查。"))
-            continue
-        result.append(ExecutorProbe(executor=executor, state="detected", executable=str(native),
-            source="npm_platform_package" if projected else source,
-            reason="已定位本地程序，尚未验证启动、协议或认证。", next_action="点击检查连接。"))
+            for located, source in _executable_candidates(executor, configured, search_path, include_managed):
+                try:
+                    native, projected = resolve_executable(executor, located)
+                except (OSError, ValueError) as exc:
+                    if probe is None:
+                        code = "unsupported_launcher" if isinstance(exc, ValueError) and str(exc) == "unsupported_launcher" else (
+                            "executable_access_denied" if isinstance(exc, PermissionError) else "invalid_executable")
+                        probe = ExecutorProbe(executor=executor, state="invalid_path", executable=str(located), source=source,
+                            error_code=code, reason="所选入口不能作为原生程序启动；没有执行该入口。",
+                            next_action="选择该执行者的原生可执行文件；不会执行任意终端包装脚本。" if code == "unsupported_launcher" else "核对程序路径与访问权限，然后重新检查。")
+                    continue
+                probe = ExecutorProbe(executor=executor, state="detected", executable=str(native),
+                    source="npm_platform_package" if projected else source,
+                    reason="已定位本地程序，尚未验证启动、协议或认证。", next_action="点击检查连接。")
+                break
+        except RuntimeManagerError:
+            probe = ExecutorProbe(executor=executor, state="unavailable", source="managed_runtime",
+                error_code="managed_runtime_invalid", reason="Mona 管理的模型引擎程序需要修复。",
+                next_action="在对应模型来源的引擎管理中修复程序。")
+        result.append(probe or ExecutorProbe(executor=executor, state="not_detected", error_code="executable_not_found",
+            reason="尚未找到此执行者的本地程序。", next_action="选择已安装的原生程序路径，或先按官方说明安装。"))
     return result

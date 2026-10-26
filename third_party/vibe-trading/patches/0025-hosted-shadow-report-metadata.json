@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Label Shadow profile extraction dates and the exact Shadow backtest request independently in HTML and PDF, record server report time, distinguish a requested signal scan from an unrequested scan, and state when zero completed trades do not establish strategy effectiveness. Hosted reports do not scan implicitly.",
+  "files": [
+    {
+      "path": "agent/src/shadow_account/reporter.py",
+      "sha256": "e780d2a330db27c15dcd95fba314960ed628d4eda3a36ae65f93bea0c3d5d10c",
+      "replacements": [
+        {
+          "before": "from dataclasses import asdict\n",
+          "after": "from dataclasses import asdict\nfrom datetime import datetime, timezone\n",
+          "count": 1
+        },
+        {
+          "before": "    output_dir: Path | None = None,\n",
+          "after": "    output_dir: Path | None = None,\n    report_inputs: dict[str, Any] | None = None,\n",
+          "count": 1
+        },
+        {
+          "before": "    sections = _build_sections(profile, backtest_result, today_signals or [])\n",
+          "after": "    report_generated_at = datetime.now(timezone.utc).isoformat(timespec=\"seconds\").replace(\"+00:00\", \"Z\")\n    sections = _build_sections(\n        profile,\n        backtest_result,\n        today_signals or [],\n        report_inputs=report_inputs,\n        report_generated_at=report_generated_at,\n    )\n",
+          "count": 1
+        },
+        {
+          "before": "    today_signals: list[dict[str, Any]],\n",
+          "after": "    today_signals: list[dict[str, Any]],\n    *,\n    report_inputs: dict[str, Any] | None = None,\n    report_generated_at: str,\n",
+          "count": 1
+        },
+        {
+          "before": "    combined_error = redact_text(redact_internal_paths(combined_error))\n",
+          "after": "    combined_error = redact_text(redact_internal_paths(combined_error))\n    inputs = report_inputs if isinstance(report_inputs, dict) else {}\n\n    def report_window() -> str:\n        value = inputs.get(\"window\")\n        if isinstance(value, (list, tuple)) and len(value) == 2 and all(isinstance(item, str) for item in value):\n            return f\"{value[0]} -> {value[1]}\"\n        return \"Not provided\"\n\n    source = inputs.get(\"source\")\n    source = source if isinstance(source, str) and source else \"Not provided\"\n    markets_value = inputs.get(\"markets\")\n    if isinstance(markets_value, (list, tuple)) and all(isinstance(item, str) for item in markets_value):\n        markets = \", \".join(markets_value) if markets_value else \"Not provided\"\n    else:\n        markets = \"Not provided\"\n    count_value = inputs.get(\"per_market_count\")\n    basket_count = str(count_value) if type(count_value) is int else \"Not provided\"\n    scan_requested = inputs.get(\"scan_requested\")\n    scan_status = (\n        \"Requested\"\n        if scan_requested is True\n        else \"Not requested\"\n        if scan_requested is False\n        else \"Not provided\"\n    )\n",
+          "count": 1
+        },
+        {
+          "before": "        \"combined_error\": combined_error,\n",
+          "after": "        \"combined_error\": combined_error,\n        \"report_generated_at\": report_generated_at,\n        \"journal_window\": f\"{profile.date_range[0]} -> {profile.date_range[1]}\",\n        \"shadow_backtest_window\": report_window(),\n        \"report_source\": source,\n        \"report_markets\": markets,\n        \"report_per_market_count\": basket_count,\n        \"report_scan_status\": scan_status,\n        \"zero_trade_reminder\": (\n            \"No completed trades were recorded. Check whether the signal triggered and whether its indicators had enough historical bars; this result does not validate strategy effectiveness.\"\n            if combined_numeric.get(\"trade_count\") == 0\n            else None\n        ),\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/pdf_fallback.py",
+      "sha256": "c1906596bacb2a59a6e9978bc546bb3bca0661de2f141a146edbb5eee22e253d",
+      "replacements": [
+        {
+          "before": "    story.append(para(f\"{profile.shadow_id} | {profile.created_at}\", muted))\n",
+          "after": "    story.append(para(f\"{profile.shadow_id}\", muted))\n    story.append(para(f\"Profile created at: {profile.created_at}\", muted))\n    story.append(para(f\"Report generated at: {sections['report_generated_at']}\", muted))\n    story.append(para(f\"Extraction/journal window: {sections['journal_window']}\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "            f\"Data window: {profile.date_range[0]} -> {profile.date_range[1]}\",\n",
+          "after": "            \"The extraction window is separate from the Shadow backtest window.\",\n",
+          "count": 1
+        },
+        {
+          "before": "    story.append(Paragraph(\"3. Shadow Backtest - Combined\", h2))\n",
+          "after": "    story.append(Paragraph(\"3. Shadow Backtest - Combined\", h2))\n    story.append(\n        para(\n            f\"Shadow backtest window: {sections['shadow_backtest_window']} | \"\n            f\"Source: {sections['report_source']} | Markets: {sections['report_markets']} | \"\n            f\"Basket count per market: {sections['report_per_market_count']} | \"\n            f\"Signal scan: {sections['report_scan_status']}\",\n            muted,\n        )\n    )\n",
+          "count": 1
+        },
+        {
+          "before": "            para(\"Backtest produced no usable metrics (see warning above).\", muted)\n        )\n",
+          "after": "            para(\"Backtest produced no usable metrics (see warning above).\", muted)\n        )\n    if sections.get(\"zero_trade_reminder\"):\n        story.append(para(sections[\"zero_trade_reminder\"], muted))\n",
+          "count": 1
+        },
+        {
+          "before": "    story.append(Paragraph(\"7. Today's Signal Scan\", h2))\n",
+          "after": "    story.append(Paragraph(\"7. Today's Signal Scan\", h2))\n    story.append(para(f\"Signal scan: {sections['report_scan_status']}\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "        story.append(para(\"No shadow-matching symbols today (or scan skipped).\", muted))\n",
+          "after": "        scan_status = sections[\"report_scan_status\"]\n        if scan_status == \"Not requested\":\n            story.append(para(\"Signal scan was not requested.\", muted))\n        elif scan_status == \"Requested\":\n            story.append(para(\"No shadow-matching symbols today.\", muted))\n        else:\n            story.append(para(\"Signal scan status was not provided.\", muted))\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/templates/shadow_report.html",
+      "sha256": "310a03ebf8c7f792b7537433c76d8843fcca4979fceccbdeedc32612cd4485cc",
+      "replacements": [
+        {
+          "before": "    <p class=\"subtitle\">{{ profile.shadow_id }} | {{ profile.created_at }}</p>\n",
+          "after": "    <p class=\"subtitle\">{{ profile.shadow_id }}</p>\n    <p class=\"muted\">Profile created at: {{ profile.created_at }}</p>\n    <p class=\"muted\">Report generated at: {{ report_generated_at }}</p>\n    <p class=\"muted\">Extraction/journal window: {{ journal_window }}</p>\n",
+          "count": 1
+        },
+        {
+          "before": "    <p class=\"disclaimer\">Research use only - not investment advice. Data window: {{ profile.date_range[0] }} -> {{ profile.date_range[1] }}</p>\n",
+          "after": "    <p class=\"disclaimer\">Research use only - not investment advice. The extraction window is separate from the Shadow backtest window.</p>\n",
+          "count": 1
+        },
+        {
+          "before": "    <h2>3. Shadow Backtest - Combined</h2>\n",
+          "after": "    <h2>3. Shadow Backtest - Combined</h2>\n    <p class=\"muted\">Shadow backtest window: {{ shadow_backtest_window }} | Source: {{ report_source }} | Markets: {{ report_markets }} | Basket count per market: {{ report_per_market_count }} | Signal scan: {{ report_scan_status }}</p>\n",
+          "count": 1
+        },
+        {
+          "before": "      <p class=\"muted\">Backtest produced no usable metrics (see warning above).</p>\n",
+          "after": "      <p class=\"muted\">Backtest produced no usable metrics (see warning above).</p>\n    {% endif %}\n    {% if zero_trade_reminder %}\n      <p class=\"muted\">{{ zero_trade_reminder }}</p>\n",
+          "count": 1
+        },
+        {
+          "before": "    <h2>7. Today's Signal Scan</h2>\n",
+          "after": "    <h2>7. Today's Signal Scan</h2>\n    <p class=\"muted\">Signal scan: {{ report_scan_status }}</p>\n",
+          "count": 1
+        },
+        {
+          "before": "      <p class=\"muted\">No shadow-matching symbols today (or scan skipped).</p>\n",
+          "after": "    {% if report_scan_status == 'Not requested' %}\n    <p class=\"muted\">Signal scan was not requested.</p>\n    {% elif report_scan_status == 'Requested' %}\n    <p class=\"muted\">No shadow-matching symbols today.</p>\n    {% else %}\n    <p class=\"muted\">Signal scan status was not provided.</p>\n    {% endif %}\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/shadow_account_tool.py",
+      "sha256": "7b1b712bec13238c5ee039e117efb504468c56dc33434689825e1e6610147883",
+      "replacements": [
+        {
+          "before": "            \"include_today_signals\": {\"type\": \"boolean\", \"default\": True},\n",
+          "after": "            \"include_today_signals\": {\n                \"type\": \"boolean\",\n                \"description\": \"Hosted reports do not run a market scan; request scan_shadow_signals separately.\",\n            },\n",
+          "count": 1
+        },
+        {
+          "before": "        try:\n            profile = load_profile(shadow_id)\n        except FileNotFoundError as exc:\n            return _err(str(exc))\n\n        try:\n",
+          "after": "        include_today_signals = kwargs.get(\"include_today_signals\", not hosted)\n        if type(include_today_signals) is not bool:\n            return _err(\"include_today_signals must be boolean\")\n        if hosted and include_today_signals:\n            return _err(\n                \"Hosted reports do not run a market scan; call scan_shadow_signals separately.\",\n                reason=\"separate_scan_required\",\n            )\n        try:\n            profile = load_profile(shadow_id)\n        except FileNotFoundError as exc:\n            return _err(str(exc))\n\n        try:\n",
+          "count": 1
+        },
+        {
+          "before": "        if result is None:\n",
+          "after": "        cache_miss = result is None\n        if result is None:\n",
+          "count": 1
+        },
+        {
+          "before": "        today_signals = (\n            scan_today_signals(profile) if kwargs.get(\"include_today_signals\", True) else []\n",
+          "after": "        today_signals = scan_today_signals(profile) if include_today_signals else []\n        report_inputs = (\n            {\n                \"window\": [window_start, window_end],\n                \"source\": source,\n                \"markets\": list(markets),\n                \"per_market_count\": per_market_count,\n                \"scan_requested\": include_today_signals,\n            }\n            if hosted\n            else {\"scan_requested\": include_today_signals}\n",
+          "count": 1
+        },
+        {
+          "before": "        report = render_shadow_report(profile, result, today_signals=today_signals)\n",
+          "after": "        if not hosted and cache_miss:\n            report_inputs.update(\n                window=[window_start, window_end],\n                source=source,\n                markets=list(markets),\n                per_market_count=per_market_count,\n            )\n        report = render_shadow_report(\n            profile,\n            result,\n            today_signals=today_signals,\n            report_inputs=report_inputs,\n        )\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

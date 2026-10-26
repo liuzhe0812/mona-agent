@@ -145,9 +145,6 @@ const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 360;
 
 function videoGenerationError(detail?: string): string {
-  if (detail === "membership_required") {
-    return "视频助手需要有效的 Mona Pro 订阅或试用。";
-  }
   if (detail === "invalid_agent_kind_context") {
     return "视频会话未就绪，请重试准备分镜。";
   }
@@ -893,8 +890,10 @@ export function VideoMakerView({
       setProjectSettings(result.meta ?? settings);
       setNarrationSettingsOpen(false);
       setAiTurnComplete((value) => value + 1);
-    } catch {
-      setNarrationSettingsError("配音设置保存失败，请重试。");
+    } catch (error) {
+      setNarrationSettingsError(error instanceof ApiError && [400, 409, 422].includes(error.status)
+        ? error.message
+        : "配音设置保存失败，请重试。");
     } finally {
       setNarrationSettingsSaving(false);
     }

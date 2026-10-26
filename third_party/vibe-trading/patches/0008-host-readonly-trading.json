@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Prevent hosted Agent dispatch from performing online broker writes; keep only explicitly classified broker reads and preserve local research tools.",
+  "files": [
+    {
+      "path": "agent/src/agent/tools.py",
+      "sha256": "def52d414c790af6c87552771cc019eb617cf22ca3093491b5a77935c99916eb",
+      "replacements": [
+        {
+          "before": "import json\nimport logging\nfrom abc import ABC, abstractmethod\n",
+          "after": "import json\nimport logging\nimport os\nfrom abc import ABC, abstractmethod\n",
+          "count": 1
+        },
+        {
+          "before": "    replay_after_compaction: bool = False\n",
+          "after": "    replay_after_compaction: bool = False\n    hosted_online_broker_write: bool = False\n",
+          "count": 1
+        },
+        {
+          "before": "        try:\n            return tool.execute(**params)\n",
+          "after": "        if (\n            os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n            and getattr(tool, \"hosted_online_broker_write\", False)\n        ):\n            return json.dumps(\n                {\n                    \"status\": \"error\",\n                    \"error\": \"Online broker writes are disabled in the hosted runtime.\",\n                    \"error_code\": \"hosted_broker_write_disabled\",\n                },\n                ensure_ascii=False,\n            )\n        try:\n            return tool.execute(**params)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/live/order_guard.py",
+      "sha256": "bf2610a97d8796781fe01935812ae13b5b230337cd3bf6c8abfb22877a47f0aa",
+      "replacements": [
+        {
+          "before": "    repeatable = False\n    is_readonly = False\n\n    def __init__(\n",
+          "after": "    repeatable = False\n    is_readonly = False\n    hosted_online_broker_write = True\n\n    def __init__(\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/live/registry.py",
+      "sha256": "452c12fc74c858ad43840848a0bbb152eff7c9da679a744350e5f227e2bb56e7",
+      "replacements": [
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "        if tool_class is ToolClass.READ:\n            tool.is_readonly = True\n            result.append(tool)\n        elif halted:\n",
+          "after": "        if tool_class is ToolClass.READ:\n            tool.is_readonly = True\n            result.append(tool)\n        elif os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n            logger.info(\n                \"Hosted mode omitted broker %s tool '%s'\",\n                tool_class.value,\n                spec.remote_name,\n            )\n        elif halted:\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/trading_connector_tool.py",
+      "sha256": "5491b9d985fcc22ffdee6f3921d5538ba2b9511d03e8ad1efa0b3f1e5d5b407b",
+      "replacements": [
+        {
+          "before": "    name = \"trading_place_order\"\n",
+          "after": "    name = \"trading_place_order\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"trading_cancel_order\"\n",
+          "after": "    name = \"trading_cancel_order\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"etoro_close_position\"\n",
+          "after": "    name = \"etoro_close_position\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"etoro_cancel_close_order\"\n",
+          "after": "    name = \"etoro_cancel_close_order\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"etoro_edit_position_stops\"\n",
+          "after": "    name = \"etoro_edit_position_stops\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"etoro_copy_start\"\n",
+          "after": "    name = \"etoro_copy_start\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        },
+        {
+          "before": "    name = \"etoro_copy_close\"\n",
+          "after": "    name = \"etoro_copy_close\"\n    hosted_online_broker_write = True\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/__init__.py",
+      "sha256": "dd88a2e124b3f4ba0013a3ab8ad0556fc675af98aa5a2d37a86845ba0647d5bc",
+      "replacements": [
+        {
+          "before": "import logging\nimport pkgutil\n",
+          "after": "import logging\nimport os\nimport pkgutil\n",
+          "count": 1
+        },
+        {
+          "before": "_SHELL_TOOL_NAMES = {\"bash\", \"background_run\", \"cancel_background\"}\n",
+          "after": "_SHELL_TOOL_NAMES = {\"bash\", \"background_run\", \"cancel_background\"}\n\n\ndef _hosted_mcp_server_supported(server_name: str, url: str) -> bool:\n    \"\"\"Allow hosted MCP only when the existing broker classifier owns it.\"\"\"\n    from src.live.registry import is_live_broker\n\n    return is_live_broker(server_name, url)\n\n\ndef _hosted_mcp_tools(wrappers: list[BaseTool]) -> list[BaseTool]:\n    \"\"\"Keep only tools explicitly classified as broker reads in hosted mode.\"\"\"\n    return [\n        tool for tool in wrappers\n        if not getattr(tool, \"hosted_online_broker_write\", False)\n    ]\n",
+          "count": 1
+        },
+        {
+          "before": "    registry = ToolRegistry()\n",
+          "after": "    registry = ToolRegistry()\n    hosted = os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n",
+          "count": 1
+        },
+        {
+          "before": "        try:\n            if cls.name in _SHELL_TOOL_NAMES and not include_shell_tools:\n",
+          "after": "        try:\n            if hosted and getattr(cls, \"hosted_online_broker_write\", False):\n                logger.info(\"Hosted mode disabled online broker write tool %s\", cls.name)\n                continue\n            if cls.name in _SHELL_TOOL_NAMES and not include_shell_tools:\n",
+          "count": 1
+        },
+        {
+          "before": "                from src.live.registry import (\n                    is_live_broker,\n                    should_register_live_channel,\n                    wrap_live_broker_tools,\n                )\n",
+          "after": "                from src.live.registry import (\n                    should_register_live_channel,\n                    wrap_live_broker_tools,\n                )\n",
+          "count": 1
+        },
+        {
+          "before": "                live = is_live_broker(server_name, server_url)\n",
+          "after": "                live = _hosted_mcp_server_supported(server_name, server_url)\n                if hosted and not live:\n                    logger.warning(\"Hosted mode skipped unclassified MCP server '%s'\", server_name)\n                    continue\n",
+          "count": 1
+        },
+        {
+          "before": "                if live:\n                    wrappers = wrap_live_broker_tools(\n                        server_name, wrappers, url=server_url\n                    )\n                for tool in wrappers:\n",
+          "after": "                if live:\n                    wrappers = wrap_live_broker_tools(\n                        server_name, wrappers, url=server_url\n                    )\n                if hosted:\n                    wrappers = _hosted_mcp_tools(wrappers)\n                for tool in wrappers:\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/trading/profiles.py",
+      "sha256": "338080467fdb53df2774e76f0bae489c52ef5bd2700b5ec87421d940668a6bbe",
+      "replacements": [
+        {
+          "before": "import json\nfrom pathlib import Path\n",
+          "after": "import json\nimport os\nfrom pathlib import Path\n",
+          "count": 1
+        },
+        {
+          "before": "    *MSTOCK_PROFILES,\n)\n\n\ndef config_path() -> Path:\n",
+          "after": "    *MSTOCK_PROFILES,\n)\n\n\ndef _hosted_writable_live_profile(profile: TradingProfile) -> bool:\n    return (\n        os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n        and profile.environment == \"live\"\n        and not profile.readonly\n    )\n\n\ndef config_path() -> Path:\n",
+          "count": 1
+        },
+        {
+          "before": "    selected = str(payload.get(\"selected_profile\") or DEFAULT_PROFILE_ID).strip().lower()\n    return selected or DEFAULT_PROFILE_ID\n",
+          "after": "    selected = str(payload.get(\"selected_profile\") or DEFAULT_PROFILE_ID).strip().lower()\n    selected = selected or DEFAULT_PROFILE_ID\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n        try:\n            profile = profile_by_id(selected)\n        except ValueError:\n            return selected\n        if _hosted_writable_live_profile(profile):\n            return DEFAULT_PROFILE_ID\n    return selected\n",
+          "count": 1
+        },
+        {
+          "before": "    profile = profile_by_id(profile_id)\n    path = config_path()\n",
+          "after": "    profile = profile_by_id(profile_id)\n    if _hosted_writable_live_profile(profile):\n        raise ValueError(\"hosted runtime cannot select a write-capable live trading profile\")\n    path = config_path()\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {}
+}

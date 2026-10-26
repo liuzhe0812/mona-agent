@@ -502,7 +502,7 @@ export function ThreadShell({
   useEffect(() => setFocusMessage(null), [historyKey]);
 
   const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
-  const selectedModelName = activeModelOptions.find((option) => option.active)?.model
+  const selectedModelLabel = activeModelOptions.find((option) => option.active)?.label
     ?? (settingsRef.current?.agent.executor && settingsRef.current.agent.executor !== "mona"
       ? settingsRef.current.agent.native_model
       : null)
@@ -853,7 +853,6 @@ export function ThreadShell({
   // Multi-agent: room members offered by the composer ``@`` picker. The
   // registry provides display names; unknown ids degrade to the raw id.
   const agentsById = useAgents(token);
-  const customMonaAvatar = agentsById.get("mona")?.avatarUrl || null;
   const directAgentId = conversation?.type === "direct"
     ? conversation.directAgentId?.trim() || null
     : pendingDirectAgentId?.trim() || null;
@@ -1041,29 +1040,6 @@ export function ThreadShell({
     ? t("thread.composer.placeholderOpening")
     : composerPlaceholder;
 
-  const monaHeroBrand = showHeroComposer && !isPartnerNewChat ? (
-    <div
-      data-testid="mona-hero-brand"
-      className="ml-[10px] flex shrink-0 items-center gap-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95"
-    >
-      <div
-        data-testid="mona-human-portrait"
-        className="mona-home-avatar relative h-[3.25rem] w-[3.25rem] shrink-0 overflow-hidden rounded-full border border-foreground/10 bg-muted/55 shadow-surface"
-      >
-        <img
-          src={customMonaAvatar ?? "/brand/mona_human_solid.png"}
-          alt="Mona"
-          data-testid="mona-human-portrait-image"
-          className={customMonaAvatar
-            ? "pointer-events-none h-full w-full select-none object-cover"
-            : "mona-home-avatar-image pointer-events-none absolute left-1/2 top-[-0.15rem] h-[5.75rem] w-auto max-w-none select-none"}
-          draggable={false}
-        />
-      </div>
-      <span className="mona-home-wordmark" aria-label="MONA" data-text="MONA">MONA</span>
-    </div>
-  ) : null;
-
   const composer = (
     <div
       data-testid={showHeroComposer ? "mona-hero-composer" : "mona-composer"}
@@ -1090,13 +1066,12 @@ export function ThreadShell({
           isCompacting={isCompacting}
           stopping={stopping}
           placeholder={composerPlaceholder}
-          modelLabel={toModelBadgeLabel(selectedModelName)}
+          modelLabel={toModelBadgeLabel(selectedModelLabel)}
           modelOptions={activeModelOptions}
           onModelSelect={handleModelSelect}
           contextUsage={composerContextUsage}
           imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
-          heroBrand={monaHeroBrand}
           showHeroPromptChips={!isPartnerNewChat}
           slashCommands={slashCommands}
           onStop={stop}
@@ -1131,12 +1106,11 @@ export function ThreadShell({
           isAwaitingModelResponse={isAwaitingModelResponse}
           isCompacting={isCompacting}
           placeholder={openingPlaceholder}
-          modelLabel={toModelBadgeLabel(selectedModelName)}
+          modelLabel={toModelBadgeLabel(selectedModelLabel)}
           modelOptions={activeModelOptions}
           onModelSelect={handleModelSelect}
           imageInputEnabled={imageInputEnabled}
           variant="hero"
-          heroBrand={monaHeroBrand}
           slashCommands={slashCommands}
           onStop={stop}
           runStartedAt={runStartedAt}
@@ -2048,6 +2022,7 @@ export function ThreadShell({
           <ThreadViewport
             messages={transcriptMessages}
             isStreaming={isStreaming}
+            runStartedAt={runStartedAt}
             isGroupChat={isRoomSession}
             emptyState={emptyState}
             composer={composer}

@@ -1,0 +1,28 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Filter strategy sources before expanding metadata and cache immutable built-in catalog display data without caching execution identity checks.",
+  "files": [
+    {
+      "path": "agent/src/api/mona_strategy_library.py",
+      "sha256": "be5d9dd5af913314a9ae7de611f4797f4c989870344a56dc5cfd3b4b7fc3fa5d",
+      "replacements": [
+        {
+          "before": "from contextlib import closing\nfrom dataclasses import replace\n",
+          "after": "from contextlib import closing\nfrom copy import deepcopy\nfrom dataclasses import replace\nfrom functools import lru_cache\n",
+          "count": 1
+        },
+        {
+          "before": "def strategy_catalog(limit: int = 100, offset: int = 0, q: str = \"\", source: str | None = None,\n",
+          "after": "@lru_cache(maxsize=1)\ndef _builtin_catalog() -> list[dict[str, Any]]:\n    \"\"\"Cache display data only; execution keeps using strategy_detail.\"\"\"\n    return [strategy_detail(\"builtin:\" + row[\"slug\"]) for row in _builtin_entries()]\n\n\ndef strategy_catalog(limit: int = 100, offset: int = 0, q: str = \"\", source: str | None = None,\n",
+          "count": 1
+        },
+        {
+          "before": "    identities = [\"builtin:\" + row[\"slug\"] for row in _builtin_entries()]\n    identities.extend(\"sdm:\" + artifact.id for artifact in _artifacts()\n                      if mona_deleted_strategy_version(artifact) is None)\n    rows = [strategy_detail(identity) for identity in identities]\n",
+          "after": "    rows = deepcopy(_builtin_catalog()) if source != \"custom\" else []\n    if source != \"builtin\":\n        rows.extend(strategy_detail(\"sdm:\" + artifact.id) for artifact in _artifacts()\n                    if mona_deleted_strategy_version(artifact) is None)\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

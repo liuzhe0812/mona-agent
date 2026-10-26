@@ -1,0 +1,63 @@
+/*
+ * 股票模块外壳：标题与模块页签同排，层级只靠字重、文字色和一条指示线，
+ * 不再用第二个工具栏和整排灰底按钮。
+ */
+.stock-vibe-header {
+  padding-bottom: 0.125rem;
+}
+
+.stock-vibe-page .stock-vibe-tab {
+  height: auto;
+  padding: 0.125rem 0 0.375rem;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  font-weight: 400;
+}
+
+.stock-vibe-page .stock-vibe-tab:hover:not(:disabled) {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+
+.stock-vibe-page .stock-vibe-tab[data-active="true"] {
+  border-bottom-color: hsl(var(--ring));
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+/* 投资风格是页面上文，不是表单控件：内联文字 + 下拉，不加边框和底色。 */
+.stock-vibe-header .stock-vibe-mode-select {
+  height: 1.75rem;
+  padding: 0 0.125rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: hsl(var(--foreground));
+  font-weight: 500;
+}
+
+.stock-vibe-header .stock-vibe-mode-select:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.stock-vibe-page[data-opportunity],
+.stock-vibe-page[data-account] {
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.stock-vibe-page[data-opportunity] > :not(main),
+.stock-vibe-page[data-account] > :not(main) { flex-shrink: 0; }
+
+.stock-vibe-page[data-opportunity] > main,
+.stock-vibe-page[data-account] > main {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}

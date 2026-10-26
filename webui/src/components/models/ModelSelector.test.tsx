@@ -22,6 +22,44 @@ async function open(onSelect = vi.fn(), options = models) {
   return onSelect;
 }
 describe("source-first unified model selector", () => {
+  it("shows the selected model label while passing its id to the selection callback", async () => {
+    const option = { ...models[1], model: "api/model-v2", label: "Friendly Name", active: false };
+    const select = vi.fn();
+    const { rerender } = render(<ModelSelector options={[option]} onSelect={select} />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "选择模型" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "OpenAI · Friendly Name" }));
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select.mock.calls[0][0]).toBe(option);
+    expect(select.mock.calls[0][0].model).toBe("api/model-v2");
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "搜索模型" })).not.toBeInTheDocument());
+
+    rerender(<ModelSelector options={[{ ...option, active: true }]} onSelect={select} />);
+    expect(screen.getByRole("button", { name: "Friendly Name" })).toHaveTextContent("Friendly Name");
+  });
+
+  it("keeps an icon when no model is selected", () => {
+    render(<ModelSelector options={[{ ...models[1], active: false }]} onSelect={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "选择模型" });
+    expect(button.querySelector("svg.lucide-cpu")).not.toBeNull();
+  });
+
+  it("shows the full selected model label in a tooltip without changing its accessible name", async () => {
+    const option = {
+      ...models[1], active: true, reasoningEfforts: ["low", "high"], reasoningEffort: "high",
+    };
+    render(<ModelSelector options={[option]} onSelect={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: "Same Model" });
+    expect(button).not.toHaveAttribute("title");
+    fireEvent.focus(button);
+    expect(await screen.findByRole("tooltip", { name: "Same Model · OpenAI · 思考强度：高" })).toBeInTheDocument();
+
+    fireEvent.pointerDown(button, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    await screen.findByRole("textbox", { name: "搜索模型" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("keeps the panel open until a model save succeeds and blocks another model selection", async () => {
     let resolve!: () => void;
     const pending = new Promise<void>((done) => { resolve = done; });
@@ -208,7 +246,7 @@ describe("source-first unified model selector", () => {
     expect(screen.getByRole("tab", { name: "Mona AI" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "OpenAI" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Anthropic" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "CodeBuddy" }).querySelector("img")?.getAttribute("src")).toContain("codebuddy-color.svg");
+    expect(screen.getByRole("tab", { name: "WorkBuddy" }).querySelector("img")?.getAttribute("src")).toContain("codebuddy-color.svg");
     fireEvent.click(screen.getByRole("tab", { name: "我的转发服务" }));
     expect(screen.queryByRole("menuitem", { name: "OpenAI · Same Model" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "我的转发服务 · Same Model" }));
@@ -222,6 +260,58 @@ describe("source-first unified model selector", () => {
     expect(screen.queryByRole("button", { name: /收藏/ })).not.toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "我的转发服务 · Same Model" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "OpenAI · Same Model" })).toBeInTheDocument();
+  });
+
+  it("shows WorkBuddy credit multipliers on rows without hover and preserves plain details and reasoning", async () => {
+    const free: ModelOption = {
+      provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "free-model",
+      label: "零倍率模型", executor: "codebuddy", active: false, description: "x0.00",
+    };
+    const standard: ModelOption = {
+      provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "standard-model",
+      label: "标准倍率模型", executor: "codebuddy", active: false, description: "x1.50",
+    };
+    const spaced: ModelOption = {
+      provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "spaced-model",
+      label: "空格倍率模型", executor: "codebuddy", active: false, description: "× 2.00",
+    };
+    const plain: ModelOption = {
+      provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "plain-model",
+      label: "说明模型", executor: "codebuddy", active: false,
+      description: "适合复杂推理，不单独说明积分倍率。",
+      reasoningEfforts: ["low", "high"], reasoningEffort: "high", defaultReasoningEffort: "low",
+      contextWindow: 1_000_000,
+    };
+    const unknown: ModelOption = {
+      provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "unknown-model",
+      label: "未知倍率模型", executor: "codebuddy", active: false, description: "倍率暂未提供",
+    };
+    const select = vi.fn();
+    await open(select, [free, standard, spaced, plain, unknown]);
+
+    const group = screen.getByRole("group", { name: "WorkBuddy" });
+    expect(within(group).getByText("积分消耗")).toBeInTheDocument();
+    const freeRow = within(group).getByRole("menuitem", { name: "WorkBuddy · 零倍率模型" });
+    const standardRow = within(group).getByRole("menuitem", { name: "WorkBuddy · 标准倍率模型" });
+    const spacedRow = within(group).getByRole("menuitem", { name: "WorkBuddy · 空格倍率模型" });
+    const plainRow = within(group).getByRole("menuitem", { name: "WorkBuddy · 说明模型" });
+    const unknownRow = within(group).getByRole("menuitem", { name: "WorkBuddy · 未知倍率模型" });
+    expect(within(freeRow).getByText("×0.00")).toBeInTheDocument();
+    expect(within(standardRow).getByText("×1.50")).toBeInTheDocument();
+    expect(within(spacedRow).getByText("×2.00")).toBeInTheDocument();
+    expect(within(plainRow).queryByText(/×\s*\d/)).not.toBeInTheDocument();
+    expect(within(unknownRow).queryByText(/×\s*\d/)).not.toBeInTheDocument();
+    expect(screen.queryByText(plain.description!)).not.toBeInTheDocument();
+
+    fireEvent.pointerMove(plainRow, { pointerType: "mouse" });
+    expect(await screen.findByRole("slider", { name: "思考强度" })).toBeInTheDocument();
+    expect(screen.getByText(plain.description!)).toBeInTheDocument();
+    expect(screen.getByText(/来源：WorkBuddy · .*上下文/)).toBeInTheDocument();
+
+    fireEvent.click(freeRow);
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "搜索模型" })).not.toBeInTheDocument());
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(free, null);
   });
   it("filters within source and honors the actual native visibility preference", async () => {
     useModelPreferences.getState().setNativeVisible([modelKey(models[3])], false);

@@ -8,6 +8,7 @@ import {
 
 import {
   applyConversationCanvasResponse,
+  buildConversationCanvasPrompt,
   conversationCanvasBaseHash,
   createConversationCanvasNote,
   deriveConversationCanvasTitle,
@@ -32,6 +33,14 @@ describe("detectConversationCanvasIntent", () => {
     expect(detectConversationCanvasIntent("画一个微服务架构图")?.kind).toBe("flowchart");
     expect(detectConversationCanvasIntent("把下面的处理过程整理成一张图")?.kind).toBe("flowchart");
     expect(detectConversationCanvasIntent("制作一张部门泳道图")?.kind).toBe("flowchart");
+    expect(detectConversationCanvasIntent("随便做个思维导图测试一下")).toEqual({
+      kind: "mindmap",
+      title: "思维导图",
+    });
+    expect(detectConversationCanvasIntent("随便生成个思维导图测试")).toEqual({
+      kind: "mindmap",
+      title: "思维导图",
+    });
   });
 
   it("普通讨论不误创建画布", () => {
@@ -39,6 +48,7 @@ describe("detectConversationCanvasIntent", () => {
     expect(detectConversationCanvasIntent("帮我分析一下思维导图应该包含哪些内容")).toBeNull();
     expect(detectConversationCanvasIntent("退款审批流程图应该包含哪些节点？")).toBeNull();
     expect(detectConversationCanvasIntent("我们讨论一下架构图应该怎么画")).toBeNull();
+    expect(detectConversationCanvasIntent("不要随便做个思维导图")).toBeNull();
   });
 
   it("PPT 和配图请求不被改道成流程图", () => {
@@ -46,8 +56,10 @@ describe("detectConversationCanvasIntent", () => {
       "制作一个PPT介绍最近爆火的模型，页面信息密度高，图表展示相关数据，合理配图",
     )).toBeNull();
     expect(detectConversationCanvasIntent("做一个商业汇报 PPT，可视化展示经营数据")).toBeNull();
+    expect(detectConversationCanvasIntent("随便做一个商业汇报 PPT，可视化展示经营数据")).toBeNull();
     expect(detectConversationCanvasIntent("在 PowerPoint 里制作一页产品流程图")).toBeNull();
     expect(detectConversationCanvasIntent("制作一个产品介绍，合理配图")).toBeNull();
+    expect(detectConversationCanvasIntent("随便做一张产品配图")).toBeNull();
   });
 });
 
@@ -90,6 +102,20 @@ describe("createConversationCanvasNote", () => {
     expect(note.originChatId).toBe("chat-123");
     expect(note.type).toBe("flowchart");
     expect(note.title).toBe("退款审批流程图");
+  });
+});
+
+describe("buildConversationCanvasPrompt", () => {
+  it.each(["flowchart", "mindmap"] as const)("routes %s changes through the live tool", (kind) => {
+    const note = createConversationCanvasNote(kind, "测试画布", "chat-tool");
+    const prompt = buildConversationCanvasPrompt(note, "添加一个分支");
+
+    expect(prompt).toContain(note.id);
+    expect(prompt).toContain("添加一个分支");
+    expect(prompt).toContain('canvas(action="open")');
+    expect(prompt).toContain("工具失败时说明画布未完成");
+    expect(prompt).not.toContain("```mindmap");
+    expect(prompt).not.toContain("严格输出上述结构化块");
   });
 });
 

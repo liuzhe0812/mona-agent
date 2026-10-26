@@ -110,6 +110,20 @@ describe("AIChat terminal session binding", () => {
     expect(historyMock.keys).toContain("websocket:chat-1");
   });
 
+  it("shows a retryable error when creating the AI chat fails", async () => {
+    chatMock.newChat.mockRejectedValueOnce(new Error("backend unavailable"));
+    render(<AIChat sessionId="ssh-session-1" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("AI 会话创建失败");
+
+    chatMock.newChat.mockResolvedValueOnce("chat-retry");
+    fireEvent.click(screen.getByRole("button", { name: "发送测试消息" }));
+    await waitFor(() =>
+      expect(useTerminalStore.getState().aiChatIds["ssh-session-1"]).toBe("chat-retry"),
+    );
+    await waitFor(() => expect(streamMock.send).toHaveBeenCalled());
+  });
+
   it("restores the chat bound to the connection after an SSH reconnect", async () => {
     localStorage.setItem(
       "mona.terminal.ai-chat.v1",

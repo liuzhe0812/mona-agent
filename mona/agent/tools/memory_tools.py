@@ -20,12 +20,10 @@ from mona.agent.tools.schema import (
     tool_parameters_schema,
 )
 
-_VALID_FILES = {"memory", "soul", "user", "agents"}
+_VALID_FILES = {"memory", "soul"}
 _FILE_MAP = {
     "memory": "MEMORY.md",
     "soul": "SOUL.md",
-    "user": "USER.md",
-    "agents": "AGENTS.md",
 }
 
 
@@ -52,7 +50,7 @@ def _history_path(agent_id: str) -> Path:
 
 
 class MemoryReadTool(Tool):
-    """Read a memory file (MEMORY.md / SOUL.md / USER.md / AGENTS.md)."""
+    """Read the current Agent's long-term memory or persona."""
 
     _scopes = {"core", "subagent", "memory"}
 
@@ -72,9 +70,8 @@ class MemoryReadTool(Tool):
         return (
             "Read a memory file stored outside the workspace. "
             "Use file='memory' for MEMORY.md (long-term memory), "
-            "file='soul' for SOUL.md (personality/style), "
-            "file='user' for USER.md (user profile), "
-            "file='agents' for AGENTS.md (project-specific preferences)."
+            "file='soul' for SOUL.md (persona: identity, style and behavior). "
+            "User preferences are provided separately by the shared user profile."
         )
 
     @property
@@ -98,13 +95,15 @@ class MemoryReadTool(Tool):
             path = _memory_file_path(file, self._agent_id)
         except ValueError as e:
             return f"Error: {e}"
-        if not path.exists():
-            return f"{path.name} does not exist yet (empty)."
         try:
-            content = path.read_text(encoding="utf-8")
+            from mona.agent.agent_management import read_instruction
+
+            content = read_instruction(self._agent_id, file)["content"]
         except Exception as e:
             return f"Error reading {path.name}: {e}"
         if not content.strip():
+            if not path.exists():
+                return f"{path.name} does not exist yet (empty)."
             return f"{path.name} is empty."
         return content
 
@@ -136,9 +135,9 @@ class MemoryEditTool(Tool):
             "Edit your own memory file stored outside the workspace. "
             "Use mode='replace' to replace entire content (default), "
             "or mode='append' to add content to the end. "
-            "file='memory' → MEMORY.md, 'soul' → SOUL.md, "
-            "'user' → USER.md, 'agents' → AGENTS.md. All changes are "
-            "saved immediately and recorded in version history."
+            "file='memory' → MEMORY.md, 'soul' → SOUL.md (persona). "
+            "Shared user preferences cannot be edited with this tool. All changes are "
+            "saved immediately, keeping only the previous version."
         )
 
     @property
@@ -174,14 +173,14 @@ class MemoryEditTool(Tool):
         except ValueError as e:
             return f"Error: {e}"
         try:
-            if mode == "append" and path.exists():
-                existing = path.read_text(encoding="utf-8")
+            from mona.agent.agent_management import read_instruction, write_instruction
+
+            if mode == "append":
+                existing = read_instruction(self._agent_id, file)["content"]
                 if existing and not existing.endswith("\n"):
                     content = existing + "\n" + content
                 else:
                     content = existing + content
-            from mona.agent.agent_management import write_instruction
-
             write_instruction(
                 self._agent_id,
                 file,

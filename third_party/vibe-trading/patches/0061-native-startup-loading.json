@@ -1,0 +1,40 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Defer heavy agent, provider and swarm exports until first use while preserving original public objects and discovery; lightweight API startup no longer initializes language-model and MCP dependencies.",
+  "files": [
+    {
+      "path": "agent/src/agent/__init__.py",
+      "sha256": "7f2b0cc1c0ad9a04e69d3ce908541ea49cc815b0a4e2a8764f81c323d8c1896d",
+      "replacements": [
+        {
+          "before": "\"\"\"Agent core module: ReAct AgentLoop, tool registry, context, workspace memory, skills.\"\"\"\n\nfrom src.agent.loop import AgentLoop\nfrom src.agent.memory import WorkspaceMemory\nfrom src.agent.skills import SkillsLoader\nfrom src.agent.tools import BaseTool, ToolRegistry\n\n__all__ = [\"AgentLoop\", \"WorkspaceMemory\", \"SkillsLoader\", \"BaseTool\", \"ToolRegistry\"]\n",
+          "after": "\"\"\"Agent core module: ReAct AgentLoop, tool registry, context, workspace memory, skills.\"\"\"\n\nfrom src.agent.memory import WorkspaceMemory\nfrom src.agent.skills import SkillsLoader\nfrom src.agent.tools import BaseTool, ToolRegistry\n\n__all__ = [\"AgentLoop\", \"WorkspaceMemory\", \"SkillsLoader\", \"BaseTool\", \"ToolRegistry\"]\n\n\ndef __getattr__(name: str):\n    if name != \"AgentLoop\":\n        raise AttributeError(f\"module {__name__!r} has no attribute {name!r}\")\n    from src.agent.loop import AgentLoop\n    globals()[name] = AgentLoop\n    return AgentLoop\n\n\ndef __dir__():\n    return sorted(set(globals()) | set(__all__))\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/providers/__init__.py",
+      "sha256": "6d9b9f9df69f7e50390cf342128809c1526345638b60558668b2a28a0f362a81",
+      "replacements": [
+        {
+          "before": "\"\"\"LLM provider abstraction layer.\"\"\"\n\nfrom src.providers.llm import build_llm\n\n__all__ = [\"build_llm\"]\n",
+          "after": "\"\"\"LLM provider abstraction layer.\"\"\"\n\n\n__all__ = [\"build_llm\"]\n\n\ndef __getattr__(name: str):\n    if name != \"build_llm\":\n        raise AttributeError(f\"module {__name__!r} has no attribute {name!r}\")\n    from src.providers.llm import build_llm\n    globals()[name] = build_llm\n    return build_llm\n\n\ndef __dir__():\n    return sorted(set(globals()) | set(__all__))\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/swarm/__init__.py",
+      "sha256": "e218699721bcbc08104b182485e89e8cbb5f54b64d94de1c70204dd7a91080e7",
+      "replacements": [
+        {
+          "before": "\"\"\"Swarm multi-agent system — package entry point.\"\"\"\n\nfrom __future__ import annotations\n\nfrom src.swarm.models import (\n    RunStatus,\n    SwarmAgentSpec,\n    SwarmEvent,\n    SwarmRun,\n    SwarmTask,\n    TaskStatus,\n    WorkerResult,\n)\nfrom src.swarm.presets import build_run_from_preset, inspect_preset, list_presets, load_preset\nfrom src.swarm.runtime import SwarmRuntime\nfrom src.swarm.store import SwarmStore\nfrom src.swarm.worker import run_worker\n\n__all__ = [\n    \"RunStatus\",\n    \"SwarmAgentSpec\",\n    \"SwarmEvent\",\n    \"SwarmRun\",\n    \"SwarmRuntime\",\n    \"SwarmStore\",\n    \"SwarmTask\",\n    \"TaskStatus\",\n    \"WorkerResult\",\n    \"build_run_from_preset\",\n    \"inspect_preset\",\n    \"list_presets\",\n    \"load_preset\",\n    \"run_worker\",\n]\n",
+          "after": "\"\"\"Swarm multi-agent system — package entry point.\"\"\"\n\nfrom __future__ import annotations\n\nfrom src.swarm.models import (\n    RunStatus,\n    SwarmAgentSpec,\n    SwarmEvent,\n    SwarmRun,\n    SwarmTask,\n    TaskStatus,\n    WorkerResult,\n)\nfrom src.swarm.presets import build_run_from_preset, inspect_preset, list_presets, load_preset\nfrom src.swarm.store import SwarmStore\n\n__all__ = [\n    \"RunStatus\",\n    \"SwarmAgentSpec\",\n    \"SwarmEvent\",\n    \"SwarmRun\",\n    \"SwarmRuntime\",\n    \"SwarmStore\",\n    \"SwarmTask\",\n    \"TaskStatus\",\n    \"WorkerResult\",\n    \"build_run_from_preset\",\n    \"inspect_preset\",\n    \"list_presets\",\n    \"load_preset\",\n    \"run_worker\",\n]\n\n\ndef __getattr__(name: str):\n    if name == \"SwarmRuntime\":\n        from src.swarm.runtime import SwarmRuntime\n        value = SwarmRuntime\n    elif name == \"run_worker\":\n        from src.swarm.worker import run_worker\n        value = run_worker\n    else:\n        raise AttributeError(f\"module {__name__!r} has no attribute {name!r}\")\n    globals()[name] = value\n    return value\n\n\ndef __dir__():\n    return sorted(set(globals()) | set(__all__))\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

@@ -70,7 +70,7 @@ pub struct AppSettings {
     pub preferences_revision: Option<String>,
     #[serde(default = "default_run_in_background")]
     pub run_in_background: bool,
-    #[serde(default = "default_auto_start_gateway")]
+    #[serde(default = "default_auto_start_gateway", skip_deserializing)]
     pub auto_start_gateway: bool,
     #[serde(default = "default_gateway_port")]
     pub gateway_port: u16,
@@ -186,6 +186,18 @@ mod tests {
         );
         assert!(settings.browser_automation_enabled);
         assert!(!settings.computer_use_enabled);
+    }
+
+    #[test]
+    fn legacy_disabled_gateway_autostart_is_ignored_without_resetting_other_settings() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"auto_start_gateway":false,"run_in_background":false,"gateway_port":18001}"#,
+        )
+        .unwrap();
+
+        assert!(settings.auto_start_gateway);
+        assert!(!settings.run_in_background);
+        assert_eq!(settings.gateway_port, 18001);
     }
 
     #[test]

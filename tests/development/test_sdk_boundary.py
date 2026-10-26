@@ -49,7 +49,7 @@ class _SDKBuildClient:
 
 
 def _build_sdk_options(monkeypatch, tmp_path, executor, *, readonly=False, host_collaboration=False, is_subagent=False,
-                       platform="linux"):
+                       platform="linux", design_resources=False):
     def tool(name, description, schema):
         return lambda callback: {"name": name, "description": description, "schema": schema, "callback": callback}
 
@@ -80,8 +80,23 @@ def _build_sdk_options(monkeypatch, tmp_path, executor, *, readonly=False, host_
         "effort": None,
         "resume": False,
         "hostCollaboration": host_collaboration,
+        "hostDesignResources": design_resources,
     })
     return worker.options
+
+
+@pytest.mark.parametrize("executor", [ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
+@pytest.mark.parametrize("readonly,is_subagent", [(True, False), (False, True), (True, True)])
+def test_shared_design_resource_does_not_enable_private_skills_or_child_delegation(monkeypatch, tmp_path, executor, readonly, is_subagent):
+    from mona.development.executors.host_tools import HOST_SERVER, SDK_DESIGN_TOOL
+    options = _build_sdk_options(monkeypatch, tmp_path, executor, readonly=readonly,
+                                 is_subagent=is_subagent, design_resources=True)
+    assert options.allowed_tools == [SDK_DESIGN_TOOL]
+    assert set(options.mcp_servers) == {HOST_SERVER}
+    assert [tool["name"] for tool in options.mcp_servers[HOST_SERVER]["tools"]] == ["development_design_resource"]
+    assert options.setting_sources == [] and "Skill" in options.disallowed_tools
+    if executor == ExecutorId.CLAUDE:
+        assert options.skills == [] and options.plugins == []
 
 
 @pytest.mark.parametrize("executor", [ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
@@ -411,6 +426,9 @@ def test_isolated_process_environment_does_not_inherit_vendor_user_settings(tmp_
     assert profile.environment["PYTHONPATH"] != "malicious-import"
     assert "synthetic-auth-value" not in repr(profile)
     assert profile.environment["ANTHROPIC_API_KEY" if executor == ExecutorId.CLAUDE else "CODEBUDDY_API_KEY"] == "synthetic-auth-value"
+    if executor == ExecutorId.CODEBUDDY:
+        assert profile.environment["CODEBUDDY_CONFIG_DIR"] == str(tmp_path / "managed" / ".codebuddy")
+        assert profile.environment["CODEBUDDY_INTERNET_ENVIRONMENT"] == "internal"
     assert prepare_sdk_profile(executor, binary, tmp_path / "managed", root, environment={}).home == profile.home
     with pytest.raises(RpcError):
         prepare_sdk_profile(executor, binary, root / "unsafe-managed", root)

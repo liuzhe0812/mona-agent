@@ -348,7 +348,6 @@ class AgentLoop:
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
             session_manager=self.sessions,
             agent_runtime_resolver=self._resolve_named_agent_runtime,
-            subscription_access_resolver=self._resolve_subagent_subscription_access,
         )
         self._unified_session = unified_session
         self._running = False
@@ -829,6 +828,7 @@ class AgentLoop:
                 max_messages=max_messages,
                 max_tokens=max_tokens,
                 include_timestamps=include_timestamps,
+                model_view=True,
             )
 
         from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
@@ -1301,6 +1301,8 @@ class AgentLoop:
         self,
         msg: InboundMessage,
         session: Session,
+        *,
+        model_content: Any = None,
         **kwargs: Any,
     ) -> bool:
         """Persist the triggering user message before the turn starts.
@@ -1319,6 +1321,12 @@ class AgentLoop:
             extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
             session.add_message("user", text, **extra)
+            if model_content is not None and session.conversation_metadata.type != "room":
+                snapshot = (
+                    self._sanitize_persisted_blocks(model_content)
+                    if isinstance(model_content, list) else model_content
+                )
+                session.remember_model_input(session.messages[-1], snapshot)
             self._mark_pending_user_turn(session)
             self.sessions.save(session)
             return True
@@ -1745,6 +1753,10 @@ class AgentLoop:
                     retry_wait_callback=on_retry_wait,
                     checkpoint_callback=_checkpoint,
                     context_limit_callback=self._learn_context_window,
+                    request_snapshot_callback=(
+                        partial(self.consolidator.remember_request, session)
+                        if session is not None else None
+                    ),
                     injection_callback=_drain_pending,
                     repeat_guard_enabled=True,
                     # Sustained goals may legitimately exceed mona_LLM_TIMEOUT_S; idle stall
@@ -2705,7 +2717,6 @@ class AgentLoop:
         # Bind request-scoped tool state before token estimation and prompt
         # construction so both paths see the same capability set.
         # Fail-closed: any IPC error means no access to personal data.
-        await self._refresh_subscription_access()
 
         self._set_tool_context(
             ctx.msg.channel,
@@ -2752,52 +2763,18 @@ class AgentLoop:
         if self.tools.has("update_plan"):
             ctx.initial_messages = self._inject_task_plan_note(ctx.initial_messages)
 
-        ctx.user_persisted_early = self._persist_user_message_early(ctx.msg, ctx.session)
+        ctx.user_persisted_early = self._persist_user_message_early(
+            ctx.msg, ctx.session,
+            model_content=(
+                ctx.initial_messages[-1].get("content")
+                if not ctx.history or ctx.history[-1].get("role") != "user" else None
+            ),
+        )
 
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
         return "ok"
-
-    async def _refresh_subscription_access(self) -> None:
-        """Read the local license state and update the ToolRegistry.
-
-        Called once at the start of each turn (in ``_state_build``). Uses
-        ``asyncio.to_thread`` because ``tauri_invoke`` is a blocking HTTP
-        call to the IPC bridge. Fail-closed: any error means no access.
-
-        Base local tools do not require a software subscription. Keep paid
-        extension checks independent of data access and tool permissions.
-        """
-        if not self.tools.requires_subscription_check:
-            self.tools.set_subscription_access(False)
-            return
-        try:
-            from mona.agent.tools.tauri_ipc import (
-                check_subscription_access,
-                invalidate_subscription_access_cache,
-            )
-
-            invalidate_subscription_access_cache()
-            has_access = await asyncio.to_thread(check_subscription_access)
-        except Exception as e:
-            logger.debug("subscription access check failed, failing closed: {}", e)
-            has_access = False
-
-        self.tools.set_subscription_access(has_access)
-
-    @staticmethod
-    def _resolve_subagent_subscription_access() -> bool:
-        """Resolve the same trusted, cached entitlement for out-of-band jobs.
-
-        Direct room mentions can launch a named Agent without first entering
-        Mona's normal turn builder, so reading only the parent registry's last
-        value would incorrectly deny a freshly started subscribed session.
-        """
-        from mona.agent.tools.tauri_ipc import check_subscription_access
-
-        return bool(check_subscription_access())
-
 
     @staticmethod
     def _inject_task_plan_note(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2880,7 +2857,19 @@ class AgentLoop:
         if ctx.final_content is None or not ctx.final_content.strip():
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
-        ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
+        ctx.save_skip = len(ctx.initial_messages) - (0 if ctx.user_persisted_early else 1)
+        if (
+            ctx.user_persisted_early
+            and (not ctx.history or ctx.history[-1].get("role") != "user")
+            and ctx.session.conversation_metadata.type != "room"
+        ):
+            current = ctx.all_messages[len(ctx.initial_messages) - 1]
+            persisted = next(message for message in reversed(ctx.session.messages) if message.get("role") == "user")
+            content = current.get("content")
+            ctx.session.remember_model_input(
+                persisted,
+                self._sanitize_persisted_blocks(content) if isinstance(content, list) else content,
+            )
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
@@ -3040,6 +3029,7 @@ class AgentLoop:
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            model_content = content
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
@@ -3076,6 +3066,12 @@ class AgentLoop:
                 entry["author_id"] = partner_id
             normalize_message_author(entry)
             session.messages.append(entry)
+            if role == "user" and session.conversation_metadata.type != "room":
+                snapshot = (
+                    self._sanitize_persisted_blocks(model_content)
+                    if isinstance(model_content, list) else model_content
+                )
+                session.remember_model_input(entry, snapshot)
             session.update_ui_summary(entry)
             if role == "assistant":
                 last_assistant_idx = len(session.messages) - 1

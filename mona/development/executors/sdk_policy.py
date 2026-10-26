@@ -17,6 +17,7 @@ from pathlib import Path
 from mona.development.contracts import ExecutorId
 from mona.development.executors.codex_policy import _ENV_KEYS
 from mona.development.executors.rpc import RpcError
+from mona.development.executors.workbuddy_application import workbuddy_cli_launcher
 
 SDK_MODULES = {ExecutorId.CLAUDE: "claude_agent_sdk", ExecutorId.CODEBUDDY: "codebuddy_agent_sdk"}
 SDK_PACKAGES = {ExecutorId.CLAUDE: "claude-agent-sdk", ExecutorId.CODEBUDDY: "codebuddy-agent-sdk"}
@@ -51,9 +52,9 @@ def prepare_sdk_profile(executor: ExecutorId, executable: Path, home: Path, root
                         codebuddy_environment: str = "internal", model_endpoint: str | None = None,
                         model_token: str | None = None) -> SDKProfile:
     if executor not in SDK_MODULES:
-        raise RpcError("wrong_executor", "此宿主只接入 Claude Code 和 CodeBuddy 官方 SDK。")
+        raise RpcError("wrong_executor", "此宿主只接入 Claude Code 和 WorkBuddy 的配套 SDK。")
     if executor == ExecutorId.CODEBUDDY and codebuddy_environment not in {"internal", "external"}:
-        raise RpcError("sdk_contract_incompatible", "请选择国内或国际 CodeBuddy 环境，未切换到其他服务。")
+        raise RpcError("sdk_contract_incompatible", "请选择国内或国际 WorkBuddy 环境，未切换到其他服务。")
     executable, root, home = executable.resolve(strict=True), root.resolve(strict=True), home.resolve()
     if not executable.is_file() or not root.is_dir() or executable.suffix.lower() in {".bat", ".cmd", ".ps1"}:
         raise RpcError("unsupported_launcher", "请选择原生 CLI 可执行文件，不执行命令包装脚本。")
@@ -79,6 +80,8 @@ def prepare_sdk_profile(executor: ExecutorId, executable: Path, home: Path, root
     if executor == ExecutorId.CODEBUDDY:
         # Pin one region for login, probes, main work and child work; ignore ambient overrides.
         env["CODEBUDDY_INTERNET_ENVIRONMENT"] = codebuddy_environment
+        if workbuddy_cli_launcher(executable):
+            env["ELECTRON_RUN_AS_NODE"] = "1"
     if model_endpoint and model_token:
         if executor != ExecutorId.CLAUDE:
             raise RpcError("unsupported_model_route", "此引擎暂不支持配置的模型来源。")

@@ -27,6 +27,12 @@ from pydantic import Field, field_validator
 from mona.agent.partners import normalize_agent_id
 from mona.config.schema import Base
 
+
+def is_retired_stock_job(agent_id: str, room_id: str) -> bool:
+    return agent_id.startswith("com.mona.stock") or agent_id == "com.mona.a-share-analyst" or room_id in {
+        "stock_research", "stock_ai_diagnosis",
+    }
+
 JOB_SCHEMA_VERSION = 1
 
 JOB_STATUS_QUEUED = "queued"
@@ -57,6 +63,10 @@ _JOB_ID_RE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 class JobTransitionError(ValueError):
     """Raised when a compare-and-set state transition is not allowed."""
+
+
+class RetiredTaskError(JobTransitionError):
+    """A persisted task belongs to an implementation that has been removed."""
 
 
 class JobNotFoundError(KeyError):
@@ -186,6 +196,8 @@ class AgentJobStore:
         attempt: int = 1,
     ) -> AgentJob:
         """Build and persist a new ``queued`` job."""
+        if is_retired_stock_job(assigned_to, room_id):
+            raise RetiredTaskError("旧股票模块已移除，历史任务不能重新执行")
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         while self._path(job_id).exists():
@@ -305,6 +317,8 @@ class AgentJobStore:
         """
         with self._lock_for(job_id):
             job = self.load(job_id)
+            if target == JOB_STATUS_RUNNING and is_retired_stock_job(job.assigned_to, job.room_id):
+                raise JobTransitionError("旧股票模块已移除，历史任务不能重新执行")
             if not can_transition(job.status, target):
                 raise JobTransitionError(
                     f"job {job_id} cannot transition from {job.status!r} to {target!r}"

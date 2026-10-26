@@ -56,7 +56,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
-import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
+import { getFolderDisplayName, isSentFolder, sortFolders } from "./lib/folderUtils";
 import * as emailApi from "./lib/emailApi";
 import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -65,11 +65,28 @@ import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { openPathWithSystemApp, isTauri, httpFetch } from "@/lib/tauri";
 import { getServicesHttpBase } from "@/lib/api";
 import { SenderPopover } from "./SenderPopover";
+import { openEmailLink } from "./lib/emailLinks";
 
 interface ParsedAddress {
   name: string;
   email: string;
   inContacts: boolean;
+}
+
+function attachmentErrorHint(error: unknown): string {
+  const message = String(error);
+  if (message.includes("附件未完整缓存在本地")) {
+    return "附件尚未完整保存在本地，邮件服务未就绪。请启动邮件服务或同步邮件后重试。";
+  }
+  if (message.includes("本地邮件缓存中未找到该附件")) {
+    return "本地邮件缓存中没有该附件，请重新同步邮件后重试。";
+  }
+  return "请检查邮件是否已完整收取或网络连接是否正常，然后重试。";
+}
+
+function showAttachmentError(action: string, error: unknown): void {
+  console.warn(`${action}附件失败`);
+  window.alert(`${action}附件失败。${attachmentErrorHint(error)}`);
 }
 
 /**
@@ -140,6 +157,7 @@ export function MailView() {
   // 多选
   const selectedUids = useEmailStore((s) => s.selectedUids);
   const folders = useEmailStore((s) => s.folders);
+  const selectedFolder = useEmailStore((s) => s.selectedFolder);
   const batchOperate = useEmailStore((s) => s.batchOperate);
   const batchOperating = useEmailStore((s) => s.batchOperating);
   const clearSelection = useEmailStore((s) => s.clearSelection);
@@ -189,19 +207,16 @@ export function MailView() {
     setImageContextMenu({ src, x, y });
   }, []);
 
-  // 点击链接：用系统默认应用打开 URL（默认浏览器）
-  const handleLinkClick = useCallback((url: string) => {
-    if (!isTauri()) {
-      window.open(url, "_blank", "noopener,noreferrer");
-      return;
-    }
-    void openPathWithSystemApp(url);
-  }, []);
-
   // 选中邮件时，若未读则自动标记为已读
   // 本地优先：即使 gateway 离线，Rust 侧也会先更新 SQLite，gateway 失败不报错
+  // 已发送文件夹的邮件不存在未读语义，跳过
   useEffect(() => {
-    if (selectedMessage && !selectedMessage.isRead && gatewayUrl) {
+    if (
+      selectedMessage &&
+      !selectedMessage.isRead &&
+      !isSentFolder(selectedMessage.folder) &&
+      gatewayUrl
+    ) {
       void toggleRead(gatewayUrl, selectedMessage);
     }
   }, [selectedMessage, gatewayUrl, toggleRead]);
@@ -270,26 +285,30 @@ export function MailView() {
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 text-caption"
-              disabled={batchOperating}
-              onClick={() => void batchOperate(gatewayUrl, "mark_read")}
-            >
-              <MailOpen className="h-3.5 w-3.5" />
-              标为已读
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 text-caption"
-              disabled={batchOperating}
-              onClick={() => void batchOperate(gatewayUrl, "mark_unread")}
-            >
-              <MailOpen className="h-3.5 w-3.5" />
-              标为未读
-            </Button>
+            {!isSentFolder(selectedFolder) && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-caption"
+                  disabled={batchOperating}
+                  onClick={() => void batchOperate(gatewayUrl, "mark_read")}
+                >
+                  <MailOpen className="h-3.5 w-3.5" />
+                  标为已读
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-caption"
+                  disabled={batchOperating}
+                  onClick={() => void batchOperate(gatewayUrl, "mark_unread")}
+                >
+                  <MailOpen className="h-3.5 w-3.5" />
+                  标为未读
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -372,6 +391,7 @@ export function MailView() {
   }
 
   const m = selectedMessage;
+  const visibleAttachments = m.attachments?.filter((att) => !att.isInline) ?? [];
   // 正文加载阶段：区分"正在加载正文"（读本地）和"正在请求邮件"（走邮件服务器）
   const stageKey = m ? `${m.uid}:${m.accountId}:${m.folder}` : null;
   const stage = stageKey ? bodyLoadingStage[stageKey] : undefined;
@@ -380,14 +400,20 @@ export function MailView() {
   // 此时 bodyText/bodyHtml 都空属于合法空正文（纯附件、日历邀请、加密内容）
   const isBodyLoading = Boolean(stage);
 
-  const handleDownloadAttachment = async (filename: string) => {
-    if (!gatewayUrl) return;
+  const handleDownloadAttachment = async (att: EmailAttachment) => {
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中下载附件。");
+      return;
+    }
     const account = accounts.find((a) => a.id === m.accountId);
-    if (!account) return;
-    setDownloading(filename);
+    if (!account) {
+      window.alert("未找到此邮件对应的邮箱账号，请刷新邮件列表后重试。");
+      return;
+    }
+    setDownloading(att.filename);
     try {
       const savePath = await save({
-        defaultPath: filename,
+        defaultPath: att.filename,
       });
       if (savePath) {
         // 直接下载到文件，避免前端处理大 base64 字符串
@@ -396,12 +422,13 @@ export function MailView() {
           account,
           m.folder,
           m.uid,
-          filename,
+          att.filename,
           savePath,
+          att.contentId ?? undefined,
         );
       }
     } catch (e) {
-      console.error("下载附件失败:", e);
+      showAttachmentError("下载", e);
     } finally {
       setDownloading(null);
     }
@@ -409,9 +436,15 @@ export function MailView() {
 
   // 打开附件：下载到临时目录后用系统默认应用打开
   const handleOpenAttachment = async (att: EmailAttachment) => {
-    if (!gatewayUrl || !isTauri()) return;
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中打开附件。");
+      return;
+    }
     const account = accounts.find((a) => a.id === m.accountId);
-    if (!account) return;
+    if (!account) {
+      window.alert("未找到此邮件对应的邮箱账号，请刷新邮件列表后重试。");
+      return;
+    }
     setDownloading(att.filename);
     try {
       const tmp = await tempDir();
@@ -425,10 +458,11 @@ export function MailView() {
         m.uid,
         att.filename,
         filePath,
+        att.contentId ?? undefined,
       );
       await openPathWithSystemApp(filePath);
     } catch (e) {
-      console.error("打开附件失败:", e);
+      showAttachmentError("打开", e);
     } finally {
       setDownloading(null);
     }
@@ -436,14 +470,22 @@ export function MailView() {
 
   // 保存全部附件：选择目录后批量下载
   const handleSaveAllAttachments = async () => {
-    if (!gatewayUrl || !m.attachments) return;
+    const attachments = m.attachments?.filter((att) => !att.isInline) ?? [];
+    if (attachments.length === 0) return;
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中保存附件。");
+      return;
+    }
     const account = accounts.find((a) => a.id === m.accountId);
-    if (!account) return;
+    if (!account) {
+      window.alert("未找到此邮件对应的邮箱账号，请刷新邮件列表后重试。");
+      return;
+    }
     const dir = await openDialog({ directory: true, multiple: false });
     if (!dir || typeof dir !== "string") return;
     setDownloading("__all__");
     try {
-      for (const att of m.attachments) {
+      for (const att of attachments) {
         const safeName = att.filename.replace(/[<>:"/\\|?*]/g, "_");
         const filePath = await join(dir, safeName);
         await emailApi.downloadAttachmentToFile(
@@ -453,10 +495,11 @@ export function MailView() {
           m.uid,
           att.filename,
           filePath,
+          att.contentId ?? undefined,
         );
       }
     } catch (e) {
-      console.error("保存全部附件失败:", e);
+      showAttachmentError("保存全部", e);
     } finally {
       setDownloading(null);
     }
@@ -464,9 +507,15 @@ export function MailView() {
 
   // 复制附件到剪贴板：下载到临时文件后用 Rust 命令复制文件到剪贴板
   const handleCopyAttachment = async (att: EmailAttachment) => {
-    if (!gatewayUrl || !isTauri()) return;
+    if (!isTauri()) {
+      window.alert("请在 Mona 桌面版中复制附件。");
+      return;
+    }
     const account = accounts.find((a) => a.id === m.accountId);
-    if (!account) return;
+    if (!account) {
+      window.alert("未找到此邮件对应的邮箱账号，请刷新邮件列表后重试。");
+      return;
+    }
     try {
       const tmp = await tempDir();
       const safeName = att.filename.replace(/[<>:"/\\|?*]/g, "_");
@@ -478,11 +527,12 @@ export function MailView() {
         m.uid,
         att.filename,
         filePath,
+        att.contentId ?? undefined,
       );
       // 复制文件路径文本到剪贴板（Tauri clipboard-manager 仅支持文本，文件剪贴板需 OS 级 API）
       await navigator.clipboard.writeText(filePath);
     } catch (e) {
-      console.error("复制附件失败:", e);
+      showAttachmentError("复制", e);
     }
   };
 
@@ -696,21 +746,23 @@ export function MailView() {
           </h2>
           <TooltipProvider delayDuration={300}>
             <div className="flex shrink-0 items-center gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => void toggleRead(gatewayUrl, m)}
-                    aria-label={m.isRead ? "标记为未读" : "标记为已读"}
-                  >
-                    <MailOpen className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{m.isRead ? "标记为未读" : "标记为已读"}</TooltipContent>
-              </Tooltip>
+              {!isSentFolder(m.folder) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      onClick={() => void toggleRead(gatewayUrl, m)}
+                      aria-label={m.isRead ? "标记为未读" : "标记为已读"}
+                    >
+                      <MailOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{m.isRead ? "标记为未读" : "标记为已读"}</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -825,9 +877,9 @@ export function MailView() {
             <span className="shrink-0 text-muted-foreground/70">时间</span>
             <span className="text-foreground">{formatFullDate(m.date)}</span>
           </div>
-          {m.hasAttachments && m.attachments && m.attachments.length > 0 && (
+          {m.hasAttachments && visibleAttachments.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
-              {m.attachments.map((att, idx) => (
+              {visibleAttachments.map((att, idx) => (
                 <ContextMenu key={idx}>
                   <ContextMenuTrigger asChild>
                     <div
@@ -853,11 +905,11 @@ export function MailView() {
                       <ExternalLink className="mr-2 h-3.5 w-3.5" />
                       打开
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => void handleDownloadAttachment(att.filename)}>
+                    <ContextMenuItem onClick={() => void handleDownloadAttachment(att)}>
                       <Download className="mr-2 h-3.5 w-3.5" />
                       另存为...
                     </ContextMenuItem>
-                    {m.attachments && m.attachments.length > 1 && (
+                    {visibleAttachments.length > 1 && (
                       <ContextMenuItem onClick={() => void handleSaveAllAttachments()}>
                         <FolderArchive className="mr-2 h-3.5 w-3.5" />
                         保存全部附件
@@ -898,7 +950,6 @@ export function MailView() {
             html={m.bodyHtml}
             onImageOpen={handleImageOpen}
             onImageMenu={handleImageMenu}
-            onLinkClick={handleLinkClick}
           />
         ) : m.bodyText ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-ui leading-relaxed text-foreground">
@@ -1103,8 +1154,10 @@ interface SafeHtmlFrameProps {
   onImageOpen?: (src: string) => void;
   /** 右键点击图片时触发（显示自定义菜单） */
   onImageMenu?: (src: string, x: number, y: number) => void;
-  /** 点击链接时触发（用系统默认应用打开 URL） */
+  /** 默认在 Mona 浏览器打开网页链接，可由调用方覆盖。 */
   onLinkClick?: (url: string) => void;
+  /** 内容再少也保留的最小高度（撰写窗口里的引用块用更小值，避免大片空白） */
+  minHeight?: number;
 }
 
 /**
@@ -1112,7 +1165,13 @@ interface SafeHtmlFrameProps {
  * allow-same-origin 让父页面可读取 contentDocument 调整高度（不带 allow-scripts，脚本仍不能跑）。
  * 通过父窗口访问 contentDocument 拦截 IMG 的 click/contextmenu，替换 WebView2 原生菜单。
  */
-export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: SafeHtmlFrameProps) {
+export function SafeHtmlFrame({
+  html,
+  onImageOpen,
+  onImageMenu,
+  onLinkClick = openEmailLink,
+  minHeight = 200,
+}: SafeHtmlFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number>(400);
   // 保存当前事件监听的解绑函数，用于 onLoad 时重新挂载前清理
@@ -1152,7 +1211,7 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
   // 在 iframe contentDocument 上挂载图片事件监听
   const attachListeners = (doc: Document) => {
     // 左键点击：先检测链接，再检测图片
-    // 链接点击：阻止 iframe 内导航，交给父组件用系统默认应用打开 URL
+    // 链接点击：阻止 iframe 导航，交给 Mona 的链接入口。
     // 图片点击：直接打开预览（替代 WebView2 默认行为）
     const handleClick = (e: MouseEvent) => {
       const target = e.target as Element | null;
@@ -1161,12 +1220,14 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
       const anchor = target.closest("a") as HTMLAnchorElement | null;
       if (anchor) {
         // 取原始 href 属性，避免 srcDoc 的 baseURI 把相对路径解析成 about:srcdoc/...
-        const rawHref = anchor.getAttribute("href") || "";
-        // 仅处理 http/https/mailto/tel 等外部链接，忽略锚点（#xxx）和 javascript:
-        if (/^(https?:|mailto:|tel:)/i.test(rawHref)) {
+        const rawHref = (anchor.getAttribute("href") || "").trim();
+        if (rawHref && !rawHref.startsWith("#")) {
           e.preventDefault();
           e.stopPropagation();
-          onLinkClickRef.current?.(rawHref);
+          const url = rawHref.startsWith("//") ? `https:${rawHref}` : rawHref;
+          if (/^(https?:|mailto:|tel:)/i.test(url)) {
+            void onLinkClickRef.current(url);
+          }
           return;
         }
       }
@@ -1223,7 +1284,7 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
         const doc = iframe.contentDocument;
         if (!doc) return;
         const h = doc.body?.scrollHeight ?? doc.documentElement?.scrollHeight ?? 400;
-        setHeight(Math.max(h, 100));
+        setHeight(Math.max(h, minHeight));
       } catch {
         // 跨域访问失败时保持默认高度
       }
@@ -1259,7 +1320,7 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
       window.clearTimeout(timer3);
       observer?.disconnect();
     };
-  }, [wrappedHtml]);
+  }, [wrappedHtml, minHeight]);
 
   // 卸载时清理监听
   useEffect(() => {
@@ -1277,7 +1338,7 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
       const doc = iframe.contentDocument;
       if (!doc) return;
       const h = doc.body?.scrollHeight ?? doc.documentElement?.scrollHeight ?? 400;
-      setHeight(Math.max(h, 100));
+      setHeight(Math.max(h, minHeight));
       // 重新挂载事件监听（新的 contentDocument 上）
       detachListenersRef.current?.();
       detachListenersRef.current = attachListeners(doc);
@@ -1294,7 +1355,7 @@ export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: S
       scrolling="auto"
       onLoad={handleLoad}
       className="w-full border-0"
-      style={{ height: `${height}px`, minHeight: "200px", overflowX: "auto", overflowY: "hidden" }}
+      style={{ height: `${height}px`, minHeight: `${minHeight}px`, overflowX: "auto", overflowY: "hidden" }}
       title="邮件正文"
     />
   );

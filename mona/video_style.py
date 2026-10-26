@@ -229,28 +229,10 @@ def _template_directory() -> Path:
     return Path(__file__).parent / "skills" / "mona-video" / "templates" / "styles"
 
 
-_TEMPLATE_ALIASES = {
-    "business": "minimal-business",
-    "business-light": "minimal-business",
-    "minimal": "minimal-business",
-    "tech": "tech-dark",
-    "technology-dark": "tech-dark",
-    "editorial": "editorial-magazine",
-    "magazine": "editorial-magazine",
-    "knowledge": "knowledge-cards",
-    "light-knowledge": "knowledge-cards",
-}
-
-
-def _canonical_template_id(template_id: str) -> str:
-    value = str(template_id).strip().lower()
-    return _TEMPLATE_ALIASES.get(value, value)
-
-
 def _custom_template() -> dict[str, Any]:
     """Return the valid component contract used by a blank custom series."""
 
-    template = get_builtin_template("minimal-business")
+    template = get_builtin_template("huashu-keynote")
     template["id"] = "custom"
     template["name"] = "自定义"
     template["description"] = "从标准组件契约开始自定义视觉令牌。"
@@ -266,7 +248,7 @@ def list_builtin_templates() -> list[dict[str, Any]]:
 
 
 def get_builtin_template(template_id: str) -> dict[str, Any]:
-    canonical = _canonical_template_id(template_id)
+    canonical = str(template_id).strip().lower()
     if not _SERIES_ID_RE.fullmatch(canonical):
         raise VideoStyleError("内置风格名称无效", code="INVALID_TEMPLATE_ID")
     path = _template_directory() / f"{canonical}.json"
@@ -315,7 +297,7 @@ def create_series(
     series_id: str | None = None,
     name: str | None = None,
     *,
-    template_id: str | None = "minimal-business",
+    template_id: str | None = "huashu-keynote",
     default_aspect_ratio: str = "16:9",
 ) -> dict[str, Any]:
     """Create a series and its revision-zero style draft."""

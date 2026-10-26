@@ -47,7 +47,6 @@ interface LicenseContextValue {
   loggedIn: boolean;
   serverTrial: boolean;
   remainingDays: number;
-  deviceMismatch: boolean;
   pricingConfig: PricingConfig | null;
   pricingError: string | null;
   fetchPricing: () => Promise<void>;
@@ -59,7 +58,6 @@ interface LicenseContextValue {
   forgotPassword: (email: string) => Promise<string>;
   resetPassword: (email: string, code: string, newPassword: string) => Promise<string>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<string>;
-  bindDevice: () => Promise<{ success: boolean; remaining_changes?: number }>;
   refreshLicense: () => Promise<void>;
 }
 
@@ -70,7 +68,6 @@ const LicenseContext = createContext<LicenseContextValue>({
   loggedIn: false,
   serverTrial: false,
   remainingDays: 0,
-  deviceMismatch: false,
   pricingConfig: null,
   pricingError: null,
   fetchPricing: async () => {},
@@ -82,7 +79,6 @@ const LicenseContext = createContext<LicenseContextValue>({
   forgotPassword: async () => "",
   resetPassword: async () => "",
   changePassword: async () => "",
-  bindDevice: async () => ({ success: false }),
   refreshLicense: async () => {},
 });
 
@@ -100,7 +96,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [loggedIn, setLoggedIn] = useState(false);
   const [serverTrial, setServerTrial] = useState(false);
   const [remainingDays, setRemainingDays] = useState(0);
-  const [deviceMismatch, setDeviceMismatch] = useState(false);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
   const licenseCheckGeneration = useRef(0);
@@ -121,7 +116,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     try {
-      const result = await invokeTauri<LicenseInfo>("check_license");
+      const result = await invokeTauri<LicenseInfo>("check_account_status");
       if (licenseCheckGeneration.current !== generation) return;
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
@@ -130,7 +125,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       setLoggedIn(hasAccount);
       setServerTrial(!!result.trial && result.status === "valid");
       setRemainingDays(result.remaining_days ?? remainingDaysUntil(result.expires_at));
-      setDeviceMismatch(result.status === "device_mismatch");
     } catch {
       if (licenseCheckGeneration.current === generation) setLicenseActive(false);
     } finally {
@@ -199,8 +193,19 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     setLicenseInfo(null);
     setServerTrial(false);
     setRemainingDays(0);
-    setDeviceMismatch(false);
     setChecking(false);
+  }, []);
+
+  const wakeCloudSyncAfterLogin = useCallback(async (mutation: number) => {
+    if (authMutationGeneration.current !== mutation) return;
+    try {
+      const { cloudSyncApi } = await import("@/lib/cloud-sync");
+      if (authMutationGeneration.current !== mutation) return;
+      await cloudSyncApi.sync();
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "sync_disabled") return;
+      console.warn("Cloud sync wake after login failed");
+    }
   }, []);
 
   const login = useCallback(async (account: string, password: string, options?: DeviceLoginOptions) => {
@@ -214,7 +219,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     if (authMutationGeneration.current !== mutation) return;
     setLoggedIn(true);
     await checkLicense();
-  }, [invokeTauri, checkLicense]);
+    void wakeCloudSyncAfterLogin(mutation);
+  }, [invokeTauri, checkLicense, wakeCloudSyncAfterLogin]);
 
   const register = useCallback(async (email: string, password: string, code: string, account: string) => {
     const mutation = ++authMutationGeneration.current;
@@ -224,7 +230,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     if (authMutationGeneration.current !== mutation) return;
     setLoggedIn(true);
     await checkLicense();
-  }, [invokeTauri, checkLicense]);
+    void wakeCloudSyncAfterLogin(mutation);
+  }, [invokeTauri, checkLicense, wakeCloudSyncAfterLogin]);
 
   const sendRegisterCode = useCallback(async (email: string, account: string): Promise<string> => {
     const result = await invokeTauri<{ success: boolean; message?: string }>("send_register_code", { email, account });
@@ -266,19 +273,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     return result.message || "";
   }, [invokeTauri]);
 
-  const bindDevice = useCallback(async (): Promise<{ success: boolean; remaining_changes?: number }> => {
-    try {
-      const result = await invokeTauri<{ success: boolean; remaining_changes?: number }>("bind_device");
-      if (result.success) {
-        setDeviceMismatch(false);
-        await checkLicense();
-      }
-      return result;
-    } catch {
-      return { success: false };
-    }
-  }, [invokeTauri, checkLicense]);
-
   useEffect(() => {
     checkLicense();
     fetchPricing();
@@ -318,7 +312,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       loggedIn,
       serverTrial,
       remainingDays,
-      deviceMismatch,
       pricingConfig,
       pricingError,
       fetchPricing,
@@ -330,7 +323,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       forgotPassword,
       resetPassword,
       changePassword,
-      bindDevice,
       refreshLicense: checkLicense,
     }}>
       {children}

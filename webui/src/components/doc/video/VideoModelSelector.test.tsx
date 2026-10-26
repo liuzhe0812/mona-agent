@@ -114,7 +114,7 @@ describe("VideoModelSelector", () => {
   it.each([
     ["OpenAI · Codex CLI 模型", "codex", "codex-model"],
     ["Anthropic · Claude Code 模型", "claude", "claude-model"],
-    ["CodeBuddy · CodeBuddy 模型", "codebuddy", "codebuddy-model"],
+    ["WorkBuddy · CodeBuddy 模型", "codebuddy", "codebuddy-model"],
   ] as const)("maps %s to an explicit native model without an API provider", async (choice, executor, model) => {
     const onChange = await openSelector();
     await selectOption(choice);
@@ -171,9 +171,9 @@ describe("VideoModelSelector", () => {
     render(<VideoModelSelector token="test-token" value={{
       executor: "codebuddy", model: "codebuddy-model", provider: null, effort: "high",
     }} onChange={vi.fn()} />);
-    const trigger = await screen.findByRole("button", { name: "CodeBuddy · CodeBuddy 模型" });
+    const trigger = await screen.findByRole("button", { name: "WorkBuddy · CodeBuddy 模型" });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    const choice = await screen.findByRole("menuitem", { name: "CodeBuddy · CodeBuddy 模型" });
+    const choice = await screen.findByRole("menuitem", { name: "WorkBuddy · CodeBuddy 模型" });
     expect(choice).toHaveAttribute("aria-disabled", "true");
     expect(choice).toHaveAttribute("aria-description", "此引擎已停用，请在模型设置中启用。");
   });

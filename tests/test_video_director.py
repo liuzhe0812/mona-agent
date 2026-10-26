@@ -92,13 +92,30 @@ async def _sync(
     scene: dict | None = None,
     extra: dict | None = None,
 ):
-    source_path = project / "drafts" / "scene_01.html"
+    meta = server._load_video_meta(project)
+    if not meta.get("scenes"):
+        planned = await handle_video_agent(_request({"action": "plan", "name": project.name, "scenes": [{
+            "title": "A scene", "duration": 3, "visual": "A continuous authored object",
+            "animation": "The object follows the narration", "narration": "", "assets": [], **(scene or {}),
+        }]}))
+        assert planned.status == 200, planned.text
+        confirmed = await server.handle_video_project_confirm(_Request({
+            "name": project.name, "expectedPlanRevision": json.loads(planned.body)["planRevision"],
+        }))
+        assert confirmed.status == 200
+        meta = server._load_video_meta(project)
+    source_path = project / "drafts" / "film.html"
     source_path.write_text(source, encoding="utf-8")
     return await handle_video_agent(_request({
         "action": "sync", "name": project.name, "scene_index": 1,
-        "source_file": "drafts/scene_01.html",
-        "scene": {"title": "A scene", "duration": 3, **(scene or {})}, **(extra or {}),
+        "source_file": "drafts/film.html", "plan_revision": meta.get("planRevision", 0), **(extra or {}),
     }))
+
+
+def _film(content: str, *, animation: str = "") -> str:
+    return ('<!doctype html><html><head></head><body><main data-composition-id="film" '
+            'data-width="320" data-height="180">' + content + '</main>'
+            + ('<script>' + animation + '</script>' if animation else '') + '</body></html>')
 
 
 async def test_video_agent_requires_internal_token_and_bound_chat(project: Path) -> None:
@@ -115,9 +132,9 @@ async def test_video_agent_requires_internal_token_and_bound_chat(project: Path)
 
 
 @pytest.mark.parametrize("source", [
-    "<!doctype html><html><head><title>自由构图</title></head><body><main>HTML</main></body></html>",
-    '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><circle cx="20" cy="20" r="12" fill="#00aa66"/></svg>',
-    '<canvas id="scene" width="80" height="40"></canvas><script>document.querySelector("canvas").getContext("2d").fillRect(0,0,30,30)</script>',
+    _film('<h1>自由构图</h1>'),
+    _film('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><circle cx="20" cy="20" r="12" fill="#00aa66"/></svg>'),
+    _film('<canvas id="scene" width="80" height="40"></canvas><script>document.querySelector("canvas").getContext("2d").fillRect(0,0,30,30)</script>'),
 ])
 async def test_sync_accepts_authored_html_svg_and_canvas_without_builtin_layout(
     project: Path, source: str
@@ -127,14 +144,14 @@ async def test_sync_accepts_authored_html_svg_and_canvas_without_builtin_layout(
     assert response.status == 200
     payload = json.loads(response.body)
     assert payload["ok"] is True
-    scene = payload["scene"]
+    scene = payload["scenes"][0]
     assert scene["layout"] == "authored"
     assert scene["htmlStatus"] == "previewing"
-    assert scene["sourcePath"] == "scene_sources/scene_01.html"
+    assert scene["sourcePath"] == "scene_sources/film.html"
     assert (project / scene["sourcePath"]).read_text(encoding="utf-8") == source
     assert (project / scene["htmlPath"]).is_file()
     meta = json.loads((project / "meta.json").read_text(encoding="utf-8"))
-    assert meta["authoringMode"] == "agent"
+    assert meta["authoringMode"] == "huashu-motion"
     assert meta["phase"] == "exportable"
     assert server._video_scene_ready(project, scene)
 
@@ -150,7 +167,7 @@ async def test_sync_rejects_source_file_outside_project_without_writing(project:
 
     assert response.status == 422
     assert json.loads(response.body)["ok"] is False
-    assert not (project / "scene_sources" / "scene_01.html").exists()
+    assert not (project / "scene_sources" / "film.html").exists()
     assert not (project / "scenes" / "scene_01.html").exists()
     assert json.loads((project / "meta.json").read_text(encoding="utf-8"))["scenes"] == []
 
@@ -158,31 +175,32 @@ async def test_sync_rejects_source_file_outside_project_without_writing(project:
 async def test_syncing_edit_keeps_previous_source_and_rendered_scene_in_version(
     project: Path,
 ) -> None:
-    old_source = '<!doctype html><html><body><svg id="old-scene"><text>OLD VERSION</text></svg></body></html>'
-    new_source = '<!doctype html><html><body><svg id="new-scene"><text>NEW VERSION</text></svg></body></html>'
+    old_source = _film('<svg id="old-scene"><text>OLD VERSION</text></svg>')
+    new_source = _film('<svg id="new-scene"><text>NEW VERSION</text></svg>')
 
     first = await _sync(project, old_source)
     assert first.status == 200
-    old_rendered = (project / json.loads(first.body)["scene"]["htmlPath"]).read_bytes()
+    old_rendered = (project / json.loads(first.body)["scenes"][0]["htmlPath"]).read_bytes()
+    existing_versions = set((project / "versions").iterdir())
 
-    second = await _sync(project, new_source, scene={"title": "Updated scene"})
+    second = await _sync(project, new_source)
     assert second.status == 200
-    versions = list((project / "versions").iterdir())
+    versions = list(set((project / "versions").iterdir()) - existing_versions)
     assert len(versions) == 1
     snapshot = versions[0]
-    assert (snapshot / "scene_sources" / "scene_01.html").read_text(encoding="utf-8") == old_source
+    assert (snapshot / "scene_sources" / "film.html").read_text(encoding="utf-8") == old_source
     assert (snapshot / "scenes" / "scene_01.html").read_bytes() == old_rendered
-    assert (project / "scene_sources" / "scene_01.html").read_text(encoding="utf-8") == new_source
+    assert (project / "scene_sources" / "film.html").read_text(encoding="utf-8") == new_source
     assert b"NEW VERSION" in (project / "scenes" / "scene_01.html").read_bytes()
 
 
 async def test_authored_scene_is_ready_only_while_source_hash_matches_current_bytes(
     project: Path,
 ) -> None:
-    response = await _sync(project, '<!doctype html><svg id="authored"></svg>')
+    response = await _sync(project, _film('<svg id="authored"></svg>'))
     assert response.status == 200
-    scene = json.loads(response.body)["scene"]
-    source = project / "scene_sources" / "scene_01.html"
+    scene = json.loads(response.body)["scenes"][0]
+    source = project / "scene_sources" / "film.html"
 
     assert scene["sourceHash"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert server._video_scene_ready(project, scene)
@@ -213,10 +231,10 @@ async def test_changed_narration_and_long_tts_refresh_subtitles_without_replacin
     meta = json.loads((project / "meta.json").read_text(encoding="utf-8"))
     meta.update({"narrationEnabled": True, "subtitleMode": "burned", "ttsProvider": "edge"})
     (project / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    source = '''<!doctype html><html><body>
+    source = _film('''
 <svg id="custom-svg" xmlns="http://www.w3.org/2000/svg" width="320" height="180">
 <circle cx="90" cy="90" r="40" fill="#00ccaa"/><text x="20" y="30">CUSTOM COMPOSITION</text></svg>
-</body></html>'''
+''')
     previous_narration = "旧旁白。"
     changed_narration = "更新后的旁白需要完整字幕。"
     first = await _sync(project, source, scene={"narration": previous_narration})
@@ -246,7 +264,12 @@ async def test_changed_narration_and_long_tts_refresh_subtitles_without_replacin
     server._save_video_meta(project, meta)
     assert (project / first_scene["audioTimingPath"]).is_file()
 
-    second = await _sync(project, source, scene={"narration": changed_narration})
+    edited = await handle_video_agent(_request({
+        "action": "edit", "name": project.name, "scene_index": 1, "plan_revision": 1,
+        "instruction": "将旁白更新为新的说法。", "scene": {"narration": changed_narration},
+    }))
+    assert edited.status == 200
+    second = await _sync(project, source)
     assert second.status == 200
     meta = server._load_video_meta(project)
     scene = meta["scenes"][0]
@@ -262,13 +285,13 @@ async def test_changed_narration_and_long_tts_refresh_subtitles_without_replacin
     assert scene["duration"] == 5
     assert provider.calls == [previous_narration, changed_narration]
     assert scene["sourceHash"] == hashlib.sha256(
-        (project / "scene_sources" / "scene_01.html").read_bytes()
+        (project / "scene_sources" / "film.html").read_bytes()
     ).hexdigest()
     assert server._video_scene_ready(project, scene)
 
     current_html = (project / "scenes" / "scene_01.html").read_text(encoding="utf-8")
     timing = json.loads((project / "audio" / "scene_01.timing.json").read_text(encoding="utf-8"))
-    assert 'id=&quot;custom-svg&quot;' in current_html
+    assert 'id=\\"custom-svg\\"' in current_html
     assert "CUSTOM COMPOSITION" in current_html
     assert changed_narration in current_html
     assert timing["cues"][0]["text"] == changed_narration
@@ -294,18 +317,18 @@ async def test_authored_scene_exports_through_production_edge_ffmpeg_pipeline(
         "subtitleMode": "burned", "ttsProvider": "edge",
     })
     server._save_video_meta(project, meta)
-    source = '''<!doctype html><html><body>
+    source = _film('''
     <svg id="export-authored-scene" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080"
          style="position:absolute;inset:0;width:1920px;height:1080px">
       <rect width="1920" height="1080" fill="#102030"/>
-      <rect x="20" y="20" width="600" height="600" fill="#ff00ff"/>
+      <rect id="evidence" x="20" y="20" width="600" height="600" fill="#ff00ff"/>
       <text x="720" y="450" fill="#ffffff" font-size="72">AUTHORED SVG</text>
-</svg></body></html>'''
+</svg>''', animation="const tl=gsap.timeline({paused:true});tl.fromTo('#evidence',{attr:{width:50}},{attr:{width:600},duration:2});window.__timelines={film:tl};")
     sync = await _sync(project, source, scene={
         "title": "Authored scene", "duration": 3, "narration": "本地合成语音用于真实导出验收。",
     })
     assert sync.status == 200
-    assert server._video_scene_ready(project, json.loads(sync.body)["scene"])
+    assert server._video_scene_ready(project, json.loads(sync.body)["scenes"][0])
 
     class _OfflineToneProvider:
         async def synthesize_with_timings(self, text: str, voice: str = ""):
@@ -316,6 +339,9 @@ async def test_authored_scene_exports_through_production_edge_ffmpeg_pipeline(
             )
 
     monkeypatch.setattr(tts, "EdgeTTSProvider", lambda **_kwargs: _OfflineToneProvider())
+    preview = await handle_video_agent(_request({"action": "preview", "name": project.name, "scene_index": 1, "plan_revision": 1}))
+    assert preview.status == 200, preview.text
+    assert json.loads(preview.body)["motionReview"]["distinctVisualStates"] >= 2
     name = project.name
     assert name not in server._video_render_tasks or server._video_render_tasks[name].done()
     queued = await server.handle_video_project_export(_Request({
@@ -372,7 +398,7 @@ async def test_real_browser_preview_seeks_canvas_embeds_local_asset_and_blocks_o
         encoding="utf-8",
     )
     private_url = json.dumps(outside.as_uri())
-    source = f'''<!doctype html><html><head></head><body>
+    source = _film(f'''
 <canvas id="scene" width="320" height="180"></canvas>
 <img src="assets/swatch.svg" style="position:absolute;left:150px;top:10px;width:24px;height:24px">
 <script>
@@ -383,7 +409,7 @@ function seek(seconds){{
   ctx.fillStyle=seconds<1?"#ff0000":"#0000ff";ctx.fillRect(10,10,40,40);
   ctx.fillStyle=outsideReadable?"#ff00ff":"#00ff00";ctx.fillRect(70,10,30,30);
 }}
-window.__monaSeek=seek;seek(0);
+const tl=gsap.timeline({{paused:true}});OM.clock(tl,seek,3);window.__timelines={{film:tl}};seek(0);
 fetch({private_url}).then(r=>r.text()).then(text=>{{
   outsideReadable=text.includes("ff00ff");seek(0);
   parent.postMessage({{type:"mona-scene-report",outsideFileReadable:outsideReadable}},"*");
@@ -391,18 +417,18 @@ fetch({private_url}).then(r=>r.text()).then(text=>{{
   outsideReadable=false;seek(0);
   parent.postMessage({{type:"mona-scene-report",outsideFileReadable:false}},"*");
 }});
-</script></body></html>'''
+</script>''')
 
     synced = await _sync(project, source)
     assert synced.status == 200
-    rendered = project / json.loads(synced.body)["scene"]["htmlPath"]
+    rendered = project / json.loads(synced.body)["scenes"][0]["htmlPath"]
     rendered_text = rendered.read_text(encoding="utf-8")
     assert "data:image/svg+xml;base64," in rendered_text
     assert 'sandbox="allow-scripts"' in rendered_text
     assert "allow-same-origin" not in rendered_text
 
     response = await handle_video_agent(_request({
-        "action": "preview", "name": project.name, "scene_index": 1,
+        "action": "preview", "name": project.name, "scene_index": 1, "plan_revision": 1,
     }))
     assert response.status == 200, response.body.decode("utf-8", errors="replace")
     payload = json.loads(response.body)
@@ -422,7 +448,7 @@ fetch({private_url}).then(r=>r.text()).then(text=>{{
             image.close()
 
     selected_response = await handle_video_agent(_request({
-        "action": "preview", "name": project.name, "scene_index": 1, "timestamps": [0.5, 2.25],
+        "action": "preview", "name": project.name, "scene_index": 1, "plan_revision": 1, "timestamps": [0.5, 2.25],
     }))
     assert selected_response.status == 200, selected_response.body.decode("utf-8", errors="replace")
     selected = json.loads(selected_response.body)
@@ -449,7 +475,7 @@ async def test_visual_only_edit_keeps_original_voice_and_exact_subtitle_timings(
     meta.update({"narrationEnabled": True, "subtitleMode": "burned", "ttsProvider": "edge"})
     server._save_video_meta(project, meta)
     narration = "保留原来的旁白和字幕。"
-    first = await _sync(project, '<svg><text>Original visual</text></svg>', scene={"narration": narration})
+    first = await _sync(project, _film('<svg><text>Original visual</text></svg>'), scene={"narration": narration})
     assert first.status == 200
     calls = []
 
@@ -464,7 +490,7 @@ async def test_visual_only_edit_keeps_original_voice_and_exact_subtitle_timings(
     server._save_video_meta(project, meta)
     timing = (project / "audio" / "scene_01.timing.json").read_bytes()
 
-    updated = await _sync(project, '<svg><text>Revised visual</text></svg>', scene={"narration": narration})
+    updated = await _sync(project, _film('<svg><text>Revised visual</text></svg>'))
     assert updated.status == 200
     assert (project / "audio" / "scene_01.timing.json").read_bytes() == timing
     assert narration in (project / "scenes" / "scene_01.html").read_text(encoding="utf-8")
@@ -482,7 +508,7 @@ async def test_old_tts_cache_regroups_subtitles_without_resynthesis_or_reconfirm
     narration = "权重用于说明每个指标对模型结果的重要程度，以及各项指标在总评分中所占的比例。"
     synced = await _sync(
         project,
-        '<svg><text>Subtitle regroup cache</text></svg>',
+        _film('<svg><text>Subtitle regroup cache</text></svg>'),
         scene={"title": "权重", "duration": 15, "narration": narration},
     )
     assert synced.status == 200
@@ -590,14 +616,13 @@ async def _confirm_and_sync_scenes(project: Path, scenes: list[dict]) -> dict:
         "name": project.name, "expectedPlanRevision": plan_revision,
     }))
     assert confirmed.status == 200, confirmed.body.decode("utf-8", errors="replace")
-    for index in range(1, len(scenes) + 1):
-        draft = project / "drafts" / f"scene_{index:02d}.html"
-        draft.write_text(f"<main>Authored scene {index}</main>", encoding="utf-8")
-        synced = await handle_video_agent(_request({
-            "action": "sync", "name": project.name, "scene_index": index,
-            "plan_revision": plan_revision, "source_file": f"drafts/scene_{index:02d}.html",
-        }))
-        assert synced.status == 200, synced.body.decode("utf-8", errors="replace")
+    draft = project / "drafts" / "film.html"
+    draft.write_text(_film("".join(f'<section data-om-id="part-{index}">{scene["title"]}</section>' for index, scene in enumerate(scenes, 1))), encoding="utf-8")
+    synced = await handle_video_agent(_request({
+        "action": "sync", "name": project.name,
+        "plan_revision": plan_revision, "source_file": "drafts/film.html",
+    }))
+    assert synced.status == 200, synced.body.decode("utf-8", errors="replace")
     return server._load_video_meta(project)
 
 
@@ -643,15 +668,15 @@ async def test_style_selection_respects_fixed_choice_revision_confirmation_and_s
 
     await _plan(project)
     meta = server._load_video_meta(project)
-    meta.update({"templateId": "minimal-business", "stylePreference": "fixed"})
+    meta.update({"templateId": "huashu-keynote", "stylePreference": "fixed"})
     server._save_video_meta(project, meta)
     style_path = project / "style" / "design-system.json"
-    style_path.write_text(json.dumps(get_builtin_template("minimal-business")), encoding="utf-8")
+    style_path.write_text(json.dumps(get_builtin_template("huashu-keynote")), encoding="utf-8")
     original_meta = (project / "meta.json").read_bytes()
     original_style = style_path.read_bytes()
 
     fixed_override = await handle_video_agent(_request({
-        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "dashi-flow",
+        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "huashu-whiteboard",
     }))
     assert fixed_override.status == 422
     assert "固定" in json.loads(fixed_override.body)["error"] or "选择" in json.loads(fixed_override.body)["error"]
@@ -659,20 +684,20 @@ async def test_style_selection_respects_fixed_choice_revision_confirmation_and_s
     assert style_path.read_bytes() == original_style
 
     explicit_switch = await handle_video_agent(_request({
-        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "dashi-flow",
+        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "huashu-whiteboard",
         "instruction": "用户明确要求改用扁平流程图风格。",
     }))
     assert explicit_switch.status == 200, explicit_switch.body.decode("utf-8", errors="replace")
     switched_meta = server._load_video_meta(project)
     assert switched_meta["stylePreference"] == "fixed"
-    assert switched_meta["templateId"] == "dashi-flow"
+    assert switched_meta["templateId"] == "huashu-whiteboard"
     assert switched_meta["planRevision"] == 2
     assert switched_meta["approvedPlanRevision"] is None
 
     switched_meta_bytes = (project / "meta.json").read_bytes()
     switched_style_bytes = style_path.read_bytes()
     stale = await handle_video_agent(_request({
-        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "dashi-paper",
+        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "huashu-collage",
         "instruction": "用户明确要求改用复古剪纸风格。",
     }))
     assert stale.status == 422
@@ -692,7 +717,7 @@ async def test_style_selection_respects_fixed_choice_revision_confirmation_and_s
     assert confirmed.status == 200
     approved_meta = (project / "meta.json").read_bytes()
     confirmed_switch = await handle_video_agent(_request({
-        "action": "style", "name": project.name, "plan_revision": 2, "style_id": "dashi-paper",
+        "action": "style", "name": project.name, "plan_revision": 2, "style_id": "huashu-collage",
         "instruction": "用户明确要求改用复古剪纸风格。",
     }))
     assert confirmed_switch.status == 422
@@ -706,10 +731,10 @@ async def test_style_switch_preserves_voice_cache_and_requires_new_plan_confirma
 
     await _plan(project)
     meta = server._load_video_meta(project)
-    meta.update({"templateId": "minimal-business", "stylePreference": "auto", "narrationEnabled": True})
+    meta.update({"templateId": "huashu-keynote", "stylePreference": "auto", "narrationEnabled": True})
     server._save_video_meta(project, meta)
     style_path = project / "style" / "design-system.json"
-    style_path.write_text(json.dumps(get_builtin_template("minimal-business")), encoding="utf-8")
+    style_path.write_text(json.dumps(get_builtin_template("huashu-keynote")), encoding="utf-8")
     audio_dir = project / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_path = audio_dir / "scene_01.mp3"
@@ -737,12 +762,12 @@ async def test_style_switch_preserves_voice_cache_and_requires_new_plan_confirma
     )
 
     switched = await handle_video_agent(_request({
-        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "dashi-flow",
+        "action": "style", "name": project.name, "plan_revision": 1, "style_id": "huashu-whiteboard",
     }))
     assert switched.status == 200, switched.body.decode("utf-8", errors="replace")
     after_meta = server._load_video_meta(project)
     scene = after_meta["scenes"][0]
-    assert after_meta["templateId"] == "dashi-flow"
+    assert after_meta["templateId"] == "huashu-whiteboard"
     assert after_meta["planRevision"] == 2
     assert after_meta["requirePlanApproval"] is True
     assert after_meta["approvedPlanRevision"] is None
@@ -799,6 +824,8 @@ async def test_invalid_resolution_does_not_partially_commit_audio_settings(
     assert (project / "meta.json").read_bytes() == meta_before
     assert not (project / "versions").exists()
     assert not (project / "audio").exists()
+
+
 
 
 async def test_edit_requires_approved_current_plan_instruction_and_allowed_fields(project: Path) -> None:
@@ -881,7 +908,10 @@ async def test_scoped_visual_edit_preserves_other_scene_and_audio_then_noop_is_i
     assert first_html.read_bytes() == html_bytes
     assert second_source.read_bytes() == other_source_bytes
     assert second_html.read_bytes() == other_html_bytes
-    assert other_scene == other_scene_before
+    assert other_scene["htmlStatus"] == "pending"
+    assert "motionReview" not in other_scene
+    for key in ("id", "title", "visual", "animation", "narration", "duration", "assets", "sourceHash"):
+        assert other_scene[key] == other_scene_before[key]
 
     audio_keys = ("audioMtime", "audioInputHash", "audioTimingPath", "audioTimingSource",
                   "audioAlignmentConfidence", "audioTimingHash")
@@ -891,7 +921,7 @@ async def test_scoped_visual_edit_preserves_other_scene_and_audio_then_noop_is_i
         assert audio_path.read_bytes() == cache_snapshots[index]["audio"]
         assert timing_path.read_bytes() == cache_snapshots[index]["timing"]
     assert {key: edited[key] for key in audio_keys} == {key: first[key] for key in audio_keys}
-    assert other_scene["motionReview"] == other_scene_before["motionReview"]
+    assert {key: other_scene[key] for key in audio_keys} == {key: other_scene_before[key] for key in audio_keys}
 
     version_count = len(list((project / "versions").iterdir()))
     last_edit = copy.deepcopy(after_meta["lastEdit"])
@@ -989,7 +1019,7 @@ async def test_sync_can_add_authorized_assets_but_cannot_remove_or_replace_appro
     assert meta["planRevision"] == meta["approvedPlanRevision"] == 1
 
     accepted_draft = project / "drafts" / "scene_01_added.html"
-    accepted_draft.write_text("<main>Uses both approved assets</main>", encoding="utf-8")
+    accepted_draft.write_text(_film("<main>Uses both approved assets</main>"), encoding="utf-8")
     appended = await handle_video_agent(_request({
         "action": "sync", "name": project.name, "scene_index": 1, "plan_revision": 1,
         "source_file": "drafts/scene_01_added.html",
@@ -1032,7 +1062,7 @@ async def test_plan_waits_for_user_confirmation_and_rejects_stale_generation(pro
     assert json.loads(unchanged.body)["planRevision"] == 1
 
     draft = project / "drafts" / "scene_01.html"
-    draft.write_text("<div>Two alternatives</div>", encoding="utf-8")
+    draft.write_text(_film("<div>Two alternatives</div>"), encoding="utf-8")
     request = {"action": "sync", "name": project.name, "scene_index": 1,
                "source_file": "drafts/scene_01.html", "plan_revision": 1}
     blocked = await handle_video_agent(_request(request))
@@ -1148,14 +1178,14 @@ async def test_preview_cannot_overwrite_plan_edits_during_frame_capture(
     from mona.api import video_director
 
     meta = server._load_video_meta(project)
-    meta["authoringMode"] = "remotion"
+    meta["authoringMode"] = "huashu-motion"
     server._save_video_meta(project, meta)
     await _plan(project)
     await server.handle_video_project_confirm(_Request({"name": project.name, "expectedPlanRevision": 1}))
-    draft = project / "drafts" / "scene_01.tsx"
-    draft.write_text("export default function Scene() { return <div>Alternatives</div>; }", encoding="utf-8")
+    draft = project / "drafts" / "film.html"
+    draft.write_text(_film("<div>Alternatives</div>"), encoding="utf-8")
     synced = await handle_video_agent(_request({"action": "sync", "name": project.name, "scene_index": 1,
-                                              "plan_revision": 1, "source_file": "drafts/scene_01.tsx"}))
+                                              "plan_revision": 1, "source_file": "drafts/film.html"}))
     assert synced.status == 200
 
     async def capture(_project, _scene, _meta, timestamps=None):
@@ -1180,14 +1210,14 @@ async def test_preview_cannot_overwrite_plan_edits_during_frame_capture(
 
 async def test_selected_preview_preserves_existing_complete_motion_review(project: Path, monkeypatch) -> None:
     meta = server._load_video_meta(project)
-    meta["authoringMode"] = "remotion"
+    meta["authoringMode"] = "huashu-motion"
     server._save_video_meta(project, meta)
     await _plan(project)
     await server.handle_video_project_confirm(_Request({"name": project.name, "expectedPlanRevision": 1}))
-    draft = project / "drafts" / "scene_01.tsx"
-    draft.write_text("export default function Scene() { return <div>Preview</div>; }", encoding="utf-8")
+    draft = project / "drafts" / "film.html"
+    draft.write_text(_film("<div>Preview</div>"), encoding="utf-8")
     synced = await handle_video_agent(_request({"action": "sync", "name": project.name, "scene_index": 1,
-                                                "plan_revision": 1, "source_file": "drafts/scene_01.tsx"}))
+                                                "plan_revision": 1, "source_file": "drafts/film.html"}))
     assert synced.status == 200
     complete_review = {"distinctVisualStates": 7, "staticVisual": False}
     meta = server._load_video_meta(project)
@@ -1328,13 +1358,13 @@ def test_speech_timing_observation_marks_estimates_and_handles_missing_or_invali
 
 
 @pytest.mark.parametrize("review_state", ["missing", "static", "stale-source"])
-async def test_remotion_export_requires_observed_motion_for_current_source(project: Path, review_state: str) -> None:
+async def test_huashu_export_requires_observed_motion_for_current_source(project: Path, review_state: str) -> None:
     await _plan(project)
     await server.handle_video_project_confirm(_Request({"name": project.name, "expectedPlanRevision": 1}))
-    draft = project / "drafts/scene_01.tsx"
-    draft.write_text("export default function Scene(){return <div>Alternatives</div>}", encoding="utf-8")
+    draft = project / "drafts/film.html"
+    draft.write_text(_film("<div>Alternatives</div>"), encoding="utf-8")
     synced = await handle_video_agent(_request({"action": "sync", "name": project.name, "scene_index": 1,
-                                               "plan_revision": 1, "source_file": "drafts/scene_01.tsx"}))
+                                               "plan_revision": 1, "source_file": "drafts/film.html"}))
     assert synced.status == 200
     meta = server._load_video_meta(project)
     scene = meta["scenes"][0]
@@ -1406,7 +1436,7 @@ def _saved_authoring_style(tmp_path: Path, series_id: str = "paper-style") -> tu
     from mona.video_style import create_series, save_style_draft
     from mona.video_style_authoring import bind_style_sample, capture_style_sample
 
-    create_series(tmp_path, series_id, f"风格 {series_id}", template_id="dashi-paper")
+    create_series(tmp_path, series_id, f"风格 {series_id}", template_id="huashu-collage")
     draft = save_style_draft(tmp_path, series_id, {"authoring": {"rules": f"{series_id} 的纸张边缘与连续对象运动规则"}}, expected_revision=0)
     sample = tmp_path / "video_projects" / f"sample-{series_id}"
     for name in ("assets", "scene_sources", "scenes", "renders/previews/scene_01"):
@@ -1417,14 +1447,14 @@ def _saved_authoring_style(tmp_path: Path, series_id: str = "paper-style") -> tu
     Image.new("RGB", (16, 16), "#2478aa").save(image)
     asset_id = f"shape-{series_id}"
     register_project_asset(sample, {"id": asset_id, "path": "assets/shape.png", "sourceType": "user-upload", "rightsStatus": "owned"})
-    source = sample / "scene_sources" / "scene_01.tsx"
-    source.write_text(f'export default function Scene(){{return <div>{series_id}</div>}}', encoding="utf-8")
+    source = sample / "scene_sources" / "film.html"
+    source.write_text(_film(f'<div>{series_id}</div>'), encoding="utf-8")
     rendered = sample / "scenes" / "scene_01.html"
     rendered.write_text("<!doctype html><html><body>sample</body></html>", encoding="utf-8")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     meta = json.loads((sample / "meta.json").read_text(encoding="utf-8"))
     meta["scenes"] = [{"index": 1, "title": "纸张机制图", "duration": 8, "authored": True,
-                       "authoredRuntime": "remotion", "htmlStatus": "previewing", "assets": [asset_id],
+                       "authoredRuntime": "huashu-motion", "sourcePath": "scene_sources/film.html", "htmlStatus": "previewing", "assets": [asset_id],
                        "sourceHash": digest, "motionReviewSourceHash": digest,
                        "motionReview": {"distinctVisualStates": 2}}]
     (sample / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -1481,14 +1511,14 @@ async def test_auto_style_can_select_frozen_saved_style_and_preserves_project_as
     output = project / "renders" / "output.mp4"
     output.write_bytes(b"previous-export")
     meta = server._load_video_meta(project)
-    meta.update({"templateId": "minimal-business", "stylePreference": "auto", "planRevision": 0})
+    meta.update({"templateId": "huashu-keynote", "stylePreference": "auto", "planRevision": 0})
     server._save_video_meta(project, meta)
     inspection = json.loads((await handle_video_agent(_request({"action": "inspect", "name": project.name}))).body)
     available = {item["id"]: item for item in inspection["availableStyles"]}
     assert available["saved:paper-style"]["source"] == "saved"
     assert available["saved:paper-style"]["version"] == 1
     assert available["saved:paper-style"]["name"] == "风格 paper-style"
-    assert available["dashi-flow"]["source"] == "builtin"
+    assert available["huashu-whiteboard"]["source"] == "builtin"
     assert "saved:unfinished" not in available
     response = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "saved:paper-style", "plan_revision": 0}))
     assert response.status == 200, response.body.decode()
@@ -1506,8 +1536,8 @@ async def test_auto_style_can_select_frozen_saved_style_and_preserves_project_as
     assert inspected["style"]["id"] == "saved:paper-style"
     assert inspected["style"]["authoring"]["rules"] == saved["authoring"]["rules"]
     examples = [Path(path) for path in inspected["styleExamples"]]
-    assert examples == [project / "style" / "authoring" / "scene_sources" / "scene_01.tsx"]
-    assert examples[0].read_bytes() == (sample / "scene_sources" / "scene_01.tsx").read_bytes()
+    assert examples == [project / "style" / "authoring" / "scene_sources" / "film.html"]
+    assert examples[0].read_bytes() == (sample / "scene_sources" / "film.html").read_bytes()
     shutil.rmtree(sample)
     assert examples[0].is_file()
 
@@ -1516,7 +1546,7 @@ async def test_fixed_saved_style_identity_is_not_its_shared_builtin_base(project
     _saved_authoring_style(tmp_path, "paper-one")
     _saved_authoring_style(tmp_path, "paper-two")
     meta = server._load_video_meta(project)
-    meta.update({"templateId": "minimal-business", "stylePreference": "auto", "planRevision": 0})
+    meta.update({"templateId": "huashu-keynote", "stylePreference": "auto", "planRevision": 0})
     server._save_video_meta(project, meta)
     first = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "saved:paper-one", "plan_revision": 0}))
     assert first.status == 200
@@ -1525,7 +1555,7 @@ async def test_fixed_saved_style_identity_is_not_its_shared_builtin_base(project
     server._save_video_meta(project, meta)
     original_meta = (project / "meta.json").read_bytes()
     original_style = (project / "style" / "design-system.json").read_bytes()
-    for style_id in ("saved:paper-two", "dashi-paper"):
+    for style_id in ("saved:paper-two", "huashu-collage"):
         refused = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": style_id, "plan_revision": 1}))
         assert refused.status == 422
         assert (project / "meta.json").read_bytes() == original_meta
@@ -1533,7 +1563,7 @@ async def test_fixed_saved_style_identity_is_not_its_shared_builtin_base(project
     switched = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "saved:paper-two", "plan_revision": 1, "instruction": "用户明确要求使用另一套纸张风格。"}))
     assert switched.status == 200
     assert server._load_video_meta(project)["styleSourceSeriesId"] == "paper-two"
-    assert json.loads((project / "style" / "design-system.json").read_text(encoding="utf-8"))["baseTemplateId"] == "dashi-paper"
+    assert json.loads((project / "style" / "design-system.json").read_text(encoding="utf-8"))["baseTemplateId"] == "huashu-collage"
 
 
 async def test_builtin_switch_does_not_expose_old_saved_style_examples(project: Path, tmp_path: Path) -> None:
@@ -1542,16 +1572,16 @@ async def test_builtin_switch_does_not_expose_old_saved_style_examples(project: 
     meta.update({"stylePreference": "auto", "planRevision": 0})
     server._save_video_meta(project, meta)
     assert (await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "saved:paper-style", "plan_revision": 0}))).status == 200
-    switched = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "dashi-paper", "plan_revision": 1}))
+    switched = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "huashu-collage", "plan_revision": 1}))
     assert switched.status == 200
     assert not (project / "style" / "authoring").exists()
-    obsolete = project / "style" / "authoring" / "scene_sources" / "scene_02.tsx"
+    obsolete = project / "style" / "authoring" / "scene_sources" / "obsolete.html"
     obsolete.parent.mkdir(parents=True)
     obsolete.write_text("obsolete example", encoding="utf-8")
     inspected = json.loads((await handle_video_agent(_request({"action": "inspect", "name": project.name}))).body)
     assert inspected["styleExamples"] == []
     assert inspected["style"]["authoring"] is None
-    assert inspected["style"]["id"] == "dashi-paper"
+    assert inspected["style"]["id"] == "huashu-collage"
 
 
 async def test_saved_style_switch_preserves_fixed_snapshot_version_and_sample_direction(project: Path, tmp_path: Path) -> None:
@@ -1587,7 +1617,7 @@ async def test_saved_style_switch_preserves_fixed_snapshot_version_and_sample_di
     meta["styleAuthoring"] = {"seriesId": "paper-style"}
     meta["stylePreference"] = "auto"
     server._save_video_meta(project, meta)
-    refused = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "dashi-flow", "plan_revision": meta["planRevision"], "instruction": "自动推荐另一套。"}))
+    refused = await handle_video_agent(_request({"action": "style", "name": project.name, "style_id": "huashu-whiteboard", "plan_revision": meta["planRevision"], "instruction": "自动推荐另一套。"}))
     assert refused.status == 422
     assert (project / "style" / "design-system.json").read_bytes() == before
 

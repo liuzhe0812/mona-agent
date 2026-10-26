@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, ImageOff, Maximize2, MoreHorizontal, Play, Sparkles } from "lucide-react";
+import { Check, ImageOff, Maximize2, MoreHorizontal, Play, Sparkles } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 import { Button } from "@/components/ui/button";
@@ -62,7 +62,6 @@ export function VideoStyleGallery({ templates, selectedId, disabled = false, onS
 }) {
   const [base, setBase] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<VideoStyleTemplate | null>(null);
-  const [showBasics, setShowBasics] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   useEffect(() => {
@@ -71,8 +70,6 @@ export function VideoStyleGallery({ templates, selectedId, disabled = false, onS
     setReducedMotion(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
     return () => { active = false; };
   }, []);
-  const samples = templates.filter((style) => style.preview);
-  const basics = templates.filter((style) => !style.preview);
   return (
     <section aria-label="视频风格" className="space-y-3">
       {showHeader ? <div className="flex items-center justify-between gap-3">
@@ -83,26 +80,9 @@ export function VideoStyleGallery({ templates, selectedId, disabled = false, onS
         </Button>
       </div> : null}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {samples.map((style) => <StylePreviewCard key={style.id} style={style} base={base} selected={selectedId === style.id} disabled={disabled}
+        {templates.map((style) => <StylePreviewCard key={style.id} style={style} base={base} selected={selectedId === style.id} disabled={disabled}
           onSelect={() => onSelect(style.id)} onExpand={() => { setPreviewFailed(false); setExpanded(style); }} onCreateFrom={onCreateFrom ? () => onCreateFrom(style) : undefined} />)}
       </div>
-      {basics.length ? (
-        <div>
-          <Button type="button" variant="ghost" size="sm" aria-expanded={showBasics} onClick={() => setShowBasics((value) => !value)}>
-            <ChevronDown className={cn("mr-1.5 h-3.5 w-3.5 transition-transform", showBasics && "rotate-180")} />基础配色
-          </Button>
-          {showBasics ? <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {basics.map((style) => <Button key={style.id} type="button" variant="outline" disabled={disabled} aria-label={`选择${style.name}`}
-              aria-pressed={selectedId === style.id} onClick={() => onSelect(style.id)}
-              className={cn("h-auto min-w-0 flex-col items-stretch gap-2 p-2", selectedId === style.id && "border-foreground/60 bg-accent")}>
-              <span className="flex h-12 overflow-hidden rounded-sm" aria-hidden="true">
-                {["primary", "secondary", "accent", "textPrimary"].map((key) => <span key={key} className="flex-1 bg-muted" style={{ backgroundColor: style.tokens?.colors?.[key] }} />)}
-              </span>
-              <span className="truncate text-caption">{style.name}</span>
-            </Button>)}
-          </div> : null}
-        </div>
-      ) : null}
       <Dialog open={expanded !== null} onOpenChange={(open) => { if (!open) setExpanded(null); }}>
         <DialogContent className="max-w-4xl">
           <DialogHeader><DialogTitle>{expanded?.name}</DialogTitle><DialogDescription>{expanded?.description}</DialogDescription></DialogHeader>

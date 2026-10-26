@@ -90,7 +90,8 @@ ready-*
 
 ### 4.3 事件监听
 
-- 全局浏览器事件只在 `useBrowserTabs` 注册一次。
+- 原生浏览器状态事件只在 `useBrowserTabs` 注册一次。
+- 受信任本地页面的 `browser-open-url { url }` 请求定向发送到 `main`，由主界面唯一接收并切换浏览器表面、调用现有创建命令；标签状态仍由 `browser-tab-created` 投影，不另建标签记录。仅允许 HTTP(S)，窗口恢复和聚焦权限只授予 `main`。
 - 监听注册必须可取消；异步注册完成时若 effect 已卸载，应立即执行返回的 unlisten。
 - Tab 组件只监听与视图局部状态有关的事件，不重复维护全局 URL、标题和历史状态。
 
@@ -178,6 +179,7 @@ ready-*
 | `browser-tab-title-changed` | Rust | `useBrowserTabs` | 当前标题 |
 | `browser-history-changed` | Rust | `useBrowserTabs` | 前进/后退可用性 |
 | `browser-open-new-tab` | Rust | `useBrowserTabs` | 网页请求新标签，尚未创建 |
+| `browser-open-url` | 受信任本地页面 | 主界面 | 用户请求在 Mona 新标签打开网页，创建结果沿用原生状态事件 |
 | `browser-download-*` | Rust | `useDownloads` | 下载状态 |
 
 事件 payload 必须包含稳定 Tab ID。禁止依赖“当前活动 Tab”推断事件归属。

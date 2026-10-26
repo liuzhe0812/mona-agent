@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { ChevronDown, LockKeyhole, ShieldQuestion, Sparkles, Zap } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,19 +49,19 @@ export function DevelopmentPermissionSelector({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled || readonly || busy}>
-        <Button
+        <TooltipButton
           type="button"
           variant="ghost"
           size="sm"
-          className="gap-1.5 px-2"
+          className="composer-icon-control gap-1.5 px-2"
           aria-label={readonly ? "权限模式：只读" : `权限模式：${current.label}`}
           aria-busy={busy}
           title={readonly ? "只读" : current.label}
         >
-          <CurrentIcon className="h-4 w-4" aria-hidden />
-          {readonly ? "只读" : current.label}
-          {!readonly && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}
-        </Button>
+          <CurrentIcon className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="composer-control-label">{readonly ? "只读" : current.label}</span>
+          {!readonly && <ChevronDown className="composer-control-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+        </TooltipButton>
       </DropdownMenuTrigger>
       {!readonly && (
         <DropdownMenuContent align="start" className="w-40">

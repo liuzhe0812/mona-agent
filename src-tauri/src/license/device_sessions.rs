@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
-use super::{auth_send, get_hostname, get_machine_fingerprint, load_auth_token, save_auth_token};
+use super::{auth_send, get_device_fingerprint, get_hostname, load_auth_token, save_auth_token};
 
 pub(super) static ACCOUNT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -76,7 +76,7 @@ pub(super) async fn login(account: String, password: String, request_id: Option<
         else if cfg!(target_os="macos") { "macos" } else { "linux" };
     let name: String = get_hostname().chars().filter(|c| !c.is_control()).take(120).collect();
     let payload = json!({"account":account,"password":password,"request_id":request_id,
-        "device_fingerprint":get_machine_fingerprint(),"device_name":if name.is_empty() { platform } else { &name },
+        "device_fingerprint":get_device_fingerprint(),"device_name":if name.is_empty() { platform } else { &name },
         "platform":platform,"replacements":replacements});
     let response = auth_send(|client, base| client.post(format!("{base}/auth/desktop/login")).json(&payload)).await?;
     let status = response.status();
@@ -96,7 +96,7 @@ pub(super) async fn login(account: String, password: String, request_id: Option<
         return Err("账号服务返回异常，请重新登录。".into());
     }
     save_auth_token(token)?;
-    super::clear_license_cache();
+    super::clear_account_status_cache();
     // Account credentials are never returned to the React process.
     Ok(json!({"success":true}))
 }
@@ -107,14 +107,14 @@ pub(super) enum StatusError {
     Invalid(String),
 }
 
-pub(super) async fn status(token: &str) -> Result<super::LicenseCache, StatusError> {
+pub(super) async fn status(token: &str) -> Result<super::AccountStatusCache, StatusError> {
     let response = auth_send(|client, base| client.get(format!("{base}/auth/desktop/status"))
         .bearer_auth(token)).await.map_err(|_| StatusError::Unavailable)?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         if load_auth_token().as_deref() == Some(token) {
             let _ = super::remove_auth_token();
-            super::clear_license_cache();
+            super::clear_account_status_cache();
         }
         return Err(StatusError::Rejected);
     }
@@ -124,7 +124,7 @@ pub(super) async fn status(token: &str) -> Result<super::LicenseCache, StatusErr
     if !status.is_success() {
         return Err(StatusError::Invalid("账号服务尚未支持设备登录，请先升级服务端。".into()));
     }
-    let mut cache: super::LicenseCache = response.json().await
+    let mut cache: super::AccountStatusCache = response.json().await
         .map_err(|_| StatusError::Invalid("账号信息返回异常，请稍后重试。".into()))?;
     if !matches!(cache.status.as_str(), "valid" | "free")
         || !cache.device_session_id.as_deref().is_some_and(hex_id)
@@ -141,7 +141,7 @@ async fn account_response(response: reqwest::Response, token: &str) -> Result<Va
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         if load_auth_token().as_deref() == Some(token) {
             let _ = super::remove_auth_token();
-            super::clear_license_cache();
+            super::clear_account_status_cache();
         }
         return Err("此设备的登录已结束，请重新登录。".into());
     }
@@ -181,7 +181,7 @@ pub async fn revoke_login_device(app: AppHandle, device: DeviceReplacement) -> R
     let result = confirmed_removal(account_response(response, &token).await?, &device.id)?;
     if result["current_device_removed"] == true {
         super::remove_auth_token()?;
-        super::clear_license_cache();
+        super::clear_account_status_cache();
         let _ = app.emit("auth-state-changed", json!({"loggedIn":false,"devicesChanged":true}));
     } else {
         let _ = app.emit("auth-state-changed", json!({"devicesChanged":true}));
@@ -203,7 +203,7 @@ pub(super) async fn logout() -> Result<(), String> {
         }
     }
     super::remove_auth_token()?;
-    super::clear_license_cache();
+    super::clear_account_status_cache();
     Ok(())
 }
 

@@ -607,29 +607,13 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
 
-    # Initialize git for memory version control
-    try:
-        from mona.utils.gitstore import GitStore
-
-        gs = GitStore(
-            workspace,
-            tracked_files=[
-                "SOUL.md",
-                "USER.md",
-                "memory/MEMORY.md",
-            ],
-        )
-        gs.init()
-    except Exception:
-        logger.exception("Failed to initialize git store for {}", workspace)
-
     return added
 
 
 def sync_global_templates(silent: bool = False) -> list[str]:
     """Sync bundled global templates to ``~/.mona/`` (not the workspace).
 
-    Writes AGENTS.md, SOUL.md, USER.md, MEMORY.md, history.jsonl and creates
+    Writes SOUL.md, MEMORY.md, history.jsonl and creates
     the skills directory under the instance data dir (``~/.mona/``) rather
     than the workspace root. This keeps the workspace clean for user
     artifacts and enforces the ``_FsTool`` hard boundary.
@@ -663,9 +647,13 @@ def sync_global_templates(silent: bool = False) -> list[str]:
         dest.write_text(content, encoding="utf-8")
         added.append(str(dest.relative_to(memory_dir.parent)))
 
-    # Global .md templates (AGENTS.md, SOUL.md, USER.md, etc.)
+    # Agent persona; user preferences belong to the shared profile store.
     for item in tpl.iterdir():
-        if item.name.endswith(".md") and not item.name.startswith("."):
+        if (
+            item.name.endswith(".md")
+            and not item.name.startswith(".")
+            and item.name not in {"AGENTS.md", "USER.md"}
+        ):
             _write(item, memory_dir / item.name)
     # MEMORY.md lives under memory/
     _write(tpl / "memory" / "MEMORY.md", memory_dir / "MEMORY.md")
@@ -679,21 +667,5 @@ def sync_global_templates(silent: bool = False) -> list[str]:
 
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
-
-    # Initialize git for memory version control at the global memory dir
-    try:
-        from mona.utils.gitstore import GitStore
-
-        gs = GitStore(
-            memory_dir,
-            tracked_files=[
-                "SOUL.md",
-                "USER.md",
-                "MEMORY.md",
-            ],
-        )
-        gs.init()
-    except Exception:
-        logger.exception("Failed to initialize git store for {}", memory_dir)
 
     return added

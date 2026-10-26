@@ -5,7 +5,8 @@ import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
 import type { EmailScheduleConfig } from "@/lib/tauri";
 
 const mocks = vi.hoisted(() => ({
-  licenseActive: true,
+  loggedIn: false,
+  licenseActive: false,
   readEmailScheduleConfig: vi.fn(),
   writeEmailScheduleConfig: vi.fn(),
   listAccounts: vi.fn(),
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/useLicense", () => ({
-  useLicense: () => ({ licenseActive: mocks.licenseActive }),
+  useLicense: () => ({ loggedIn: mocks.loggedIn, licenseActive: mocks.licenseActive }),
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -62,7 +63,6 @@ function makeProps() {
   return {
     open: true,
     onOpenChange: vi.fn(),
-    onOpenSubscribe: vi.fn(),
     onAddEmailAccount: vi.fn(),
     onOpenEmail: vi.fn(),
   };
@@ -74,7 +74,8 @@ function renderSettings(props = makeProps()) {
 
 describe("EmailExtractionSettingsDialog", () => {
   beforeEach(() => {
-    mocks.licenseActive = true;
+    mocks.loggedIn = false;
+    mocks.licenseActive = false;
     mocks.readEmailScheduleConfig.mockReset().mockResolvedValue(initialConfig);
     mocks.writeEmailScheduleConfig.mockReset().mockResolvedValue(undefined);
     mocks.listAccounts.mockReset().mockResolvedValue(accounts);
@@ -86,7 +87,7 @@ describe("EmailExtractionSettingsDialog", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads each account's selectable folders and preserves the other account and parser settings on save", async () => {
+  it("loads and saves settings for a logged-out, unlicensed user", async () => {
     renderSettings();
 
     const work = await screen.findByRole("group", { name: "工作邮箱" });
@@ -166,17 +167,4 @@ describe("EmailExtractionSettingsDialog", () => {
     expect(mocks.writeEmailScheduleConfig).not.toHaveBeenCalled();
   });
 
-  it("offers Pro upgrade without reading or writing email config for an unlicensed user", () => {
-    mocks.licenseActive = false;
-    const props = makeProps();
-    renderSettings(props);
-
-    fireEvent.click(screen.getByRole("button", { name: "升级 Pro" }));
-
-    expect(props.onOpenChange).toHaveBeenCalledWith(false);
-    expect(props.onOpenSubscribe).toHaveBeenCalledOnce();
-    expect(mocks.readEmailScheduleConfig).not.toHaveBeenCalled();
-    expect(mocks.listAccounts).not.toHaveBeenCalled();
-    expect(mocks.writeEmailScheduleConfig).not.toHaveBeenCalled();
-  });
 });

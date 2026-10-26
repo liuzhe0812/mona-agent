@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import json
 import os
 import re
@@ -13,21 +15,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterator
 
-import tiktoken
 from loguru import logger
 
+from mona.agent.memory_versions import migrate_legacy_memory_versions, write_text_atomic
 from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.registry import ToolRegistry
 from mona.session.manager import Session
-from mona.utils.gitstore import GitStore
 from mona.utils.helpers import (
     estimate_message_tokens,
     estimate_prompt_tokens_chain,
     strip_think,
     truncate_text,
 )
-from mona.utils.prompt_templates import render_template
+from mona.utils.prompt_templates import persona_content, render_template
 
 if TYPE_CHECKING:
     from mona.providers.base import LLMProvider
@@ -62,7 +63,7 @@ class MemoryStore:
         # Memory files live OUTSIDE workspace for hard boundary, under the
         # agent-private dir (~/.mona/agents/<agent_id>/memory/) so each agent
         # gets isolated long-term memory (multi-agent phase 1).
-        # SOUL.md / USER.md / AGENTS.md also live there for unified access.
+        # Legacy USER/AGENTS files stay available for migration.
         self.memory_dir = get_agent_memory_dir(self.agent_id)
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
@@ -74,14 +75,11 @@ class MemoryStore:
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
         self._corruption_logged = False  # rate-limit non-int cursor warning
         self._oversize_logged = False  # rate-limit oversized-entry warning
-        self._git = GitStore(self.memory_dir, tracked_files=[
-            "MEMORY.md", "SOUL.md", "USER.md", "AGENTS.md", ".dream_cursor",
-        ])
+        migrate_legacy_memory_versions(
+            self.memory_dir,
+            {"SOUL.md": self.read_soul(), "MEMORY.md": self.read_memory()},
+        )
         self._maybe_migrate_legacy_history()
-
-    @property
-    def git(self) -> GitStore:
-        return self._git
 
     # -- generic helpers -----------------------------------------------------
 
@@ -219,15 +217,47 @@ class MemoryStore:
         return self.read_file(self.memory_file)
 
     def write_memory(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
+        self._write_instruction("memory", content)
 
     # -- SOUL.md -------------------------------------------------------------
 
     def read_soul(self) -> str:
-        return self.read_file(self.soul_file)
+        return persona_content(self.read_file(self.soul_file), self.read_file(self.agents_file))
 
     def write_soul(self, content: str) -> None:
-        self.soul_file.write_text(content, encoding="utf-8")
+        self._write_instruction("soul", content)
+
+    def previous_file(self, key: str) -> Path:
+        path = {"soul": self.soul_file, "memory": self.memory_file}[key]
+        return path.with_name(path.name + ".previous")
+
+    def read_previous(self, key: str) -> str | None:
+        try:
+            return self.previous_file(key).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+
+    def _write_instruction(self, key: str, content: str) -> None:
+        path = self.soul_file if key == "soul" else self.memory_file
+        current = self.read_soul() if key == "soul" else self.read_memory()
+        has_legacy_rules = key == "soul" and bool(self.read_file(self.agents_file))
+        if path.exists() and current == content and not has_legacy_rules:
+            return
+        backup_needed = current != content and (path.exists() or has_legacy_rules)
+        old_previous = self.read_previous(key) if backup_needed else None
+        if backup_needed:
+            write_text_atomic(self.previous_file(key), current)
+        try:
+            write_text_atomic(path, content)
+        except Exception:
+            if backup_needed:
+                if old_previous is None:
+                    self.previous_file(key).unlink(missing_ok=True)
+                else:
+                    write_text_atomic(self.previous_file(key), old_previous)
+            raise
+        if has_legacy_rules:
+            write_text_atomic(self.agents_file, "")
 
     # -- USER.md -------------------------------------------------------------
 
@@ -512,6 +542,57 @@ class Consolidator:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
 
+    def _prefix_route(self) -> str | None:
+        from mona.providers.openai_compat_provider import OpenAICompatProvider
+
+        provider = self.provider
+        spec = getattr(provider, "spec", None)
+        if not isinstance(provider, OpenAICompatProvider) or not spec or not spec.supports_prefix_compaction:
+            return None
+        base = provider._effective_base or spec.default_api_base
+        if spec.backend != "mona_managed":
+            default = spec.default_api_base.rstrip("/")
+            if base.rstrip("/") not in {default, f"{default}/v1"}:
+                return None
+        return hashlib.sha256(f"{self.store.agent_id}\n{spec.name}\n{base}\n{self.model}".encode()).hexdigest()
+
+    @staticmethod
+    def _message_digest(message: dict[str, Any]) -> str:
+        return hashlib.sha256(json.dumps(message, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def remember_request(self, session: Session, *, messages: list[dict], tools: list[dict]) -> None:
+        route = self._prefix_route()
+        if route is None or session.conversation_metadata.type == "room":
+            return
+        session.metadata["_model_request_head"] = {
+            "route": route,
+            "system": copy.deepcopy([message for message in messages if message.get("role") == "system"]),
+            "tools": copy.deepcopy(tools),
+            "history": [self._message_digest(message) for message in messages if message.get("role") != "system"],
+        }
+
+    def _prefix_archive_request(
+        self, session: Session, messages: list[dict], previous_summary: str | None,
+    ) -> tuple[list[dict], list[dict]] | None:
+        head = session.metadata.get("_model_request_head")
+        if not head or head.get("route") != self._prefix_route():
+            return None
+        projection = Session(key=session.key, messages=messages, metadata=session.metadata).get_history(
+            include_timestamps=True, model_view=True,
+        )
+        digests = [self._message_digest(message) for message in projection]
+        shared = min(len(digests), len(head["history"]))
+        if not shared or digests[:shared] != head["history"][:shared]:
+            return None
+        instruction = render_template("agent/consolidator_archive.md", strip=True)
+        instruction += "\n\nSummarize only the conversation above. Do not continue its tasks or call tools."
+        if previous_summary:
+            instruction += f"\n\nExisting handoff summary:\n{previous_summary}"
+        return (
+            [*copy.deepcopy(head["system"]), *projection, {"role": "user", "content": instruction}],
+            copy.deepcopy(head["tools"]),
+        )
+
     def pick_consolidation_boundary(
         self,
         session: Session,
@@ -547,6 +628,7 @@ class Consolidator:
         return session.get_history(
             max_messages=unconsolidated_count,
             include_timestamps=include_timestamps,
+            model_view=include_timestamps,
         )
 
     def _persist_last_summary(
@@ -672,7 +754,11 @@ class Consolidator:
                     else:
                         self._pending_room_summaries[session.key] = shared
         else:
-            summary = await self.archive(messages, previous_summary=previous_summary)
+            prefix_request = self._prefix_archive_request(session, messages, previous_summary)
+            summary = await self.archive(
+                messages, previous_summary=previous_summary,
+                **({"prefix_request": prefix_request} if prefix_request is not None else {}),
+            )
         if provider is not self.provider or model != self.model:
             return summary
         if summary:
@@ -687,6 +773,7 @@ class Consolidator:
         *,
         previous_summary: str | None = None,
         persist: bool = True,
+        prefix_request: tuple[list[dict], list[dict]] | None = None,
     ) -> str | None:
         """Summarize messages via LLM and append to history.jsonl.
 
@@ -704,23 +791,31 @@ class Consolidator:
                     f"{formatted}"
                 )
             budget = self._input_token_budget
-            if budget <= 0 or len(tiktoken.get_encoding("cl100k_base").encode(formatted)) > budget:
+            if budget <= 0:
                 logger.warning("Consolidation source exceeds its request budget")
+                return None
+            request_messages = [
+                {"role": "system", "content": render_template("agent/consolidator_archive.md", strip=True)},
+                {"role": "user", "content": formatted},
+            ]
+            tools = None
+            estimated = 0
+            if prefix_request is not None:
+                estimated, _ = estimate_prompt_tokens_chain(self.provider, self.model, *prefix_request)
+                if 0 < estimated <= budget:
+                    request_messages, tools = prefix_request
+                else:
+                    estimated = 0
+            if estimated <= 0:
+                estimated, _ = estimate_prompt_tokens_chain(self.provider, self.model, request_messages, tools)
+            if estimated <= 0 or estimated > budget:
+                logger.warning("Consolidation request exceeds its input budget")
                 return None
             response = await self.provider.chat_with_retry(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": render_template(
-                            "agent/consolidator_archive.md",
-                            strip=True,
-                        ),
-                    },
-                    {"role": "user", "content": formatted},
-                ],
-                tools=None,
-                tool_choice=None,
+                messages=request_messages,
+                tools=tools,
+                tool_choice="none" if tools else None,
             )
             if response.finish_reason == "error":
                 logger.warning(
@@ -728,6 +823,9 @@ class Consolidator:
                     response.error_status_code,
                     response.error_kind,
                 )
+                return None
+            if isinstance(response.tool_calls, list) and response.tool_calls:
+                logger.warning("Consolidation returned tool calls instead of a handoff")
                 return None
             summary = (response.content or "").strip()
             if not summary or summary == "(nothing)" or len(summary) > _ARCHIVE_SUMMARY_MAX_CHARS:
@@ -962,13 +1060,6 @@ class Consolidator:
 # ---------------------------------------------------------------------------
 
 
-# Single source of truth for the staleness threshold used in _annotate_with_ages
-# *and* in the Phase 1 prompt template (passed as `stale_threshold_days`).
-# Keep code and prompt aligned — if you bump this, the LLM's instruction string
-# updates automatically.
-_STALE_THRESHOLD_DAYS = 14
-
-
 class Dream:
     """Two-phase memory processor: analyze history.jsonl, then edit files via AgentRunner.
 
@@ -983,7 +1074,6 @@ class Dream:
     # needs it in Phase 2 — these caps only bound the Phase 1/2 prompt preview.
     _MEMORY_FILE_MAX_CHARS = 32_000
     _SOUL_FILE_MAX_CHARS = 16_000
-    _USER_FILE_MAX_CHARS = 16_000
     _HISTORY_ENTRY_PREVIEW_MAX_CHARS = 4_000
 
     def __init__(
@@ -994,7 +1084,6 @@ class Dream:
         max_batch_size: int = 20,
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
-        annotate_line_ages: bool = True,
         # Skill lifecycle (see docs/design/skill-lifecycle-design.md).
         # Automatic archival is OFF by default; CLI injects these from
         # DreamConfig so the same config drives both Phase 1/2 and the
@@ -1010,10 +1099,6 @@ class Dream:
         self.max_batch_size = max_batch_size
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
-        # Kill switch for the git-blame-based per-line age annotation in Phase 1.
-        # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
-        # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
-        self.annotate_line_ages = annotate_line_ages
         self.skill_prune_enabled = skill_prune_enabled
         self.archive_after_days = archive_after_days
         self.max_active_user_skills = max_active_user_skills
@@ -1047,7 +1132,7 @@ class Dream:
         )
 
         tools = ToolRegistry()
-        # Memory access (MEMORY.md / SOUL.md / USER.md / AGENTS.md / history.jsonl)
+        # Agent-private persona, long-term memory and history.
         tools.register(MemoryReadTool(self.store.agent_id))
         tools.register(MemoryEditTool(self.store.agent_id))
         tools.register(MemorySearchTool(self.store.agent_id))
@@ -1094,52 +1179,6 @@ class Dream:
         return [f"{name} — {desc}" for name, desc in sorted(entries.items())]
 
     # -- main entry ----------------------------------------------------------
-
-    def _annotate_with_ages(self, content: str) -> str:
-        """Append per-line age suffixes to MEMORY.md content.
-
-        Each non-blank line whose age exceeds ``_STALE_THRESHOLD_DAYS`` gets a
-        suffix like ``← 30d`` indicating days since last modification.
-        Returns the original content unchanged if git is unavailable,
-        annotate fails, or the line count doesn't match the age count
-        (which can happen with an uncommitted working-tree edit — better to
-        skip annotation than to tag the wrong line).
-        SOUL.md and USER.md are never annotated.
-        """
-        file_path = "MEMORY.md"
-        try:
-            ages = self.store.git.line_ages(file_path)
-        except Exception:
-            logger.debug("line_ages failed for {}", file_path)
-            return content
-        if not ages:
-            return content
-
-        had_trailing = content.endswith("\n")
-        lines = content.splitlines()
-        # If HEAD-blob line count disagrees with the working-tree content we
-        # received, ages would be assigned to the wrong lines — skip entirely
-        # and feed the LLM un-annotated content rather than misleading data.
-        if len(lines) != len(ages):
-            logger.debug(
-                "line_ages length mismatch for {} (lines={}, ages={}); skipping annotation",
-                file_path, len(lines), len(ages),
-            )
-            return content
-
-        annotated: list[str] = []
-        for line, age in zip(lines, ages):
-            if not line.strip():
-                annotated.append(line)
-                continue
-            if age.age_days > _STALE_THRESHOLD_DAYS:
-                annotated.append(f"{line}  \u2190 {age.age_days}d")
-            else:
-                annotated.append(line)
-        result = "\n".join(annotated)
-        if had_trailing:
-            result += "\n"
-        return result
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
@@ -1193,29 +1232,20 @@ class Dream:
             for e in batch
         )
 
-        # Current file contents + per-line age annotations (MEMORY.md only).
+        # Current file contents, without version metadata.
         # Each file is capped in the *prompt preview* only; Phase 2 still sees
         # the full file via the read_file tool.
         current_date = datetime.now().strftime("%Y-%m-%d")
         raw_memory = self.store.read_memory() or "(empty)"
-        annotated_memory = (
-            self._annotate_with_ages(raw_memory)
-            if self.annotate_line_ages
-            else raw_memory
-        )
-        current_memory = truncate_text(annotated_memory, self._MEMORY_FILE_MAX_CHARS)
+        current_memory = truncate_text(raw_memory, self._MEMORY_FILE_MAX_CHARS)
         current_soul = truncate_text(
             self.store.read_soul() or "(empty)", self._SOUL_FILE_MAX_CHARS,
-        )
-        current_user = truncate_text(
-            self.store.read_user() or "(empty)", self._USER_FILE_MAX_CHARS,
         )
 
         file_context = (
             f"## Current Date\n{current_date}\n\n"
             f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
-            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
-            f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
+            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}"
         )
 
         # Phase 1: Analyze (no skills list — dedup is Phase 2's job)
@@ -1232,7 +1262,6 @@ class Dream:
                         "content": render_template(
                             "agent/dream_phase1.md",
                             strip=True,
-                            stale_threshold_days=_STALE_THRESHOLD_DAYS,
                         ),
                     },
                     {"role": "user", "content": phase1_prompt},
@@ -1312,14 +1341,5 @@ class Dream:
             )
 
         self.store.compact_history()
-
-        # Git auto-commit (only when there are actual changes)
-        if changelog and self.store.git.is_initialized():
-            ts = batch[-1]["timestamp"]
-            summary = f"dream: {ts}, {len(changelog)} change(s)"
-            commit_msg = f"{summary}\n\n{analysis.strip()}"
-            sha = self.store.git.auto_commit(commit_msg)
-            if sha:
-                logger.info("Dream commit: {}", sha)
 
         return True

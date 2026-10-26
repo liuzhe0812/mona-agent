@@ -1,0 +1,1302 @@
+{
+  "schema_version": 1,
+  "source": {
+    "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+    "source_lock_sha256": "f1ba9275d953ed52a01f077b5b390948cbcbeb489c7c7a38f4058dc078061f8c",
+    "requirements_lock_sha256": "861295cd158d7bb028f41a03b54b9845db0cc1914ae5181063c83a3ad7b88648",
+    "patches": [
+      {
+        "path": "0001-host-isolation.json",
+        "sha256": "c9083da2c7dacdae83c0a51c19195c191202f618e35457d53089a3acb55a6caa"
+      },
+      {
+        "path": "0002-cli-host-alias.json",
+        "sha256": "002b57ae952e034a084edfd85bf25e287e00ea6465647b27f0ff54b8aa998faf"
+      },
+      {
+        "path": "0003-shadow-data-source.json",
+        "sha256": "76ac1b533d0f237db45f10a63f38e9ef23ed383de6223801ea2999a98d2a0bbf"
+      },
+      {
+        "path": "0004-host-requests.json",
+        "sha256": "dfa9725892fca306b5a587d69455f8c43a4c43d19ac7be5344c8a34177b3cf77"
+      },
+      {
+        "path": "0005-terminal-execution.json",
+        "sha256": "3080e68c39af63cd11e59e5b62d9ae535bbd05a1f09b08d825d9733ce869bed0"
+      },
+      {
+        "path": "0006-host-shutdown.json",
+        "sha256": "6a0c070c965ffed7aa3ee1955a7c4528cf5a23ef27814ce7d10b11257fe86dae"
+      },
+      {
+        "path": "0007-ashare-preset.json",
+        "sha256": "fcf13d9a45ed121b38300e23b20b514e4450003a83e5fa3c108a2d5dd560d9a2"
+      },
+      {
+        "path": "0008-host-readonly-trading.json",
+        "sha256": "39d910589993b702b1da33c6b12b77e7606598165fb297f48d9c78e22b28a9ba"
+      },
+      {
+        "path": "0009-host-operations.json",
+        "sha256": "ee5ff4c45a94e0b231ecb33439febe9473f765422d51f4aa07700d0746b2dc09"
+      },
+      {
+        "path": "0010-host-reads.json",
+        "sha256": "0d10e9aecc8d30ed9b51c8130c436086abcbe03d7e6e03bf64ca81d5199d5f41"
+      },
+      {
+        "path": "0011-host-swarm-read-roots.json",
+        "sha256": "025dbc0ac04d09e32f1f3448359bef234a7ff245c353ebf7fb085349a478de9d"
+      },
+      {
+        "path": "0012-host-swarm-asof.json",
+        "sha256": "5f060f8aff1551c9e29d842f81e558e3ecf789c1b46aa085d271855c8bf9beba"
+      },
+      {
+        "path": "0013-host-swarm-artifacts.json",
+        "sha256": "6200fcec995e6d0acbb91d338af32d71347e164910e53b5abb239606be518ff6"
+      },
+      {
+        "path": "0014-hosted-strategy-boundary.json",
+        "sha256": "847967684d085ab677024af1e12fe824c5eb749cc6e1df73a026fb2299c06805"
+      },
+      {
+        "path": "0015-hosted-research-scenarios.json",
+        "sha256": "51e9dadd6c7701915d0c7531781a8fb32084a4f9f200b1c46c75737d3e77f24b"
+      },
+      {
+        "path": "0016-hosted-scheduled-firings.json",
+        "sha256": "8e84fe1f7f003330c195e11e3d0c895d7e99cf6405ebd2f8b2d3549a6a8ad589"
+      },
+      {
+        "path": "0017-hosted-runner-process-tree.json",
+        "sha256": "0faf2ab80e0ddab1154879d6f1db031c299cab39764cdc2e1ba9d66b6ae01e6f"
+      },
+      {
+        "path": "0018-hosted-attention-policy.json",
+        "sha256": "a935284f6c83eb0182143a702111862a13a19dba55382fd68b2d180d731dd2a0"
+      },
+      {
+        "path": "0019-hosted-owned-records.json",
+        "sha256": "5ac62f3b4b8551677793560afce896a3d69e61f39603f3e5aea87e0f1a66e252"
+      },
+      {
+        "path": "0020-hosted-backtest-inputs.json",
+        "sha256": "2b9a73dbeabd38aa779a0bf014ce9511cac6a6dbf8f23978a1370dc55f389dd1"
+      },
+      {
+        "path": "0021-hosted-shadow-unavailable.json",
+        "sha256": "f047c2a586c22cb4d2bad4dff5b390667649ff52bb684c251f8b21f14bdb68ac"
+      },
+      {
+        "path": "0022-hosted-shadow-cache-inputs.json",
+        "sha256": "ea054458854ed5d0e8ca4000dba3c76146946a532432cc2c9fd9492f380e9a00"
+      },
+      {
+        "path": "0023-hosted-shadow-account-comparison.json",
+        "sha256": "201d169cde5779f9b7aa45d179c5fc80f1d162d89eb268dd0bf65566e34789b5"
+      },
+      {
+        "path": "0024-hosted-trade-journal-operation.json",
+        "sha256": "c57a3267d0a008f192df531fecbfa766fcd6252fd13afae14845c17cee478df6"
+      },
+      {
+        "path": "0025-hosted-shadow-report-metadata.json",
+        "sha256": "b94b6a79f3acf15159410ffce14830bf0e186b8e8133b210b67863317dbd41e8"
+      },
+      {
+        "path": "0026-hosted-strategy-oos-validation.json",
+        "sha256": "5b5b68a790eaacde7a2758d94fecd859928dda939761cedcaa38504d34af4eaa"
+      },
+      {
+        "path": "0027-hosted-strict-factor-validation.json",
+        "sha256": "9d90ec6acb73e259e8574d31c3560d4862764a1c8cde6df0ac844e8e00f81565"
+      },
+      {
+        "path": "0028-hosted-workbench.json",
+        "sha256": "317f716ddfbc5e27708f4bdf06b6cbe17b5f82623ceb878b6fef911cbee558de"
+      },
+      {
+        "path": "0029-hosted-workbench-market.json",
+        "sha256": "be564872af4093fe739b6c3108f4bd9e3e097f564e594c36f40758749e17276a"
+      },
+      {
+        "path": "0030-hosted-symbol-search.json",
+        "sha256": "0c79e5048ed798c3f089d90079ca90585d9dffb117e9fabc5f1f391397217666"
+      },
+      {
+        "path": "0031-adaptive-forecast.json",
+        "sha256": "f842981ba78e4284329b14ca053e1811199750427bc9d354c9a621ba83207e16"
+      },
+      {
+        "path": "0032-forecast-abstention.json",
+        "sha256": "9c0ab134cc1e301e0fe0bd2ca3073e8567ef107dfe0f30e9775df94deceb5161"
+      },
+      {
+        "path": "0033-hosted-opportunity.json",
+        "sha256": "4013b1de6b02a013d8609387400b9bf1b2f6b99e16212c5ea1f259f9e10b9841"
+      },
+      {
+        "path": "0034-daily-forecast-cache.json",
+        "sha256": "02663630c809cd32a85498eefd8a4d1b2c5a06cb558fbf4cb265fbcf341c9495"
+      },
+      {
+        "path": "0035-directional-curve.json",
+        "sha256": "7b1fa1016123d86a3055ee62b79406f9f6841116dc7e1aada896e54c4dbe517c"
+      },
+      {
+        "path": "0036-daily-return-history.json",
+        "sha256": "3c2410460c35c6e13d0acb454863efafc1e95ae9ccccda78b6e2e393955deb99"
+      },
+      {
+        "path": "0037-quote-summary.json",
+        "sha256": "8a8c36e58c9f6fe1f8ed5c27da6db64377411a61703024abc2bbb1d891e3d6da"
+      },
+      {
+        "path": "0039-hosted-opportunity-history.json",
+        "sha256": "8f4545a3ebabb69cb01dfc52602462cbd81bcbad7d13f3dbcd78be3cf53c1335"
+      },
+      {
+        "path": "0040-workbench-history.json",
+        "sha256": "f088808220202808badb16310a8710f596f56e335fc9900ba9c1208e3eb48977"
+      },
+      {
+        "path": "0042-opportunity-history-management.json",
+        "sha256": "a718b8679380b22c5ccc975a3555906e69ce6f8c7ea8c723d91fdc451e05cf44"
+      },
+      {
+        "path": "0043-research-context.json",
+        "sha256": "db4f32f6d3c33e0d6225d2034764be4cc65569248b8cfcba665255bcd53e1598"
+      },
+      {
+        "path": "0044-standard-opportunity-evaluation.json",
+        "sha256": "bb4dd02ffc73b6cf6490a927cabbbba3bbed02b4f9ae744bccaf7e2574c60582"
+      },
+      {
+        "path": "0045-journal-review.json",
+        "sha256": "b54df2629b062d3896074424d6d15ae36750d390f77a16232fdfd644eaf8a2b3"
+      },
+      {
+        "path": "0046-journal-research-context.json",
+        "sha256": "c38aae5f25b9494f5e8913949d9fc9a920be38f36816d9a3b6220f40116bb5e9"
+      },
+      {
+        "path": "0047-retire-custom-opportunity-evaluation.json",
+        "sha256": "478a91d526d4bf7676cdc2749f7b8b9364782ecc5840f642a4fdfaf98b6880a4"
+      },
+      {
+        "path": "0048-hosted-backtest-settings.json",
+        "sha256": "ed26a6e43b45f9f186d71387f09c9c910f00b2d0b0f917ba68ce7ab510d34a81"
+      },
+      {
+        "path": "0049-native-research-product.json",
+        "sha256": "0bd4251ae31b6e454ce34a1871e26a54e549f9eb61a0e274ca46748637533d4c"
+      },
+      {
+        "path": "0050-hosted-native-python-and-origin.json",
+        "sha256": "7e6cda187e7725af9fd3348f524e1c04059af6ac5cd17c4ebed39902ceed9d59"
+      },
+      {
+        "path": "0051-durable-alpha-operations.json",
+        "sha256": "3ad9e926bd991d553462e9199fb1c47345edaab773e370a33ee908bb8d1aa539"
+      },
+      {
+        "path": "0052-local-paper-account.json",
+        "sha256": "7a3bb68b9f1fd00d23d56aa6c4cb5f95e19dce9b3d3b187388ee7a0bcfc8be79"
+      },
+      {
+        "path": "0053-unified-strategy-library.json",
+        "sha256": "c33c9f29814ec8514cf2aa6a8abe2de129f27669211b8bbc1354022a8317b5d9"
+      },
+      {
+        "path": "0054-unified-strategy-results.json",
+        "sha256": "6a29dcbd6f5a5c8a566b9e7b093a07b60eb52d75ec484832ae1432210383ca0c"
+      },
+      {
+        "path": "0055-custom-strategy-deletion.json",
+        "sha256": "9c8fab7875ac4b28f8440562344a46a5f20a0a75e3e74481bcf74c50bf787784"
+      },
+      {
+        "path": "0056-strategy-stock-scopes.json",
+        "sha256": "dfe44847ba4975a74cb000f0764e75a8dca6d585b77e2bcadfdd48990cfe24ae"
+      },
+      {
+        "path": "0057-strategy-scope-resilience.json",
+        "sha256": "8413c6d136a547421867b31f2cb937f72df8f7916ec8e44e2918daaeec479de3"
+      },
+      {
+        "path": "0058-strategy-scope-transport.json",
+        "sha256": "5e6c7df73e4e64e39c01a1d0c45deb036d09cdf1a5c5fa862546997d35b0198a"
+      },
+      {
+        "path": "0059-custom-strategy-ai-editing.json",
+        "sha256": "888df81f5a2b98e517afedd25bbb7234c4aa8a9c23419095c1b2fc49837c5fdb"
+      },
+      {
+        "path": "0060-strategy-catalog-loading.json",
+        "sha256": "5b88a5cbb864cb8b09757befa751f617c16347d8c76b4e3b0a79e97ce9c389c8"
+      },
+      {
+        "path": "0061-native-startup-loading.json",
+        "sha256": "a3f4fc8b5c7c9a07cd49fd0958ef7c212f1a6b1b6436f16749ff5dccb3766bf9"
+      }
+    ],
+    "exporter_sha256": "36f429f854f185df52ae809109bfe99e55bcf69e1e4d1d2cd5ff883f9b82d5a2",
+    "items_sha256": "d6d1ae56935423a36fe92781b6d4e3dc1956f32f068598018b113bab194c43dc"
+  },
+  "items": [
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "动量、5日反转、低波动与量比横截面排名，默认选前3只，每20个交易日调仓。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "多因子排名",
+      "parameters": [
+        {
+          "editable": true,
+          "name": "momentum_window",
+          "value": 20
+        },
+        {
+          "editable": true,
+          "name": "vol_window",
+          "value": 20
+        },
+        {
+          "editable": true,
+          "name": "top_n",
+          "value": 3
+        },
+        {
+          "editable": true,
+          "name": "rebalance_freq",
+          "value": 20
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "动量、5日反转、低波动与量比横截面排名，默认选前3只，每20个交易日调仓。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/multi-factor/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "27ed0e87150ba94ec838df7dd801f9711cb3ad38ef0a2f654c55ae61adef3fbb"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:multi-factor",
+      "unavailable_reason": null,
+      "version": "2415779419ddb8311576a6e1eb367462608c51dfda857badbcd53d64bb3af0b2"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "EMA/ADX趋势、布林带/RSI反转与OBV/量比综合投票。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "技术指标综合",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "ema_fast",
+          "value": 12
+        },
+        {
+          "editable": false,
+          "name": "ema_slow",
+          "value": 26
+        },
+        {
+          "editable": false,
+          "name": "adx_period",
+          "value": 14
+        },
+        {
+          "editable": false,
+          "name": "adx_threshold",
+          "value": 25.0
+        },
+        {
+          "editable": false,
+          "name": "bb_window",
+          "value": 20
+        },
+        {
+          "editable": false,
+          "name": "bb_std",
+          "value": 2.0
+        },
+        {
+          "editable": false,
+          "name": "rsi_period",
+          "value": 14
+        },
+        {
+          "editable": false,
+          "name": "rsi_oversold",
+          "value": 30
+        },
+        {
+          "editable": false,
+          "name": "rsi_overbought",
+          "value": 70
+        },
+        {
+          "editable": false,
+          "name": "vol_ma_period",
+          "value": 20
+        },
+        {
+          "editable": false,
+          "name": "obv_ma_period",
+          "value": 20
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "EMA/ADX趋势、布林带/RSI反转与OBV/量比综合投票。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/technical-basic/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "739f3d1d3cd49677ea55a5818fb6e82fc0741fd6317dfedf28ca1d5aff518669"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:technical-basic",
+      "unavailable_reason": null,
+      "version": "4f1b1fcccf466367cc965bd291ce77df035df25ac5fb10afccba85803e7adc0b"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "按实际估值或财报字段过滤，满足原生分支条件的股票等权。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "基本面过滤",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "pe_min",
+          "value": 0.0
+        },
+        {
+          "editable": false,
+          "name": "pe_max",
+          "value": 20.0
+        },
+        {
+          "editable": false,
+          "name": "pb_max",
+          "value": 3.0
+        },
+        {
+          "editable": false,
+          "name": "roe_min",
+          "value": 8.0
+        },
+        {
+          "editable": false,
+          "name": "revenue_min",
+          "value": 0.0
+        },
+        {
+          "editable": false,
+          "name": "net_assets_min",
+          "value": 0.0
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "按实际估值或财报字段过滤，满足原生分支条件的股票等权。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/fundamental-filter/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "9d3cfcac58af6e5132a181b98d3a503afadca9e719d31086e6875c663d2afc59"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:fundamental-filter",
+      "unavailable_reason": null,
+      "version": "ca9e9f0f9740f919d0ad89ac0a9e5c3afee42222916b0c5c052f8bc74b39a698"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "事件分数达到原生阈值后排序筛选并等权。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "事件情绪筛选",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "score_threshold",
+          "value": 0.2
+        },
+        {
+          "editable": false,
+          "name": "top_n",
+          "value": null
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "事件分数达到原生阈值后排序筛选并等权。"
+        },
+        {
+          "label": "适用条件",
+          "value": "该示例缺少必需的历史事件数据配置，当前无法运行。请选择其他策略。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/event-driven/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "e39dfd70ae8d0cd72bed321dbfecbde964835c815cfc19aa7622a84eb0f44c8e"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:event-driven",
+      "unavailable_reason": "该示例缺少必需的历史事件数据配置，当前无法运行。请选择其他策略。",
+      "version": "4f53dec928edbe41685a421d7e02d6366887a6ab65320e50216774aa32410633"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "按原生看涨、看跌K线形态汇总方向。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "K线形态综合",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "body_pct",
+          "value": 0.1
+        },
+        {
+          "editable": false,
+          "name": "shadow_ratio",
+          "value": 2.0
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "按原生看涨、看跌K线形态汇总方向。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/candlestick/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "f66c574d61ce9fe2c9cf6fb7906a479f33ddcd91c3720a81681a94c26b1e1aaf"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:candlestick",
+      "unavailable_reason": null,
+      "version": "f824a9a6144ad6fb6ab16bd64549ce5b0ea2367a254ab10c0640ea3d4097ad22"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "转换线、基准线、云带位置与云带方向共同过滤。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "一目均衡表",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "tenkan_period",
+          "value": 9
+        },
+        {
+          "editable": false,
+          "name": "kijun_period",
+          "value": 26
+        },
+        {
+          "editable": false,
+          "name": "senkou_b_period",
+          "value": 52
+        },
+        {
+          "editable": false,
+          "name": "displacement",
+          "value": 26
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "转换线、基准线、云带位置与云带方向共同过滤。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/ichimoku/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "7dfe09547424c9859fdea9e8bf53eaccb37a025636d9c952e9d8c41b56330b18"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:ichimoku",
+      "unavailable_reason": null,
+      "version": "b5ff2711312bddfe6e2d0aaa0fbfd97dcf2c44f70fb50046a053faa82b66d54c"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "Zigzag、五浪推动、ABC调整与Fibonacci条件；信号须等待右侧确认。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "艾略特波浪",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "swing_window",
+          "value": 10
+        },
+        {
+          "editable": false,
+          "name": "fib_tolerance",
+          "value": 0.15
+        },
+        {
+          "editable": false,
+          "name": "min_wave_bars",
+          "value": 5
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "Zigzag、五浪推动、ABC调整与Fibonacci条件；信号须等待右侧确认。"
+        },
+        {
+          "label": "适用条件",
+          "value": "该示例暂不兼容当前运行环境，无法运行。请选择其他策略。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/elliott-wave/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "e65d68f9fdd5bbcf8df0b326914a02c9e6b37c884547ad464bce5929d8beaa3c"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:elliott-wave",
+      "unavailable_reason": "该示例暂不兼容当前运行环境，无法运行。请选择其他策略。",
+      "version": "2c2491967930814fe3daed0cbd7e1d8e37d013eaca9b1bd4ed22da59ccc21eeb"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "XABCD形态方向；D点确认时间须核实，暂不提供普通A股运行。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "谐波形态",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "is_stock",
+          "value": false
+        },
+        {
+          "editable": false,
+          "name": "swing_window",
+          "value": 10
+        },
+        {
+          "editable": false,
+          "name": "tol",
+          "value": 0.12
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "XABCD形态方向；D点确认时间须核实，暂不提供普通A股运行。"
+        },
+        {
+          "label": "适用条件",
+          "value": "形态确认与历史回填的时点尚不明确。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/harmonic/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aae8014ff2acc634ed7b9690325938eb5fdad2321936f51b4b5fca81345bb197"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:harmonic",
+      "unavailable_reason": "形态确认与历史回填的时点尚不明确。",
+      "version": "d384e9bb940eb7a8a38ab918a0c94d4b99c1a466784ec146e0dbce8e567c9718"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "CZSC逐根更新，结合买卖点与笔结构。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "缠论买卖点",
+      "parameters": [],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "CZSC逐根更新，结合买卖点与笔结构。"
+        },
+        {
+          "label": "适用条件",
+          "value": "缺少策略所需依赖：czsc"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/chanlun/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "87affafb96d7c19c360125311dd03ea88c3e7be1ddc74b6bc3d557a697e3920a"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:chanlun",
+      "unavailable_reason": "缺少策略所需依赖：czsc",
+      "version": "97c1b4fdbc1b3ce271dcb2c43f5a71c5350f81b7af19a7f7abc9542479608991"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "ChoCH/BOS与FVG结构过滤；须核实摆动点的确认时间。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "结构突破与缺口",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "swing_length",
+          "value": 10
+        },
+        {
+          "editable": false,
+          "name": "close_break",
+          "value": true
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "ChoCH/BOS与FVG结构过滤；须核实摆动点的确认时间。"
+        },
+        {
+          "label": "适用条件",
+          "value": "摆动点和结构确认的时点尚不明确。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/smc/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "d3b02d9b0689d33506a936f4a9216e4326aa74e3ffdb829966d2aaad9a08e549"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:smc",
+      "unavailable_reason": "摆动点和结构确认的时点尚不明确。",
+      "version": "233a4738ba8725807f1efb6438e3b4a01c2ce3ecc4655fda7c8b3cccdb56e597"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "两资产价格比Z-score的多空配对。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "配对均值回归",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "lookback",
+          "value": 60
+        },
+        {
+          "editable": false,
+          "name": "entry_z",
+          "value": 2.0
+        },
+        {
+          "editable": false,
+          "name": "exit_z",
+          "value": 0.5
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "两资产价格比Z-score的多空配对。"
+        },
+        {
+          "label": "适用条件",
+          "value": "需要恰好两个标的和多空配对执行，普通A股只做多不适用。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/pair-trading/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "1ba410cfb9fc4d816c253dc8d4b2fe95197ecb6140a453e21b161ee585104144"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:pair-trading",
+      "unavailable_reason": "需要恰好两个标的和多空配对执行，普通A股只做多不适用。",
+      "version": "7c538f868e0189c1de8c97be152a3d6b530b580e5c35230b646171a6a7bd2eaa"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "月份或星期效应，保留原生正负方向。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "日历效应",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "bullish_months",
+          "value": null
+        },
+        {
+          "editable": false,
+          "name": "bearish_months",
+          "value": null
+        },
+        {
+          "editable": false,
+          "name": "use_weekday",
+          "value": false
+        },
+        {
+          "editable": false,
+          "name": "bullish_weekdays",
+          "value": null
+        },
+        {
+          "editable": false,
+          "name": "bearish_weekdays",
+          "value": null
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "月份或星期效应，保留原生正负方向。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/seasonal/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "a095950a1c668ee8c5c1cfd98764c1634711a96c1bda4ef130997c7ac6a2bb50"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:seasonal",
+      "unavailable_reason": null,
+      "version": "1bed6f33fb04377082092cf367dd58323dffb6ff7157d47a544c0c26818a0506"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "20日历史波动率在120日窗口中的分位过滤。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "波动率分位",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "hv_window",
+          "value": 20
+        },
+        {
+          "editable": false,
+          "name": "lookback",
+          "value": 120
+        },
+        {
+          "editable": false,
+          "name": "low_pct",
+          "value": 20.0
+        },
+        {
+          "editable": false,
+          "name": "high_pct",
+          "value": 80.0
+        },
+        {
+          "editable": false,
+          "name": "annualize",
+          "value": 252
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "20日历史波动率在120日窗口中的分位过滤。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/volatility/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "879f47c7b52ff0e91b8d0b4a9318eb65bbaf2c9111a29b11e26efd0082c3793e"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:volatility",
+      "unavailable_reason": null,
+      "version": "8814fc7a57fef5bc09d57520a0f097915643e966837b75edd40b400265c92f36"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "按市场设置均线周期并按逆波动分配仓位。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "跨市场双均线",
+      "parameters": [],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "按市场设置均线周期并按逆波动分配仓位。"
+        },
+        {
+          "label": "适用条件",
+          "value": "原实现使用全窗口末尾波动率为历史配权，存在前视问题，需修正后使用。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/cross-market-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "a579f83468fbf59f4632f924c390d1bd4433aa1aa3a274bc3332bb5fd3c9cb20"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:cross-market-strategy",
+      "unavailable_reason": "原实现使用全窗口末尾波动率为历史配权，存在前视问题，需修正后使用。",
+      "version": "cfaeedc1141735dc683b7a22bedc9e7f03a882aa17c12e348990471e95edb254"
+    },
+    {
+      "can_backtest": true,
+      "can_scan": true,
+      "deleted": false,
+      "description": "原生OHLCV特征、5日标签与walk-forward模型；运行时会按原生规则训练。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "china_a",
+      "name": "机器学习预测示例",
+      "parameters": [],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生OHLCV特征、5日标签与walk-forward模型；运行时会按原生规则训练。"
+        },
+        {
+          "label": "适用条件",
+          "value": "给定A股证券池与足够的日线历史。正负信号保留原生含义。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/ml-strategy/SKILL.md"
+        },
+        {
+          "label": "来源摘要",
+          "value": "dab36e929cef71f586fe28791e75aa12a5251d0b234d605bd7b6e8f06af0ffeb"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:ml-strategy",
+      "unavailable_reason": null,
+      "version": "6917cbc985bc589601d3f636cf0ccf159e3729d6275cbe2b5f889e2ea791102b"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "options",
+      "name": "现金担保卖Put",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "delta",
+          "value": 0.3
+        },
+        {
+          "editable": false,
+          "name": "dte",
+          "value": 35
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。"
+        },
+        {
+          "label": "适用条件",
+          "value": "期权合约腿与合成定价不适用于普通A股选股及股票回测。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/options-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aab056a9bfb6ea9f90f3c0d476fea5269e527a550325dd5642ac4bb97a43d3d6"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:options-strategy-cash-secured-put",
+      "unavailable_reason": "期权合约腿与合成定价不适用于普通A股选股及股票回测。",
+      "version": "7593224de278bfb21f23814e5377c89a815e4d4a065d5d8824276aceb5707565"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "options",
+      "name": "铁鹰组合",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "short_delta",
+          "value": 0.16
+        },
+        {
+          "editable": false,
+          "name": "wing_delta",
+          "value": 0.05
+        },
+        {
+          "editable": false,
+          "name": "risk_fraction",
+          "value": 0.1
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。"
+        },
+        {
+          "label": "适用条件",
+          "value": "期权合约腿与合成定价不适用于普通A股选股及股票回测。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/options-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aab056a9bfb6ea9f90f3c0d476fea5269e527a550325dd5642ac4bb97a43d3d6"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:options-strategy-iron-condor",
+      "unavailable_reason": "期权合约腿与合成定价不适用于普通A股选股及股票回测。",
+      "version": "90728a16c45d0e7820970a6a751a32a8c53a20fd6023706280cd7811a1bffe59"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "options",
+      "name": "波动过滤卖宽跨",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "delta",
+          "value": 0.16
+        },
+        {
+          "editable": false,
+          "name": "gate",
+          "value": "contracting"
+        },
+        {
+          "editable": false,
+          "name": "notional_fraction",
+          "value": 1.0
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。"
+        },
+        {
+          "label": "适用条件",
+          "value": "期权合约腿与合成定价不适用于普通A股选股及股票回测。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/options-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aab056a9bfb6ea9f90f3c0d476fea5269e527a550325dd5642ac4bb97a43d3d6"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:options-strategy-vol-gated-strangle",
+      "unavailable_reason": "期权合约腿与合成定价不适用于普通A股选股及股票回测。",
+      "version": "2583b67062ac67cc843c58a226e93c9cd840fd2ef226189df006aa5498b9b0bd"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "options",
+      "name": "备兑Call",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "delta",
+          "value": 0.3
+        },
+        {
+          "editable": false,
+          "name": "dte",
+          "value": 35
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。"
+        },
+        {
+          "label": "适用条件",
+          "value": "期权合约腿与合成定价不适用于普通A股选股及股票回测。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/options-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aab056a9bfb6ea9f90f3c0d476fea5269e527a550325dd5642ac4bb97a43d3d6"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:options-strategy-covered-call",
+      "unavailable_reason": "期权合约腿与合成定价不适用于普通A股选股及股票回测。",
+      "version": "7574907014e0ce74bf69074a9b086882be775b4f942588a17ef2008202c5ff27"
+    },
+    {
+      "can_backtest": false,
+      "can_scan": false,
+      "deleted": false,
+      "description": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。",
+      "effective_config": null,
+      "example": true,
+      "has_evidence": false,
+      "interval": "1D",
+      "linked_run": null,
+      "market": "options",
+      "name": "保护性Put",
+      "parameters": [
+        {
+          "editable": false,
+          "name": "delta",
+          "value": 0.2
+        },
+        {
+          "editable": false,
+          "name": "dte",
+          "value": 60
+        },
+        {
+          "editable": false,
+          "name": "roll_dte",
+          "value": 21
+        }
+      ],
+      "rules": [
+        {
+          "label": "原生规则",
+          "value": "原生期权合约腿示例，使用历史波动率和Black-Scholes合成定价。"
+        },
+        {
+          "label": "适用条件",
+          "value": "期权合约腿与合成定价不适用于普通A股选股及股票回测。"
+        },
+        {
+          "label": "来源",
+          "value": "src/skills/options-strategy/example_signal_engine.py"
+        },
+        {
+          "label": "来源摘要",
+          "value": "aab056a9bfb6ea9f90f3c0d476fea5269e527a550325dd5642ac4bb97a43d3d6"
+        }
+      ],
+      "source": "builtin",
+      "strategy_id": "builtin:options-strategy-protective-put",
+      "unavailable_reason": "期权合约腿与合成定价不适用于普通A股选股及股票回测。",
+      "version": "adb213dc621202ed2e60f445baec46dcbeb7d8c142e8e3497536c2433a43be43"
+    }
+  ]
+}

@@ -173,6 +173,7 @@
       "ariaLabel": "Settings sections"
     },
     "nav": {
+      "account": "Account",
       "general": "General",
       "resources": "Advanced features",
       "byok": "BYOK",
@@ -262,6 +263,8 @@
       "imageDefaults": "Defaults",
       "webSearch": "Web search",
       "runtimeParameters": "Runtime parameters",
+      "dateAndTime": "Date & time",
+      "filesAndStorage": "Files & storage",
       "capabilities": "Capabilities"
     },
     "rows": {
@@ -306,7 +309,8 @@
       "defaultAspectRatio": "Used when AI does not specify a ratio. Can be changed for one generation.",
       "defaultImageSize": "Used when AI does not specify a resolution. Supported values depend on the service.",
       "maxImagesPerTurn": "Upper bound for one generate_image request.",
-      "timezone": "IANA timezone used by runtime context and schedules.",
+      "timezone": "Used for conversation times and scheduled tasks. Changes save automatically.",
+      "workspacePath": "Changes save automatically and apply after restart. Existing conversations migrate to the new folder.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
     "values": {
@@ -329,6 +333,9 @@
     "status": {
       "loading": "Loading settings...",
       "loadError": "Could not load settings",
+      "updateFailed": "Could not update settings",
+      "autoSaveFailed": "Saving could not be confirmed. The last confirmed settings are still shown. Please retry.",
+      "workspacePickerFailed": "Could not open the folder picker. Please retry.",
       "unsaved": "Unsaved changes.",
       "upToDate": "Up to date.",
       "savedRestart": "Saved. Restart mona to apply.",
@@ -340,6 +347,8 @@
       "save": "Save",
       "saving": "Saving",
       "edit": "Edit",
+      "change": "Change",
+      "dismiss": "OK",
       "cancel": "Cancel",
       "openDocs": "Open docs"
     },
@@ -522,10 +531,6 @@
     "computer_use": {
       "name": "Computer control",
       "description": "Chats: used when Mona clicks, types, or operates another desktop application for you"
-    },
-    "westock": {
-      "name": "Stock data support",
-      "description": "Stocks: supplements company, financial, announcement, and technical data for diagnosis, deep research, and screening"
     }
     }
   },
@@ -988,6 +993,37 @@
     "agentActivityToolsOnly": "{{tools}} tool calls",
     "agentActivityLiveSummary": "Working… · {{reasoning}} steps · {{tools}} tool calls",
     "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
+    "agentActivityElapsed": "Working for {{seconds}}s",
+    "agentActivityElapsedMinutes": "Working for {{minutes}}m {{seconds}}s",
+    "agentActivityDuration": "Worked for {{minutes}}m {{seconds}}s",
+    "agentActivityFinished": "Completed",
+    "collapseProcess": "Collapse process",
+    "expandProcess": "Expand process",
+    "activityFilesAndCommands": "Edited files and ran commands",
+    "activityCommands": "Ran commands",
+    "activityDetails": "Activity",
+    "activityCommandRunning": "Running command",
+    "activityCommandCompleted": "Ran command",
+    "activityCommandFailed": "Command failed",
+    "activityCommand": "Run command",
+    "activityToolRunning": "Using tool",
+    "activityToolCompleted": "Used tool",
+    "activityToolFailed": "Tool failed",
+    "activityTool": "Use tool",
+    "activityToolMany": "Used tools {{count}} times",
+    "activityToolRunningMany": "Using tools ({{count}} calls)",
+    "activityFileEdited": "Edited",
+    "activityFileEditing": "Editing",
+    "fileActivityPreparing": "Preparing edit…",
+    "fileActivityFailedOne": "Failed {{file}}",
+    "fileActivityEditingOne": "Editing {{file}}",
+    "fileActivityEditedOne": "Edited {{file}}",
+    "fileActivityFailedMany": "Failed {{count}} files",
+    "fileActivityEditingMany": "Editing {{count}} files",
+    "fileActivityEditedMany": "Edited {{count}} files",
+    "fileEditPreparing": "Preparing file edit…",
+    "fileEditFailed": "Failed",
+    "fileEditApproximate": "estimated",
     "imageAttachment": "Image attachment",
     "showAll": "Show all",
     "collapse": "Collapse",

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { MessageBubble } from "@/components/MessageBubble";
@@ -10,6 +10,7 @@ import {
 import { useAgents } from "@/components/room/useAgents";
 import {
   AgentActivityCluster,
+  ActivityTimingHeader,
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
 import { StepActivityTrace } from "@/components/workflow/StepActivityTrace";
@@ -20,6 +21,8 @@ interface ThreadMessagesProps {
   messages: UIMessage[];
   /** When true, agent turn still in flight — keeps activity cluster expanded. */
   isStreaming?: boolean;
+  runStartedAt?: number | null;
+  focusMessage?: { id: string; requestId: number } | null;
   /** Rooms use group-chat bubbles and show every assistant author, including Mona. */
   isGroupChat?: boolean;
   hiddenMessageCount?: number;
@@ -219,6 +222,8 @@ function groupMessageTime(timestamp: number): string {
 export function ThreadMessages({
   messages,
   isStreaming = false,
+  runStartedAt,
+  focusMessage,
   isGroupChat = false,
   hiddenMessageCount = 0,
   hasMoreHistory = false,
@@ -235,6 +240,94 @@ export function ThreadMessages({
   const clientCtx = useClientContextOrNull();
   const agentsById = useAgents(clientCtx?.token ?? null);
   const units = useMemo(() => buildDisplayUnits(messages), [messages]);
+  const { timingHeaders, processTimings, taskTimings, latestTiming } = useMemo(() => {
+    type Timing = {
+      key: string;
+      startedAt: number;
+      latencyMs?: number;
+      isTurnStreaming: boolean;
+      hasActivity: boolean;
+      indices: number[];
+      finalAnswerIndex: number;
+      hasProcess: boolean;
+    };
+    const headers = new Map<number, Timing>();
+    const processes = new Map<number, Timing>();
+    const tasks = new Map<number, Timing>();
+    let current: Timing | null = null;
+    let userMessageId: string | undefined;
+    for (const [index, unit] of units.entries()) {
+      if (unit.type === "single" && unit.message.role === "user") {
+        if (!unit.message.isInjected) {
+          current = null;
+          userMessageId = unit.message.id;
+        }
+        continue;
+      }
+      if (unit.type !== "cluster" && unit.message.role !== "assistant") continue;
+      const rows = unit.type === "cluster" ? unit.messages : [unit.message];
+      if (!current) {
+        current = { key: userMessageId ?? unitKey(unit, index), startedAt: rows[0].createdAt, isTurnStreaming: false, hasActivity: false, indices: [], finalAnswerIndex: -1, hasProcess: false };
+        headers.set(index, current);
+      }
+      current.indices.push(index);
+      tasks.set(index, current);
+      if (unit.type === "cluster") {
+        current.hasActivity = true;
+        current.finalAnswerIndex = -1;
+      }
+      else if (
+        unit.message.kind !== "widget"
+        && (!unit.message.messageType || unit.message.messageType === "message")
+        && (unit.message.content.trim() || unit.message.deliveredFiles?.length || unit.message.media?.length)
+      ) current.finalAnswerIndex = index;
+      for (const row of rows) {
+        if (row.latencyMs != null) current.latencyMs = row.latencyMs;
+      }
+    }
+    if (current && isStreaming) current.isTurnStreaming = true;
+    for (const [index, timing] of headers) {
+      if (!isGroupChat) {
+        for (const unitIndex of timing.indices) {
+          const unit = units[unitIndex];
+          if (unit.type === "single" && unit.message.toolEvents?.length) timing.hasProcess = true;
+          if (unitIndex === timing.finalAnswerIndex) continue;
+          if (unit.type === "single" && (
+            unit.message.kind === "widget"
+            || (unit.message.messageType && unit.message.messageType !== "message")
+            || unit.message.deliveredFiles?.length
+            || unit.message.media?.length
+            || unit.message.images?.length
+          )) continue;
+          processes.set(unitIndex, timing);
+          timing.hasProcess = true;
+        }
+      }
+      if (!timing.hasActivity && !timing.hasProcess && timing.latencyMs == null && !timing.isTurnStreaming) headers.delete(index);
+    }
+    return { timingHeaders: headers, processTimings: processes, taskTimings: tasks, latestTiming: current };
+  }, [units, isStreaming, isGroupChat]);
+  const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(() => new Set());
+  const latestProcessKey = latestTiming?.hasProcess ? latestTiming.key : undefined;
+  const latestProcessStreaming = latestTiming?.isTurnStreaming ?? false;
+  useLayoutEffect(() => {
+    if (!latestProcessKey || isGroupChat) return;
+    setExpandedProcesses((previous) => {
+      if (previous.has(latestProcessKey) === latestProcessStreaming) return previous;
+      const next = new Set(previous);
+      if (latestProcessStreaming) next.add(latestProcessKey);
+      else next.delete(latestProcessKey);
+      return next;
+    });
+  }, [latestProcessKey, latestProcessStreaming, isGroupChat]);
+  const focusedProcessKey = focusMessage
+    ? processTimings.get(units.findIndex((unit) => unit.type === "single" && unit.message.id === focusMessage.id))?.key
+    : undefined;
+  useLayoutEffect(() => {
+    if (!focusedProcessKey) return;
+    setExpandedProcesses((previous) => previous.has(focusedProcessKey)
+      ? previous : new Set(previous).add(focusedProcessKey));
+  }, [focusMessage?.id, focusMessage?.requestId, focusedProcessKey]);
   const showTimeDivider = useMemo(() => {
     let previousTime: number | null = null;
     return units.map((unit) => {
@@ -273,9 +366,15 @@ export function ThreadMessages({
         const prev = units[index - 1];
         const marginTop =
           index > 0
-            ? marginAfterPrevUnit(prev)
+            ? marginAfterPrevUnit(prev, unit)
             : "";
         const next = units[index + 1];
+        const timing = timingHeaders.get(index);
+        const process = processTimings.get(index);
+        const processHidden = !isGroupChat && process && !expandedProcesses.has(process.key);
+        const task = taskTimings.get(index);
+        const showToolEvents = isGroupChat || !task?.hasProcess || expandedProcesses.has(task.key);
+        if (processHidden && !timing) return null;
         const hasBodyBelow =
           unit.type === "cluster"
           && next?.type === "single"
@@ -297,6 +396,20 @@ export function ThreadMessages({
             id={unit.type === "single" ? `thread-message-${unit.message.id}` : undefined}
             className={marginTop}
           >
+            {timing && <ActivityTimingHeader
+              startedAt={timing.startedAt}
+              latencyMs={timing.latencyMs}
+              isTurnStreaming={timing.isTurnStreaming}
+              runStartedAt={timing.isTurnStreaming ? runStartedAt : undefined}
+              expanded={expandedProcesses.has(timing.key)}
+              onToggle={!isGroupChat && timing.hasProcess ? () => setExpandedProcesses((previous) => {
+                const next = new Set(previous);
+                if (next.has(timing.key)) next.delete(timing.key);
+                else next.add(timing.key);
+                return next;
+              }) : undefined}
+            />}
+            {!processHidden && <>
             {isGroupChat && showTimeDivider[index] && unit.type === "single" ? (
               <div
                 className="my-2 flex items-center gap-3 px-2 text-[10.5px] text-muted-foreground/55"
@@ -312,6 +425,7 @@ export function ThreadMessages({
                 messages={unit.messages}
                 isTurnStreaming={index === liveActivityClusterIndex}
                 hasBodyBelow={hasBodyBelow}
+                showTiming={false}
               />
             ) : groupAssistant ? (
               <div className="flex min-w-0 items-start gap-2">
@@ -336,7 +450,7 @@ export function ThreadMessages({
                     onBranch={onBranch}
                     onWidgetPrompt={onWidgetPrompt}
                   />
-                  {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
+                  {showToolEvents && unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                     <StepActivityTrace events={unit.message.toolEvents} />
                   ) : null}
                 </div>
@@ -356,11 +470,12 @@ export function ThreadMessages({
                   onBranch={onBranch}
                   onWidgetPrompt={onWidgetPrompt}
                 />
-                {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
+                {showToolEvents && unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                   <StepActivityTrace events={unit.message.toolEvents} />
                 ) : null}
               </>
             )}
+            </>}
           </div>
         );
       })}
@@ -370,7 +485,11 @@ export function ThreadMessages({
 
 function currentActivityClusterIndex(units: DisplayUnit[]): number {
   const last = units.length - 1;
-  return units[last]?.type === "cluster" ? last : -1;
+  if (units[last]?.type === "cluster") return last;
+  return units[last]?.type === "single"
+    && units[last].message.role === "assistant"
+    && !!units[last].message.isStreaming
+    && units[last - 1]?.type === "cluster" ? last - 1 : -1;
 }
 
 function unitKey(unit: DisplayUnit, index: number): string {
@@ -381,9 +500,12 @@ function unitKey(unit: DisplayUnit, index: number): string {
   return unit.message.id;
 }
 
-function marginAfterPrevUnit(prev: DisplayUnit): string {
+function marginAfterPrevUnit(prev: DisplayUnit, current: DisplayUnit): string {
   if (prev.type === "cluster") {
-    return "mt-4";
+    return current.type === "single" && current.message.role === "assistant" ? "mt-1" : "mt-4";
+  }
+  if (current.type === "cluster" && prev.message.role === "assistant") {
+    return "mt-2";
   }
   const p = prev.message;
   const denseP =

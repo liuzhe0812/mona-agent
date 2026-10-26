@@ -87,7 +87,7 @@ def test_provider_words_restore_script_punctuation_and_english_spacing_only_on_e
     assert "。" not in "".join(cue["text"] for cue in mismatch["cues"])
 
 
-def test_long_provider_sentence_splits_near_longest_central_word_gap_without_orphan_tail() -> None:
+def test_long_provider_sentence_fills_readable_lines_without_splitting_spoken_words() -> None:
     narration = "权重表示每项数据对选择结果的影响程度需要结合当前预算与业务目标综合判断。"
     assert 18 < len(narration.rstrip("。")) < 36
     words = []

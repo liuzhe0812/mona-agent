@@ -441,7 +441,7 @@ export const ChatList = memo(function ChatList({
                   taskTitle ||
                   deriveTitle(cleanedPreview, t("chat.newChat"));
                 const tooltipTitle = rowTitle;
-                // 协作群摘要标出最后发言者；私聊摘要标出所属 Agent。
+                // 协作群摘要标出最后发言者。
                 let speakerPrefix = "";
                 if (isRoom) {
                   const authorId = s.previewAuthorId;
@@ -459,7 +459,7 @@ export const ChatList = memo(function ChatList({
                   ? [statusLabel, previewText].filter(Boolean).join(" · ")
                   : [
                       s.workspace ? workspaceLabel(s.workspace) : "",
-                      isRoom ? `${speakerPrefix}${previewText}` : s.agentKind === "video" ? "视频项目" : agentName,
+                      isRoom ? `${speakerPrefix}${previewText}` : s.agentKind === "video" ? "视频项目" : "",
                       isRoom ? "" : previewText,
                     ].filter(Boolean).join(" · ");
                 const summaryText = summaryTextWithStatus.trim();

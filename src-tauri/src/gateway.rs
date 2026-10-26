@@ -99,7 +99,6 @@ impl GatewayManager {
             // Rust 写在 app_data_dir()、Python 默认在 ~/.mona 找，路径不一致会导致
             // email_intel.db 抛 "邮件数据库不存在"。
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
-            cmd.env("MONA_ENABLE_WESTOCK", "1");
 
             // Set PYTHONPATH if source tree exists.
             // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
@@ -150,7 +149,6 @@ impl GatewayManager {
 
             // 同 dev 模式：把 Rust 侧 app_data_dir 传给 Python
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
-            cmd.env("MONA_ENABLE_WESTOCK", "1");
         }
 
         #[cfg(windows)]

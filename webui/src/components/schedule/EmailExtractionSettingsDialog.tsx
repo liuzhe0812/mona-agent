@@ -23,7 +23,6 @@ import {
 interface EmailExtractionSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onOpenSubscribe: () => void;
   onAddEmailAccount: () => void;
   onOpenEmail: () => void;
 }

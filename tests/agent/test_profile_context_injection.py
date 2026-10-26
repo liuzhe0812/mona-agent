@@ -98,7 +98,7 @@ def test_partner_direct_context_has_private_bootstrap_and_shared_profile(tmp_pat
     rendered = context.build_personalization_context()
 
     assert "private soul" in rendered
-    assert "private user preferences" in rendered
+    assert "private user preferences" not in rendered
     assert "private agent rules" in rendered
     assert "Shared User Profile (read-only)" in rendered
     assert "回答简洁" in rendered
@@ -145,7 +145,7 @@ def test_named_room_agent_prompt_uses_job_snapshot_and_private_bootstrap(tmp_pat
     rendered = manager._build_named_agent_prompt(definition, registry, durable_snapshot)
 
     assert "private soul" in rendered
-    assert "private user preferences" in rendered
+    assert "private user preferences" not in rendered
     assert "private agent rules" in rendered
     assert "fixed-v1" in rendered
     assert "固定版本" in rendered

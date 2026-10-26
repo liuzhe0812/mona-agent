@@ -17,6 +17,8 @@ struct NotificationsResponse {
 
 #[derive(Deserialize)]
 struct NotificationEntry {
+    #[serde(default)]
+    id: Option<String>,
     title: String,
     body: String,
     /// Optional click routing pushed by cross-process producers (stock-module
@@ -67,7 +69,87 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                     log::debug!("Schedule notifications poll failed: {}", e);
                 }
             }
+            poll_stock_notifications(&app, port).await;
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     });
+}
+
+async fn stock_request(
+    method: &str,
+    url: String,
+    request_id: Option<String>,
+) -> Option<crate::LocalHttpResponse> {
+    let headers = request_id
+        .map(|id| vec![("X-Mona-Request-ID".to_string(), id)])
+        .unwrap_or_default();
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        crate::perform_local_http_request(method.to_string(), url, headers, None),
+    )
+    .await
+    {
+        Ok(Ok(response)) if response.status == 200 => Some(response),
+        _ => None,
+    }
+}
+
+async fn poll_stock_notifications(app: &tauri::AppHandle, port: u16) {
+    let base = format!("http://127.0.0.1:{port}/api/stock-vibe/notifications");
+    let Some(response) = stock_request("GET", base.clone(), None).await else {
+        return;
+    };
+    let Ok(data) = serde_json::from_slice::<NotificationsResponse>(&response.body) else {
+        return;
+    };
+    for entry in data.notifications {
+        let Some(id) = entry.id else {
+            continue;
+        };
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        {
+            continue;
+        }
+        let Some(claim) = stock_request(
+            "POST",
+            format!("{base}/{id}/claim"),
+            Some(uuid::Uuid::new_v4().simple().to_string()),
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok(receipt) = serde_json::from_slice::<serde_json::Value>(&claim.body) else {
+            continue;
+        };
+        if receipt["status"] != "completed" || receipt["receipt"]["body"]["claimed"] != true {
+            continue;
+        }
+        let payload = NotificationPayload {
+            id: format!("stock-vibe-{id}"),
+            title: entry.title,
+            body: entry.body,
+            only_when_background: false,
+            actions: vec![],
+            click_action: Some("open-stock".to_string()),
+            click_data: entry.click_data,
+        };
+        // Claim is durable before showing. A crash leaves an unknown delivery;
+        // it must not replay a possibly shown toast after the next restart.
+        match native_notification::show_native(app, payload).await {
+            Ok(()) => {
+                let _ = stock_request(
+                    "POST",
+                    format!("{base}/{id}/ack"),
+                    Some(uuid::Uuid::new_v4().simple().to_string()),
+                )
+                .await;
+            }
+            Err(error) => log::error!("Stock notification delivery is unconfirmed: {error}"),
+        }
+    }
 }

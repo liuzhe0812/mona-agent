@@ -1,8 +1,6 @@
 import { COMPOSE_FIELDS } from './slides-layout'
-import { PRESETS, PRESET_SCENARIOS, presetScenarioCatalog } from './slides-presets'
-import { DESIGN_CATALOG } from './slides-design'
+import { PRESETS } from './slides-presets'
 import { replaceColorsCapability } from './slides-colors'
-import { dashiCapability, dashiScenarioCatalog } from './slides-dashi'
 import { designCapability, pathCapability, richTextFields } from './slides-design-schema'
 
 export interface SlidesCapability {
@@ -15,9 +13,6 @@ export interface SlidesCapability {
 export interface SlidesCapabilitiesResult {
   mode: 'capabilities'
   documentType: 'slides'
-  designs?: Array<{ id: string; label: string; use: string }>
-  presetScenarios?: ReturnType<typeof presetScenarioCatalog>
-  templateScenarios?: ReturnType<typeof dashiScenarioCatalog>
   operations: Array<Pick<SlidesCapability, 'op' | 'description'> & { payloadSchema?: Record<string, unknown> }>
   availableOperations: string[]
   unsupportedOperations: string[]
@@ -85,8 +80,50 @@ const chartFields = {
   style: chartStyle,
 }
 
+const composeContent = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['columns', 'rows', 'items'],
+  properties: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    width: { type: 'number', exclusiveMinimum: 0 },
+    height: { type: 'number', exclusiveMinimum: 0 },
+    columns: { type: 'array', minItems: 1, maxItems: 24, items: { type: 'number', exclusiveMinimum: 0 } },
+    rows: { type: 'array', minItems: 1, maxItems: 24, items: { type: 'number', exclusiveMinimum: 0 } },
+    gap: { type: 'number', minimum: 0, default: 24 },
+    items: {
+      type: 'array', minItems: 1, maxItems: 50,
+      description: '按顺序叠放的 grid item；type 为 text、shape、image、svg 或 chart。chart 使用原生数据及可选 style。',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['type', 'column', 'row'],
+        properties: {
+          type: { enum: ['text', 'shape', 'image', 'svg', 'chart'] },
+          column: { type: 'integer', minimum: 0 },
+          row: { type: 'integer', minimum: 0 },
+          columnSpan: { type: 'integer', minimum: 1 },
+          rowSpan: { type: 'integer', minimum: 1 },
+          ...chartFields,
+          inset: { type: 'number', minimum: 0 },
+          text: { type: 'string' },
+          ...richTextFields,
+          font: addFont,
+          align: { enum: ['left', 'center', 'right', 'justify'] },
+          shape: { type: 'string' },
+          fillColor: { type: 'string' },
+          strokeColor: { type: ['string', 'null'] },
+          strokeWidthPt: { type: 'number', exclusiveMinimum: 0 },
+          dataUrl: { type: 'string' },
+          assetPath: { type: 'string', description: 'image 素材在当前工作区的路径，由 office 工具读取' },
+          svg: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
 const directCapabilities: SlidesCapability[] = [
-  dashiCapability,
   replaceColorsCapability,
   designCapability,
   pathCapability,
@@ -234,13 +271,12 @@ const directCapabilities: SlidesCapability[] = [
     payloadSchema: {
       type: 'object',
       required: ['slideId', 'x', 'y', 'width', 'height'],
-      oneOf: [{ required: ['assetPath'] }, { required: ['dataUrl'] }, { required: ['assetId'] }],
+      oneOf: [{ required: ['assetPath'] }, { required: ['dataUrl'] }],
       properties: {
         slideId,
         ...geometry,
         dataUrl: { type: 'string', description: '受支持图片格式的 base64 data URL' },
         assetPath: { type: 'string', description: '优先使用当前工作区的图片路径，由 office 工具读取并转为 dataUrl' },
-        assetId: {type:'string',enum:Array.from({length:12},(_,index)=>`theme03-3d-${String(index+1).padStart(2,'0')}`),description:'可复用的 Dashi 原始完整3D图组；由 Office 解码为无损PNG后插入，不能同时提供路径或dataUrl。'},
       },
     },
     description: '插入可移动、可缩放的图片。',
@@ -265,9 +301,9 @@ const directCapabilities: SlidesCapability[] = [
     payloadSchema: {
       type: 'object',
       required: ['slideId'],
-      properties: { slideId },
+      properties: { slideId, content: composeContent },
     },
-    description: '在指定幻灯片后插入空白幻灯片。',
+    description: '在指定幻灯片后新增页面；可选 content 复用 slide_compose 原生网格，在同一原子命令内写入新页。content 不含页面或元素 ID。新增页、展开内容及图表样式合计计入 50 次原始操作上限；回执返回真实新页和元素 ID。省略 content 创建空白页。',
   },
   {
     op: 'slide_duplicate',
@@ -315,45 +351,11 @@ const directCapabilities: SlidesCapability[] = [
   {
     op: 'slide_compose',
     payloadSchema: {
-      type: 'object',
+      ...composeContent,
       required: ['slideId', 'columns', 'rows', 'items'],
       properties: {
         slideId,
-        x: { type: 'number' },
-        y: { type: 'number' },
-        width: { type: 'number', exclusiveMinimum: 0 },
-        height: { type: 'number', exclusiveMinimum: 0 },
-        columns: { type: 'array', items: { type: 'number', exclusiveMinimum: 0 } },
-        rows: { type: 'array', items: { type: 'number', exclusiveMinimum: 0 } },
-        gap: { type: 'number', minimum: 0, default: 24 },
-        items: {
-          type: 'array',
-          description: '按顺序叠放的 grid item；type 为 text、shape、image、svg 或 chart。chart 使用原生数据及可选 style。',
-          items: {
-            type: 'object',
-            required: ['type', 'column', 'row'],
-            properties: {
-              type: { enum: ['text', 'shape', 'image', 'svg', 'chart'] },
-              column: { type: 'integer', minimum: 0 },
-              row: { type: 'integer', minimum: 0 },
-              columnSpan: { type: 'integer', minimum: 1 },
-              rowSpan: { type: 'integer', minimum: 1 },
-              ...chartFields,
-              inset: { type: 'number', minimum: 0 },
-              text: { type: 'string' },
-              ...richTextFields,
-              font: addFont,
-              align: { enum: ['left', 'center', 'right', 'justify'] },
-              shape: { type: 'string' },
-              fillColor: { type: 'string' },
-              strokeColor: { type: ['string', 'null'] },
-              strokeWidthPt: { type: 'number', exclusiveMinimum: 0 },
-              dataUrl: { type: 'string' },
-              assetPath: { type: 'string', description: 'image 素材在当前工作区的路径，由 office 工具读取' },
-              svg: { type: 'string' },
-            },
-          },
-        },
+        ...composeContent.properties,
       },
     },
     description: `在指定幻灯片内按网格插入可编辑内容；支持字段：${Object.keys(COMPOSE_FIELDS).join(', ')}。`,
@@ -363,21 +365,19 @@ const directCapabilities: SlidesCapability[] = [
     payloadSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['slideId'],
+      required: ['slideId', 'presetId', 'content'],
       properties: {
         slideId,
-        presetId: { type: 'string', enum: ['auto','auto-content',...PRESETS.map((preset) => preset.id)], description: '默认 auto 选择适配预设；无匹配则解释原因，不隐式降级。可直接使用原生操作；auto-content 仅用于主动选择的基础草稿。' },
-        contentRef: { type: 'string', description: '查询候选返回的只读内容引用，与 content 二选一；跨候选复用同一内容，不能为了套模板删事实' },
+        presetId: { type: 'string', enum: ['auto-content',...PRESETS.map((preset) => preset.id)], description: '显式选择要绘制的原生页结构；auto-content 为基础内容草稿，不自动推荐风格。' },
         content: {
           type: 'object',
           additionalProperties: false,
           description: '本页真实内容；几何、字号、颜色和对象由预设生成，不要重复提供坐标或样式。',
           properties: {
             title: { type: 'string' },
-            scenario: {type:'string',enum:PRESET_SCENARIOS.map((scenario) => scenario.id),description:'按用途选择 presetScenarios 中的场景；后续预设页继承，可自由原生定制。'},
-            theme: {type:'string',enum:['light-editorial','dark-product'],description:'整稿视觉方向；首个成功页面后自动继承'},
-            accentColor: {type:'string',description:'用户品牌强调色 #RRGGBB；同一编辑器会话后续页面继承'},
-            role: { type: 'string', description: '页面用途，取自 presetRoles 目录；用于软排序' },
+            theme: {type:'string',enum:['light-editorial','dark-product'],description:'所选原生结构的绘制参数；设计方向由 Huashu Design 和用户要求确定'},
+            accentColor: {type:'string',description:'当前页面强调色 #RRGGBB'},
+            role: { type: 'string', description: '当前页面的内容用途' },
             relation: { type: 'string', enum: ['none','parallel','sequence','hierarchy','matrix','cycle','network'], description: '本页真实关系；选页和写入都必须匹配' },
             axes: {type:'object',description:'矩阵真实维度，必填 x/y 各 1–6 字；不得套用模板的示例维度',required:['x','y'],properties:{x:{type:'string'},y:{type:'string'}}},
             facts: { type: 'array', description: '事实只写一次，程序将未展示的必含事实追加到正文；有结构节点的页面保留原配对，不得删除事实', items: {
@@ -429,9 +429,9 @@ const directCapabilities: SlidesCapability[] = [
         },
       },
     },
-    description: '可选的原生整页预设。提供 slideId 和 content 自动选页，也可指定预设；允许复用同一版式。'
+    description: '按明确指定的 presetId 绘制原生整页结构；不推荐风格、不继承其它页面的样式。'
       + '只适用于空白页，容量与事实在写入前校验。无匹配时可使用 slide_compose 或原生操作自由构图，不必改写内容来通过匹配。'
-      + '回执 presetPages 给出角色到真实元素 ID 的映射，图表样式在同次命令内应用。候选查询与隔离预览仅在需要时使用。',
+      + '回执 presetPages 给出角色到真实元素 ID 的映射，图表样式在同次命令内应用。',
   },
 ]
 
@@ -452,8 +452,5 @@ export function getSlidesCapabilities(
     availableOperations: available.map((c) => c.op), unsupportedOperations, inapplicableOperations,
     nextOperations: requested.slice(3),
     note: '未指定 operations 时仅返回操作目录；指定实际名称读取参数，每次最多3项，剩余见 nextOperations。未知名称列在 unsupportedOperations，不影响已知项。改品牌色用 inspect palette + slide_replace_colors 原位修改，不需要关闭或新建文稿。',
-    ...(!names.length ? { designs: [...DESIGN_CATALOG] } : {}),
-    presetScenarios: presetScenarioCatalog(),
-    templateScenarios: dashiScenarioCatalog(),
   }
 }

@@ -1,0 +1,148 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "description": "Delete only version-matched custom strategies through the existing durable operation and native disabled lifecycle, preserving history and preventing reactivation.",
+  "files": [
+    {
+      "path": "agent/src/strategy_store/models.py",
+      "sha256": "020d825f2bd360a5f3779b1a2ff52dc5e0a02844f6d365a73d1b19a6be1e6b38",
+      "replacements": [
+        {
+          "before": "#: Bench types the ``bench_history`` schema accepts.\n",
+          "after": "MONA_DELETED_STRATEGY_PREFIX = \"mona_user_deleted:\"\n\n\ndef mona_deleted_strategy_version(artifact: Artifact) -> str | None:\n    \"\"\"Preserve the execution version of a product-deleted strategy.\"\"\"\n    reason = artifact.disabled_reason or \"\"\n    if artifact.type is not ArtifactType.STRATEGY or not reason.startswith(MONA_DELETED_STRATEGY_PREFIX):\n        return None\n    version = reason[len(MONA_DELETED_STRATEGY_PREFIX):]\n    return version if len(version) == 64 and all(char in \"0123456789abcdef\" for char in version) else None\n\n\n#: Bench types the ``bench_history`` schema accepts.\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/strategy_store/sqlite_store.py",
+      "sha256": "66bacc41993a6b579592e0ca48fe2b97eeee809bf7c14dbf01c9fefdddbd1d32",
+      "replacements": [
+        {
+          "before": "    validate_validation_status_transition,\n",
+          "after": "    mona_deleted_strategy_version,\n    validate_validation_status_transition,\n",
+          "count": 1
+        },
+        {
+          "before": "        existing = self.get_artifact(artifact_id)\n        if existing is None:\n            return None\n\n        now = _now_iso()\n",
+          "after": "        existing = self.get_artifact(artifact_id)\n        if existing is None:\n            return None\n        if mona_deleted_strategy_version(existing) is not None:\n            if status is ArtifactStatus.DISABLED and reason in (None, existing.disabled_reason):\n                return existing\n            raise ValueError(\"Deleted strategies cannot change lifecycle state\")\n\n        now = _now_iso()\n",
+          "count": 1
+        },
+        {
+          "before": "        existing = self.get_artifact(artifact.id)\n        if existing is None:\n            return None\n\n        # Structural enforcement",
+          "after": "        existing = self.get_artifact(artifact.id)\n        if existing is None:\n            return None\n        if mona_deleted_strategy_version(existing) is not None:\n            raise ValueError(\"Deleted strategy records are read-only\")\n\n        # Structural enforcement",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/strategy_store/store.py",
+      "sha256": "aaa480e6128210edd09011fe5d9234721c7b0242be5e303f17aa94ea7e1525eb",
+      "replacements": [
+        {
+          "before": "    validate_validation_status_transition,\n",
+          "after": "    mona_deleted_strategy_version,\n    validate_validation_status_transition,\n",
+          "count": 1
+        },
+        {
+          "before": "        existing = self._artifacts.get(artifact_id)\n        if existing is None:\n            return None\n\n        now = _now_iso()\n",
+          "after": "        existing = self._artifacts.get(artifact_id)\n        if existing is None:\n            return None\n        if mona_deleted_strategy_version(existing) is not None:\n            if status is ArtifactStatus.DISABLED and reason in (None, existing.disabled_reason):\n                return existing\n            raise ValueError(\"Deleted strategies cannot change lifecycle state\")\n\n        now = _now_iso()\n",
+          "count": 1
+        },
+        {
+          "before": "        existing = self._artifacts.get(artifact.id)\n        if existing is None:\n            return None\n\n        # Structural enforcement",
+          "after": "        existing = self._artifacts.get(artifact.id)\n        if existing is None:\n            return None\n        if mona_deleted_strategy_version(existing) is not None:\n            raise ValueError(\"Deleted strategy records are read-only\")\n\n        # Structural enforcement",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/mona_strategy_library.py",
+      "sha256": "d2d587fb93dc47b3d4ca8a0eb4f54a738a95c963b6957e43769e0e0da4a8180a",
+      "replacements": [
+        {
+          "before": "from src.config.paths import get_runs_dir, get_runtime_root\n",
+          "after": "from src.config.paths import get_runs_dir, get_runtime_root\nfrom src.strategy_store.models import MONA_DELETED_STRATEGY_PREFIX, mona_deleted_strategy_version\n",
+          "count": 1
+        },
+        {
+          "before": "            \"source\": \"builtin\", \"example\": True, \"market\": row[\"market\"], \"interval\": \"1D\",\n",
+          "after": "            \"source\": \"builtin\", \"example\": True, \"deleted\": False, \"market\": row[\"market\"], \"interval\": \"1D\",\n",
+          "count": 1
+        },
+        {
+          "before": "    version = _digest(json.dumps(linked or {\"artifact_id\": artifact.id, \"updated_at\": artifact.updated_at}, sort_keys=True).encode())\n",
+          "after": "    deleted_version = mona_deleted_strategy_version(artifact)\n    if deleted_version is not None:\n        reason = \"此自定义策略已删除，历史运行仍可查看。\"\n    version = deleted_version or _digest(json.dumps(linked or {\"artifact_id\": artifact.id, \"updated_at\": artifact.updated_at}, sort_keys=True).encode())\n",
+          "count": 1
+        },
+        {
+          "before": "        \"source\": \"custom\", \"example\": False, \"market\": market, \"interval\": (config or {}).get(\"interval\", \"1D\"),\n",
+          "after": "        \"source\": \"custom\", \"example\": False, \"deleted\": deleted_version is not None, \"market\": market, \"interval\": (config or {}).get(\"interval\", \"1D\"),\n",
+          "count": 1
+        },
+        {
+          "before": "    identities.extend(\"sdm:\" + artifact.id for artifact in _artifacts())\n",
+          "after": "    identities.extend(\"sdm:\" + artifact.id for artifact in _artifacts()\n                      if mona_deleted_strategy_version(artifact) is None)\n",
+          "count": 1
+        },
+        {
+          "before": "    if not strategy[\"can_scan\" if payload[\"operation\"] == \"strategy_scan\" else \"can_backtest\"]:\n",
+          "after": "    if strategy.get(\"deleted\"):\n        raise HTTPException(409, \"This strategy was deleted and cannot be run\")\n    if not strategy[\"can_scan\" if payload[\"operation\"] == \"strategy_scan\" else \"can_backtest\"]:\n",
+          "count": 1
+        },
+        {
+          "before": "    if strategy[\"version\"] != payload[\"strategy_version\"]:\n        raise HTTPException(409, \"Strategy version changed\")\n",
+          "after": "    if strategy[\"version\"] != payload[\"strategy_version\"]:\n        raise HTTPException(409, \"Strategy version changed\")\n    if strategy.get(\"deleted\"):\n        raise HTTPException(409, \"This strategy was deleted and cannot be run\")\n",
+          "count": 1
+        },
+        {
+          "before": "def prepare_operation(payload: dict[str, Any])",
+          "after": "\ndef validate_delete(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:\n    if set(payload) != {\"operation\", \"strategy_id\", \"strategy_version\"}:\n        raise HTTPException(422, \"Strategy deletion fields do not match the contract\")\n    identity = payload[\"strategy_id\"]\n    if not isinstance(identity, str) or not identity.startswith(\"sdm:\") or not _ID.fullmatch(identity) or \"..\" in identity:\n        raise HTTPException(422, \"Only custom strategies can be deleted\")\n    version = payload[\"strategy_version\"]\n    if not isinstance(version, str) or not _VERSION.fullmatch(version):\n        raise HTTPException(422, \"A strategy execution version is required\")\n    detail = strategy_detail(identity)\n    if detail[\"version\"] != version:\n        raise HTTPException(409, \"Strategy version changed; read it again before deleting\")\n    return dict(payload), {\"strategy_id\": identity, \"strategy_version\": version, \"strategy_name\": detail[\"name\"]}\n\n\ndef execute_delete(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:\n    from src.strategy_store.models import ArtifactStatus\n\n    store = _store()\n    try:\n        # Use the native store's reentrant lock so a Session cannot change the\n        # artifact between this worker's version check and lifecycle update.\n        with store._lock:\n            clean, references = validate_delete(payload)\n            artifact = _custom_asset(clean[\"strategy_id\"])\n            already_deleted = mona_deleted_strategy_version(artifact) is not None\n            if not already_deleted:\n                updated = store.update_status(artifact.id, ArtifactStatus.DISABLED,\n                    reason=MONA_DELETED_STRATEGY_PREFIX + clean[\"strategy_version\"])\n                if updated is None:\n                    raise HTTPException(404, \"Strategy not found\")\n        result = {\"status\": \"ok\", \"kind\": \"strategy_delete\", \"deleted\": True,\n            \"strategy_id\": clean[\"strategy_id\"], \"strategy_version\": clean[\"strategy_version\"],\n            \"already_deleted\": already_deleted}\n        return json.dumps(result, ensure_ascii=False), references\n    except HTTPException as exc:\n        result = {\"status\": \"error\", \"kind\": \"strategy_delete\", \"deleted\": False,\n            \"strategy_id\": payload.get(\"strategy_id\"), \"strategy_version\": payload.get(\"strategy_version\"),\n            \"error_code\": \"strategy_version_changed\" if exc.status_code == 409 else \"strategy_delete_unavailable\"}\n        return json.dumps(result, ensure_ascii=False), {}\n\n\ndef prepare_operation(payload: dict[str, Any])",
+          "count": 1
+        },
+        {
+          "before": "    source = \"\"\n    if detail and detail[\"source\"] == \"builtin\":\n",
+          "after": "    source = \"\"\n    if detail and detail.get(\"deleted\"):\n        raise HTTPException(409, \"This strategy was deleted and cannot be modified\")\n    if detail and detail[\"source\"] == \"builtin\":\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/mona_operations.py",
+      "sha256": "022be0a8994a6e15564a360e86a25b0aafb2a8e3d7ff32b5d725e55c0f1ea962",
+      "replacements": [
+        {
+          "before": "        \"strategy_scan\",\n",
+          "after": "        \"strategy_scan\",\n        \"strategy_delete\",\n",
+          "count": 1
+        },
+        {
+          "before": "    if operation == \"strategy_scan\" or (operation == \"backtest\" and \"strategy_id\" in payload):\n",
+          "after": "    if operation == \"strategy_delete\":\n        from src.api.mona_strategy_library import validate_delete\n        clean, references = validate_delete(payload)\n        return operation, clean, references\n    if operation == \"strategy_scan\" or (operation == \"backtest\" and \"strategy_id\" in payload):\n",
+          "count": 1
+        },
+        {
+          "before": "def _tool_call(operation: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:\n",
+          "after": "def _tool_call(operation: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:\n    if operation == \"strategy_delete\":\n        from src.api.mona_strategy_library import execute_delete\n        return execute_delete(payload)\n",
+          "count": 1
+        },
+        {
+          "before": "    operation_id = uuid.uuid4().hex\n    source = _source_receipt()\n",
+          "after": "    if store.active_count():\n        raise HTTPException(status_code=409, detail=\"A native operation is already active\")\n    operation_id = uuid.uuid4().hex\n    source = _source_receipt()\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/session/service.py",
+      "sha256": "55cca444f34dadd899b3a220c9598c76f11d676a0341635a8f3ec51bbb6fdc2c",
+      "replacements": [
+        {
+          "before": "            resolve_native_research_context(config[\"mona_native_research\"])\n",
+          "after": "            resolve_native_research_context(config[\"mona_native_research\"])\n        if (config or {}).get(\"mona_strategy_creation\") is True:\n            from src.api.mona_strategy_library import creation_context\n            creation_context(config)\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

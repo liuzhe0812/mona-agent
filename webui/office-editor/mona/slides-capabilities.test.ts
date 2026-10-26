@@ -9,7 +9,6 @@ describe('Slides capabilities', () => {
     expect(result.mode).toBe('capabilities')
     expect(result.documentType).toBe('slides')
     expect(result.operations.map(({ op }) => op)).toEqual([
-      'slide_add_template',
       'slide_replace_colors',
       'slide_add_design',
       'slide_add_path',
@@ -84,7 +83,6 @@ describe('Slides capabilities', () => {
       'slide_add_svg',
     ]))
     expect(getSlidesCapabilities('unsupported').operations.map(({ op }) => op)).toEqual([
-      'slide_add_template',
       'slide_add_design',
       'slide_add',
       'slide_duplicate',
@@ -111,5 +109,33 @@ describe('Slides capabilities', () => {
     expect(unknown.operations).toEqual([])
     expect(unknown.unsupportedOperations).toEqual(['slide_missing'])
     expect(getSlidesCapabilities('chart', ['slide_set_text']).inapplicableOperations).toEqual(['slide_set_text'])
+  })
+
+  it('reuses native compose content for optional atomic page creation without public IDs', () => {
+    const detail = getSlidesCapabilities(undefined, ['slide_add', 'slide_compose'])
+    const add = detail.operations.find((operation) => operation.op === 'slide_add')!.payloadSchema!
+    const compose = detail.operations.find((operation) => operation.op === 'slide_compose')!.payloadSchema!
+    const content = (add.properties as Record<string, Record<string, unknown>>).content!
+    expect(add.required).toEqual(['slideId'])
+    expect(content.required).toEqual(['columns', 'rows', 'items'])
+    expect(content.additionalProperties).toBe(false)
+    expect(content.properties).toEqual(Object.fromEntries(Object.entries(compose.properties as Record<string, unknown>).filter(([key]) => key !== 'slideId')))
+    expect(content.properties).not.toHaveProperty('slideId')
+    expect(content.properties).not.toHaveProperty('elementId')
+  })
+
+  it('exposes native editing without legacy templates or automatic design recommendations', () => {
+    const result = getSlidesCapabilities()
+    for (const key of ['designs', 'presets', 'presetScenarios', 'templateScenarios', 'templates']) {
+      expect(result).not.toHaveProperty(key)
+    }
+    expect(result.availableOperations).not.toContain('slide_add_template')
+    expect(getSlidesCapabilities(undefined, ['slide_add_template']).unsupportedOperations).toEqual(['slide_add_template'])
+    const detail = getSlidesCapabilities(undefined, ['slide_add_image', 'slide_add_preset'])
+    const image = detail.operations.find((operation) => operation.op === 'slide_add_image')!.payloadSchema!
+    expect(image.properties).not.toHaveProperty('assetId')
+    const preset = detail.operations.find((operation) => operation.op === 'slide_add_preset')!.payloadSchema!
+    expect(preset.required).toEqual(['slideId', 'presetId', 'content'])
+    expect((preset.properties as Record<string, { enum?: string[] }>).presetId!.enum).not.toContain('auto')
   })
 })

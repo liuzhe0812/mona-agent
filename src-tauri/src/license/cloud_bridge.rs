@@ -187,12 +187,51 @@ pub(crate) async fn notes_request(app: &tauri::AppHandle, args: &Value) -> Resul
     let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
     bound_token(args["binding"].as_str().ok_or("缺少账号绑定。")?)?;
     if args.to_string().len() > 12 * 1024 * 1024 { return Err("笔记同步请求过大。".into()); }
-    let request = args.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || crate::notes::sync::request(&request)).await
+    let initialize = args["action"] == "index" && args["initialize"] == true;
+    let mut request = args.clone();
+    if let Some(object) = request.as_object_mut() {
+        object.remove("initialize");
+    }
+    let app_handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if initialize {
+            crate::notes::initialize_cloud_default_vault(&app_handle)?;
+        }
+        crate::notes::sync::request(&request)
+    })
+        .await
         .map_err(|_| "笔记同步尚未完成，请稍后核对。")??;
     if args["action"] == "apply" && result["applied"] == true && result["reused"] == false {
         if app.emit("notes-changed", json!({"source": "cloud"})).is_err() {
             log::warn!("Notes sync committed; view notification deferred");
+        }
+    }
+    Ok(result)
+}
+
+pub(crate) async fn operations_request(
+    app: &tauri::AppHandle,
+    args: &Value,
+) -> Result<Value, String> {
+    use tauri::Emitter;
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
+    bound_token(args["binding"].as_str().ok_or("缺少账号绑定。")?)?;
+    if args.to_string().len() > 2 * 1024 * 1024 {
+        return Err("运维主机同步请求过大。".into());
+    }
+    let mut request = args.clone();
+    if let Some(object) = request.as_object_mut() {
+        object.remove("binding");
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::terminal::cloud_sync::request(&request)
+    })
+    .await
+    .map_err(|_| "运维主机同步尚未完成，请重试。")?
+    .map_err(|_| "运维主机同步失败，请重新加载后重试。")?;
+    if args["action"] == "apply" && result["applied"] == true {
+        if app.emit("operations-connections-changed", json!({})).is_err() {
+            log::warn!("Operations connection sync committed; view notification deferred");
         }
     }
     Ok(result)

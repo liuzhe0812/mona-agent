@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "description": "Expose bounded trade-journal review evidence from the existing parser and FIFO ledger without changing matching, fee allocation, behavior diagnostics or account semantics.",
+  "files": [
+    {
+      "path": "agent/src/tools/trade_journal_tool.py",
+      "sha256": "426ebe07b0bc72e405d42b8e3ad95eca3be0df00f3daecfa5493af3e14fd5169",
+      "replacements": [
+        {
+          "before": "import json\n",
+          "after": "import hashlib\nimport json\n",
+          "count": 1
+        },
+        {
+          "before": "    adjust: \"CaliberAdjust | None\" = None,\n) -> list[dict[str, Any]]:",
+          "after": "    adjust: \"CaliberAdjust | None\" = None,\n    *,\n    unmatched: list[dict[str, Any]] | None = None,\n) -> list[dict[str, Any]]:",
+          "count": 1
+        },
+        {
+          "before": "        positions are ignored.\n",
+          "after": "        positions are ignored in the return value. When supplied, ``unmatched``\n        receives the remaining native long/short lots, not inferred account positions.\n",
+          "count": 1
+        },
+        {
+          "before": "    return roundtrips\n\n\ndef _safe_div",
+          "after": "    if unmatched is not None:\n        for side, positions in ((\"buy\", longs), (\"sell\", shorts)):\n            for symbol, lots in positions.items():\n                unmatched.extend({\n                    \"symbol\": symbol, \"datetime\": lot[\"dt\"], \"side\": side,\n                    \"quantity\": lot[\"qty\"], \"price\": lot[\"price\"],\n                    \"currency\": code_currency(symbol),\n                } for lot in lots if lot[\"qty\"] > 1e-9)\n    return roundtrips\n\n\ndef _safe_div",
+          "count": 1
+        },
+        {
+          "before": "\ndef _format_range(df: pd.DataFrame) -> str:\n",
+          "after": "\n\ndef _journal_review(\n    df: pd.DataFrame,\n    *,\n    source: dict[str, Any],\n    parsed_records: int,\n) -> dict[str, Any]:\n    \"\"\"Project the existing parser and FIFO ledger; never infer account equity.\"\"\"\n    limit = 200\n    unmatched: list[dict[str, Any]] = []\n    matched = pair_trades_fifo(df, unmatched=unmatched)\n    names = dict(zip(df[\"symbol\"], df[\"name\"]))\n    currencies = sorted({code_currency(symbol) for symbol in df[\"symbol\"]})\n    by_symbol: dict[str, dict[str, Any]] = {}\n    for trade in matched:\n        symbol = trade[\"symbol\"]\n        summary = by_symbol.setdefault(symbol, {\n            \"symbol\": symbol, \"name\": names.get(symbol, \"\"),\n            \"currency\": trade[\"currency\"], \"matched_count\": 0,\n            \"matched_quantity\": 0.0, \"matched_pnl\": 0.0,\n        })\n        summary[\"matched_count\"] += 1\n        summary[\"matched_quantity\"] += trade[\"qty\"]\n        summary[\"matched_pnl\"] += trade[\"pnl\"]\n    for summary in by_symbol.values():\n        summary[\"matched_pnl\"] = round(summary[\"matched_pnl\"], 2)\n    unmatched_symbols: dict[tuple[str, str], dict[str, Any]] = {}\n    for lot in unmatched:\n        key = (lot[\"symbol\"], lot[\"side\"])\n        summary = unmatched_symbols.setdefault(key, {\n            \"symbol\": lot[\"symbol\"], \"name\": names.get(lot[\"symbol\"], \"\"),\n            \"currency\": lot[\"currency\"], \"side\": lot[\"side\"],\n            \"quantity\": 0.0, \"lots\": 0,\n        })\n        summary[\"quantity\"] += lot[\"quantity\"]\n        summary[\"lots\"] += 1\n    settlements = []\n    for currency in currencies:\n        pool = df[df[\"symbol\"].map(code_currency) == currency]\n        settlements.append({\n            \"currency\": currency,\n            \"matched_pnl\": round(sum(t[\"pnl\"] for t in matched if t[\"currency\"] == currency), 2),\n            \"recognized_fees\": round(float(pool[\"fee\"].sum()), 2),\n            \"record_count\": len(pool),\n        })\n    valid_dates = df[\"datetime\"].dropna()\n    return {\n        \"schema_version\": 1,\n        \"source_sha256\": source[\"source_sha256\"],\n        \"coverage\": {\n            **source,\n            \"parsed_records\": parsed_records,\n            \"analyzed_records\": len(df),\n            \"filtered_out_records\": parsed_records - len(df),\n            \"buy_records\": int((df[\"side\"] == \"buy\").sum()),\n            \"sell_records\": int((df[\"side\"] == \"sell\").sum()),\n            \"dividend_records\": int((df[\"side\"] == \"dividend\").sum()),\n            \"invalid_datetime_records\": int(df[\"datetime\"].isna().sum()),\n            \"date_start\": str(valid_dates.min().date()) if not valid_dates.empty else None,\n            \"date_end\": str(valid_dates.max().date()) if not valid_dates.empty else None,\n            \"currencies\": currencies,\n        },\n        \"preview\": {\"rows\": df.head(8).to_dict(orient=\"records\"),\n                    \"total\": len(df), \"limit\": 8, \"truncated\": len(df) > 8},\n        \"settlements\": settlements,\n        \"by_symbol\": list(by_symbol.values()),\n        \"matched_trades\": {\"rows\": matched[:limit], \"total\": len(matched),\n                           \"limit\": limit, \"truncated\": len(matched) > limit},\n        \"unmatched\": {\n            \"rows\": unmatched[:limit], \"total_lots\": len(unmatched),\n            \"limit\": limit, \"truncated\": len(unmatched) > limit,\n            \"by_symbol\": list(unmatched_symbols.values()),\n        },\n        \"method\": {\n            \"pairing\": \"fifo_with_short_lots\",\n            \"opening_balance\": \"not_provided\",\n            \"pnl_scope\": \"matched_trade_pnl_after_native_fee_allocation\",\n            \"fee_scope\": \"recognized_parser_fee_columns_only\",\n            \"currency_conversion\": False,\n            \"account_return\": False,\n            \"unmatched_scope\": \"remaining_imported_lots_not_account_positions\",\n            \"short_scope\": \"native_sell_before_buy_pairing_not_proof_of_short_selling\",\n        },\n    }\n\n\ndef _format_range(df: pd.DataFrame) -> str:\n",
+          "count": 1
+        },
+        {
+          "before": "    try:\n        fmt, records = parse_file(path)\n",
+          "after": "    source: dict[str, Any] = {}\n    try:\n        source[\"source_sha256\"] = hashlib.sha256(path.read_bytes()).hexdigest()\n        fmt, records = parse_file(path, diagnostics=source)\n",
+          "count": 1
+        },
+        {
+          "before": "    if analysis_type in {\"full\", \"strategy\"}:\n",
+          "after": "    if analysis_type == \"full\":\n        result[\"review\"] = _journal_review(filtered, source=source, parsed_records=len(records))\n\n    if analysis_type in {\"full\", \"strategy\"}:\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/trade_journal_parsers.py",
+      "sha256": "b56d377f7e93320536144ef96fcb0c311fe041fccd0a7dd9121b3dd154e97eff",
+      "replacements": [
+        {
+          "before": "def parse_file(path: str | Path) -> tuple[FormatName, list[TradeRecord]]:",
+          "after": "def parse_file(\n    path: str | Path, *, diagnostics: dict[str, Any] | None = None,\n) -> tuple[FormatName, list[TradeRecord]]:",
+          "count": 1
+        },
+        {
+          "before": "                return \"generic\", records\n",
+          "after": "                if diagnostics is not None:\n                    diagnostics.update(_parse_coverage(df, \"generic\"))\n                return \"generic\", records\n",
+          "count": 1
+        },
+        {
+          "before": "    return fmt, _PARSERS[fmt](df)\n",
+          "after": "    records = _PARSERS[fmt](df)\n    if diagnostics is not None:\n        diagnostics.update(_parse_coverage(df, fmt))\n    return fmt, records\n",
+          "count": 1
+        },
+        {
+          "before": "\ndef records_to_dataframe(records: list[TradeRecord]) -> pd.DataFrame:\n",
+          "after": "\ndef _parse_coverage(df: pd.DataFrame, fmt: str) -> dict[str, Any]:\n    \"\"\"Describe only fee columns actually read by the selected native parser.\"\"\"\n    columns = list(map(str, df.columns))\n    fees = {\n        \"tonghuashun\": (\"手续费\", \"印花税\", \"过户费\"),\n        \"eastmoney\": (\"佣金\", \"印花税\"),\n        \"futu\": (\"Commission\", \"Platform Fee\"),\n    }\n    if fmt == \"generic\":\n        colmap = {str(column).strip().lower(): str(column) for column in df.columns}\n        recognized = next(([colmap[key]] for key in (\"fee\", \"commission\", \"fees\") if key in colmap), [])\n    else:\n        recognized = [column for column in fees.get(fmt, ()) if column in columns]\n    return {\"source_rows\": len(df), \"raw_columns\": columns,\n            \"recognized_fee_columns\": recognized, \"fee_columns_present\": bool(recognized)}\n\n\ndef records_to_dataframe(records: list[TradeRecord]) -> pd.DataFrame:\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

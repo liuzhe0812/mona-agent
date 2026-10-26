@@ -11,6 +11,7 @@ from loguru import logger
 from mona.agent.memory import Consolidator, MemoryStore
 from mona.providers.base import LLMResponse
 from mona.session.manager import SessionManager
+from mona.utils.helpers import estimate_prompt_tokens
 
 
 @pytest.fixture
@@ -47,10 +48,13 @@ class TestConsolidationFailureBackoff:
             session.add_message("assistant", f"a{i}")
         session.metadata["_last_summary"] = {"text": "Prior handoff"}
         sessions.save(session)
+        consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(12_000, "test-pressure"))
         mock_provider.chat_with_retry.return_value = LLMResponse(
             content="Unavailable", finish_reason="error", error_kind="connection",
         )
-        mock_provider.estimate_prompt_tokens.return_value = (12_000, "test")
+        mock_provider.estimate_prompt_tokens.side_effect = lambda messages, tools, _model: (
+            estimate_prompt_tokens(messages, tools), "test-summary-request",
+        )
         return consolidator, session, clock
 
     async def test_failure_preserves_context_and_retries_after_cooldown(
@@ -73,7 +77,7 @@ class TestConsolidationFailureBackoff:
 
         clock.now += consolidator._FAILURE_RETRY_DELAY_SECONDS
         mock_provider.chat_with_retry.return_value = LLMResponse(content="Recovered handoff")
-        mock_provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+        consolidator.estimate_session_prompt_tokens.side_effect = [(12_000, "test-pressure"), (100, "test-pressure")]
         await consolidator.maybe_consolidate_by_tokens(
             saved,
         )
@@ -110,7 +114,7 @@ class TestConsolidationFailureBackoff:
         other = consolidator.sessions.get_or_create("websocket:other")
         other.messages = deepcopy(session.messages)
         mock_provider.chat_with_retry.return_value = LLMResponse(content="Recovered handoff")
-        mock_provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+        consolidator.estimate_session_prompt_tokens.side_effect = [(12_000, "test-pressure"), (100, "test-pressure")]
         await consolidator.maybe_consolidate_by_tokens(other)
         assert other.last_consolidated > 0
         assert session.last_consolidated == 0
@@ -120,7 +124,7 @@ class TestConsolidationFailureBackoff:
         await consolidator.maybe_consolidate_by_tokens(session)
         assert session.last_consolidated == 0
         consolidator.set_provider(mock_provider, "replacement-model", 10_000)
-        mock_provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+        consolidator.estimate_session_prompt_tokens.side_effect = [(12_000, "test-pressure"), (100, "test-pressure")]
         await consolidator.maybe_consolidate_by_tokens(session)
         assert session.last_consolidated > 0
 
@@ -136,7 +140,7 @@ class TestConsolidationFailureBackoff:
         await consolidator.maybe_consolidate_by_tokens(session)
         mock_provider.chat_with_retry.side_effect = None
         mock_provider.chat_with_retry.return_value = LLMResponse(content="Recovered handoff")
-        mock_provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+        consolidator.estimate_session_prompt_tokens.side_effect = [(12_000, "test-pressure"), (100, "test-pressure")]
         await consolidator.maybe_consolidate_by_tokens(session)
         assert session.last_consolidated > 0
 

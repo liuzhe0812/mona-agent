@@ -1,2 +1,14 @@
 # Ensure shell scripts always use LF line endings (Docker/Linux compat)
 *.sh text eol=lf
+
+# Preserve the exact bytes of frozen receipts, patches, and dependency locks.
+/third_party/vibe-trading/*.json -text whitespace=cr-at-eol
+/third_party/vibe-trading/patches/*.json -text whitespace=cr-at-eol
+/third_party/vibe-trading/*.lock -text whitespace=cr-at-eol
+/third_party/vibe-trading/*.zip binary
+/tests/fixtures/stock_vibe/**/*.csv text eol=lf
+/tests/fixtures/stock_vibe/**/*.json text eol=lf
+/mona/runtime/process_tree.py text eol=lf
+
+# Vendored design resources are verified against the pinned upstream Git blobs.
+/mona/skills/mona-design/** -text

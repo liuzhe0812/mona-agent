@@ -7,6 +7,7 @@ import {
   fallbackAgentName,
 } from "@/components/room/AgentAvatar";
 import { AgentLogo } from "@/components/AgentLogo";
+import { MONA_BRAND_AVATAR } from "@/lib/brand-assets";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import type { ConversationMeta, UIMessage } from "@/lib/types";
 
@@ -26,15 +27,15 @@ describe("AgentLogo", () => {
     const logo = container.querySelector(".mona-agent-logo");
 
     expect(logo?.className).toContain("mona-agent-logo--working");
-    expect(logo?.querySelector('img[src="/brand/mona_app_icon.png"]')).toBeTruthy();
+    expect(logo?.querySelector('img[src="/brand/mona_app_icon.png?v=a829e97b8751"]')).toBeTruthy();
     expect(logo?.querySelector("svg")).toBeNull();
     expect(logo?.querySelector("style")?.textContent).toContain("prefers-reduced-motion");
   });
 
-  it("keeps the compact avatar variant on the same raster identity", () => {
+  it("uses the current portrait for the compact assistant avatar", () => {
     const { container } = render(<AgentLogo state="idle" variant="avatar" />);
 
-    expect(container.querySelector('img[src="/brand/mona_avatar_white.png"]')).toBeTruthy();
+    expect(container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`)).toBeTruthy();
     expect(container.querySelector("style")?.textContent).not.toContain(
       "mona-agent-logo--welcome",
     );
@@ -44,14 +45,31 @@ describe("AgentLogo", () => {
 describe("ConversationAvatar", () => {
   it("uses the current human portrait as Mona's default Agent avatar", () => {
     const { container } = render(<AgentAvatar agentId="mona" />);
-    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeTruthy();
+    expect(container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`)).toBeTruthy();
     expect(container.querySelector('img[src="/brand/mona_avatar_white.png"]')).toBeNull();
+  });
+
+  it.each(["", "/brand/mona_avatar_human.png", "/brand/v2/avatar.webp", "/brand/v2/avatar.webp?v=8f12d953a395"])("normalizes Mona's default avatar URL %s to the current portrait", (avatarUrl) => {
+    const { container } = render(
+      <AgentAvatar agentId="mona" avatarUrl={avatarUrl} />,
+    );
+
+    expect(container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`)).toBeTruthy();
+  });
+
+  it.each([
+    "https://example.com/custom-mona-avatar.png",
+    "data:image/png;base64,dXNlci1hdmF0YXI=",
+  ])("preserves Mona's custom avatar URL %s", (avatarUrl) => {
+    const { container } = render(<AgentAvatar agentId="mona" avatarUrl={avatarUrl} />);
+
+    expect(container.querySelector(`img[src="${avatarUrl}"]`)).toBeTruthy();
   });
 
   it("pairs the task initial with a small Mona identity badge", () => {
     const { container } = render(<ConversationAvatar taskTitle="制作新能源报告" />);
     expect(container.textContent).toBe("制");
-    const badge = container.querySelector('img[src="/brand/mona_avatar_human.png"]');
+    const badge = container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`);
     expect(badge).toBeTruthy();
   });
 
@@ -65,7 +83,12 @@ describe("ConversationAvatar", () => {
     );
 
     expect(container.querySelector(`img[src="${customAvatar}"]`)).toBeTruthy();
-    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeNull();
+    expect(container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`)).toBeNull();
+  });
+
+  it("does not migrate a portrait explicitly configured for a different agent", () => {
+    const { container } = render(<AgentAvatar agentId="agent.custom" avatarUrl="/brand/v2/avatar.webp" />);
+    expect(container.querySelector("img")).toHaveAttribute("src", "/brand/v2/avatar.webp");
   });
 
   it("renders a stacked cluster with overflow count for rooms", () => {
@@ -147,7 +170,7 @@ describe("ThreadMessages multi-author projection", () => {
     expect(screen.getByText("股神")).toBeInTheDocument();
     expect(screen.getByText("Mona 的汇总。")).toBeInTheDocument();
     expect(screen.getByText("分析师的补充。")).toBeInTheDocument();
-    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeTruthy();
+    expect(container.querySelector(`img[src="${MONA_BRAND_AVATAR}"]`)).toBeTruthy();
   });
 
   it("uses a left avatar column and weak time divider for spaced group replies", () => {

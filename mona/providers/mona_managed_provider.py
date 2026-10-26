@@ -55,6 +55,17 @@ class MonaManagedProvider(OpenAICompatProvider):
         return request
 
     @staticmethod
+    def _handle_error(e: Exception, **kwargs: Any) -> Any:
+        response = OpenAICompatProvider._handle_error(e, **kwargs)
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            if isinstance(body.get("detail"), str):
+                response.content = body["detail"]
+            if isinstance(body.get("error"), str):
+                response.error_code = body["error"]
+        return response
+
+    @staticmethod
     def _friendly_error(response: Any) -> Any:
         messages = {
             402: "模型余额不足，请在账户中充值后重试。",
@@ -63,6 +74,13 @@ class MonaManagedProvider(OpenAICompatProvider):
         }
         if response.error_status_code in messages:
             response.content = messages[response.error_status_code]
+        elif response.error_status_code == 409:
+            response.content = "模型请求失败，请稍后重试。"
+        elif response.error_kind in {"timeout", "connection"} or (
+            response.error_status_code is not None and response.error_status_code >= 500
+            and response.error_code not in {"model_capacity_exceeded", "managed_model_unavailable"}
+        ):
+            response.content = "模型请求失败，请稍后重试。"
         if response.finish_reason == "error" or response.error_status_code is not None:
             response.error_should_retry = False
         return response

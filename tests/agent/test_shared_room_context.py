@@ -285,12 +285,14 @@ async def test_collaboration_step_keeps_bound_model_context_metadata(
 
 
 def _consolidator(manager):
-    return Consolidator(
+    consolidator = Consolidator(
         store=MemoryStore(manager.workspace), provider=manager.provider, model="test-model",
         sessions=manager._sessions, context_window_tokens=10_000,
         build_messages=lambda **kwargs: kwargs["history"], get_tool_definitions=lambda: [],
         max_completion_tokens=100,
     )
+    consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(12_000, "test-pressure"))
+    return consolidator
 
 
 def _add_room_history(session):
@@ -317,7 +319,9 @@ async def test_room_compaction_saves_separate_public_summary_without_private_too
         LLMResponse(content=f"Private summary {PRIVATE_TOOL_MARKER}"),
         LLMResponse(content=PUBLIC_CONSTRAINT),
     ]
-    manager.provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+    consolidator.estimate_session_prompt_tokens.side_effect = [
+        (12_000, "test-pressure"), (100, "test-pressure"),
+    ]
 
     if idle:
         await consolidator.compact_idle_session(session.key, max_suffix=4)
@@ -364,7 +368,6 @@ async def test_public_summary_failure_retains_history_cursor_and_existing_summar
     manager.provider.chat_with_retry.side_effect = [
         LLMResponse(content="New private summary"), public_result,
     ]
-    manager.provider.estimate_prompt_tokens.return_value = (12_000, "test")
 
     await consolidator.maybe_consolidate_by_tokens(session)
     await consolidator.compact_idle_session(session.key, max_suffix=4)
@@ -393,7 +396,6 @@ async def test_room_summary_save_failure_rolls_back_metadata_cursor_and_messages
     manager.provider.chat_with_retry.side_effect = [
         LLMResponse(content="New private summary"), LLMResponse(content="New public summary"),
     ]
-    manager.provider.estimate_prompt_tokens.return_value = (12_000, "test")
     monkeypatch.setattr(manager._sessions, "save", MagicMock(side_effect=OSError("Disk unavailable")))
 
     with pytest.raises(OSError, match="Disk unavailable"):
@@ -425,7 +427,6 @@ async def test_private_history_write_failure_does_not_commit_public_summary(
     manager.provider.chat_with_retry.side_effect = [
         LLMResponse(content="New private summary"), LLMResponse(content="New public summary"),
     ]
-    manager.provider.estimate_prompt_tokens.return_value = (12_000, "test")
     monkeypatch.setattr(consolidator.store, "append_history", MagicMock(side_effect=OSError("Disk unavailable")))
 
     await consolidator.maybe_consolidate_by_tokens(session)
@@ -445,7 +446,9 @@ async def test_legacy_room_summary_uses_retained_public_prefix_and_marks_coverag
     manager.provider.chat_with_retry.side_effect = [
         LLMResponse(content="New private summary"), LLMResponse(content=PUBLIC_CONSTRAINT),
     ]
-    manager.provider.estimate_prompt_tokens.side_effect = [(12_000, "test"), (100, "test")]
+    consolidator.estimate_session_prompt_tokens.side_effect = [
+        (12_000, "test-pressure"), (100, "test-pressure"),
+    ]
 
     await consolidator.maybe_consolidate_by_tokens(session)
 
@@ -463,7 +466,6 @@ async def test_room_summary_cancellation_does_not_leave_a_pending_shared_commit(
     manager.provider.chat_with_retry.side_effect = [
         LLMResponse(content="Private summary"), LLMResponse(content="Public summary"),
     ]
-    manager.provider.estimate_prompt_tokens.return_value = (12_000, "test")
 
     async def on_compaction(active):
         if not active:

@@ -46,18 +46,18 @@ export function AccountDevices() {
   }, [read]);
 
   const revoke = async () => {
-    if (!selected || mutationPending.current) return;
+    if (!selected || selected.current || mutationPending.current) return;
     const target = selected;
     const request = generation.current;
     mutationPending.current = true;
     setRemoving(true);
     setRemoveError("");
     try {
-      const result = await removeLoginDevice({ id: target.id, revision: target.revision });
+      await removeLoginDevice({ id: target.id, revision: target.revision });
       if (request !== generation.current) return;
       setSelected(null);
       setData((current) => current && ({ ...current, devices: current.devices.filter((device) => device.id !== target.id) }));
-      if (!result.current_device_removed) await read();
+      await read();
     } catch (error) {
       if (request === generation.current) setRemoveError(accountDeviceErrorMessage(error, "remove"));
     } finally {
@@ -95,9 +95,9 @@ export function AccountDevices() {
                   {devicePlatformLabel[device.platform]} · 最近使用 <time dateTime={device.last_seen_at} title={new Date(device.last_seen_at).toLocaleString("zh-CN")}>{lastUsed(device.last_seen_at)}</time>
                 </p>
               </div>
-              <Button variant="ghost" size="sm" className="shrink-0 text-destructive hover:text-destructive"
+              {!device.current && <Button variant="ghost" size="sm" className="shrink-0 text-destructive hover:text-destructive"
                 disabled={loading || removing || !!readError} aria-label={`移除 ${device.name}`}
-                onClick={() => { setRemoveError(""); setSelected(device); }}>移除</Button>
+                onClick={() => { setRemoveError(""); setSelected(device); }}>移除</Button>}
             </li>
           ))}
         </ul>}
@@ -105,10 +105,9 @@ export function AccountDevices() {
       <Dialog open={selected !== null} onOpenChange={(open) => { if (!open && !mutationPending.current) { setSelected(null); setRemoveError(""); } }}>
         <DialogContent className="sm:max-w-md" showCloseButton={!removing}>
           <DialogHeader>
-            <DialogTitle>{selected?.current ? "移除当前设备？" : "移除登录设备？"}</DialogTitle>
+            <DialogTitle>移除登录设备？</DialogTitle>
             <DialogDescription className="break-words">
-              {selected?.current ? "将退出当前设备的账号登录并释放名额。" : `将退出“${selected?.name ?? ""}”的账号登录并释放名额。`}
-              本地资料和任务不会删除。
+              将退出“{selected?.name ?? ""}”的账号登录并释放名额。本地资料和任务不会删除。
             </DialogDescription>
           </DialogHeader>
           {removeError && <p role="alert" className="text-caption text-destructive">{removeError}</p>}

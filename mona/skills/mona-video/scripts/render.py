@@ -676,6 +676,20 @@ async def render_project_async(
     width, height = storyboard.get("resolution") or (DEFAULT_WIDTH, DEFAULT_HEIGHT)
     design_size = (width, height)
     timeline, total_duration = compute_timeline(scenes, storyboard)
+    audio_timeline = timeline
+    meta_path = project / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    if meta.get("authoringMode") == "huashu-motion":
+        from mona.video_authoring import composition_path
+
+        full_composition = composition_path(project, meta)
+        if full_composition is None:
+            raise ValueError("整片动画尚未准备完成，请重新制作后导出")
+        audio_timeline, total_duration = compute_timeline([
+            (int(scene["index"]), scenes_dir / f"scene_{int(scene['index']):02d}.html")
+            for scene in meta.get("scenes") or []
+        ], storyboard)
+        timeline = [(1, full_composition, 0.0, total_duration)]
 
     # Apply quality preset
     preset = _QUALITY_PRESETS.get(quality, _QUALITY_PRESETS["standard"])
@@ -786,14 +800,14 @@ async def render_project_async(
         # 若 narration.mp3 不存在但已有分镜音频,自动拼接(synthesize_narration
         # 可能因单场景失败中断而未执行 concat)
         if not narration_mp3.is_file():
-            scene_mp3s = [project / "audio" / f"scene_{num:02d}.mp3" for num, *_rest in timeline]
+            scene_mp3s = [project / "audio" / f"scene_{num:02d}.mp3" for num, *_rest in audio_timeline]
             if any(path.is_file() for path in scene_mp3s):
                 if progress_cb is not None:
                     progress_cb("muxing", 95.5, "正在准备声音...")
                 _concat_scene_audio(
                     [path if path.is_file() else None for path in scene_mp3s],
                     narration_mp3, cancel_event, ffmpeg,
-                    durations=[duration for _num, _path, _start, duration in timeline],
+                    durations=[duration for _num, _path, _start, duration in audio_timeline],
                 )
         if narration_mp3.is_file():
             if progress_cb is not None:

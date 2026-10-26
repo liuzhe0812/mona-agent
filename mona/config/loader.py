@@ -209,6 +209,8 @@ def _env_replace(match: re.Match[str]) -> str:
 
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
+    # The removed stock implementation's settings must not prevent startup.
+    data.pop("stock", None)
     if "cloudSync" in data:
         data["cloud_sync"] = data.pop("cloudSync")
     defaults = data.get("agents", {}).get("defaults", {})

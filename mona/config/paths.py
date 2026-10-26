@@ -121,7 +121,7 @@ def get_stock_projects_dir(workspace: str | Path) -> Path:
 
 
 def get_stock_project_dir(workspace: str | Path, run_id: str) -> Path:
-    """Return one run-scoped stock product directory."""
+    """Resolve historical stock artifact references used by shared sessions."""
     if not run_id or any(ch not in _STORAGE_ID_CHARS for ch in run_id):
         raise ValueError(f"Invalid stock run id {run_id!r}")
     candidate = Path(workspace).expanduser().resolve()
@@ -165,11 +165,6 @@ def is_agent_workspace(workspace: str | Path | None) -> bool:
     resolved = current.resolve(strict=False)
     root = default.resolve(strict=False)
     return resolved == root or root in resolved.parents
-
-
-def get_cli_history_path() -> Path:
-    """Return the shared CLI history file path."""
-    return Path.home() / ".mona" / "history" / "cli_history"
 
 
 def get_legacy_sessions_dir() -> Path:

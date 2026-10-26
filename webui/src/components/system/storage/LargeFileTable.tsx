@@ -174,24 +174,24 @@ export function LargeFileTable({ files, onAnalyze, analyzingFileId, onTrash }: P
               <col className="w-20" />
               <col className="w-28" />
             </colgroup>
-            <thead className="sticky top-0 z-10 bg-background text-muted-foreground">
-              <tr className="h-8 bg-muted/60">
-                <th scope="col" className="border-r border-border/60 px-3 py-1 text-left font-normal">文件</th>
-                <th scope="col" className="border-r border-border/60 px-3 py-1 text-left font-normal">类型</th>
-                <th scope="col" className="border-r border-border/60 px-3 py-1 text-left font-normal">修改时间</th>
-                <th scope="col" className="border-r border-border/60 px-3 py-1 text-right font-normal">大小</th>
-                <th scope="col" className="px-3 py-1"></th>
+            <thead className="sticky top-0 z-10 bg-card text-micro text-muted-foreground">
+              <tr>
+                <th scope="col" className="py-2.5 pr-3 text-left font-normal">文件</th>
+                <th scope="col" className="px-3 py-2.5 text-left font-normal">类型</th>
+                <th scope="col" className="px-3 py-2.5 text-left font-normal">修改时间</th>
+                <th scope="col" className="px-3 py-2.5 text-right font-normal">大小</th>
+                <th scope="col" className="py-2.5 pl-3"></th>
               </tr>
             </thead>
             <tbody>
               {displayFiles.map((file, index) => (
                 <tr
                   key={`${file.parentDirName}-${file.extension}-${index}`}
-                  className="cursor-default border-b border-border/30 hover:bg-accent/40 last:border-b-0"
+                  className="cursor-default border-t border-border/50 hover:bg-accent/40"
                   onContextMenu={(e) => handleContextMenu(e, file.path)}
                   title={file.path}
                 >
-                  <td className="truncate py-2 pl-3 pr-2" title={getFileName(file.path)}>
+                  <td className="truncate py-2.5 pl-0 pr-3" title={getFileName(file.path)}>
                     <span className="flex min-w-0 items-center gap-1.5">
                       <FileSystemIcon name={file.path} />
                       <span className="truncate font-medium">{getFileName(file.path)}</span>

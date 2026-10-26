@@ -13,6 +13,7 @@ from mona.development.contracts import ExecutorId
 from mona.development.executors.base import ExecutorProbe
 from mona.development.executors.login import AUTH_FAILURE_REASONS
 from mona.development.executors.rpc import RpcError
+from mona.development.executors.workbuddy_application import workbuddy_cli_launcher
 from mona.development.store import DevelopmentError
 
 # Only host-owned error codes may cross the SDK worker boundary.
@@ -62,9 +63,14 @@ def failed_probe(executor: ExecutorId, error: DevelopmentError, *, executable: s
 async def native_version(executable: Path, executor: ExecutorId, *, cwd: Path,
                          env: Mapping[str, str], timeout: float = 8) -> str:
     """A version check is not a model request or an authenticated session."""
+    launcher = workbuddy_cli_launcher(executable) if executor == ExecutorId.CODEBUDDY else None
+    command = (str(launcher), str(executable)) if launcher else (str(executable),)
+    launch_env = dict(env)
+    if launcher:
+        launch_env["ELECTRON_RUN_AS_NODE"] = "1"
     kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-    spawn = asyncio.create_task(asyncio.create_subprocess_exec(str(executable), "--version", cwd=str(cwd),
-        env=dict(env), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+    spawn = asyncio.create_task(asyncio.create_subprocess_exec(*command, "--version", cwd=str(cwd),
+        env=launch_env, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, **kwargs))
     process = None
     readers: list[asyncio.Task] = []

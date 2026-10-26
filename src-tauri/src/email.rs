@@ -3,12 +3,16 @@
 //! 收发逻辑复用 Python 侧 `mona/channels/email.py`，Rust 侧只做本地缓存和
 //! gateway HTTP 转发，避免引入 imap/lettre 等重型依赖。
 
+mod search;
+
 use crate::settings::app_data_dir;
+mod outbox;
+mod sync;
 use base64::Engine;
 use ring::aead;
 use ring::pbkdf2;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -1143,6 +1147,10 @@ pub struct SyncRequest {
 pub struct SyncResult {
     pub new_count: u32,
     pub new_messages: Vec<EmailMessage>,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub processed_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1947,6 +1955,8 @@ impl EmailState {
             ",
         )
         .map_err(|e| e.to_string())?;
+        search::init_schema(conn)?;
+        sync::init_schema(conn)?;
         Ok(())
     }
 }
@@ -2567,128 +2577,36 @@ pub async fn email_outbox_delete(
     state: tauri::State<'_, EmailState>,
     id: String,
 ) -> Result<(), String> {
-    let conn = state.conn()?;
-    conn.execute("DELETE FROM email_outbox WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    outbox::cancel(&state.conn()?, &id)
 }
 
-/// 处理到期的 outbox 邮件：调用 gateway 发送，成功后更新状态
+/// Send due items only after durably recording an attempt.
 #[tauri::command]
 pub async fn email_outbox_process(
     state: tauri::State<'_, EmailState>,
+    app_handle: AppHandle,
     gateway_url: String,
 ) -> Result<u32, String> {
     if gateway_url.is_empty() {
-        return Err("gateway URL 为空".into());
+        return Err("邮件服务尚未就绪".into());
     }
-    let db_path = state.db_path().to_path_buf();
-
-    // Phase 1: 同步读取 — 查询到期邮件 + 获取凭据 + 构建请求体（不跨 await）
-    struct PendingSend {
-        id: String,
-        req_body: Value,
-    }
-    let pending: Vec<PendingSend> = {
-        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut stmt = conn
-            .prepare("SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_text, body_html, in_reply_to, attachments_json FROM email_outbox WHERE status = 'pending' AND scheduled_at <= ?1")
-            .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, String, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>, Option<String>)> = stmt
-            .query_map(params![now], |row| {
-                Ok((
-                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
-
-        let mut result = Vec::new();
-        for (id, account_id, to, cc, bcc, subject, body_text, body_html, in_reply_to, attachments_json) in rows {
-            let account = match get_imap_credentials(&conn, &account_id) {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = conn.execute(
-                        "UPDATE email_outbox SET status = 'failed', error = ?1 WHERE id = ?2",
-                        params![format!("账号不存在: {e}"), id],
-                    );
-                    continue;
-                }
-            };
-            let smtp_password = match decrypt_password(&account.smtp_password) {
-                Ok(p) => p,
-                Err(e) => {
-                    let _ = conn.execute(
-                        "UPDATE email_outbox SET status = 'failed', error = ?1 WHERE id = ?2",
-                        params![format!("密码解密失败: {e}"), id],
-                    );
-                    continue;
-                }
-            };
-            let attachments: Value = attachments_json
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(Value::Array(vec![]));
-            let req_body = serde_json::json!({
-                "smtpHost": account.smtp_host,
-                "smtpPort": account.smtp_port,
-                "smtpUsername": account.smtp_username,
-                "smtpPassword": smtp_password,
-                "useSsl": account.smtp_use_ssl,
-                "fromAddress": account.from_address,
-                "fromName": account.from_name,
-                "to": to.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
-                "cc": cc.as_deref().unwrap_or("").split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
-                "bcc": bcc.as_deref().unwrap_or("").split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
-                "subject": subject,
-                "bodyHtml": body_html.as_deref().unwrap_or(""),
-                "bodyText": body_text,
-                "inReplyTo": in_reply_to,
-                "attachments": attachments,
-            });
-            result.push(PendingSend { id, req_body });
+    match outbox::process(state.inner(), &gateway_url).await {
+        Ok((sent, needs_attention)) => {
+            let _ = app_handle.emit("email-outbox-updated", ());
+            if needs_attention {
+                let _ = app_handle.emit_to("main", "email-action-required", serde_json::json!({
+                    "message": "有定时邮件未能确认发送结果，请在邮件页的定时邮件中查看，先核对已发送邮件再决定是否重发。"
+                }));
+            }
+            Ok(sent)
         }
-        result
-    }; // conn dropped
-
-    // Phase 2: 异步发送 — 不持有 Connection
-    let url = format!("{}/email/send", gateway_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
-    let mut sent_count = 0u32;
-    let mut updates: Vec<(String, &'static str, Option<String>)> = Vec::new();
-
-    for item in pending {
-        match client.post(&url).json(&item.req_body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                updates.push((item.id, "sent", None));
-                sent_count += 1;
-            }
-            Ok(resp) => {
-                let text = resp.text().await.unwrap_or_default();
-                updates.push((item.id, "failed", Some(text)));
-            }
-            Err(e) => {
-                updates.push((item.id, "failed", Some(format!("网络错误: {e}"))));
-            }
+        Err(error) => {
+            let _ = app_handle.emit_to("main", "email-action-required", serde_json::json!({
+                "message": "定时邮件的发送状态未能保存，请先核对已发送邮件，勿直接重复发送。"
+            }));
+            Err(error)
         }
     }
-
-    // Phase 3: 同步写入 — 更新状态
-    if !updates.is_empty() {
-        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
-        for (id, status, error) in updates {
-            let _ = conn.execute(
-                "UPDATE email_outbox SET status = ?1, error = ?2 WHERE id = ?3",
-                params![status, error, id],
-            );
-        }
-    }
-
-    Ok(sent_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -2717,11 +2635,17 @@ fn extract_bodies(
     }
 }
 
-/// 递归提取附件元信息（Content-Disposition: attachment 的 part）
-/// 返回 { filename, contentType, size, partId } 列表，前端用于展示和按需下载
+/// 递归提取附件元信息，并保留内联 part 的 Content-ID，供草稿恢复使用。
 fn extract_attachments(msg: &mailparse::ParsedMail<'_>, attachments: &mut Vec<serde_json::Value>) {
     let disposition = msg.get_content_disposition();
-    if disposition.disposition == mailparse::DispositionType::Attachment {
+    let content_id = msg
+        .headers
+        .iter()
+        .find(|header| header.get_key().eq_ignore_ascii_case("content-id"))
+        .and_then(|header| normalize_content_id(&header.get_value()));
+    let is_attachment = disposition.disposition == mailparse::DispositionType::Attachment;
+    let is_inline = !is_attachment && content_id.is_some();
+    if is_attachment || is_inline {
         let filename = disposition
             .params
             .iter()
@@ -2738,12 +2662,17 @@ fn extract_attachments(msg: &mailparse::ParsedMail<'_>, attachments: &mut Vec<se
             .unwrap_or_else(|| "未命名附件".to_string());
         let content_type = msg.ctype.mimetype.clone();
         let size = msg.get_body_raw().map(|b| b.len()).unwrap_or(0) as u64;
-        attachments.push(serde_json::json!({
+        let mut attachment = serde_json::json!({
             "filename": filename,
             "contentType": content_type,
             "size": size,
             "partId": String::new(),
-        }));
+            "isInline": is_inline,
+        });
+        if let Some(content_id) = content_id {
+            attachment["contentId"] = serde_json::Value::String(content_id);
+        }
+        attachments.push(attachment);
     }
     // 递归子 part，包括 message/* 嵌套邮件（转发邮件内的附件）
     for part in &msg.subparts {
@@ -2753,7 +2682,65 @@ fn extract_attachments(msg: &mailparse::ParsedMail<'_>, attachments: &mut Vec<se
 
 /// 递归查找指定文件名的附件 part，返回其解码后的原始字节
 /// skill 第五节：完整 .eml 中的附件已经在本地，用户点击下载时从 .eml 解码并导出，不再请求网络
-fn find_attachment_bytes<'a>(msg: &'a mailparse::ParsedMail<'_>, filename: &str) -> Option<(&'a mailparse::ParsedMail<'a>, String)> {
+fn normalize_content_id(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches(|ch| ch == '<' || ch == '>').trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn find_attachment_bytes<'a>(
+    msg: &'a mailparse::ParsedMail<'_>,
+    filename: &str,
+    content_id: Option<&str>,
+) -> Option<(&'a mailparse::ParsedMail<'a>, String)> {
+    if let Some(content_id) = content_id.and_then(normalize_content_id) {
+        if let Some(found) = find_attachment_by_content_id(msg, &content_id) {
+            return Some(found);
+        }
+    }
+    find_attachment_by_filename(msg, filename)
+}
+
+fn find_attachment_by_content_id<'a>(
+    msg: &'a mailparse::ParsedMail<'_>,
+    content_id: &str,
+) -> Option<(&'a mailparse::ParsedMail<'a>, String)> {
+    let disposition = msg.get_content_disposition();
+    let part_content_id = msg
+        .headers
+        .iter()
+        .find(|header| header.get_key().eq_ignore_ascii_case("content-id"))
+        .and_then(|header| normalize_content_id(&header.get_value()));
+    if let Some(part_content_id) = part_content_id {
+        if part_content_id.eq_ignore_ascii_case(content_id) {
+            let fname = disposition
+                .params
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("filename"))
+                .map(|(_, v)| v.clone())
+                .or_else(|| {
+                    msg.ctype
+                        .params
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("name"))
+                        .map(|(_, v)| v.clone())
+                })
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "未命名附件".to_string());
+            return Some((msg, fname));
+        }
+    }
+    for part in &msg.subparts {
+        if let Some(found) = find_attachment_by_content_id(part, content_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_attachment_by_filename<'a>(
+    msg: &'a mailparse::ParsedMail<'_>,
+    filename: &str,
+) -> Option<(&'a mailparse::ParsedMail<'a>, String)> {
     let disposition = msg.get_content_disposition();
     if disposition.disposition == mailparse::DispositionType::Attachment {
         let fname = disposition
@@ -2775,11 +2762,37 @@ fn find_attachment_bytes<'a>(msg: &'a mailparse::ParsedMail<'_>, filename: &str)
         }
     }
     for part in &msg.subparts {
-        if let Some(found) = find_attachment_bytes(part, filename) {
+        if let Some(found) = find_attachment_by_filename(part, filename) {
             return Some(found);
         }
     }
     None
+}
+
+fn extract_attachment_response(
+    eml_bytes: &[u8],
+    filename: &str,
+    content_id: Option<&str>,
+) -> Result<Option<FetchAttachmentResponse>, String> {
+    let parsed = match mailparse::parse_mail(eml_bytes) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            log::warn!("[email-fetch-attachment] mailparse 解析失败: {error}");
+            return Ok(None);
+        }
+    };
+    let Some((part, actual_filename)) = find_attachment_bytes(&parsed, filename, content_id) else {
+        return Err("本地邮件缓存中未找到该附件，请重新同步邮件后重试。".into());
+    };
+    let raw_bytes = part
+        .get_body_raw()
+        .map_err(|_| "读取本地附件失败，请重新同步邮件后重试。".to_string())?;
+    Ok(Some(FetchAttachmentResponse {
+        filename: actual_filename,
+        content_type: part.ctype.mimetype.clone(),
+        size: raw_bytes.len() as u64,
+        data: base64::engine::general_purpose::STANDARD.encode(&raw_bytes),
+    }))
 }
 
 /// 递归收集内联图片（Content-ID 或 inline disposition 的 image/*），转成 data URI
@@ -3010,68 +3023,243 @@ pub async fn email_get_messages(
     Ok(msgs)
 }
 
-/// 统一收件箱：聚合所有账号 INBOX，按日期降序，使用 date 作为游标（uid 跨账号会冲突）
-/// 用于 P5-2 统一收件箱视图
+fn unified_inbox_page(
+    conn: &Connection,
+    before_date: Option<&str>,
+    before_account_id: Option<&str>,
+    before_uid: Option<&str>,
+    limit: u32,
+) -> Result<Vec<EmailMessage>, String> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT rowid, date, account_id, uid FROM messages WHERE folder = 'INBOX'")
+        .map_err(|e| e.to_string())?;
+    let mut candidates = stmt
+        .query_map([], |row| {
+            let date: String = row.get(1)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                search::parse_timestamp(&date).unwrap_or(i64::MIN),
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+
+    if let Some(date) = before_date.filter(|date| !date.is_empty()) {
+        let before_timestamp = search::parse_timestamp(date).unwrap_or(i64::MIN);
+        if let (Some(account_id), Some(uid)) = (before_account_id, before_uid) {
+            candidates.retain(|(_, timestamp, candidate_account, candidate_uid)| {
+                *timestamp < before_timestamp
+                    || (*timestamp == before_timestamp
+                        && (candidate_account.as_str() > account_id
+                            || (candidate_account.as_str() == account_id
+                                && candidate_uid.as_str() > uid)))
+            });
+        } else {
+            // Keep the legacy date-only cursor working for callers that have not sent identity fields.
+            candidates.retain(|(_, timestamp, _, _)| *timestamp < before_timestamp);
+        }
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    candidates.truncate(limit as usize);
+    let rowids: Vec<i64> = candidates.into_iter().map(|(rowid, _, _, _)| rowid).collect();
+    if rowids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut messages_by_rowid = std::collections::HashMap::with_capacity(rowids.len());
+    for chunk in rowids.chunks(400) {
+        let placeholders = (1..=chunk.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT rowid, uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
+             FROM messages WHERE rowid IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    EmailMessage {
+                        uid: row.get(1)?,
+                        account_id: row.get(2)?,
+                        folder: row.get(3)?,
+                        subject: row.get(4)?,
+                        from_address: row.get(5)?,
+                        from_name: row.get(6)?,
+                        to_addresses: row.get(7)?,
+                        cc_addresses: row.get(8)?,
+                        date: row.get(9)?,
+                        body_text: String::new(),
+                        body_html: None,
+                        has_attachments: row.get::<_, i32>(10)? != 0,
+                        is_read: row.get::<_, i32>(11)? != 0,
+                        is_starred: row.get::<_, i32>(12)? != 0,
+                        raw_size: row.get(13)?,
+                        message_id: row.get(14)?,
+                        attachments: Vec::new(),
+                        body_fetched: row.get::<_, i32>(15)? != 0,
+                        eml_path: row.get(16)?,
+                    },
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        messages_by_rowid.extend(rows);
+    }
+
+    Ok(rowids
+        .into_iter()
+        .filter_map(|rowid| messages_by_rowid.remove(&rowid))
+        .collect())
+}
+
+/// 统一收件箱：先按解析后的邮件时间排序，再用账号和 UID 保证同一时间稳定续页。
+/// 用于 P5-2 统一收件箱视图。
 #[tauri::command]
 pub async fn email_get_unified_inbox(
     state: tauri::State<'_, EmailState>,
     before_date: Option<String>,
     limit: u32,
+    before_account_id: Option<String>,
+    before_uid: Option<String>,
 ) -> Result<Vec<EmailMessage>, String> {
     let conn = state.conn()?;
-    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = match &before_date {
-        Some(b) if !b.is_empty() => (
-            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
-             FROM messages
-             WHERE folder = 'INBOX' AND date < ?1
-             ORDER BY date DESC LIMIT ?2"
-                .to_string(),
-            vec![
-                Box::new(b.clone()) as Box<dyn rusqlite::ToSql>,
-                Box::new(limit),
-            ],
-        ),
-        _ => (
-            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
-             FROM messages
-             WHERE folder = 'INBOX'
-             ORDER BY date DESC LIMIT ?1"
-                .to_string(),
-            vec![Box::new(limit) as Box<dyn rusqlite::ToSql>],
-        ),
+    unified_inbox_page(
+        &conn,
+        before_date.as_deref(),
+        before_account_id.as_deref(),
+        before_uid.as_deref(),
+        limit,
+    )
+}
+
+#[cfg(test)]
+mod unified_inbox_tests {
+    use super::{unified_inbox_page, EmailState};
+    use rusqlite::{params, Connection};
+    use std::sync::{
+        atomic::AtomicBool,
+        Arc,
     };
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-    let msgs = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok(EmailMessage {
-                uid: row.get(0)?,
-                account_id: row.get(1)?,
-                folder: row.get(2)?,
-                subject: row.get(3)?,
-                from_address: row.get(4)?,
-                from_name: row.get(5)?,
-                to_addresses: row.get(6)?,
-                cc_addresses: row.get(7)?,
-                date: row.get(8)?,
-                body_text: String::new(),
-                body_html: None,
-                has_attachments: row.get::<_, i32>(9)? != 0,
-                is_read: row.get::<_, i32>(10)? != 0,
-                is_starred: row.get::<_, i32>(11)? != 0,
-                raw_size: row.get(12)?,
-                message_id: row.get(13)?,
-                attachments: Vec::new(),
-                body_fetched: row.get::<_, i32>(14)? != 0,
-                eml_path: row.get(15)?,
+    use tempfile::TempDir;
+
+    fn isolated_state() -> (TempDir, EmailState) {
+        let temp = tempfile::tempdir().unwrap();
+        let state = EmailState {
+            db_path: temp.path().join("email.sqlite3"),
+            schema_initialized: Arc::new(AtomicBool::new(false)),
+            user_fetch_in_progress: Arc::new(AtomicBool::new(false)),
+        };
+        state.conn().unwrap();
+        (temp, state)
+    }
+
+    fn insert_message(conn: &Connection, account_id: &str, uid: &str, date: &str) {
+        conn.execute(
+            "INSERT INTO messages
+             (uid, account_id, folder, subject, from_address, to_addresses, date)
+             VALUES (?1, ?2, 'INBOX', 'test', 'sender@example.invalid', '', ?3)",
+            params![uid, account_id, date],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unified_inbox_sorts_mixed_rfc_dates_by_instant() {
+        let (_temp, state) = isolated_state();
+        let conn = state.conn().unwrap();
+        insert_message(&conn, "account-a", "early", "Mon, 12 Feb 2024 10:00:00 +0200");
+        insert_message(&conn, "account-a", "middle", "2024-02-12T08:30:00Z");
+        insert_message(&conn, "account-a", "late", "Mon, 12 Feb 2024 10:00:00 -0200");
+
+        let page = unified_inbox_page(&conn, None, None, None, 50).unwrap();
+
+        assert_eq!(
+            page.iter().map(|message| message.uid.as_str()).collect::<Vec<_>>(),
+            vec!["late", "middle", "early"]
+        );
+    }
+
+    #[test]
+    fn unified_inbox_cursor_reaches_the_51st_message_with_the_same_date() {
+        let (_temp, state) = isolated_state();
+        let conn = state.conn().unwrap();
+        let date = "Tue, 12 Mar 2024 10:00:00 +0000";
+        let mut expected = (0..51)
+            .map(|index| {
+                (
+                    format!("__mona_test_unified_account_{}", index % 4),
+                    format!("{index:03}"),
+                )
             })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(msgs)
+            .collect::<Vec<_>>();
+        expected.sort();
+        for index in (0..51).rev() {
+            insert_message(
+                &conn,
+                &format!("__mona_test_unified_account_{}", index % 4),
+                &format!("{index:03}"),
+                date,
+            );
+        }
+
+        let first_page = unified_inbox_page(&conn, None, None, None, 50).unwrap();
+        assert_eq!(first_page.len(), 50);
+        assert_eq!(
+            first_page
+                .iter()
+                .map(|message| (message.account_id.clone(), message.uid.clone()))
+                .collect::<Vec<_>>(),
+            expected[..50].to_vec()
+        );
+        let last = first_page.last().unwrap();
+        let second_page = unified_inbox_page(
+            &conn,
+            Some(&last.date),
+            Some(&last.account_id),
+            Some(&last.uid),
+            50,
+        )
+        .unwrap();
+
+        assert_eq!(second_page.len(), 1);
+        assert_eq!(
+            (second_page[0].account_id.clone(), second_page[0].uid.clone()),
+            expected[50].clone()
+        );
+    }
+}
+
+fn flush_flags_in_background(state: EmailState, app: AppHandle, service_url: String) {
+    tokio::spawn(async move {
+        match sync::flush_flags(&state, &service_url).await {
+            Ok(true) => {
+                let _ = app.emit_to("main", "email-action-required", serde_json::json!({
+                    "message": "邮箱尚未接受部分已读或星标修改，本地修改已保留，请检查邮箱账号设置。"
+                }));
+            }
+            Ok(false) => {}
+            Err(_) => log::warn!("[email] pending flag synchronization could not finish"),
+        }
+    });
 }
 
 #[tauri::command]
@@ -3081,124 +3269,25 @@ pub async fn email_mark_read(
     gateway_url: String,
     req: SetFlagRequest,
 ) -> Result<(), String> {
-    // 本地优先：先更新 SQLite，确保 UI 立即响应且状态持久化
-    // 即使 IMAP 同步失败（如企业邮箱限制非 INBOX 文件夹），本地已读状态也不会丢失
-    {
-        let conn = state.conn()?;
-        let value: i32 = if req.add { 1 } else { 0 };
-        conn.execute(
-            "UPDATE messages SET is_read = ?1 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-            params![value, req.uid, req.account_id, req.mailbox],
-        )
-        .map_err(|e| e.to_string())?;
-        // 同步更新 .meta.json
-        if let Some(mut meta) = read_meta_json(&req.account_id, &req.mailbox, &req.uid) {
-            meta.is_read = req.add;
-            let _ = write_meta_json(&meta);
-        }
-    }
-
-    // 独立预览窗口与主窗口的 Zustand 实例互不共享，通知主窗口刷新未读统计。
+    sync::queue_flag(state.inner(), &req)?;
     if window.label() != "main" {
-        let _ = window.app_handle().emit_to(
-            "main",
-            "email-read-changed",
-            serde_json::json!({
-                "accountId": &req.account_id,
-                "folder": &req.mailbox,
-                "uid": &req.uid,
-                "isRead": req.add,
-            }),
-        );
+        let _ = window.app_handle().emit_to("main", "email-read-changed", serde_json::json!({
+            "accountId": req.account_id, "folder": req.mailbox, "uid": req.uid, "isRead": req.add,
+        }));
     }
-
-    // 后台同步到 IMAP 服务器（fire-and-forget，不阻塞前端）
-    // Foxmail 风格：本地已读状态秒级生效，IMAP 同步在后台进行，失败不影响本地
-    if !gateway_url.is_empty() {
-        let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
-        let req_clone = req.clone();
-        tokio::spawn(async move {
-            let client = reqwest::Client::builder()
-        .no_proxy()
-                .timeout(Duration::from_secs(10))
-                .build();
-            if let Ok(client) = client {
-                match client.post(&url).json(&req_clone).send().await {
-                    Ok(resp) if resp.status().is_success() => {}
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        log::warn!(
-                            "[email-mark-read] IMAP set_flag 失败（本地已更新）: {} {}",
-                            status,
-                            text
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[email-mark-read] 请求 gateway 失败（本地已更新）: {}",
-                            e
-                        );
-                    }
-                }
-            }
-        });
-    }
+    flush_flags_in_background(state.inner().clone(), window.app_handle().clone(), gateway_url);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn email_toggle_starred(
     state: tauri::State<'_, EmailState>,
+    app_handle: AppHandle,
     gateway_url: String,
     req: SetFlagRequest,
 ) -> Result<(), String> {
-    // 本地优先：先更新 SQLite
-    {
-        let conn = state.conn()?;
-        let value: i32 = if req.add { 1 } else { 0 };
-        conn.execute(
-            "UPDATE messages SET is_starred = ?1 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-            params![value, req.uid, req.account_id, req.mailbox],
-        )
-        .map_err(|e| e.to_string())?;
-        if let Some(mut meta) = read_meta_json(&req.account_id, &req.mailbox, &req.uid) {
-            meta.is_starred = req.add;
-            let _ = write_meta_json(&meta);
-        }
-    }
-
-    // 后台同步到 IMAP（fire-and-forget，失败不影响本地）
-    if !gateway_url.is_empty() {
-        let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
-        let req_clone = req.clone();
-        tokio::spawn(async move {
-            let client = reqwest::Client::builder()
-        .no_proxy()
-                .timeout(Duration::from_secs(10))
-                .build();
-            if let Ok(client) = client {
-                match client.post(&url).json(&req_clone).send().await {
-                    Ok(resp) if resp.status().is_success() => {}
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        log::warn!(
-                            "[email-toggle-starred] IMAP set_flag 失败（本地已更新）: {} {}",
-                            status,
-                            text
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[email-toggle-starred] 请求 gateway 失败（本地已更新）: {}",
-                            e
-                        );
-                    }
-                }
-            }
-        });
-    }
+    sync::queue_flag(state.inner(), &req)?;
+    flush_flags_in_background(state.inner().clone(), app_handle, gateway_url);
     Ok(())
 }
 
@@ -3334,6 +3423,8 @@ pub struct FetchAttachmentRequest {
     pub mailbox: String,
     pub uid: String,
     pub filename: String,
+    #[serde(default)]
+    pub content_id: Option<String>,
     #[serde(default = "default_true")]
     pub use_ssl: bool,
 }
@@ -3373,19 +3464,38 @@ pub struct SaveDraftRequest {
     pub to: Vec<String>,
     #[serde(default)]
     pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
     pub subject: String,
+    #[serde(default)]
+    pub body_text: String,
     pub body_html: String,
     #[serde(default)]
     pub in_reply_to: Option<String>,
     #[serde(default)]
+    pub draft_uid: Option<String>,
+    #[serde(default)]
+    pub draft_folder: Option<String>,
+    #[serde(default)]
+    pub draft_request_id: Option<String>,
+    #[serde(default)]
     pub attachments: Vec<EmailAttachmentInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDraftResult {
+    #[serde(default)]
+    pub draft_uid: Option<String>,
+    #[serde(default)]
+    pub draft_folder: Option<String>,
 }
 
 #[tauri::command]
 pub async fn email_save_draft(
     gateway_url: String,
     req: SaveDraftRequest,
-) -> Result<(), String> {
+) -> Result<SaveDraftResult, String> {
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
@@ -3404,7 +3514,9 @@ pub async fn email_save_draft(
             "gateway 返回 {status} ({url}): {text}\n若刚更新代码，请重启 Mona 使新路由生效"
         ));
     }
-    Ok(())
+    resp.json::<SaveDraftResult>()
+        .await
+        .map_err(|e| format!("解析草稿保存响应失败: {e}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3460,58 +3572,42 @@ pub async fn email_fetch_attachment(
     gateway_url: String,
     req: FetchAttachmentRequest,
 ) -> Result<FetchAttachmentResponse, String> {
-    if gateway_url.is_empty() {
-        return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
-    }
-
-    // Foxmail 风格：优先从本地 .eml 文件解析附件
-    let eml_path: String = {
+    // 本地只有 body_fetched=true 的完整 RFC822 才作为离线附件来源。
+    let cached_eml: Option<(String, bool)> = {
         let conn = state.conn()?;
         conn.query_row(
-            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            "SELECT eml_path, body_fetched FROM messages
+             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
             params![&req.uid, &req.account_id, &req.mailbox],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get(0)?, row.get::<_, i32>(1)? != 0)),
         )
-        .unwrap_or_default()
+        .optional()
+        .map_err(|e| e.to_string())?
     };
-    if !eml_path.is_empty() {
+    if let Some((eml_path, true)) = cached_eml.filter(|(path, complete)| !path.is_empty() && *complete) {
         if let Some(eml_bytes) = read_eml_file(&eml_path) {
-            if let Ok(parsed) = mailparse::parse_mail(&eml_bytes) {
-                if let Some((part, _fname)) = find_attachment_bytes(&parsed, &req.filename) {
-                    if let Ok(raw_bytes) = part.get_body_raw() {
-                        let content_type = part.ctype.mimetype.clone();
-                        let data_b64 =
-                            base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
-                        return Ok(FetchAttachmentResponse {
-                            filename: req.filename.clone(),
-                            content_type,
-                            size: raw_bytes.len() as u64,
-                            data: data_b64,
-                        });
-                    }
-                    log::warn!(
-                        "[email-fetch-attachment] 找到附件 part 但 get_body_raw 失败: {}",
-                        req.filename
-                    );
-                } else {
-                    log::warn!(
-                        "[email-fetch-attachment] 在 .eml 中未找到附件: {}",
-                        req.filename
-                    );
-                }
-            } else {
-                log::warn!("[email-fetch-attachment] mailparse 解析失败");
+            match extract_attachment_response(
+                &eml_bytes,
+                &req.filename,
+                req.content_id.as_deref(),
+            )? {
+                Some(response) => return Ok(response),
+                None => log::warn!("[email-fetch-attachment] 完整本地 .eml 解析失败，尝试邮件服务回退"),
             }
         } else {
-            log::warn!("[email-fetch-attachment] eml_path 非空但文件不存在");
+            log::warn!("[email-fetch-attachment] 完整本地 .eml 不可读，尝试邮件服务回退");
         }
     }
 
-    // 本地无 .eml 或解析失败：调 gateway /email/fetch_attachment 从 IMAP 拉取
+    // 本地没有完整可读的 .eml 时才请求 IMAP。
+    if gateway_url.is_empty() {
+        return Err("附件未完整缓存在本地，邮件服务尚未就绪；请启动邮件服务或同步邮件后重试。".into());
+    }
     let url = format!("{}/email/fetch_attachment", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(90))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
     let resp = client
@@ -3545,9 +3641,6 @@ pub async fn email_download_attachment_to_file(
     req: FetchAttachmentRequest,
     save_path: String,
 ) -> Result<u64, String> {
-    if gateway_url.is_empty() {
-        return Err("gateway URL 为空".into());
-    }
     if save_path.is_empty() {
         return Err("save_path 不能为空".into());
     }
@@ -3588,6 +3681,10 @@ pub struct EmailFolder {
     pub flags: String,
     #[serde(default)]
     pub unread_count: u32,
+}
+
+fn is_selectable_folder(flags: &str) -> bool {
+    !flags.split_whitespace().any(|flag| flag.eq_ignore_ascii_case("\\Noselect"))
 }
 
 #[tauri::command]
@@ -3849,8 +3946,8 @@ pub async fn email_create_folder(
     let conn = state.conn()?;
     let now = chrono::Local::now().to_rfc3339();
     conn.execute(
-        "INSERT OR REPLACE INTO folders (account_id, name, delimiter, flags, has_children, updated_at)
-         VALUES (?1, ?2, '/', '', 0, ?3)",
+        "INSERT INTO folders (account_id, name, delimiter, flags, has_children, updated_at)
+         VALUES (?1, ?2, '/', '', 0, ?3) ON CONFLICT(account_id, name) DO UPDATE SET delimiter=excluded.delimiter, flags=excluded.flags, has_children=excluded.has_children, updated_at=excluded.updated_at",
         params![&req.account_id, &req.mailbox, now],
     )
     .map_err(|e| format!("写入本地文件夹缓存失败: {e}"))?;
@@ -3860,10 +3957,16 @@ pub async fn email_create_folder(
 #[tauri::command]
 pub async fn email_sync(
     state: tauri::State<'_, EmailState>,
+    app_handle: AppHandle,
     gateway_url: String,
     req: SyncRequest,
 ) -> Result<SyncResult, String> {
-    sync_folder_internal(&state, &gateway_url, req, true).await
+    let account_id = req.account_id.clone();
+    let folder = req.mailbox.clone();
+    let result = sync_folder_internal(&state, &gateway_url, req, true, true, false).await?;
+    start_body_prefetch(state.inner().clone(), app_handle.clone(), gateway_url, account_id.clone(), folder.clone());
+    let _ = app_handle.emit("email-mailbox-updated", serde_json::json!({"accountId":account_id, "folder":folder}));
+    Ok(result)
 }
 
 /// 邮件同步核心逻辑：调用 gateway /email/sync，UPSERT 到 SQLite，应用规则。
@@ -3875,10 +3978,25 @@ async fn sync_folder_internal(
     gateway_url: &str,
     req: SyncRequest,
     apply_rules: bool,
+    refresh_flags: bool,
+    background: bool,
 ) -> Result<SyncResult, String> {
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
+    let mailbox_lock = sync::mail_lock(state, &req.account_id, &req.mailbox, "metadata")?;
+    let _mailbox_guard = mailbox_lock.lock().await;
+    let folder_flags: Option<String> = state.conn()?.query_row(
+        "SELECT flags FROM folders WHERE account_id=?1 AND name=?2",
+        params![req.account_id, req.mailbox], |row| row.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    if folder_flags.as_deref().is_some_and(|flags| !is_selectable_folder(flags)) {
+        return Err("此目录仅用于分组，请选择其中的邮件文件夹。".into());
+    }
+    if !state.conn()?.query_row("SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)", params![req.account_id], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+        return Err("邮箱已移除，后台收取已停止。".into());
+    }
+    let mut protected_flags = sync::pending_keys(state, &req.account_id, &req.mailbox)?;
     let url = format!("{}/email/sync", gateway_url.trim_end_matches('/'));
     // gateway 同步只拉信头和标志；正文由按需读取和后台预取负责。
     let client = reqwest::Client::builder()
@@ -3890,6 +4008,20 @@ async fn sync_folder_internal(
     // 同步水位线必须按 folder 读取，不能使用账号级 last_synced_uid。
     let mut req_json = serde_json::to_value(&req).map_err(|e| e.to_string())?;
     if let Some(obj) = req_json.as_object_mut() {
+        obj.insert("refreshFlags".into(), Value::Bool(refresh_flags));
+        obj.insert("background".into(), Value::Bool(background));
+        if refresh_flags {
+            let conn = state.conn()?;
+            let mut stmt = conn.prepare("SELECT uid FROM messages WHERE account_id=?1 AND folder=?2 AND uid_int > 0").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![req.account_id, req.mailbox], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+            let known_uids = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            obj.insert("knownUids".into(), serde_json::json!(known_uids));
+        }
+        let oldest_uid: Option<i64> = state.conn()?.query_row(
+            "SELECT MIN(uid_int) FROM messages WHERE account_id=?1 AND folder=?2 AND uid_int > 0",
+            params![req.account_id, req.mailbox], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        obj.insert("beforeUid".into(), oldest_uid.map(Value::from).unwrap_or(Value::Null));
         let (local_last_uid, local_uid_validity): (Option<i64>, String) = {
             let conn = state.conn()?;
             let (folder_last_uid, uid_validity) = conn
@@ -3974,7 +4106,7 @@ async fn sync_folder_internal(
             _ => (Vec::new(), String::new(), false),
         };
 
-    let conn = state.conn()?;
+    let mut conn = state.conn()?;
     log::debug!(
         "[email-sync] account={} mailbox={} last_uid={:?} gateway_returned={} uid_validity={} changed={}",
         req.account_id,
@@ -3984,10 +4116,18 @@ async fn sync_folder_internal(
         uid_validity,
         uid_validity_changed
     );
+    if !conn.query_row("SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)", params![req.account_id], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+        return Err("邮箱已移除，后台收取已停止。".into());
+    }
 
     // UIDVALIDITY 变化：废弃该文件夹所有旧 UID 映射，让本地从头重建索引
     // 旧 UID 已失效，保留会导致新邮件永远拉不到（UID > last_uid 永远不命中）
     if uid_validity_changed {
+        conn.execute(
+            "UPDATE email_pending_flags SET last_error='stale' WHERE account_id=?1 AND folder=?2",
+            params![req.account_id, req.mailbox],
+        ).map_err(|e| e.to_string())?;
+        protected_flags.clear();
         log::warn!(
             "[email-sync] UIDVALIDITY changed for account={} mailbox={}: 废弃旧 UID 映射并重建文件夹索引",
             req.account_id,
@@ -4051,29 +4191,22 @@ async fn sync_folder_internal(
         if uid.is_empty() {
             continue;
         }
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
         let message_id_str = msg.get("messageId").and_then(|v| v.as_str()).unwrap_or("");
 
-        // 去重：如果本地存在相同 message_id 的记录，分三种情况处理：
-        // 1. 同文件夹内不同 uid（本地发送版本 "L" 或 MOVE 后的旧 uid）：删除旧版本，INSERT 新 uid 版本
-        //    场景a: email_send 已落盘 "L" uid 版本，IMAP 同步拉到 IMAP uid 版本
-        //    场景b: MOVE 邮件后本地保留旧 uid，IMAP 同步拉到新 uid 版本（IMAP MOVE 会改变 uid）
-        // 2. 跨文件夹相同 message_id（uid 可能相同也可能不同）：规则 move 后 IMAP 服务器未真正删除
-        //    源文件夹邮件（某些企业邮箱 MOVE 行为异常），下次同步源文件夹又拉到同一封邮件。
-        //    此时邮件已在目标文件夹，源文件夹的副本是 stale 的，跳过 INSERT 避免重复显示。
-        // 3. 同文件夹同 uid：已存在的记录，跳过去重逻辑，交给后面的 UPSERT 处理
-        // 继承旧记录的 is_read/is_starred：MOVE 后 IMAP 服务器可能丢失 \Seen 标志，
-        // 不能让新 UID 记录的 is_read 回退为 IMAP 返回值（可能 false），否则已读邮件变未读
+        // 只用服务器 UID 替换同文件夹内的本地发送占位记录；
+        // 相同 Message-ID 可以合法存在于多个文件夹或多个服务器 UID 中。
         let mut inherited_is_read: Option<bool> = None;
         let mut inherited_is_starred: Option<bool> = None;
-        let mut skip_insert_cross_folder = false;
+        let mut inherited_eml: Option<Vec<u8>> = None;
+        let mut replaced_locals: Vec<(String, String)> = Vec::new();
         if !message_id_str.is_empty() {
-            // 查询所有文件夹中相同 message_id 的记录（不限 folder，不限 uid）
-            let local_records: Vec<(String, String, String, i32, i32)> = match conn.prepare(
+            let local_records: Vec<(String, String, String, i32, i32)> = match tx.prepare(
                 "SELECT uid, folder, eml_path, is_read, is_starred FROM messages
-                 WHERE account_id = ?1 AND message_id = ?2",
+                 WHERE account_id = ?1 AND message_id = ?2 AND folder = ?3 AND uid LIKE 'L%'",
             ) {
                 Ok(mut stmt) => match stmt.query_map(
-                    params![&req.account_id, message_id_str],
+                    params![&req.account_id, message_id_str, &req.mailbox],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i32>(3)?, row.get::<_, i32>(4)?)),
                 ) {
                     Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
@@ -4081,20 +4214,7 @@ async fn sync_folder_internal(
                 },
                 Err(_) => Vec::new(),
             };
-            for (local_uid, local_folder, local_eml_path, local_is_read, local_is_starred) in &local_records {
-                if local_folder != &req.mailbox {
-                    // 跨文件夹重复：邮件已被规则移动到其他文件夹，当前文件夹的副本是 stale 的
-                    // 跳过 INSERT，避免同一封邮件在多个文件夹显示
-                    log::debug!(
-                        "[email-sync] 跨文件夹去重: 跳过 uid={} message_id={} (已存在于文件夹 {}，当前同步 {})",
-                        uid,
-                        message_id_str,
-                        local_folder,
-                        req.mailbox
-                    );
-                    skip_insert_cross_folder = true;
-                    break;
-                }
+            for (local_uid, _local_folder, local_eml_path, local_is_read, local_is_starred) in &local_records {
                 // 同文件夹内：只有 uid 不同时才删除旧记录（同 uid 是已存在记录，交给 UPSERT）
                 if local_uid == &uid {
                     continue;
@@ -4106,14 +4226,14 @@ async fn sync_folder_internal(
                 if *local_is_starred == 1 {
                     inherited_is_starred = Some(true);
                 }
-                if !local_eml_path.is_empty() {
-                    let _ = delete_eml_file(local_eml_path);
+                if read_meta_json(&req.account_id, &req.mailbox, local_uid).map(|m| m.body_fetched).unwrap_or(false) {
+                    inherited_eml = read_eml_file(local_eml_path);
                 }
-                let _ = delete_meta_json(&req.account_id, &req.mailbox, local_uid);
-                let _ = conn.execute(
+                replaced_locals.push((local_uid.clone(), local_eml_path.clone()));
+                tx.execute(
                     "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                     params![local_uid, &req.account_id, &req.mailbox],
-                );
+                ).map_err(|e| e.to_string())?;
                 log::debug!(
                     "[email-sync] 去重: 删除旧版本 uid={} (IMAP uid={} 替换, message_id={}, is_read={}, is_starred={})",
                     local_uid,
@@ -4124,66 +4244,48 @@ async fn sync_folder_internal(
                 );
             }
         }
-        // 跨文件夹重复：跳过本封邮件的 INSERT，处理下一条
-        if skip_insert_cross_folder {
-            continue;
-        }
-
         // 检查该邮件是否已存在（用于统计真正的新增数）
-        let existed: bool = conn
+        let existed: bool = tx
             .query_row(
                 "SELECT 1 FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                 params![&uid, &req.account_id, &req.mailbox],
                 |_| Ok(true),
             )
             .unwrap_or(false);
-        // Offline-First: 同步时直接拉完整 RFC822（gateway 已切换为 BODY.PEEK[]），
-        // body_fetched 跟随 gateway 返回值（普通邮件 true，大邮件降级为 false 待后台补拉）。
-        // 用户点击时优先读本地 .eml，毫秒级返回，无需再走 gateway。
-        let raw_bytes_b64 = msg.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
+        if existed {
+            let (read, star): (bool, bool) = tx.query_row(
+                "SELECT is_read, is_starred FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3",
+                params![uid, req.account_id, req.mailbox], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(|e| e.to_string())?;
+            if protected_flags.contains(&(uid.clone(), "\\Seen".into())) { inherited_is_read = Some(read); }
+            if protected_flags.contains(&(uid.clone(), "\\Flagged".into())) { inherited_is_starred = Some(star); }
+        }
+        // 再次收取信头时，保留该 UID 已有的完整正文。
+        if inherited_eml.is_none() && !msg.get("bodyFetched").and_then(Value::as_bool).unwrap_or(false) {
+            let cached: Option<String> = tx.query_row(
+                "SELECT eml_path FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3 AND body_fetched=1
+                 AND (COALESCE(message_id,'')=?4 OR ?4='')",
+                params![uid, req.account_id, req.mailbox, message_id_str], |row| row.get(0),
+            ).optional().map_err(|e| e.to_string())?;
+            inherited_eml = cached.and_then(|path| read_eml_file(&path)).filter(|bytes| mailparse::parse_mail(bytes).is_ok());
+        }
+        let raw_bytes_b64 = inherited_eml.as_ref().map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)).unwrap_or_else(|| msg.get("rawBytes").and_then(Value::as_str).unwrap_or("").to_string());
         // gateway 返回的 bodyFetched：true=完整 RFC822，false=HEADER-only（大邮件降级）
-        let gw_body_fetched = msg.get("bodyFetched").and_then(|v| v.as_bool()).unwrap_or(false);
+        let gw_body_fetched = msg.get("bodyFetched").and_then(|v| v.as_bool()).unwrap_or(false) || inherited_eml.is_some();
         // 保存解码后的 eml 字节，用于落盘后用 Rust parse_eml_header 重新解析 header
         // 确保 subject/from/to/cc 解码质量不依赖 gateway Python 代码（gb2312→gb18030 归一化在 Rust 侧保证）
-        let mut eml_bytes_opt: Option<Vec<u8>> = None;
-        let eml_path_value: String = if !raw_bytes_b64.is_empty() {
-            match base64::engine::general_purpose::STANDARD.decode(raw_bytes_b64) {
-                Ok(bytes) => {
-                    eml_bytes_opt = Some(bytes.clone());
-                    match write_eml_file(&req.account_id, &req.mailbox, &uid, &bytes) {
-                        Ok(rel_path) => {
-                            // 写 .meta.json sidecar（存 isRead/isStarred/bodyFetched 等 RFC822 不含的状态）
-                            // 继承旧记录（MOVE 去重）的 is_read/is_starred，避免 MOVE 后 \Seen 丢失导致已读变未读
-                            let is_read = inherited_is_read.unwrap_or(msg["isRead"].as_bool().unwrap_or(false));
-                            let is_starred = inherited_is_starred.unwrap_or(msg["isStarred"].as_bool().unwrap_or(false));
-                            let has_attachments = msg["hasAttachments"].as_bool().unwrap_or(false);
-                            let meta = EmlMeta {
-                                uid: uid.clone(),
-                                account_id: req.account_id.clone(),
-                                folder: req.mailbox.clone(),
-                                is_read,
-                                is_starred,
-                                has_attachments,
-                                body_fetched: gw_body_fetched,
-                                message_id: message_id_str.to_string(),
-                                eml_mtime: chrono::Utc::now().timestamp(),
-                            };
-                            let _ = write_meta_json(&meta);
-                            rel_path
-                        }
-                        Err(e) => {
-                            log::warn!("[email-sync] 写入 .eml 失败 uid={}: {}", uid, e);
-                            String::new()
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[email-sync] base64 解码 rawBytes 失败 uid={}: {}", uid, e);
-                    String::new()
-                }
-            }
-        } else {
-            String::new()
+        if raw_bytes_b64.is_empty() { return Err("邮件原文缺失，请重新收取。".into()); }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&raw_bytes_b64)
+            .map_err(|e| format!("邮件原文无法解码: {e}"))?;
+        let eml_path_value = write_eml_file(&req.account_id, &req.mailbox, &uid, &bytes)?;
+        let eml_bytes_opt = Some(bytes);
+        let mut meta = EmlMeta {
+            uid: uid.clone(), account_id: req.account_id.clone(), folder: req.mailbox.clone(),
+            is_read: inherited_is_read.unwrap_or(msg["isRead"].as_bool().unwrap_or(false)),
+            is_starred: inherited_is_starred.unwrap_or(msg["isStarred"].as_bool().unwrap_or(false)),
+            has_attachments: msg["hasAttachments"].as_bool().unwrap_or(false),
+            body_fetched: gw_body_fetched, message_id: message_id_str.to_string(),
+            eml_mtime: chrono::Utc::now().timestamp(),
         };
         // 用 Rust 的 parse_eml_header 从 .eml 字节重新解析 header（subject/from/to/cc/date/message_id/has_attachments）
         // 不直接用 gateway 返回的 JSON 字段，确保 gb2312/gbk 编码的中文（含"喆"等扩展字符）正确解码
@@ -4211,12 +4313,12 @@ async fn sync_folder_internal(
             "to": hdr_to,
             "cc": hdr_cc,
         }));
-        // sync 时 body_fetched 跟随 gateway 返回值：普通邮件=1（完整 RFC822 已落盘），大邮件=0（HEADER-only，待后台补拉）
+        // 只有完整原文成功落盘后才能设置 body_fetched。
         let body_fetched_value: i32 = if gw_body_fetched { 1 } else { 0 };
-        // UPSERT：更新邮件内容但保留用户已设置的 is_read/is_starred 和 body_fetched
+        // 正文保存在 .eml，未确认的本地标志修改优先于远端快照。
         // 不再存储 body_text/body_html/attachments_json（已移除字段），改为存 eml_path
         // Foxmail 风格：正文完全存 .eml 文件，SQLite 仅做索引
-        conn.execute(
+        tx.execute(
             "INSERT INTO messages
              (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
               date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
@@ -4235,8 +4337,8 @@ async fn sync_folder_internal(
               message_id=excluded.message_id,
               eml_path=CASE WHEN excluded.eml_path != '' THEN excluded.eml_path ELSE messages.eml_path END,
               body_fetched=CASE WHEN excluded.eml_path != '' THEN excluded.body_fetched ELSE messages.body_fetched END,
-              is_read=CASE WHEN messages.is_read=1 THEN 1 ELSE excluded.is_read END,
-              is_starred=CASE WHEN messages.is_starred=1 THEN 1 ELSE excluded.is_starred END",
+              is_read=CASE WHEN EXISTS(SELECT 1 FROM email_pending_flags p WHERE p.account_id=messages.account_id AND p.folder=messages.folder AND p.uid=messages.uid AND p.flag='\\Seen' AND COALESCE(p.last_error,'')!='stale') THEN messages.is_read ELSE excluded.is_read END,
+              is_starred=CASE WHEN EXISTS(SELECT 1 FROM email_pending_flags p WHERE p.account_id=messages.account_id AND p.folder=messages.folder AND p.uid=messages.uid AND p.flag='\\Flagged' AND COALESCE(p.last_error,'')!='stale') THEN messages.is_starred ELSE excluded.is_starred END",
             params![
                 uid,
                 req.account_id,
@@ -4259,7 +4361,18 @@ async fn sync_folder_internal(
             ],
         )
         .map_err(|e| e.to_string())?;
-        if !existed {
+        (meta.is_read, meta.is_starred) = tx.query_row(
+            "SELECT is_read, is_starred FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3",
+            params![uid, req.account_id, req.mailbox], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|e| e.to_string())?;
+        meta.has_attachments = hdr_has_att;
+        write_meta_json(&meta)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        for (local_uid, local_path) in replaced_locals {
+            if !local_path.is_empty() { let _ = delete_eml_file(&local_path); }
+            let _ = delete_meta_json(&req.account_id, &req.mailbox, &local_uid);
+        }
+        if !existed && !msg.get("isHistorical").and_then(Value::as_bool).unwrap_or(false) {
             new_count += 1;
             new_uids.push(uid);
         }
@@ -4268,6 +4381,9 @@ async fn sync_folder_internal(
     // 自动从新邮件收集联系人（发件人 + 收件人 + 抄送）
     // 使用重新解析的正确 header，避免 gateway 返回的乱码字段污染通讯录
     auto_collect_contacts(&conn, &req.account_id, &corrected_messages);
+    if let Some(flags) = resp_value.get("flags").and_then(Value::as_array) {
+        sync::apply_flags(state, &req.account_id, &req.mailbox, flags, &protected_flags)?;
+    }
     // 更新同步水位线（取本次同步中最大的 UID）
     // folders.last_synced_uid 是按 folder 存储的水位线，下次同步以此为基准，
     // 避免从 messages 表查 MAX(uid_int) 时因本地残留过期高 UID 而陷入死循环。
@@ -4288,7 +4404,7 @@ async fn sync_folder_internal(
         conn.execute(
             "INSERT INTO folders (account_id, name, delimiter, flags, has_children, updated_at, last_synced_uid)
              VALUES (?1, ?2, '/', '', 0, ?3, ?4)
-             ON CONFLICT(account_id, name) DO UPDATE SET last_synced_uid = ?4",
+             ON CONFLICT(account_id, name) DO UPDATE SET last_synced_uid = MAX(COALESCE(folders.last_synced_uid, 0), excluded.last_synced_uid)",
             params![&req.account_id, &req.mailbox, chrono::Utc::now().to_rfc3339(), max_uid],
         )
         .map_err(|e| e.to_string())?;
@@ -4297,6 +4413,7 @@ async fn sync_folder_internal(
     // 应用邮件规则（仅对本次同步的新邮件）
     // apply_rules=false 时跳过（用于规则 MOVE 后同步目标文件夹，避免递归触发规则）
     // 注意：规则应用是 async，MutexGuard 不能跨 await，需在 await 前 drop conn
+    drop(_mailbox_guard);
     let rules = if apply_rules {
         get_enabled_rules(&conn, &req.account_id).unwrap_or_default()
     } else {
@@ -4480,61 +4597,14 @@ async fn sync_folder_internal(
                 trigger_schedule_extract(&gw, &account_id, &mailbox, &uids).await;
             });
 
-            // 2. 异步预取未读邮件正文（仅 INBOX，不阻塞 sync 返回）
-            //    同步只拉了 HEADER，这里后台拉完整 RFC822 落盘，
-            //    确保用户/AI 打开邮件时走本地 .eml，毫秒级无等待。
-            if req.mailbox == "INBOX" {
-                let state_clone = state.clone();
-                let gw = gateway_url.to_string();
-                let account_id = req.account_id.clone();
-                let mailbox = req.mailbox.clone();
-                tokio::spawn(async move {
-                    let (account, plain_password) = {
-                        match state_clone.conn() {
-                            Ok(conn) => match get_imap_credentials(&conn, &account_id) {
-                                Ok(a) => match decrypt_password(&a.imap_password) {
-                                    Ok(p) => (a, p),
-                                    Err(e) => {
-                                        log::warn!(
-                                            "[email-sync] prefetch: decrypt password failed: {}",
-                                            e
-                                        );
-                                        return;
-                                    }
-                                },
-                                Err(e) => {
-                                    log::warn!(
-                                        "[email-sync] prefetch: get credentials failed: {}",
-                                        e
-                                    );
-                                    return;
-                                }
-                            },
-                            Err(e) => {
-                                log::warn!("[email-sync] prefetch: get conn failed: {}", e);
-                                return;
-                            }
-                        }
-                    };
-                    if let Err(e) = prefetch_unread_bodies(
-                        &state_clone,
-                        &gw,
-                        &account,
-                        &plain_password,
-                        &mailbox,
-                    )
-                    .await
-                    {
-                        log::debug!("[email-sync] prefetch unread bodies failed: {}", e);
-                    }
-                });
-            }
         }
     }
 
     Ok(SyncResult {
         new_count,
         new_messages: new_messages_in_folder,
+        has_more: resp_value.get("hasMore").and_then(Value::as_bool).unwrap_or(false),
+        processed_count: new_messages.len(),
     })
 }
 
@@ -4575,36 +4645,12 @@ async fn trigger_schedule_extract(gateway_url: &str, account_id: &str, folder: &
 // ---------------------------------------------------------------------------
 // 后台静默同步引擎
 // ---------------------------------------------------------------------------
-// 启动后等待 30s 执行首次全量同步（让前端首屏先完成），之后每 15 分钟轮询一次（对齐 Foxmail 默认）。
+// 启动后等待 30s 执行首次同步，之后每分钟轮询；历史信头按批次逐步补齐。
 // 遍历 SQLite 中所有账号 + 文件夹，调用 gateway /email/sync 进行增量同步。
 // 单个账号/文件夹失败不影响其他，全部错误静默记录日志。
 
 const BG_SYNC_INITIAL_DELAY_SECS: u64 = 30;
-const BG_SYNC_INTERVAL_SECS: u64 = 900;
-
-/// 判断是否为系统文件夹（INBOX/Sent/Drafts/Trash/Junk 等）。
-/// bg sync 只对系统文件夹 + 本地已有邮件的文件夹做同步，跳过空的自定义文件夹
-/// 避免 N 次 IMAP SELECT 占用连接锁导致 UI 卡顿。
-fn is_system_folder(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower == "inbox"
-        || lower.contains("sent")
-        || lower.contains("outbox")
-        || lower.contains("draft")
-        || lower.contains("trash")
-        || lower.contains("junk")
-        || lower.contains("spam")
-        || lower.contains("deleted")
-        || lower.contains("star")
-        || lower.contains("flag")
-        || name.contains("收件箱")
-        || name.contains("已发送")
-        || name.contains("已发邮件")
-        || name.contains("发件箱")
-        || name.contains("草稿")
-        || name.contains("垃圾")
-        || name.contains("删除")
-}
+const BG_SYNC_INTERVAL_SECS: u64 = 60;
 
 /// 检查账号是否在冷却期内（IMAP 认证失败后 1 小时不再尝试）
 /// 返回 Some(剩余秒数) 表示在冷却期内，None 表示可以尝试
@@ -4680,41 +4726,55 @@ fn is_permanent_auth_error(error_text: &str) -> bool {
 
 /// 启动后台静默同步引擎。应在 services 启动成功后调用。
 pub fn start_background_sync(app_handle: AppHandle, services_port: u16) {
-    let gateway_url = format!("http://127.0.0.1:{}", services_port);
+    let gateway_url = format!("http://127.0.0.1:{services_port}");
+    let sender_app = app_handle.clone();
+    let sender_url = gateway_url.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let state = sender_app.state::<EmailState>();
+            match sync::flush_flags(state.inner(), &sender_url).await {
+                Ok(true) => {
+                    let _ = sender_app.emit_to("main", "email-action-required", serde_json::json!({
+                        "message": "邮箱尚未接受部分已读或星标修改，本地修改已保留，请检查邮箱账号设置。"
+                    }));
+                }
+                Err(error) => log::warn!("[email] pending flags could not be synchronized: {}", error),
+                Ok(false) => {}
+            }
+            if email_outbox_process(state, sender_app.clone(), sender_url.clone()).await.is_err() {
+                log::warn!("[email] scheduled mail state needs attention");
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(BG_SYNC_INITIAL_DELAY_SECS)).await;
-
         loop {
-            let started = std::time::Instant::now();
-            let mut total_new: u32 = 0;
-
-            // 1. 处理到期的 outbox 邮件（延迟发送）
-            let email_state = app_handle.state::<EmailState>();
-            match email_outbox_process(email_state, gateway_url.clone()).await {
-                Ok(n) => {
-                    if n > 0 {
-                        log::debug!("[email-bg] outbox processed: {} sent", n);
-                        let _ = app_handle.emit("email-outbox-updated", ());
-                    }
-                }
-                Err(e) => log::warn!("[email-bg] outbox process failed: {}", e),
-            }
-
-            // 2. 邮件同步 + 删除对账 + 预下载
-            match run_bg_sync_cycle(&app_handle, &gateway_url, &mut total_new).await {
-                Ok(()) => {
-                    log::debug!(
-                        "[email-bg] sync cycle done in {:.1}s, new={}",
-                        started.elapsed().as_secs_f32(),
-                        total_new
-                    );
-                }
-                Err(e) => {
-                    log::warn!("[email-bg] sync cycle error: {}", e);
-                }
+            let mut total_new = 0;
+            if let Err(error) = run_bg_sync_cycle(&app_handle, &gateway_url, &mut total_new).await {
+                log::warn!("[email] background mailbox synchronization failed: {}", error);
             }
             tokio::time::sleep(Duration::from_secs(BG_SYNC_INTERVAL_SECS)).await;
         }
+    });
+}
+
+fn start_body_prefetch(state: EmailState, app: AppHandle, service_url: String, account_id: String, folder: String) {
+    tokio::spawn(async move {
+        let credentials = (|| {
+            let conn = state.conn()?;
+            let account = get_imap_credentials(&conn, &account_id)?;
+            let password = decrypt_password(&account.imap_password)?;
+            Ok::<_, String>((account, password))
+        })();
+        let Ok((account, password)) = credentials else {
+            log::warn!("[email] cached mailbox credentials could not be loaded");
+            return;
+        };
+        if let Err(error) = prefetch_mail_bodies(&state, &service_url, &account, &password, &folder).await {
+            log::warn!("[email] body prefetch incomplete: {}", error);
+        }
+        let _ = app.emit("email-mailbox-updated", serde_json::json!({"accountId": account_id, "folder": folder}));
     });
 }
 
@@ -4725,8 +4785,9 @@ async fn run_bg_sync_cycle(
     total_new: &mut u32,
 ) -> Result<(), String> {
     let email_state = app_handle.state::<EmailState>();
+    let mut history_queue = std::collections::VecDeque::new();
 
-    // P0-2: 每 N 次同步周期对账一次（约 60 分钟，BG_SYNC_INTERVAL_SECS=900s）
+    // 每 60 次同步周期对账一次，保持原有约一小时的频率。
     // skill 第三节：不支持 CONDSTORE/QRESYNC 时定期全量对账，同步删除/移动状态
     let cycle = RECONCILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let need_reconcile = cycle % RECONCILE_EVERY_N_CYCLES == 0;
@@ -4817,7 +4878,7 @@ async fn run_bg_sync_cycle(
                 }
             };
             let mut stmt = match conn.prepare(
-                "SELECT name FROM folders WHERE account_id = ?1 ORDER BY name",
+                "SELECT name, flags FROM folders WHERE account_id = ?1 ORDER BY name",
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -4826,12 +4887,12 @@ async fn run_bg_sync_cycle(
                 }
             };
             let rows = stmt
-                .query_map(params![&account.id], |row| row.get::<_, String>(0))
+                .query_map(params![&account.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
                 .map_err(|e| e.to_string());
             let mut fs: Vec<String> = Vec::new();
             if let Ok(rows) = rows {
-                for r in rows.flatten() {
-                    fs.push(r);
+                for (name, flags) in rows.flatten() {
+                    if is_selectable_folder(&flags) { fs.push(name); }
                 }
             }
             fs
@@ -4857,9 +4918,9 @@ async fn run_bg_sync_cycle(
                         let now = chrono::Local::now().to_rfc3339();
                         for folder in &remote_folders {
                             let _ = conn.execute(
-                                "INSERT OR REPLACE INTO folders
+                                "INSERT INTO folders
                                  (account_id, name, delimiter, flags, has_children, updated_at)
-                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(account_id, name) DO UPDATE SET delimiter=excluded.delimiter, flags=excluded.flags, has_children=excluded.has_children, updated_at=excluded.updated_at",
                                 params![
                                     &account.id,
                                     folder.name,
@@ -4871,7 +4932,7 @@ async fn run_bg_sync_cycle(
                             );
                         }
                     }
-                    folders = remote_folders.iter().map(|f| f.name.clone()).collect();
+                    folders = remote_folders.iter().filter(|folder| is_selectable_folder(&folder.flags)).map(|f| f.name.clone()).collect();
                     log::debug!(
                         "[email-bg] account={} synced {} folders from IMAP",
                         account.id,
@@ -4894,37 +4955,7 @@ async fn run_bg_sync_cycle(
             continue;
         }
 
-        // 文件夹过滤：避免对一堆空文件夹逐个跑 IMAP SELECT（每文件夹约 1-2 秒）
-        // 只同步：INBOX / 系统文件夹（Sent/Drafts/Trash/Junk 等）/ 本地已有邮件的文件夹
-        // 自定义空文件夹靠 IDLE 或用户手动"收取"触发
-        let filtered_folders: Vec<String> = match email_state.conn() {
-            Ok(conn) => {
-                let mut result: Vec<String> = Vec::new();
-                for f in &folders {
-                    let is_system = is_system_folder(f);
-                    let has_local: bool = conn
-                        .query_row(
-                            "SELECT COUNT(*) > 0 FROM messages WHERE account_id = ?1 AND folder = ?2",
-                            params![&account.id, f],
-                            |row| row.get::<_, bool>(0),
-                        )
-                        .unwrap_or(false);
-                    if is_system || has_local || f == "INBOX" {
-                        result.push(f.clone());
-                    }
-                }
-                result
-            }
-            Err(_) => folders.clone(),
-        };
-        if filtered_folders.len() != folders.len() {
-            log::debug!(
-                "[email-bg] account={} folder filter: {} -> {} (skip empty custom folders)",
-                account.id,
-                folders.len(),
-                filtered_folders.len()
-            );
-        }
+        let filtered_folders = folders;
 
         for folder in &filtered_folders {
             // 优先用 folders 表的 last_synced_uid 作为同步水位线，
@@ -4971,12 +5002,15 @@ async fn run_bg_sync_cycle(
                 last_uid,
             };
 
-            let sync_added_new;
-            match sync_folder_internal(&email_state, gateway_url, req, true).await {
+            match sync_folder_internal(&email_state, gateway_url, req.clone(), true, true, true).await {
                 Ok(result) => {
+                    if result.has_more && result.processed_count > 0 {
+                        history_queue.push_back(req.clone());
+                    }
+                    start_body_prefetch(email_state.inner().clone(), app_handle.clone(), gateway_url.into(), account.id.clone(), folder.clone());
+                    let _ = app_handle.emit("email-mailbox-updated", serde_json::json!({"accountId": account.id, "folder":folder}));
                     // 同步成功，清除 IMAP 冷却期（如果之前有）
                     clear_account_cooldown(&email_state, &account.id, "imap");
-                    sync_added_new = result.new_count > 0;
                     if result.new_count > 0 {
                         log::debug!(
                             "[email-bg] account={} folder={} new={}",
@@ -5023,28 +5057,6 @@ async fn run_bg_sync_cycle(
             // 本地邮件删除仅由用户主动操作触发（点删除按钮 → IMAP MOVE/STORE + 删本地）。
             // 之前对非 INBOX 文件夹做对账会误清空刚同步的数据（UIDVALIDITY 不稳定）。
 
-            // P1-1: 正文预下载（仅 INBOX，最近 N 封未读且未拉取正文的邮件）
-            // 用户大概率会查看未读邮件，提前下载避免点击时的等待
-            // 有新增邮件时 sync_folder_internal 已启动正文处理；无新增时补齐之前失败或遗漏项。
-            if folder == "INBOX" && !sync_added_new {
-                if let Err(e) = prefetch_unread_bodies(
-                    &email_state,
-                    gateway_url,
-                    &account,
-                    &plain_password,
-                    folder,
-                )
-                .await
-                {
-                    log::warn!(
-                        "[email-bg] account={} folder={} prefetch unread bodies failed: {}",
-                        account.id,
-                        folder,
-                        e
-                    );
-                }
-            }
-
             // P0-2: 定期全量对账（每 N 次同步周期对账一次）
             // skill 第三节：服务器不支持 CONDSTORE/QRESYNC 时定期校准
             // 增量同步只拉新增，无法发现服务器端已删除/已移动的邮件
@@ -5073,14 +5085,35 @@ async fn run_bg_sync_cycle(
         }
     }
 
+    while let Some(req) = history_queue.pop_front() {
+        if check_account_cooldown(email_state.inner(), &req.account_id, "imap").is_some() {
+            continue;
+        }
+        match sync_folder_internal(email_state.inner(), gateway_url, req.clone(), true, false, true).await {
+            Ok(result) => {
+                if result.has_more && result.processed_count > 0 { history_queue.push_back(req.clone()); }
+                if result.new_count > 0 {
+                    *total_new += result.new_count;
+                    let _ = app_handle.emit("email-bg-sync", serde_json::json!({
+                        "accountId": req.account_id, "folder": req.mailbox,
+                        "newCount": result.new_count, "newMessages": result.new_messages,
+                    }));
+                }
+                start_body_prefetch(email_state.inner().clone(), app_handle.clone(), gateway_url.into(), req.account_id.clone(), req.mailbox.clone());
+                let _ = app_handle.emit("email-mailbox-updated", serde_json::json!({"accountId":req.account_id, "folder":req.mailbox}));
+            }
+            Err(error) => log::warn!("[email] history backfill deferred: {}", error),
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     Ok(())
 }
 
 /// 后台对账计数器：每 N 次同步周期触发一次全量对账
 /// 静态计数器，进程重启后重新计数（影响很小，下次对账最多推迟 N 个周期）
 static RECONCILE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// 每 4 次后台同步周期对账一次（约 60 分钟，BG_SYNC_INTERVAL_SECS=900s）
-const RECONCILE_EVERY_N_CYCLES: u32 = 4;
+/// 每 60 次后台同步周期对账一次，约一小时。
+const RECONCILE_EVERY_N_CYCLES: u32 = 60;
 
 /// 全量对账：调用 gateway /email/list_uids 获取服务器 UID 集合，
 /// 删除本地有但服务器没有的邮件（.eml + .meta.json + SQLite 索引）。
@@ -5219,8 +5252,6 @@ async fn try_recover_services(app_handle: &tauri::AppHandle) {
     }
 }
 
-const PREFETCH_UNREAD_LIMIT: u32 = 20;
-
 fn decode_prefetched_raw_bytes(body: &Value) -> Result<Vec<u8>, String> {
     let raw_b64 = body
         .get("rawBytes")
@@ -5248,10 +5279,9 @@ fn cache_prefetched_body_under(
         return Err("RFC822 原文为空".into());
     }
 
-    let eml_path = write_eml_file_under(mail_root, account_id, folder, uid, bytes)?;
     let mut conn = state.conn()?;
-    let tx = conn.transaction().map_err(|e| format!("开启邮件缓存事务失败: {e}"))?;
-    let (is_read, is_starred, has_attachments, message_id): (i32, i32, i32, Option<String>) = tx
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| format!("开启邮件缓存事务失败: {e}"))?;
+    let (is_read, is_starred, _has_attachments, message_id): (i32, i32, i32, Option<String>) = tx
         .query_row(
             "SELECT is_read, is_starred, has_attachments, message_id FROM messages
              WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
@@ -5259,11 +5289,19 @@ fn cache_prefetched_body_under(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|e| format!("读取邮件缓存状态失败: {e}"))?;
+    let parsed = mailparse::parse_mail(bytes).map_err(|e| format!("解析完整邮件失败: {e}"))?;
+    let mut attachment_metadata = Vec::new();
+    extract_attachments(&parsed, &mut attachment_metadata);
+    let has_attachment_parts = attachment_metadata
+        .iter()
+        .any(|attachment| !attachment.get("isInline").and_then(Value::as_bool).unwrap_or(false));
+
+    let eml_path = write_eml_file_under(mail_root, account_id, folder, uid, bytes)?;
     let updated = tx
         .execute(
-            "UPDATE messages SET body_fetched = 1, eml_path = ?1
-             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-            params![eml_path, uid, account_id, folder],
+            "UPDATE messages SET body_fetched = 1, eml_path = ?1, has_attachments = ?2
+             WHERE uid = ?3 AND account_id = ?4 AND folder = ?5",
+            params![eml_path, has_attachment_parts as i32, uid, account_id, folder],
         )
         .map_err(|e| format!("更新邮件正文状态失败: {e}"))?;
     if updated != 1 {
@@ -5276,7 +5314,7 @@ fn cache_prefetched_body_under(
         folder: folder.to_string(),
         is_read: is_read != 0,
         is_starred: is_starred != 0,
-        has_attachments: has_attachments != 0,
+        has_attachments: has_attachment_parts,
         body_fetched: true,
         message_id: message_id.unwrap_or_default(),
         eml_mtime: chrono::Utc::now().timestamp(),
@@ -5293,18 +5331,46 @@ fn cache_prefetched_body_under(
         };
     }
 
+    if search::refresh_body_index_for_message(&mut conn, mail_root, account_id, folder, uid).is_err() {
+        log::warn!("[email] cached message search index will be rebuilt on demand");
+    }
     Ok(())
 }
 
-/// 预下载未读邮件的正文（仅 INBOX，最近 20 封未读且 body_fetched=0）。
-///
-/// 同步时只拉取 HEADER + FLAGS，正文按需拉取。但未读邮件用户大概率会查看，
-/// 后台静默预下载可让用户点击时秒开，提升体验。
+fn next_prefetch_uid(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    folder: &str,
+    snapshot_max_uid: i64,
+    snapshot_uids: &[String],
+    attempted_uids: &std::collections::HashSet<String>,
+) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT uid FROM messages
+         WHERE account_id = ?1 AND folder = ?2 AND body_fetched = 0 AND uid_int > ?3
+         ORDER BY uid_int DESC",
+    )?;
+    let rows = stmt.query_map(params![account_id, folder, snapshot_max_uid], |row| {
+        row.get::<_, String>(0)
+    })?;
+    for row in rows {
+        let uid = row?;
+        if !attempted_uids.contains(&uid) {
+            return Ok(Some(uid));
+        }
+    }
+    Ok(snapshot_uids
+        .iter()
+        .find(|uid| !attempted_uids.contains(*uid))
+        .cloned())
+}
+
+/// 逐步下载当前文件夹所有缺失的完整正文，优先下载最新邮件。
 /// 单封失败不影响其他，整体不阻塞同步主流程。
 ///
 /// 抢占机制：检测到用户主动 fetch_body 进行中时，sleep 让出 IMAP 锁窗口，
 /// 避免预下载串行占用账号级锁阻塞用户请求。
-async fn prefetch_unread_bodies(
+async fn prefetch_mail_bodies(
     state: &EmailState,
     gateway_url: &str,
     account: &EmailAccount,
@@ -5314,17 +5380,27 @@ async fn prefetch_unread_bodies(
     if gateway_url.is_empty() {
         return Ok(());
     }
-    // 查询未读且未拉取正文的邮件，按 UID 倒序取最近 N 封
-    let uids_to_prefetch: Vec<String> = {
+    let worker_lock = sync::mail_lock(state, &account.id, folder, "prefetch")?;
+    let Ok(_worker_guard) = worker_lock.try_lock() else { return Ok(()); };
+    let connection_lock = sync::mail_lock(state, &account.id, "", "prefetch-connection")?;
+    // 已读邮件也需要完整离线副本。
+    let (uids_to_prefetch, snapshot_max_uid): (Vec<String>, i64) = {
         let conn = state.conn()?;
+        let snapshot_max_uid = conn
+            .query_row(
+                "SELECT COALESCE(MAX(uid_int), 0) FROM messages
+                 WHERE account_id = ?1 AND folder = ?2",
+                params![&account.id, folder],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(
             "SELECT uid FROM messages
-             WHERE account_id = ?1 AND folder = ?2 AND is_read = 0 AND body_fetched = 0
-             ORDER BY uid_int DESC
-             LIMIT ?3",
+             WHERE account_id = ?1 AND folder = ?2 AND body_fetched = 0 AND uid_int > 0
+             ORDER BY uid_int DESC",
         ).map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![&account.id, folder, PREFETCH_UNREAD_LIMIT], |row| {
+            .query_map(params![&account.id, folder], |row| {
                 row.get::<_, String>(0)
             })
             .map_err(|e| e.to_string())?;
@@ -5334,7 +5410,7 @@ async fn prefetch_unread_bodies(
                 uids.push(u);
             }
         }
-        uids
+        (uids, snapshot_max_uid)
     };
 
     if uids_to_prefetch.is_empty() {
@@ -5342,7 +5418,7 @@ async fn prefetch_unread_bodies(
     }
 
     log::debug!(
-        "[email-bg] account={} folder={} prefetching {} unread bodies",
+        "[email-bg] account={} folder={} prefetching {} bodies",
         account.id,
         folder,
         uids_to_prefetch.len()
@@ -5351,7 +5427,8 @@ async fn prefetch_unread_bodies(
     let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(90))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
     let base_req = serde_json::json!({
@@ -5361,21 +5438,62 @@ async fn prefetch_unread_bodies(
         "imapPassword": plain_password,
         "mailbox": folder,
         "useSsl": account.imap_use_ssl,
+        "background": true,
         "includeRawBytes": true,
     });
 
     let mut success = 0u32;
     let mut failed = 0u32;
-    for uid in &uids_to_prefetch {
-        // 抢占检测：用户正在主动 fetch_body 时，sleep 让出 IMAP 锁窗口，跳过本轮预下载
+    let mut attempted_uids = std::collections::HashSet::new();
+    loop {
+        // 同一账号最多一个后台正文下载，避免多个文件夹占满前台请求的连接队列。
+        let _connection_guard = connection_lock.lock().await;
+        // 用户主动打开邮件时，让出后续预下载的连接窗口。
         // prefetch 是尽力而为的优化，绝不应阻塞用户主动操作
-        if state
-            .user_fetch_in_progress
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+        while state.user_fetch_in_progress.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let uid = {
+            let conn = state.conn()?;
+            next_prefetch_uid(
+                &conn,
+                &account.id,
+                folder,
+                snapshot_max_uid,
+                &uids_to_prefetch,
+                &attempted_uids,
+            )
+            .map_err(|e| e.to_string())?
+        };
+        let Some(uid) = uid else { break; };
+        let body_lock = sync::mail_lock(state, &account.id, folder, &format!("body:{uid}"))?;
+        let body_guard = body_lock.lock().await;
+        let latest_uid = {
+            let conn = state.conn()?;
+            next_prefetch_uid(
+                &conn,
+                &account.id,
+                folder,
+                snapshot_max_uid,
+                &uids_to_prefetch,
+                &attempted_uids,
+            )
+            .map_err(|e| e.to_string())?
+        };
+        if latest_uid.as_deref() != Some(uid.as_str()) {
+            drop(body_guard);
             continue;
         }
+        attempted_uids.insert(uid.clone());
+        let already_cached = match state.conn()?.query_row(
+            "SELECT body_fetched=1 AND eml_path!='' FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account.id, folder, &uid], |row| row.get::<_, bool>(0),
+        ) {
+            Ok(value) => value,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if already_cached { continue; }
         let mut req = base_req.clone();
         req["uid"] = serde_json::Value::String(uid.clone());
         match client.post(&url).json(&req).send().await {
@@ -5406,14 +5524,14 @@ async fn prefetch_unread_bodies(
                         continue;
                     }
                 };
-                match cache_prefetched_body_under(
-                    state,
-                    &mail_root(),
-                    &account.id,
-                    folder,
-                    uid,
-                    &bytes,
-                ) {
+                let cache_state = state.clone();
+                let cache_account = account.id.clone();
+                let cache_folder = folder.to_string();
+                let cache_uid = uid.clone();
+                let cached = tokio::task::spawn_blocking(move || {
+                    cache_prefetched_body_under(&cache_state, &mail_root(), &cache_account, &cache_folder, &cache_uid, &bytes)
+                }).await.map_err(|e| format!("邮件保存任务失败: {e}")).and_then(|result| result);
+                match cached {
                     Ok(()) => success += 1,
                     Err(e) => {
                         log::warn!(
@@ -5425,6 +5543,14 @@ async fn prefetch_unread_bodies(
                         failed += 1;
                     }
                 }
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::CONFLICT => {
+                log::debug!(
+                    "[email-bg] account={} uid={} yielded to foreground fetch",
+                    account.id,
+                    uid
+                );
+                break;
             }
             Ok(resp) => {
                 log::warn!(
@@ -5461,10 +5587,11 @@ async fn prefetch_unread_bodies(
 mod prefetch_cache_tests {
     use super::{
         cache_prefetched_body_under, decode_prefetched_raw_bytes, eml_relative_path,
-        meta_relative_path, EmailState,
+        meta_relative_path, next_prefetch_uid, EmailState,
     };
     use rusqlite::params;
     use serde_json::json;
+    use std::collections::HashSet;
     use std::path::Path;
     use std::sync::{
         atomic::AtomicBool,
@@ -5495,6 +5622,96 @@ mod prefetch_cache_tests {
         assert!(decode_prefetched_raw_bytes(&json!({})).is_err());
         assert!(decode_prefetched_raw_bytes(&json!({ "rawBytes": "not-base64!" })).is_err());
         assert!(decode_prefetched_raw_bytes(&json!({ "rawBytes": "" })).is_err());
+    }
+
+    #[test]
+    fn prefetch_rechecks_newer_uids_and_does_not_retry_a_failed_uid_in_the_same_round() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let conn = state.conn().unwrap();
+        conn.execute(
+            "INSERT INTO messages
+             (uid, uid_int, account_id, folder, subject, from_address, to_addresses, date,
+              is_read, is_starred, has_attachments, message_id, body_fetched, eml_path)
+             VALUES ('41', 41, 'test-account', 'INBOX', 'older', 'sender@example.test', '',
+                     '2026-10-16T00:00:00Z', 0, 0, 0, '<41@example.test>', 0, '')",
+            [],
+        )
+        .unwrap();
+        let snapshot_max_uid = conn
+            .query_row(
+                "SELECT MAX(uid_int) FROM messages WHERE account_id='test-account' AND folder='INBOX'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        let snapshot_uids = vec!["42".to_string(), "41".to_string()];
+        let mut attempted_uids = HashSet::new();
+
+        assert_eq!(
+            next_prefetch_uid(
+                &conn,
+                "test-account",
+                "INBOX",
+                snapshot_max_uid,
+                &snapshot_uids,
+                &attempted_uids,
+            )
+            .unwrap()
+            .as_deref(),
+            Some("42"),
+        );
+        attempted_uids.insert("42".to_string());
+        conn.execute(
+            "INSERT INTO messages
+             (uid, uid_int, account_id, folder, subject, from_address, to_addresses, date,
+              is_read, is_starred, has_attachments, message_id, body_fetched, eml_path)
+             VALUES ('43', 43, 'test-account', 'INBOX', 'newer', 'sender@example.test', '',
+                     '2026-10-16T00:01:00Z', 0, 0, 0, '<43@example.test>', 0, '')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            next_prefetch_uid(
+                &conn,
+                "test-account",
+                "INBOX",
+                snapshot_max_uid,
+                &snapshot_uids,
+                &attempted_uids,
+            )
+            .unwrap()
+            .as_deref(),
+            Some("43"),
+        );
+        attempted_uids.insert("43".to_string());
+        assert_eq!(
+            next_prefetch_uid(
+                &conn,
+                "test-account",
+                "INBOX",
+                snapshot_max_uid,
+                &snapshot_uids,
+                &attempted_uids,
+            )
+            .unwrap()
+            .as_deref(),
+            Some("41"),
+        );
+        attempted_uids.insert("41".to_string());
+        assert_eq!(
+            next_prefetch_uid(
+                &conn,
+                "test-account",
+                "INBOX",
+                snapshot_max_uid,
+                &snapshot_uids,
+                &attempted_uids,
+            )
+            .unwrap(),
+            None,
+        );
     }
 
     #[test]
@@ -5534,6 +5751,71 @@ mod prefetch_cache_tests {
         assert_eq!(meta["bodyFetched"], true);
         assert_eq!(meta["isStarred"], true);
         assert_eq!(meta["hasAttachments"], true);
+    }
+
+    #[test]
+    fn prefetched_attachment_flags_reflect_complete_eml_parts() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let mail_root = temp.path().join("mail");
+        let conn = state.conn().unwrap();
+        conn.execute(
+            "UPDATE messages SET has_attachments = 0 WHERE uid = '42' AND account_id = 'test-account'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages
+             (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses,
+              cc_addresses, date, has_attachments, is_read, is_starred, raw_size, message_id,
+              body_fetched, eml_path)
+             VALUES ('43', 43, 'test-account', 'INBOX', 'inline', 'sender@example.com', NULL,
+                     '', NULL, 'Wed, 16 Oct 2026 00:00:00 +0000', 0, 0, 0, 0,
+                     '<inline@example.com>', 0, '')",
+            [],
+        )
+        .unwrap();
+
+        let regular_attachment = b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nBody\r\n--b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"report.bin\"\r\nContent-Transfer-Encoding: base64\r\n\r\nAQID\r\n--b--\r\n";
+        cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "42",
+            regular_attachment,
+        )
+        .unwrap();
+
+        let inline_only = b"MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/html\r\n\r\n<img src=\"cid:logo@example.com\">\r\n--b\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=\"logo.png\"\r\nContent-ID: <logo@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\nAQID\r\n--b--\r\n";
+        cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "43",
+            inline_only,
+        )
+        .unwrap();
+
+        let conn = state.conn().unwrap();
+        for (uid, expected) in [("42", true), ("43", false)] {
+            let has_attachments: bool = conn
+                .query_row(
+                    "SELECT has_attachments FROM messages
+                     WHERE uid = ?1 AND account_id = 'test-account' AND folder = 'INBOX'",
+                    params![uid],
+                    |row| row.get::<_, i32>(0).map(|value| value != 0),
+                )
+                .unwrap();
+            assert_eq!(has_attachments, expected);
+            let meta: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(mail_root.join(meta_relative_path("test-account", "INBOX", uid)))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(meta["hasAttachments"], expected);
+        }
     }
 
     #[test]
@@ -6178,7 +6460,7 @@ pub async fn email_send(
             use_ssl: account.imap_use_ssl,
             last_uid,
         };
-        sync_folder_internal(&state_inner, &gw, sync_req, false).await
+        sync_folder_internal(&state_inner, &gw, sync_req, false, true, true).await
     }
     .await;
     match sync_result {
@@ -6285,13 +6567,21 @@ pub async fn email_mark_all_read(
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
     let url = format!("{}/email/mark_all_read", gateway_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
     let resp = client
         .post(&url)
         .json(&req)
         .send()
         .await
-        .map_err(|e| format!("请求 gateway 失败 ({url}): {e}"))?;
+        .map_err(|e| {
+            log::warn!("[email] mark-all-read request failed: {:?}", e);
+            "标记已读的结果暂未确认，请刷新文件夹后核对。".to_string()
+        })?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -6724,123 +7014,11 @@ pub async fn email_search_messages(
     state: tauri::State<'_, EmailState>,
     req: EmailSearchRequest,
 ) -> Result<Vec<EmailSearchResult>, String> {
-    let conn = state.conn()?;
-    // 有关键词时用 FTS5 MATCH，否则用普通查询
-    let use_fts = req.keyword.as_ref().map_or(false, |k| !k.is_empty());
-
-    let mut conditions: Vec<String> = Vec::new();
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    // FTS 模式下 MATCH 参数放在第一位
-    if use_fts {
-        let keyword = req.keyword.as_ref().unwrap();
-        // 用双引号包裹作为短语查询，避免 FTS5 特殊字符问题
-        let fts_query = format!("\"{}\"", keyword.replace('"', " "));
-        params.push(Box::new(fts_query));
-    }
-
-    // FTS 模式下字段需要 m. 前缀（JOIN 了 messages_fts）
-    let col_prefix = if use_fts { "m." } else { "" };
-
-    if let Some(ref v) = req.account_id {
-        conditions.push(format!("{col_prefix}account_id = ?{}", params.len() + 1));
-        params.push(Box::new(v.clone()));
-    }
-    if let Some(ref v) = req.folder {
-        conditions.push(format!("{col_prefix}folder = ?{}", params.len() + 1));
-        params.push(Box::new(v.clone()));
-    }
-    if let Some(ref v) = req.from_address {
-        conditions.push(format!("{col_prefix}from_address LIKE ?{}", params.len() + 1));
-        params.push(Box::new(format!("%{v}%")));
-    }
-    if let Some(ref v) = req.from_name {
-        conditions.push(format!("{col_prefix}from_name LIKE ?{}", params.len() + 1));
-        params.push(Box::new(format!("%{v}%")));
-    }
-    if let Some(ref v) = req.date_from {
-        conditions.push(format!("{col_prefix}date >= ?{}", params.len() + 1));
-        params.push(Box::new(v.clone()));
-    }
-    if let Some(ref v) = req.date_to {
-        conditions.push(format!("{col_prefix}date <= ?{}", params.len() + 1));
-        params.push(Box::new(v.clone()));
-    }
-    if let Some(v) = req.is_read {
-        conditions.push(format!("{col_prefix}is_read = ?{}", params.len() + 1));
-        params.push(Box::new(if v { 1i32 } else { 0i32 }));
-    }
-    if let Some(v) = req.is_starred {
-        conditions.push(format!("{col_prefix}is_starred = ?{}", params.len() + 1));
-        params.push(Box::new(if v { 1i32 } else { 0i32 }));
-    }
-    if let Some(v) = req.has_attachments {
-        conditions.push(format!("{col_prefix}has_attachments = ?{}", params.len() + 1));
-        params.push(Box::new(if v { 1i32 } else { 0i32 }));
-    }
-
-    let limit = req.limit.clamp(1, 200);
-    let offset = req.offset;
-
-    let sql = if use_fts {
-        let extra = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("AND {}", conditions.join(" AND "))
-        };
-        format!(
-            "SELECT m.uid, m.account_id, m.folder, m.subject, m.from_address, m.from_name,
-                    m.to_addresses, m.date, m.has_attachments, m.is_read, m.is_starred, m.raw_size
-             FROM messages m
-             JOIN messages_fts ON m.rowid = messages_fts.rowid
-             WHERE messages_fts MATCH ?1
-             {extra}
-             ORDER BY CAST(m.uid AS INTEGER) DESC LIMIT ?{} OFFSET ?{}",
-            params.len() + 1,
-            params.len() + 2
-        )
-    } else {
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-        format!(
-            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses,
-                    date, has_attachments, is_read, is_starred, raw_size
-             FROM messages {where_clause}
-             ORDER BY uid_int DESC LIMIT ?{} OFFSET ?{}",
-            params.len() + 1,
-            params.len() + 2
-        )
-    };
-
-    params.push(Box::new(limit));
-    params.push(Box::new(offset));
-
-    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let msgs = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok(EmailSearchResult {
-                uid: row.get(0)?,
-                account_id: row.get(1)?,
-                folder: row.get(2)?,
-                subject: row.get(3)?,
-                from_address: row.get(4)?,
-                from_name: row.get(5)?,
-                to_addresses: row.get(6)?,
-                date: row.get(7)?,
-                has_attachments: row.get::<_, i32>(8)? != 0,
-                is_read: row.get::<_, i32>(9)? != 0,
-                is_starred: row.get::<_, i32>(10)? != 0,
-                raw_size: row.get(11)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(msgs)
+    let mut conn = state.conn()?;
+    let root = mail_root();
+    tokio::task::spawn_blocking(move || search::search_messages(&mut conn, &root, &req))
+        .await
+        .map_err(|e| format!("邮件搜索任务失败: {e}"))?
 }
 
 // ==================== 批量操作 ====================
@@ -7322,7 +7500,7 @@ async fn update_local_cache(
                 // Box::pin 打破 async fn 静态递归：sync_folder_internal 内部会调用
                 // update_local_cache（应用规则时），不 pin 会报 E0733。
                 // apply_rules=false 运行时不会真正递归，仅满足编译器静态调用图要求。
-                let sync_fut = sync_folder_internal(state, gateway_url, sync_req, false);
+                let sync_fut = sync_folder_internal(state, gateway_url, sync_req, false, true, false);
                 let sync_result = Box::pin(sync_fut).await;
                 match sync_result {
                     Ok(r) => log::debug!(
@@ -7356,6 +7534,28 @@ fn resolve_email_service_base_url(
         .ok_or_else(|| "本地无 .eml 缓存且邮件服务未就绪，无法拉取正文".into())
 }
 
+fn email_body_json(parsed: &mailparse::ParsedMail<'_>, mut header: Value) -> Value {
+    use mailparse::MailHeaderMap;
+
+    let mut body_text = String::new();
+    let mut body_html = None;
+    extract_bodies(parsed, &mut body_text, &mut body_html);
+    let mut attachments = Vec::new();
+    extract_attachments(parsed, &mut attachments);
+    if let Some(fields) = header.as_object_mut() {
+        fields.insert(
+            "bccAddresses".into(),
+            Value::String(parsed.headers.get_first_value("Bcc").unwrap_or_default()),
+        );
+    }
+    serde_json::json!({
+        "bodyText": body_text,
+        "bodyHtml": body_html,
+        "attachments": attachments,
+        "header": header,
+    })
+}
+
 /// 按需读取单封邮件正文（Offline-First：本地 .eml 优先，缺失时才调 gateway）。
 ///
 /// 三段式逻辑：
@@ -7372,6 +7572,8 @@ pub async fn email_fetch_body(
     mailbox: String,
     gateway_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let body_lock = sync::mail_lock(state.inner(), &account_id, &mailbox, &format!("body:{uid}"))?;
+    let _body_guard = body_lock.lock().await;
     // 1. 查 SQLite 拿 eml_path、body_fetched 和 header（已解码，避免重复解析）
     let conn = state.conn()?;
     let (eml_path, body_fetched, db_header, db_date): (String, bool, Option<serde_json::Value>, String) = conn
@@ -7420,14 +7622,6 @@ pub async fn email_fetch_body(
         let eml_abs = eml_absolute_path(&eml_path);
         if let Ok(eml_bytes) = std::fs::read(&eml_abs) {
             if let Ok(parsed) = mailparse::parse_mail(&eml_bytes) {
-                let mut body_text = String::new();
-                let mut body_html: Option<String> = None;
-                extract_bodies(&parsed, &mut body_text, &mut body_html);
-                if body_text.len() > 50000 {
-                    body_text.truncate(50000);
-                }
-                let mut attachments: Vec<serde_json::Value> = Vec::new();
-                extract_attachments(&parsed, &mut attachments);
                 let header = match db_header {
                     Some(h) => h,
                     None => reparse_header_and_fix_db(
@@ -7439,12 +7633,7 @@ pub async fn email_fetch_body(
                         &db_date,
                     ),
                 };
-                return Ok(serde_json::json!({
-                    "bodyText": body_text,
-                    "bodyHtml": body_html,
-                    "attachments": attachments,
-                    "header": header,
-                }));
+                return Ok(email_body_json(&parsed, header));
             } else {
                 log::warn!("[email-fetch-body] mailparse 解析失败，回退 gateway");
             }
@@ -7480,7 +7669,8 @@ pub async fn email_fetch_body(
     let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(90))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
 
@@ -7501,10 +7691,9 @@ pub async fn email_fetch_body(
     {
         Ok(result) => result,
         Err(e) => {
-            // 连接错误：services 可能未启动或已崩溃，尝试恢复后重试一次
-            if e.contains("error sending request") || e.contains("连接") {
+            if e.is_connection_error() {
                 log::warn!(
-                    "[email-fetch-body] services 连接失败，尝试恢复: {}",
+                    "[email-fetch-body] local services connection failed, recovering: {:?}",
                     e
                 );
                 try_recover_services(&app_handle).await;
@@ -7520,9 +7709,9 @@ pub async fn email_fetch_body(
                     state.inner(),
                     &gateway_url,
                 )
-                .await?
+                .await.map_err(EmailBodyFetchError::user_message)?
             } else {
-                return Err(e);
+                return Err(e.user_message());
             }
         }
     };
@@ -7554,58 +7743,27 @@ pub async fn email_fetch_body(
             parsed_eml = Some(bytes);
         }
     }
-    let mut cached = false;
-    if let Some(bytes) = &parsed_eml {
-        match write_eml_file(&account_id, &mailbox, &resolved_uid, bytes) {
-            Ok(rel) => match state.conn() {
-                Ok(conn) => {
-                    if let Err(e) = conn.execute(
-                        "UPDATE messages SET body_fetched = 1, eml_path = ?1
-                         WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-                        params![rel, &resolved_uid, &account_id, &mailbox],
-                    ) {
-                        log::warn!(
-                            "[email-fetch-body] 更新 body_fetched 失败 account={} uid={}: {}",
-                            account_id,
-                            resolved_uid,
-                            e
-                        );
-                    } else {
-                        cached = true;
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[email-fetch-body] 打开数据库失败: {}", e);
-                }
-            },
-            Err(e) => {
-                log::warn!(
-                    "[email-fetch-body] 落盘 .eml 失败 account={} uid={}: {}",
-                    account_id,
-                    resolved_uid,
-                    e
-                );
-            }
-        }
+    let cache_failed;
+    if let Some(bytes) = parsed_eml.take() {
+        let state_copy = state.inner().clone();
+        let account_copy = account_id.clone();
+        let mailbox_copy = mailbox.clone();
+        let uid_copy = resolved_uid.clone();
+        let (bytes, result) = tokio::task::spawn_blocking(move || {
+            let result = cache_prefetched_body_under(&state_copy, &mail_root(), &account_copy, &mailbox_copy, &uid_copy, &bytes);
+            (bytes, result)
+        }).await.map_err(|e| format!("本地邮件保存任务失败: {e}"))?;
+        cache_failed = result.is_err();
+        parsed_eml = Some(bytes);
+    } else {
+        drop(_body_guard);
+        cache_failed = fetch_raw_and_cache(state.inner(), &gateway_url, &account_id, &resolved_uid, &mailbox).await.is_err();
     }
-    if !cached {
-        // 回退路径：rawBytes 缺失/写盘失败时二次拉取落盘（此时 guard 已释放，不会自锁）
-        if let Err(e) = fetch_raw_and_cache(
-            state.inner(),
-            &gateway_url,
-            &account_id,
-            &resolved_uid,
-            &mailbox,
-        )
-        .await
-        {
-            log::warn!(
-                "[email-fetch-body] 回退落盘 .eml 失败 account={} uid={}: {}",
-                account_id,
-                resolved_uid,
-                e
-            );
-        }
+    if cache_failed {
+        log::warn!("[email] loaded message could not be persisted locally");
+        let _ = app_handle.emit_to("main", "email-action-required", serde_json::json!({
+            "message": "邮件已加载，但未能保存本地副本。请检查磁盘空间后重新收取。"
+        }));
     }
 
     // 5. 注入 header（网络回退路径 gateway 不返回 header；本地命中路径在第 2 步已返回）
@@ -7649,6 +7807,15 @@ pub async fn email_fetch_body(
                     date,
                 ),
             );
+            if let Ok(parsed) = mailparse::parse_mail(&bytes) {
+                use mailparse::MailHeaderMap;
+                if let Some(header) = obj.get_mut("header").and_then(Value::as_object_mut) {
+                    header.insert(
+                        "bccAddresses".into(),
+                        Value::String(parsed.headers.get_first_value("Bcc").unwrap_or_default()),
+                    );
+                }
+            }
         }
     }
 
@@ -7660,6 +7827,76 @@ pub async fn email_fetch_body(
     }
 
     Ok(body)
+}
+
+#[derive(Debug)]
+enum EmailBodyFetchError {
+    Request(reqwest::Error),
+    Message(String),
+}
+
+impl EmailBodyFetchError {
+    fn is_connection_error(&self) -> bool {
+        matches!(self, Self::Request(error) if error.is_connect() && !error.is_timeout())
+    }
+
+    fn user_message(self) -> String {
+        log::warn!("[email-fetch-body] request failed: {:?}", self);
+        match self {
+            Self::Request(error) if error.is_timeout() =>
+                "邮件正文收取超时，请稍后重试。".into(),
+            Self::Request(error) if error.is_connect() =>
+                "暂时无法连接邮件服务，请稍后重试。".into(),
+            Self::Message(message) if message.contains("邮箱正忙") =>
+                "邮箱正在处理其他请求，请稍后重试。".into(),
+            Self::Message(message) if is_permanent_auth_error(&message) =>
+                "邮件正文收取失败，请检查邮箱账号设置。".into(),
+            Self::Message(message) if message.contains("UID not found") =>
+                "这封邮件可能已被移动或删除，请刷新邮件列表。".into(),
+            _ => "邮件正文加载失败，请稍后重试。".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod body_transport_tests {
+    use super::{is_selectable_folder, EmailBodyFetchError};
+    use std::time::Duration;
+
+    #[test]
+    fn grouping_directories_are_not_mailboxes() {
+        assert!(!is_selectable_folder("\\Noselect \\HasChildren"));
+        assert!(!is_selectable_folder("\\noselect"));
+        assert!(is_selectable_folder("\\HasNoChildren"));
+    }
+
+    #[tokio::test]
+    async fn response_timeout_does_not_trigger_services_recovery() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let error = reqwest::Client::builder().no_proxy().timeout(Duration::from_millis(50)).build().unwrap()
+            .get(format!("http://{address}/email/fetch_body")).send().await.unwrap_err();
+        server.abort();
+        let failure = EmailBodyFetchError::Request(error);
+        assert!(!failure.is_connection_error());
+        assert_eq!(failure.user_message(), "邮件正文收取超时，请稍后重试。");
+    }
+
+    #[tokio::test]
+    async fn refused_local_connection_can_trigger_services_recovery() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().unwrap()
+            .get(format!("http://{address}/email/fetch_body")).send().await.unwrap_err();
+        let failure = EmailBodyFetchError::Request(error);
+        assert!(failure.is_connection_error());
+        assert_eq!(failure.user_message(), "暂时无法连接邮件服务，请稍后重试。");
+    }
 }
 
 /// 调 gateway /email/fetch_body 拉取正文，含 UID 失效自动修复重试。
@@ -7677,7 +7914,7 @@ async fn fetch_body_via_gateway(
     original_uid: &str,
     state: &EmailState,
     gateway_url: &str,
-) -> Result<(serde_json::Value, String), String> {
+) -> Result<(serde_json::Value, String), EmailBodyFetchError> {
     let mut req_uid = original_uid.to_string();
     let mut retried = false;
 
@@ -7700,17 +7937,17 @@ async fn fetch_body_via_gateway(
             .json(&req)
             .send()
             .await
-            .map_err(|e| format!("请求 gateway 失败: {e}"))?;
+            .map_err(EmailBodyFetchError::Request)?;
 
         if resp.status().is_success() {
             let body: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| format!("解析响应失败: {e}"))?;
+                .map_err(EmailBodyFetchError::Request)?;
             return Ok((body, req_uid));
         }
 
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.map_err(EmailBodyFetchError::Request)?;
 
         // 仅在第一次失败且错误是"UID not found"时尝试自动修复
         if !retried && text.contains("UID not found in mailbox") {
@@ -7737,10 +7974,10 @@ async fn fetch_body_via_gateway(
                 Err(_) => String::new(),
             };
             if message_id.is_empty() {
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(EmailBodyFetchError::Message(format!("gateway 返回错误: {text}")));
             }
 
-            // 同步当前文件夹，让 message_id 去重逻辑用新 uid 替换旧 uid 记录
+            // 同步当前文件夹后，按 Message-ID 查找服务器的新 UID。
             let sync_req = SyncRequest {
                 account_id: account.id.clone(),
                 imap_host: account.imap_host.clone(),
@@ -7751,14 +7988,14 @@ async fn fetch_body_via_gateway(
                 use_ssl: account.imap_use_ssl,
                 last_uid: None,
             };
-            let sync_fut = sync_folder_internal(state, gateway_url, sync_req, false);
+            let sync_fut = sync_folder_internal(state, gateway_url, sync_req, false, true, false);
             if let Err(e) = Box::pin(sync_fut).await {
                 log::warn!(
                     "[email-fetch-body] 自动修复：同步文件夹 {} 失败: {}",
                     mailbox,
                     e
                 );
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(EmailBodyFetchError::Message(format!("gateway 返回错误: {text}")));
             }
 
             // 用 message_id 查询本地新 uid
@@ -7766,9 +8003,9 @@ async fn fetch_body_via_gateway(
                 Ok(c) => c
                     .query_row(
                         "SELECT uid FROM messages
-                         WHERE account_id = ?1 AND folder = ?2 AND message_id = ?3
-                         ORDER BY uid DESC LIMIT 1",
-                        params![&account_id, &mailbox, &message_id],
+                         WHERE account_id = ?1 AND folder = ?2 AND message_id = ?3 AND uid != ?4 AND uid_int > 0
+                         ORDER BY uid_int DESC LIMIT 1",
+                        params![&account_id, &mailbox, &message_id, &req_uid],
                         |row| {
                             let u: String = row.get(0).unwrap_or_default();
                             Ok(u)
@@ -7783,7 +8020,7 @@ async fn fetch_body_via_gateway(
                     mailbox,
                     message_id
                 );
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(EmailBodyFetchError::Message(format!("gateway 返回错误: {text}")));
             }
             log::info!(
                 "[email-fetch-body] 自动修复：uid {} -> {} (message_id={})",
@@ -7794,7 +8031,7 @@ async fn fetch_body_via_gateway(
             req_uid = new_uid;
             continue;
         }
-        return Err(format!("gateway 返回错误: {text}"));
+        return Err(EmailBodyFetchError::Message(format!("gateway 返回错误: {text}")));
     }
 }
 
@@ -7807,6 +8044,8 @@ async fn fetch_raw_and_cache(
     uid: &str,
     mailbox: &str,
 ) -> Result<(), String> {
+    let body_lock = sync::mail_lock(state, account_id, mailbox, &format!("body:{uid}"))?;
+    let _body_guard = body_lock.lock().await;
     // 优先检查本地是否已有完整 .eml（body_fetched=1 表示已拉取完整 RFC822）
     // 注意：仅检查 eml_path 非空不够，同步时可能已落盘 HEADER-only 的 .eml
     {
@@ -7819,7 +8058,9 @@ async fn fetch_raw_and_cache(
             )
             .unwrap_or_default();
         if !eml_path.is_empty() && body_fetched {
-            return Ok(());
+            if let Some(bytes) = read_eml_file(&eml_path) {
+                if mailparse::parse_mail(&bytes).is_ok() { return Ok(()); }
+            }
         }
     }
 
@@ -7856,7 +8097,8 @@ async fn fetch_raw_and_cache(
     let url = format!("{}/email/fetch_raw", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(90))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
     let resp = client
@@ -7874,36 +8116,72 @@ async fn fetch_raw_and_cache(
         .await
         .map_err(|e| format!("解析响应失败: {e}"))?;
 
-    if let Some(raw_b64) = body.get("rawBase64").and_then(|v| v.as_str()) {
-        if !raw_b64.is_empty() {
-            match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
-                Ok(bytes) => match write_eml_file(account_id, mailbox, uid, &bytes) {
-                    Ok(rel) => {
-                        let conn = state.conn()?;
-                        // P1: 完整 RFC822 已落盘成功，原子更新 eml_path 和 body_fetched
-                        // 写入或数据库失败时保持 body_fetched=false，下次仍可恢复
-                        let _ = conn.execute(
-                            "UPDATE messages SET eml_path = ?1, body_fetched = 1
-                             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-                            params![rel, uid, account_id, mailbox],
-                        );
-                        // 同步 .meta.json：body_fetched=true（仅在落盘成功后写入）
-                        if let Some(mut meta) = read_meta_json(account_id, mailbox, uid) {
-                            meta.body_fetched = true;
-                            let _ = write_meta_json(&meta);
-                        }
-                    }
-                    Err(e) => log::warn!("[email-fetch-body] 后台落盘 .eml 失败: {}", e),
-                },
-                Err(e) => log::warn!("[email-fetch-body] 后台 base64 解码失败: {}", e),
-            }
-        }
-    }
-    Ok(())
+    let bytes = decode_prefetched_raw_bytes(&serde_json::json!({"rawBytes": body.get("rawBase64")}))?;
+    let cache_state = state.clone();
+    let cache_account = account_id.to_string();
+    let cache_folder = mailbox.to_string();
+    let cache_uid = uid.to_string();
+    tokio::task::spawn_blocking(move || {
+        cache_prefetched_body_under(&cache_state, &mail_root(), &cache_account, &cache_folder, &cache_uid, &bytes)
+    }).await.map_err(|e| format!("邮件保存任务失败: {e}"))?
 }
 
 /// 拉取邮件原始 RFC822 字节（用于 .eml 导出）
 /// Foxmail 风格：优先读本地 .eml 文件，未落盘时调 gateway 拉取并落盘。
+fn read_cached_full_eml_under(
+    state: &EmailState,
+    root: &Path,
+    account_id: &str,
+    uid: &str,
+    mailbox: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let conn = state.conn()?;
+    let cached: Option<(String, bool)> = conn
+        .query_row(
+            "SELECT eml_path, body_fetched FROM messages
+             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![uid, account_id, mailbox],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((eml_path, true)) = cached else {
+        return Ok(None);
+    };
+    if eml_path.is_empty() {
+        return Ok(None);
+    }
+
+    let eml_path = eml_absolute_path_under(root, &eml_path);
+    let Ok(bytes) = std::fs::read(eml_path) else {
+        return Ok(None);
+    };
+    if mailparse::parse_mail(&bytes).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+async fn fetch_raw_export_bytes(
+    state: &EmailState,
+    gateway_url: &str,
+    account_id: &str,
+    uid: &str,
+    mailbox: &str,
+    root: &Path,
+) -> Result<Vec<u8>, String> {
+    if let Some(bytes) = read_cached_full_eml_under(state, root, account_id, uid, mailbox)? {
+        return Ok(bytes);
+    }
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+
+    fetch_raw_and_cache(state, gateway_url, account_id, uid, mailbox).await?;
+    read_cached_full_eml_under(state, root, account_id, uid, mailbox)?
+        .ok_or_else(|| "下载后的邮件原文无法读取".into())
+}
+
 #[tauri::command]
 pub async fn email_fetch_raw(
     state: tauri::State<'_, EmailState>,
@@ -7912,91 +8190,103 @@ pub async fn email_fetch_raw(
     uid: String,
     mailbox: String,
 ) -> Result<serde_json::Value, String> {
-    if gateway_url.is_empty() {
-        return Err("gateway URL 为空".into());
-    }
+    let root = mail_root();
+    let bytes = fetch_raw_export_bytes(
+        state.inner(),
+        &gateway_url,
+        &account_id,
+        &uid,
+        &mailbox,
+        &root,
+    )
+    .await?;
+    Ok(serde_json::json!({
+        "rawBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+        "size": bytes.len(),
+    }))
+}
 
-    // 1. 优先读本地 .eml 文件
-    let conn = state.conn()?;
-    let eml_path: String = conn
-        .query_row(
-            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
-            params![&uid, &account_id, &mailbox],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap_or_default();
-    drop(conn);
-
-    if !eml_path.is_empty() {
-        if let Some(eml_bytes) = read_eml_file(&eml_path) {
-            let size = eml_bytes.len();
-            let raw_b64 = base64::engine::general_purpose::STANDARD.encode(&eml_bytes);
-            return Ok(serde_json::json!({
-                "rawBase64": raw_b64,
-                "size": size,
-            }));
-        }
-    }
-
-    // 2. 本地无 .eml，调 gateway 拉取 RFC822
-    let (account, plain_password) = {
-        let conn = state.conn()?;
-        let account = get_imap_credentials(&conn, &account_id)?;
-        let plain = decrypt_password(&account.imap_password)?;
-        (account, plain)
+#[cfg(test)]
+mod fetch_raw_export_tests {
+    use super::{fetch_raw_export_bytes, write_eml_file_under, EmailState};
+    use rusqlite::params;
+    use std::path::Path;
+    use std::sync::{
+        atomic::AtomicBool,
+        Arc,
     };
 
-    let req = serde_json::json!({
-        "accountId": account_id,
-        "imapHost": account.imap_host,
-        "imapPort": account.imap_port,
-        "imapUsername": account.imap_username,
-        "imapPassword": plain_password,
-        "mailbox": mailbox,
-        "uid": uid,
-        "useSsl": account.imap_use_ssl,
-    });
-
-    let url = format!("{}/email/fetch_raw", gateway_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
-        .json(&req)
-        .send()
-        .await
-        .map_err(|e| format!("请求 gateway 失败: {e}"))?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("gateway 返回错误: {text}"));
-    }
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析响应失败: {e}"))?;
-
-    // 3. 落盘 .eml 文件供下次使用
-    if let Some(raw_b64) = body.get("rawBase64").and_then(|v| v.as_str()) {
-        if !raw_b64.is_empty() {
-            match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
-                Ok(bytes) => {
-                    match write_eml_file(&account_id, &mailbox, &uid, &bytes) {
-                        Ok(rel) => {
-                            let conn = state.conn()?;
-                            let _ = conn.execute(
-                                "UPDATE messages SET body_fetched = 1, eml_path = ?1
-                                 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-                                params![rel, uid, account_id, mailbox],
-                            );
-                        }
-                        Err(e) => log::warn!("[email-fetch-raw] 落盘 .eml 失败: {}", e),
-                    }
-                }
-                Err(e) => log::warn!("[email-fetch-raw] base64 解码失败: {}", e),
-            }
-        }
+    fn isolated_state(root: &Path) -> (EmailState, String) {
+        let state = EmailState {
+            db_path: root.join("email.sqlite3"),
+            schema_initialized: Arc::new(AtomicBool::new(false)),
+            user_fetch_in_progress: Arc::new(AtomicBool::new(false)),
+        };
+        let account_id = format!(
+            "__mona_test_fetch_raw_{}",
+            root.file_name().unwrap().to_string_lossy()
+        );
+        let conn = state.conn().unwrap();
+        conn.execute(
+            "INSERT INTO messages
+             (uid, account_id, folder, subject, from_address, to_addresses, date)
+             VALUES ('42', ?1, 'INBOX', 'test', 'sender@example.invalid', '', '2026-10-26T00:00:00Z')",
+            params![account_id],
+        )
+        .unwrap();
+        (state, account_id)
     }
 
-    Ok(body)
+    fn cache_eml(
+        state: &EmailState,
+        root: &Path,
+        account_id: &str,
+        bytes: &[u8],
+        body_fetched: bool,
+    ) {
+        let eml_path = write_eml_file_under(root, account_id, "INBOX", "42", bytes).unwrap();
+        state
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET eml_path=?1, body_fetched=?2
+                 WHERE account_id=?3 AND folder='INBOX' AND uid='42'",
+                params![eml_path, body_fetched, account_id],
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn complete_local_eml_is_exportable_without_a_gateway_url() {
+        let temp = tempfile::tempdir().unwrap();
+        let mail_root = temp.path().join("mail");
+        let (state, account_id) = isolated_state(temp.path());
+        let raw = b"From: sender@example.invalid\r\nSubject: complete\r\n\r\nbody";
+        cache_eml(&state, &mail_root, &account_id, raw, true);
+
+        let exported =
+            fetch_raw_export_bytes(&state, "", &account_id, "42", "INBOX", &mail_root)
+                .await
+                .unwrap();
+
+        assert_eq!(exported, raw);
+    }
+
+    #[tokio::test]
+    async fn header_only_eml_is_not_exported_as_a_complete_message() {
+        let temp = tempfile::tempdir().unwrap();
+        let mail_root = temp.path().join("mail");
+        let (state, account_id) = isolated_state(temp.path());
+        let header_only = b"From: sender@example.invalid\r\nSubject: header only\r\n\r\n";
+        assert!(mailparse::parse_mail(header_only).is_ok());
+        cache_eml(&state, &mail_root, &account_id, header_only, false);
+
+        let error = fetch_raw_export_bytes(&state, "", &account_id, "42", "INBOX", &mail_root)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "gateway URL 为空");
+    }
 }
 
 /// 手动触发全量重建邮件索引（从 .eml + .meta.json 重建 SQLite 索引）
@@ -8017,7 +8307,19 @@ pub async fn email_rebuild_index(
 
 #[cfg(test)]
 mod tests {
-    use super::{email_header_json, resolve_email_service_base_url};
+    use super::{email_body_json, email_header_json, resolve_email_service_base_url};
+
+    #[test]
+    fn cached_body_preserves_long_unicode_text_and_draft_bcc() {
+        let text = format!("{}结尾正文", "中文正文".repeat(20000));
+        let raw = format!(
+            "Content-Type: text/plain; charset=utf-8\r\nBcc: hidden@example.test\r\n\r\n{text}"
+        );
+        let parsed = mailparse::parse_mail(raw.as_bytes()).unwrap();
+        let body = email_body_json(&parsed, serde_json::json!({}));
+        assert_eq!(body["bodyText"].as_str(), Some(text.as_str()));
+        assert_eq!(body["header"]["bccAddresses"], "hidden@example.test");
+    }
 
     #[test]
     fn email_service_base_url_prefers_explicit_url() {
@@ -8061,5 +8363,83 @@ mod tests {
             header["date"].as_str(),
             Some("2026-09-06T10:30:00+08:00")
         );
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::{extract_attachment_response, extract_attachments};
+    use base64::Engine;
+
+    const INLINE_ATTACHMENT_EML: &str = concat!(
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: multipart/related; boundary=\"mail-boundary\"\r\n\r\n",
+        "--mail-boundary\r\n",
+        "Content-Type: image/png\r\n",
+        "Content-Disposition: inline; filename=\"same.bin\"\r\n",
+        "Content-ID: <logo@example.test>\r\n",
+        "Content-Transfer-Encoding: base64\r\n\r\n",
+        "AQID\r\n",
+        "--mail-boundary\r\n",
+        "Content-Type: application/octet-stream\r\n",
+        "Content-Disposition: attachment; filename=\"same.bin\"\r\n",
+        "Content-Transfer-Encoding: base64\r\n\r\n",
+        "BAUG\r\n",
+        "--mail-boundary--\r\n"
+    );
+
+    #[test]
+    fn local_attachment_uses_content_id_to_disambiguate_same_filename() {
+        let response = extract_attachment_response(
+            INLINE_ATTACHMENT_EML.as_bytes(),
+            "same.bin",
+            Some("logo@example.test"),
+        )
+        .unwrap()
+        .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(response.data)
+            .unwrap();
+
+        assert_eq!(bytes, [1, 2, 3]);
+        assert_eq!(response.content_type, "image/png");
+    }
+
+    #[test]
+    fn filename_fallback_ignores_same_named_inline_part() {
+        for content_id in [None, Some("missing@example.test")] {
+            let response = extract_attachment_response(
+                INLINE_ATTACHMENT_EML.as_bytes(),
+                "same.bin",
+                content_id,
+            )
+            .unwrap()
+            .unwrap();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(response.data)
+                .unwrap();
+
+            assert_eq!(bytes, [4, 5, 6]);
+            assert_eq!(response.content_type, "application/octet-stream");
+        }
+    }
+
+    #[test]
+    fn body_attachment_metadata_keeps_optional_content_id() {
+        let parsed = mailparse::parse_mail(INLINE_ATTACHMENT_EML.as_bytes()).unwrap();
+        let mut attachments = Vec::new();
+        extract_attachments(&parsed, &mut attachments);
+
+        assert_eq!(attachments[0]["contentId"], "logo@example.test");
+        assert_eq!(attachments[0]["isInline"], true);
+        assert!(attachments[1].get("contentId").is_none());
+        assert_eq!(attachments[1]["isInline"], false);
+    }
+
+    #[test]
+    fn malformed_cached_eml_can_fall_back_to_mail_service() {
+        assert!(extract_attachment_response(b"not an RFC822 message", "file.bin", None)
+            .unwrap()
+            .is_none());
     }
 }

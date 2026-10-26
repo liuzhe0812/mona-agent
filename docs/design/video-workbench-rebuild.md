@@ -1,5 +1,6 @@
 # Mona 视频工作台整体改造方案
 
+> 2026-10-24 更新：创作资源与运行时已统一为 Huashu Motion。本文涉及 Dashi、旧 huashu-art-motion 或 Remotion 的实现说明仅保留为历史记录；当前边界以 docs/architecture/module-invariants.md 和 docs/plans/video-huashu-motion-replacement.md 为准。
 日期：2026-10-15。状态：核心改造已实施，两类本地创作、局部修改与有声导出验收完成；范围与限制见 [验收记录](../plans/video-workbench-rebuild-acceptance-20261015.md)。
 
 目标是让普通用户通过内容、导演方案和自然语言修改，获得可交付的视频。知识讲解与产品展示同等重要，由 Mona 根据内容选择表达方式。成片必须用动画、真实素材和声音表达内容，并让修改、等待和失败都有清楚的结果。

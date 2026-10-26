@@ -262,7 +262,8 @@ async def test_preflight_consolidation_uses_fresh_summary_in_same_request(tmp_pa
 
     await loop.process_direct("continue", session_key="cli:test")
 
-    assert "Fresh handoff: keep the pending deployment step." in captured[0]["content"]
+    assert "Fresh handoff: keep the pending deployment step." not in captured[0]["content"]
+    assert "Fresh handoff: keep the pending deployment step." in captured[-1]["content"]
 
 
 @pytest.mark.asyncio

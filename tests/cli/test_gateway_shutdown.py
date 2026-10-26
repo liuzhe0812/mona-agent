@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from mona.cli.commands import app
-from mona.config.schema import Config
+from mona.config.schema import Config, _resolve_tool_config_refs
 from mona.providers.factory import ProviderSnapshot
 
 runner = CliRunner()
@@ -46,6 +46,7 @@ def test_gateway_shutdown_stops_long_running_runtime_and_flushes_sessions(
     aiohttp = pytest.importorskip("aiohttp")
     from aiohttp import web
 
+    _resolve_tool_config_refs()
     config = Config()
     config.gateway.host = "127.0.0.1"
     config.gateway.port = 0
@@ -183,7 +184,6 @@ def test_gateway_shutdown_stops_long_running_runtime_and_flushes_sessions(
     monkeypatch.setattr("mona.cron.service.CronService", _FakeCronService)
     monkeypatch.setattr("mona.heartbeat.service.HeartbeatService", _FakeHeartbeatService)
     monkeypatch.setattr("mona.api.server._computer_use_startup", _skip_computer_use_startup)
-    monkeypatch.setattr("mona.agent.pack_bootstrap.ensure_stock_pack", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("mona.agent.partners.AgentRegistry", _FakeAgentRegistry)
     monkeypatch.setattr(
         "mona.agent.user_config.load_agent_user_config",

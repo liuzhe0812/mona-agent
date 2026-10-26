@@ -18,7 +18,12 @@ vi.mock("@/hooks/useLicense", () => ({
   }),
 }));
 vi.mock("@/components/PaymentDialog", () => ({
-  PaymentDialog: ({ title }: { title: string }) => <div>{title}</div>,
+  PaymentDialog: ({ title, onSuccess }: { title: string; onSuccess: () => void }) => (
+    <div>
+      <span>{title}</span>
+      <button onClick={onSuccess}>模拟支付成功</button>
+    </div>
+  ),
 }));
 
 import { CreditsView } from "./CreditsView";
@@ -61,7 +66,10 @@ describe("CreditsView", () => {
     render(<CreditsView onBack={() => undefined} />);
 
     await waitFor(() => expect(screen.getByText("120.00")).toBeInTheDocument());
-    expect(screen.getByText(/生成中预留 ¥5/)).toBeInTheDocument();
+    expect(screen.getByText(/实际扣费以核算结果为准/)).toHaveTextContent(
+      "预留或冻结金额 ¥5.00，可能包含模型处理中、待核实或退款确认中的金额；模型实际扣费以核算结果为准",
+    );
+    expect(screen.queryByText(/自动退回/)).not.toBeInTheDocument();
     expect(screen.getByText("入门包")).toBeInTheDocument();
     expect(screen.queryByText("余额明细")).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "预置充值额度" })).toHaveClass("sm:grid-cols-3");
@@ -84,6 +92,78 @@ describe("CreditsView", () => {
     await waitFor(() => expect(screen.getByText("120.00")).toBeInTheDocument());
     expect(screen.queryByText("当前软件权益")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "管理订阅" })).not.toBeInTheDocument();
+  });
+
+  it("shows recharge content only and notifies the account after payment succeeds", async () => {
+    const onPaymentComplete = vi.fn();
+    render(<CreditsView section="recharge" onPaymentComplete={onPaymentComplete} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "¥10.00" })).toBeEnabled());
+    expect(screen.queryByText("余额与充值")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "可用余额" })).not.toBeInTheDocument();
+    expect(screen.queryByText("最近充值订单")).not.toBeInTheDocument();
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "get_credit_orders")).toBe(false);
+
+    const fixedAmount = screen.getByRole("button", { name: "¥10.00", exact: true });
+    fireEvent.click(fixedAmount);
+    expect(fixedAmount).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "create_credit_order")).toBe(false);
+    const payButton = screen.getByRole("button", { name: "去支付" });
+    expect(payButton).toBeEnabled();
+    fireEvent.click(payButton);
+    confirmRecharge();
+    await screen.findByText("余额充值");
+    expect(onPaymentComplete).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "模拟支付成功" }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onPaymentComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps fixed and custom amounts mutually exclusive and validates before payment", async () => {
+    const initialImplementation = mocks.invoke.getMockImplementation();
+    mocks.invoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "get_credit_products") {
+        return Promise.resolve({
+          recharge_enabled: true,
+          custom_recharge: { enabled: true, min_amount: "1.00", max_amount: "20.00" },
+          products: [{ code: "starter", name: "入门包", price: "10.00", balance_amount: "10" }],
+        });
+      }
+      return initialImplementation?.(command, args);
+    });
+
+    render(<CreditsView section="recharge" />);
+
+    const payButton = await screen.findByRole("button", { name: "去支付" });
+    const fixedAmount = screen.getByRole("button", { name: "¥10.00", exact: true });
+    const customAmount = screen.getByRole("textbox", { name: "自定义充值金额" });
+    expect(payButton).toBeDisabled();
+
+    fireEvent.click(fixedAmount);
+    expect(fixedAmount).toHaveAttribute("aria-pressed", "true");
+    expect(customAmount).toHaveValue("");
+    expect(payButton).toBeEnabled();
+
+    fireEvent.change(customAmount, { target: { value: "12.50" } });
+    expect(fixedAmount).not.toHaveAttribute("aria-pressed", "true");
+    expect(customAmount).toHaveValue("12.50");
+    expect(payButton).toBeEnabled();
+
+    fireEvent.click(fixedAmount);
+    expect(fixedAmount).toHaveAttribute("aria-pressed", "true");
+    expect(customAmount).toHaveValue("");
+    expect(payButton).toBeEnabled();
+
+    fireEvent.change(customAmount, { target: { value: "0.99" } });
+    expect(fixedAmount).not.toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("充值金额需在 ¥1.00 至 ¥20.00 之间")).toBeInTheDocument();
+    expect(payButton).toBeDisabled();
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "create_credit_order")).toBe(false);
   });
 
   it("shows the active recharge promotion and granted Pro days", async () => {
@@ -315,12 +395,40 @@ describe("CreditsView", () => {
       return initialImplementation?.(command, args);
     });
 
-    render(<CreditsView onBack={() => undefined} />);
+    render(<CreditsView section="orders" />);
 
     await waitFor(() => expect(screen.getByText("最近充值订单")).toBeInTheDocument());
+    expect(screen.queryByText("余额与充值")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "可用余额" })).not.toBeInTheDocument();
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "get_credit_products")).toBe(false);
     expect(screen.getByText("等待支付")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "继续支付" }));
     expect(screen.getByText("余额充值")).toBeInTheDocument();
+  });
+
+  it("shows order read failures and allows retry without showing an empty state", async () => {
+    const initialImplementation = mocks.invoke.getMockImplementation();
+    let orderReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "get_credit_orders") {
+        orderReads += 1;
+        return orderReads === 1
+          ? Promise.reject(new Error("订单暂不可用"))
+          : Promise.resolve({ orders: [], has_more: false });
+      }
+      return initialImplementation?.(command, args);
+    });
+
+    render(<CreditsView section="orders" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("订单暂不可用");
+    expect(screen.queryByText("暂无充值订单")).not.toBeInTheDocument();
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual(["get_credit_orders"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("暂无充值订单");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(orderReads).toBe(2);
   });
 
   it("reuses the checkout idempotency key after an ambiguous network failure", async () => {

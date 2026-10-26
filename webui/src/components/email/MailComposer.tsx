@@ -25,13 +25,26 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { useEmailStore } from "./store/emailStore";
-import { sendEmail, saveDraft, fetchEmailBody, type EmailAttachmentInput } from "./lib/emailApi";
+import {
+  sendEmail,
+  saveDraft,
+  fetchEmailBody,
+  fetchAttachment,
+  parseEmailAddressList,
+  textToHtml,
+  type EmailAttachmentInput,
+  type SaveDraftResult,
+} from "./lib/emailApi";
 import { EmailRichEditor, type EmailRichEditorHandle } from "./EmailRichEditor";
+import { SafeHtmlFrame } from "./MailView";
 import { ContactPicker } from "./contacts/ContactPicker";
 import { ComposeAiButton } from "./ComposeAiButton";
-import type { EmailAccount, EmailMessage, EmailSignature } from "./lib/types";
+import { buildForwardSubject, buildQuotedMailHtml } from "./lib/quoteHtml";
+import { excludeSelf } from "./lib/addressUtils";
+import { guessContentType, uint8ToBase64 } from "./lib/fileBytes";
+import type { EmailAccount, EmailAttachment, EmailMessage, EmailSignature } from "./lib/types";
 
-export type ComposerMode = "compose" | "reply" | "replyAll" | "forward";
+export type ComposerMode = "compose" | "reply" | "replyAll" | "forward" | "draft";
 
 interface MailComposerProps {
   open: boolean;
@@ -41,68 +54,13 @@ interface MailComposerProps {
   baseMessage?: EmailMessage | null;
   account?: EmailAccount | null;
   standalone?: boolean;
+  onDraftSaved?: (result: SaveDraftResult, accountId: string, folder: string) => void;
   /** 预设收件人（点击发件人名称写邮件时使用） */
   presetTo?: string | null;
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function textToHtmlParagraphs(text: string): string {
-  return escapeHtml(text)
-    .split("\n")
-    .map((line) => (line.trim() === "" ? "<br>" : line))
-    .join("<br>");
-}
-
-/** Foxmail 风格回复/转发：顶部空段落（光标位置）+ 分隔线 + 原文引用 */
-function formatReplyHeaderHtml(message: EmailMessage): string {
-  const date = new Date(message.date).toLocaleString("zh-CN");
-  const sender = message.fromName
-    ? `${message.fromName} &lt;${message.fromAddress}&gt;`
-    : message.fromAddress;
-  const to = message.toAddresses || "";
-  const cc = message.ccAddresses || "";
-  const subject = message.subject || "";
-
-  // 优先用 HTML 正文，否则用纯文本转换
-  let quotedBody = "";
-  if (message.bodyHtml) {
-    // 去掉 HTML 的 html/head/body 包裹，只保留内容
-    quotedBody = message.bodyHtml
-      .replace(/<!DOCTYPE[^>]*>/gi, "")
-      .replace(/<html[^>]*>/gi, "")
-      .replace(/<\/html>/gi, "")
-      .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, "")
-      .replace(/<body[^>]*>/gi, "")
-      .replace(/<\/body>/gi, "")
-      .trim();
-  } else if (message.bodyText) {
-    quotedBody = textToHtmlParagraphs(message.bodyText.slice(0, 50000));
-  }
-
-  const headerLines: string[] = [
-    `----- 原始邮件 -----`,
-    `发件人：${sender}`,
-  ];
-  if (to) headerLines.push(`收件人：${escapeHtml(to)}`);
-  if (cc) headerLines.push(`抄送：${escapeHtml(cc)}`);
-  headerLines.push(`主题：${escapeHtml(subject)}`);
-  headerLines.push(`日期：${escapeHtml(date)}`);
-
-  const headerHtml = headerLines
-    .map((line) => `<div style="color:#666;font-size:12px;">${line}</div>`)
-    .join("\n");
-
-  // 顶部一个空段落作为用户输入区，下方是分隔线 + 原文引用
-  return `<p></p><div style="border-top:1px solid #ccc;padding-top:8px;margin-top:8px;">${headerHtml}</div><div style="margin-top:8px;">${quotedBody}</div>`;
-}
+/** 单封邮件附件总大小上限（与常见邮箱 50MB 上限对齐，网关请求体上限需能容纳 base64 膨胀） */
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 /** 校验邮箱地址格式（支持 "Name <email>" 和纯 email 两种格式） */
 function isValidEmail(addr: string): boolean {
@@ -128,20 +86,19 @@ function buildInitialSubject(mode: ComposerMode, original: string): string {
   switch (mode) {
     case "reply":
     case "replyAll":
-      return subject.startsWith("Re:") ? subject : `Re: ${subject}`;
+      return /^re\s*[:：]/i.test(subject) ? subject : `Re: ${subject}`;
     case "forward":
-      return subject.startsWith("Fwd:") ? subject : `Fwd: ${subject}`;
+      return buildForwardSubject(subject);
     default:
       return "";
   }
 }
 
 function parseAddressList(input: string): string[] {
-  return input
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return parseEmailAddressList(input);
 }
+
+type RestorableDraftAttachment = EmailAttachment & { contentId?: string | null };
 
 /** 格式化文件大小 */
 function formatFileSize(bytes: number): string {
@@ -158,6 +115,7 @@ export function MailComposer({
   baseMessage = null,
   account: accountProp,
   standalone = false,
+  onDraftSaved,
   presetTo = null,
 }: MailComposerProps) {
   const accounts = useEmailStore((s) => s.accounts);
@@ -176,17 +134,48 @@ export function MailComposer({
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
   const [attachments, setAttachments] = useState<EmailAttachmentInput[]>([]);
+  // 转发时随邮件一起发送的原邮件附件（体积只在发送时按需取，避免打开窗口就加载大附件）
+  const [forwardedAttachments, setForwardedAttachments] = useState<EmailAttachment[]>([]);
+  // 引用块：原邮件 HTML 原样保留，不经过编辑器 schema，只读展示 + 发送时拼接
+  const [quoteHtml, setQuoteHtml] = useState("");
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  // 发送前准备附件的进度提示
+  const [preparingText, setPreparingText] = useState("");
+  // 原邮件附件读取失败时的提示（不能让附件静默丢失）
+  const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
   const editorRef = useRef<EmailRichEditorHandle>(null);
+  const draftUidRef = useRef<string | null>(null);
+  const draftRequestIdRef = useRef<string | null>(null);
+  // 引用 gateway 地址但不作为 effect 依赖：地址后续就绪时不能重置用户已经输入的内容
+  const gatewayUrlRef = useRef(gatewayUrl);
+  gatewayUrlRef.current = gatewayUrl;
 
   // 获取当前账号的签名列表
   const signatures: EmailSignature[] = account?.signatures ?? [];
   const defaultSignature = signatures.find((s) => s.isDefault) ?? signatures[0] ?? null;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      draftUidRef.current = null;
+      draftRequestIdRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    draftUidRef.current = mode === "draft" ? baseMessage?.uid ?? null : null;
     setError(null);
+    setDraftLoadError(null);
     setAttachments([]);
+    setForwardedAttachments([]);
+    setQuoteHtml("");
+    setQuoteError(null);
+    setQuoteLoading(false);
+    setPreparingText("");
+    setAttachmentNotice(null);
+    setBodyText("");
+    setBodyHtml("");
     // 仅新邮件自动选中默认签名，回复/转发默认不带签名
     setSelectedSignatureId(mode === "compose" ? (defaultSignature?.id ?? null) : null);
     if (mode === "compose" || !baseMessage) {
@@ -194,11 +183,89 @@ export function MailComposer({
       setCcAddresses("");
       setBccAddresses("");
       setSubject("");
-      setBodyText("");
-      setBodyHtml("");
       setShowCc(false);
       setShowBcc(false);
       return;
+    }
+
+    if (mode === "draft") {
+      setToAddresses(baseMessage.toAddresses);
+      setCcAddresses(baseMessage.ccAddresses ?? "");
+      setBccAddresses(baseMessage.bccAddresses ?? "");
+      setSubject(baseMessage.subject);
+      setShowCc(Boolean(baseMessage.ccAddresses?.trim()));
+      setShowBcc(Boolean(baseMessage.bccAddresses?.trim()));
+      setQuoteLoading(true);
+      void (async () => {
+        try {
+          const result = await fetchEmailBody(
+            baseMessage.accountId,
+            baseMessage.uid,
+            baseMessage.folder,
+            gatewayUrlRef.current,
+          );
+          if (cancelled) return;
+          const draftBodyHtml = result.bodyHtml || textToHtml(result.bodyText);
+          setBodyText(result.bodyText);
+          setBodyHtml(draftBodyHtml);
+          editorRef.current?.setHtml(draftBodyHtml);
+          const bcc = result.header?.bccAddresses ?? baseMessage.bccAddresses ?? "";
+          setBccAddresses(bcc);
+          setShowBcc(Boolean(bcc.trim()));
+
+          const metadata = (result.attachments ?? []) as RestorableDraftAttachment[];
+          if (baseMessage.hasAttachments && metadata.length === 0) {
+            throw new Error("草稿附件列表不可用");
+          }
+          const draftAccount =
+            account ?? accounts.find((candidate) => candidate.id === baseMessage.accountId);
+          if (!draftAccount) {
+            throw new Error("草稿所属邮箱账号不可用");
+          }
+          const restored: EmailAttachmentInput[] = [];
+          for (let index = 0; index < metadata.length; index += 1) {
+            const attachment = metadata[index];
+            setPreparingText(`正在恢复草稿附件 ${index + 1}/${metadata.length}...`);
+            const fetched = await fetchAttachment(
+              gatewayUrlRef.current,
+              draftAccount,
+              baseMessage.folder,
+              baseMessage.uid,
+              attachment.filename,
+              attachment.contentId,
+            );
+            restored.push({
+              filename: fetched.filename,
+              contentType: fetched.contentType || attachment.contentType,
+              data: fetched.data,
+              contentId: attachment.contentId ?? undefined,
+            });
+          }
+          if (cancelled) return;
+          const restoredBytes = restored.reduce(
+            (sum, attachment) => sum + Math.ceil(attachment.data.length * 0.75),
+            0,
+          );
+          if (restoredBytes > MAX_ATTACHMENT_BYTES) {
+            throw new Error("草稿附件总大小超过单封 50 MB 上限");
+          }
+          setAttachments(restored);
+        } catch (error) {
+          if (!cancelled) {
+            const message = `草稿加载失败：${String(error)}`;
+            setDraftLoadError(message);
+            setAttachmentNotice(message);
+          }
+        } finally {
+          if (!cancelled) {
+            setPreparingText("");
+            setQuoteLoading(false);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
 
     const from = baseMessage.fromAddress;
@@ -215,10 +282,10 @@ export function MailComposer({
       setShowCc(false);
       setShowBcc(false);
     } else if (mode === "replyAll") {
-      // To: 原发件人 + 原 To（排除自己）
-      const toRecipients = [from, ...toList.filter((addr) => addr !== self)];
-      // Cc: 原 Cc（排除自己）
-      const ccRecipients = ccList.filter((addr) => addr !== self);
+      // To: 原发件人 + 原 To；Cc: 原 Cc
+      // 地址是 `姓名 <地址>` 形式，必须按裸地址比较才能把自己和重复项剔除
+      const toRecipients = excludeSelf([from, ...toList], self);
+      const ccRecipients = excludeSelf(ccList, self);
       setToAddresses(toRecipients.join(", "));
       setCcAddresses(ccRecipients.join(", "));
       setBccAddresses("");
@@ -234,45 +301,69 @@ export function MailComposer({
       setShowBcc(false);
     }
 
-    // 设置引用正文：Offline-First 下 SQLite 不存正文，统一走 fetchEmailBody
+    // 引用原邮件：Offline-First 下 SQLite 不存正文，统一走 fetchEmailBody
     // （fetchEmailBody 内部会先读本地 .eml，命中则毫秒级返回，不命中才走 gateway）
-    if (mode === "reply" || mode === "replyAll" || mode === "forward") {
-      if (baseMessage.bodyHtml || baseMessage.bodyText) {
-        // 内存缓存命中（之前已加载过）：直接用
-        const replyHtml = formatReplyHeaderHtml(baseMessage);
-        setBodyHtml(replyHtml);
-        setBodyText("");
-        editorRef.current?.setHtml(replyHtml);
-      } else {
-        // 原邮件正文未加载（用户未点开过），异步拉取后再格式化
-        // fetchEmailBody 是纯本地 Tauri IPC，不依赖 gatewayUrl
-        const loadingHtml = '<div style="color:#999;">正在加载原邮件...</div>';
-        setBodyHtml(loadingHtml);
-        setBodyText("");
-        (async () => {
-          try {
-            const result = await fetchEmailBody(
-              baseMessage.accountId,
-              baseMessage.uid,
-              baseMessage.folder,
-              gatewayUrl,
-            );
-            const enriched: EmailMessage = {
-              ...baseMessage,
-              bodyText: result.bodyText,
-              bodyHtml: result.bodyHtml,
-            };
-            const html = formatReplyHeaderHtml(enriched);
-            setBodyHtml(html);
-            editorRef.current?.setHtml(html);
-          } catch (e) {
-            const errHtml = `<div style="color:#999;">原邮件加载失败：${escapeHtml(String(e))}</div>`;
-            setBodyHtml(errHtml);
-            editorRef.current?.setHtml(errHtml);
-          }
-        })();
+    // 引用块不再写入编辑器：编辑器会把原 HTML 压成自己支持的少数标签，导致丢格式。
+    const applyOriginal = (message: EmailMessage) => {
+      if (cancelled) return;
+      setQuoteHtml(buildQuotedMailHtml(message));
+      // 转发保留原邮件附件；回复不带原附件
+      if (mode !== "forward") return;
+      // attachments 已解析（含空数组）时直接采用，避免重复拉取
+      if (message.attachments !== undefined) {
+        setForwardedAttachments(message.attachments);
+        return;
       }
+      if (!message.hasAttachments) {
+        setForwardedAttachments([]);
+        return;
+      }
+      // 正文来自内存缓存但缺少附件元信息：补拉一次附件列表（本地 .eml 解析，毫秒级）
+      void (async () => {
+        try {
+          const result = await fetchEmailBody(
+            message.accountId,
+            message.uid,
+            message.folder,
+            gatewayUrlRef.current,
+          );
+          if (!cancelled) setForwardedAttachments(result.attachments ?? []);
+        } catch {
+          if (!cancelled) {
+            setAttachmentNotice("原邮件附件读取失败，如需一并转发请手动添加附件");
+          }
+        }
+      })();
+    };
+
+    if (baseMessage.bodyHtml || baseMessage.bodyText) {
+      applyOriginal(baseMessage);
+      return;
     }
+    setQuoteLoading(true);
+    void (async () => {
+      try {
+        const result = await fetchEmailBody(
+          baseMessage.accountId,
+          baseMessage.uid,
+          baseMessage.folder,
+          gatewayUrlRef.current,
+        );
+        applyOriginal({
+          ...baseMessage,
+          bodyText: result.bodyText,
+          bodyHtml: result.bodyHtml,
+          attachments: result.attachments ?? baseMessage.attachments,
+        });
+      } catch (e) {
+        if (!cancelled) setQuoteError(`原邮件加载失败：${String(e)}`);
+      } finally {
+        if (!cancelled) setQuoteLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [open, mode, baseMessage, account?.fromAddress]);
 
   if (!open) return null;
@@ -281,9 +372,60 @@ export function MailComposer({
     onOpenChange(false);
   };
 
+  /** 已选附件 + 原邮件附件的总字节数（base64 按 3/4 还原） */
+  const totalAttachmentBytes = () =>
+    attachments.reduce((sum, att) => sum + Math.ceil(att.data.length * 0.75), 0) +
+    forwardedAttachments.reduce((sum, att) => sum + att.size, 0);
+
+  /** 发送/存草稿/定时前统一校验附件体积，避免等到网关 413 才失败 */
+  const assertAttachmentBudget = () => {
+    const total = totalAttachmentBytes();
+    if (total > MAX_ATTACHMENT_BYTES) {
+      const mb = (total / (1024 * 1024)).toFixed(1);
+      throw new Error(
+        `附件合计 ${mb} MB，超过单封 50 MB 上限。\n请移除较大的附件，或改用分享链接发送。`,
+      );
+    }
+  };
+
+  /** 原邮件附件转成待发送附件：体积较大，只在发送动作时按需读取 */
+  const resolveOutgoingAttachments = async (): Promise<EmailAttachmentInput[]> => {
+    assertAttachmentBudget();
+    if (!account || forwardedAttachments.length === 0 || !baseMessage) return attachments;
+    const resolved: EmailAttachmentInput[] = [];
+    for (let i = 0; i < forwardedAttachments.length; i += 1) {
+      const att = forwardedAttachments[i];
+      setPreparingText(`正在准备附件 ${i + 1}/${forwardedAttachments.length}...`);
+      const res = await fetchAttachment(
+        gatewayUrl,
+        account,
+        baseMessage.folder,
+        baseMessage.uid,
+        att.filename,
+        att.contentId,
+      );
+      resolved.push({
+        filename: res.filename,
+        contentType: res.contentType || att.contentType || "application/octet-stream",
+        data: res.data,
+        contentId: att.contentId ?? undefined,
+      });
+    }
+    setPreparingText("");
+    return [...attachments, ...resolved];
+  };
+
   const handleSend = async () => {
     if (!account) {
       setError("请先选择一个邮箱账号");
+      return;
+    }
+    if (draftLoadError) {
+      setError(draftLoadError);
+      return;
+    }
+    if (mode === "draft" && quoteLoading) {
+      setError("草稿仍在加载，请稍后重试");
       return;
     }
     if (!toAddresses.trim()) {
@@ -313,15 +455,16 @@ export function MailComposer({
     setSending(true);
     setError(null);
     try {
-      // 追加签名到正文末尾
+      // 正文顺序：用户输入 → 签名 → 原邮件引用（引用原样保留，不经过编辑器）
       const selectedSig = signatures.find((s) => s.id === selectedSignatureId) ?? null;
-      const finalBodyHtml = selectedSig?.content
-        ? `${bodyHtml}<br/><br/>${selectedSig.content}`
-        : bodyHtml;
+      const finalBodyHtml = `${bodyHtml}${
+        selectedSig?.content ? `<br/><br/>${selectedSig.content}` : ""
+      }${quoteHtml}`;
       const sigText = selectedSig?.content
         ? selectedSig.content.replace(/<[^>]*>/g, "").trim()
         : "";
       const finalBodyText = sigText ? `${bodyText}\n\n${sigText}` : bodyText;
+      const outgoingAttachments = await resolveOutgoingAttachments();
       await sendEmail(gatewayUrl, account, {
         toAddresses: toAddresses.trim(),
         ccAddresses: ccAddresses.trim() || undefined,
@@ -329,14 +472,17 @@ export function MailComposer({
         subject: subject.trim(),
         bodyText: finalBodyText,
         bodyHtml: finalBodyHtml,
-        inReplyTo: baseMessage?.messageId ?? null,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        // 只有回复才建立会话关系；转发是新的会话，带 In-Reply-To 会被对方客户端归到原邮件线程
+        inReplyTo:
+          mode === "reply" || mode === "replyAll" ? baseMessage?.messageId ?? null : null,
+        attachments: outgoingAttachments.length > 0 ? outgoingAttachments : undefined,
       });
       handleClose();
     } catch (e) {
       setError(String(e));
     } finally {
       setSending(false);
+      setPreparingText("");
     }
   };
 
@@ -345,30 +491,58 @@ export function MailComposer({
       setError("请先选择一个邮箱账号");
       return;
     }
+    if (draftLoadError) {
+      setError(draftLoadError);
+      return;
+    }
+    if (mode === "draft" && quoteLoading) {
+      setError("草稿仍在加载，请稍后重试");
+      return;
+    }
     setSavingDraft(true);
     setError(null);
     try {
-      await saveDraft(gatewayUrl, account, {
+      // 草稿必须带上引用块，否则存下来再打开就丢了原邮件内容
+      const outgoingAttachments = await resolveOutgoingAttachments();
+      const savedDraft = await saveDraft(gatewayUrl, account, {
         toAddresses: toAddresses.trim(),
         ccAddresses: ccAddresses.trim() || undefined,
         bccAddresses: bccAddresses.trim() || undefined,
         subject: subject.trim(),
         bodyText,
-        bodyHtml,
-        inReplyTo: baseMessage?.messageId ?? null,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        bodyHtml: `${bodyHtml}${quoteHtml}`,
+        inReplyTo:
+          mode === "reply" || mode === "replyAll" ? baseMessage?.messageId ?? null : null,
+        attachments: outgoingAttachments.length > 0 ? outgoingAttachments : undefined,
+      }, {
+        draftUid: mode === "draft" ? draftUidRef.current : null,
+        draftFolder: mode === "draft" ? baseMessage?.folder : null,
+        draftRequestId: draftRequestIdRef.current ?? (draftRequestIdRef.current = crypto.randomUUID()),
       });
+      draftUidRef.current = savedDraft.draftUid ?? draftUidRef.current;
+      const savedFolder = savedDraft.draftFolder ?? (mode === "draft" ? baseMessage?.folder : null);
+      if (savedFolder) onDraftSaved?.(savedDraft, account.id, savedFolder);
+      draftRequestIdRef.current = null;
       handleClose();
     } catch (e) {
       setError(String(e));
     } finally {
       setSavingDraft(false);
+      setPreparingText("");
     }
   };
 
   const handleScheduleSend = async () => {
     if (!account) {
       setError("请先选择一个邮箱账号");
+      return;
+    }
+    if (draftLoadError) {
+      setError(draftLoadError);
+      return;
+    }
+    if (mode === "draft" && quoteLoading) {
+      setError("草稿仍在加载，请稍后重试");
       return;
     }
     if (!toAddresses.trim()) {
@@ -393,15 +567,16 @@ export function MailComposer({
     setSending(true);
     setError(null);
     try {
-      // 追加签名
+      // 正文顺序：用户输入 → 签名 → 原邮件引用
       const selectedSig = signatures.find((s) => s.id === selectedSignatureId) ?? null;
-      const finalBodyHtml = selectedSig?.content
-        ? `${bodyHtml}<br/><br/>${selectedSig.content}`
-        : bodyHtml;
+      const finalBodyHtml = `${bodyHtml}${
+        selectedSig?.content ? `<br/><br/>${selectedSig.content}` : ""
+      }${quoteHtml}`;
       const sigText = selectedSig?.content
         ? selectedSig.content.replace(/<[^>]*>/g, "").trim()
         : "";
       const finalBodyText = sigText ? `${bodyText}\n\n${sigText}` : bodyText;
+      const outgoingAttachments = await resolveOutgoingAttachments();
       const { outboxAdd } = await import("./lib/emailApi");
       await outboxAdd({
         id: crypto.randomUUID(),
@@ -412,8 +587,10 @@ export function MailComposer({
         subject: subject.trim(),
         bodyText: finalBodyText,
         bodyHtml: finalBodyHtml,
-        inReplyTo: baseMessage?.messageId ?? null,
-        attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+        inReplyTo:
+          mode === "reply" || mode === "replyAll" ? baseMessage?.messageId ?? null : null,
+        attachmentsJson:
+          outgoingAttachments.length > 0 ? JSON.stringify(outgoingAttachments) : null,
         scheduledAt: scheduled.toISOString(),
         status: "pending",
         error: null,
@@ -424,6 +601,7 @@ export function MailComposer({
       setError(String(e));
     } finally {
       setSending(false);
+      setPreparingText("");
     }
   };
 
@@ -436,23 +614,43 @@ export function MailComposer({
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      const { readFile } = await import("@tauri-apps/plugin-fs");
+      const { readFile, stat } = await import("@tauri-apps/plugin-fs");
       const newAtts: EmailAttachmentInput[] = [];
+      let projected = totalAttachmentBytes();
       for (const p of paths) {
-        const data = await readFile(p);
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(data)));
         const filename = p.split(/[\\/]/).pop() || "attachment";
+        // 先按文件大小预判，避免把几百 MB 的文件整个读进内存再报错
+        let size = 0;
+        try {
+          size = (await stat(p)).size ?? 0;
+        } catch {
+          // 权限或平台差异时退化为读取后再校验
+        }
+        if (size > 0 && projected + size > MAX_ATTACHMENT_BYTES) {
+          setError(
+            `附件合计超过单封 50 MB 上限，「${filename}」未添加。\n请移除其他附件或改用分享链接发送。`,
+          );
+          continue;
+        }
+        const data = await readFile(p);
+        if (projected + data.byteLength > MAX_ATTACHMENT_BYTES) {
+          setError(
+            `附件合计超过单封 50 MB 上限，「${filename}」未添加。\n请移除其他附件或改用分享链接发送。`,
+          );
+          continue;
+        }
+        projected += data.byteLength;
         newAtts.push({
           filename,
-          contentType: "application/octet-stream",
-          data: base64,
+          contentType: guessContentType(filename),
+          data: uint8ToBase64(data),
         });
       }
       if (newAtts.length > 0) {
         setAttachments((prev) => [...prev, ...newAtts]);
       }
     } catch (err) {
-      console.warn("[MailComposer] attach files failed:", err);
+      setError(`添加附件失败：${String(err)}`);
     }
   };
 
@@ -550,16 +748,18 @@ export function MailComposer({
         截屏
       </Button>
       <span className="mx-0.5 h-4 w-px bg-border/70" />
-      <ComposeAiButton
-        mode={mode}
-        baseMessage={baseMessage}
-        bodyText={bodyText}
-        onResult={(html) => {
-          setBodyHtml(html);
-          editorRef.current?.setHtml(html);
-        }}
-        disabled={!account || sending || savingDraft}
-      />
+      {mode !== "draft" && (
+        <ComposeAiButton
+          mode={mode}
+          baseMessage={baseMessage}
+          bodyText={bodyText}
+          onResult={(html) => {
+            setBodyHtml(html);
+            editorRef.current?.setHtml(html);
+          }}
+          disabled={!account || sending || savingDraft}
+        />
+      )}
       {signatures.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -624,7 +824,7 @@ export function MailComposer({
         <ContactPicker
           value={toAddresses}
           onChange={setToAddresses}
-          placeholder="recipient@example.com"
+          placeholder="输入邮箱地址或选择联系人"
         />
         <Button
           type="button"
@@ -695,6 +895,43 @@ export function MailComposer({
           ))}
         </div>
       )}
+      {forwardedAttachments.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <span className="shrink-0 text-micro text-muted-foreground">原邮件附件</span>
+          {forwardedAttachments.map((att, idx) => (
+            <div
+              key={`${att.filename}-${idx}`}
+              className="flex items-center gap-1.5 rounded-xs border border-border/60 bg-muted/30 px-2 py-0.5 text-micro text-muted-foreground"
+              title="随本次转发一起发送"
+            >
+              <FileSystemIcon name={att.filename} />
+              <span className="max-w-[160px] truncate">{att.filename}</span>
+              <span className="shrink-0">{formatFileSize(att.size)}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setForwardedAttachments((prev) => prev.filter((_, i) => i !== idx))
+                }
+                className="ml-0.5 h-4 w-4 p-0 text-muted-foreground hover:bg-transparent hover:text-destructive"
+                aria-label="不转发该附件"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {attachmentNotice && (
+        <div className="mt-1 px-1 text-micro text-warning">{attachmentNotice}</div>
+      )}
+      {preparingText && (
+        <div className="mt-1 flex items-center gap-1.5 px-1 text-micro text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {preparingText}
+        </div>
+      )}
       {error && (
         <StatusNotice tone="danger" className="mt-1 px-2 py-1">
           {error}
@@ -707,7 +944,7 @@ export function MailComposer({
     <EmailRichEditor
       key={`${mode}-${baseMessage?.uid ?? "new"}`}
       ref={editorRef}
-      initialHtml={bodyHtml || undefined}
+      initialHtml=""
       onChange={({ html, text }) => {
         setBodyText(text);
         setBodyHtml(html);
@@ -715,6 +952,22 @@ export function MailComposer({
       placeholder="邮件正文..."
       className="min-h-0 flex-1"
       signatureHtml={signatures.find((s) => s.id === selectedSignatureId)?.content ?? null}
+      footer={
+        mode !== "compose" && baseMessage ? (
+          <div className="mt-2">
+            {quoteLoading ? (
+              <div className="flex items-center gap-1.5 py-2 text-caption text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {mode === "draft" ? "正在加载草稿..." : "正在加载原邮件..."}
+              </div>
+            ) : quoteError ? (
+              <div className="py-2 text-caption text-destructive">{quoteError}</div>
+            ) : quoteHtml ? (
+              <SafeHtmlFrame html={quoteHtml} minHeight={64} />
+            ) : null}
+          </div>
+        ) : null
+      }
     />
   );
 

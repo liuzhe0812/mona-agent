@@ -48,51 +48,54 @@ async def services_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         yield client
 
 
-def test_templates_include_core_and_copied_dashi_styles() -> None:
+def test_templates_are_the_nine_huashu_motion_sources() -> None:
     templates = list_builtin_templates()
-    assert {
-        "minimal-business",
-        "tech-dark",
-        "editorial-magazine",
-        "knowledge-cards",
-    } <= {item["id"] for item in templates}
-    assert {"dashi-notebook", "dashi-flow", "dashi-cartoon", "dashi-collage", "dashi-paper", "dashi-editorial", "dashi-tech"} <= {item["id"] for item in templates}
+    assert {item["id"] for item in templates} == {
+        "huashu-keynote", "huashu-whiteboard", "huashu-finance", "huashu-math",
+        "huashu-type", "huashu-collage", "huashu-science", "huashu-3d", "huashu-ui-space",
+    }
     required = {"cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"}
-    assert all(required <= set(item["components"]) for item in templates)
-    assert get_builtin_template("technology-dark")["id"] == "tech-dark"
+    skill = Path(__file__).resolve().parents[1] / "mona/skills/mona-video"
+    for item in templates:
+        assert required <= set(item["components"])
+        assert validate_style(item)["valid"]
+        assert item["source"]["kind"] == "huashu-motion"
+        assert (skill / item["source"]["templatePath"]).is_file()
+        assert (skill / item["source"]["manifestPath"]).is_file()
+    assert get_builtin_template("huashu-keynote")["id"] == "huashu-keynote"
 
 
-async def test_style_template_list_includes_only_real_dashi_preview_urls(
+async def test_style_template_list_includes_real_huashu_preview_urls(
     services_client: TestClient,
 ) -> None:
     response = await services_client.get("/api/video/style/templates")
     assert response.status == 200
     templates = {item["id"]: item for item in (await response.json())["templates"]}
 
-    assert templates["dashi-notebook"]["preview"] == {
-        "poster": "/api/video/style/templates/dashi-notebook/preview?kind=poster",
-        "motion": "/api/video/style/templates/dashi-notebook/preview?kind=motion",
+    assert templates["huashu-whiteboard"]["preview"] == {
+        "poster": "/api/video/style/templates/huashu-whiteboard/preview?kind=poster",
+        "motion": "/api/video/style/templates/huashu-whiteboard/preview?kind=motion",
     }
-    assert "preview" not in templates["minimal-business"]
+    assert all(set(item["preview"]) == {"poster", "motion"} for item in templates.values())
 
 
-async def test_dashi_preview_endpoint_serves_the_copied_assets(
+async def test_huashu_preview_endpoint_serves_real_template_captures(
     services_client: TestClient,
 ) -> None:
-    mime_types = {"JPEG": "image/jpeg", "GIF": "image/gif"}
-    for template_id, previews in video_series._DASHI_TEMPLATE_PREVIEWS.items():
+    mime_types = {"PNG": "image/png", "GIF": "image/gif"}
+    for template_id, previews in video_series._HUASHU_TEMPLATE_PREVIEWS.items():
         for kind, (relative_path, image_format) in previews.items():
             response = await services_client.get(
                 f"/api/video/style/templates/{template_id}/preview",
                 params={"kind": kind},
             )
-            source = (video_series._DASHI_ASSET_ROOT / relative_path).read_bytes()
+            source = (video_series._HUASHU_ASSET_ROOT / relative_path).read_bytes()
             assert response.status == 200
             assert response.content_type == mime_types[image_format]
             assert await response.read() == source
 
 
-async def test_dashi_preview_rejects_invalid_ids_kinds_and_escaped_resources(
+async def test_huashu_preview_rejects_invalid_ids_kinds_and_escaped_resources(
     services_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,13 +103,13 @@ async def test_dashi_preview_rejects_invalid_ids_kinds_and_escaped_resources(
         "/api/video/style/templates/not-a-template/preview?kind=poster"
     )
     invalid_kind = await services_client.get(
-        "/api/video/style/templates/dashi-notebook/preview?kind=html"
+        "/api/video/style/templates/huashu-whiteboard/preview?kind=html"
     )
     traversal_id = await services_client.get(
         "/api/video/style/templates/%2E%2E%2Foutside/preview?kind=poster"
     )
     ignored_path = await services_client.get(
-        "/api/video/style/templates/dashi-notebook/preview?kind=poster&path=../../outside"
+        "/api/video/style/templates/huashu-whiteboard/preview?kind=poster&path=../../outside"
     )
     assert unknown.status == 404
     assert invalid_kind.status == 400
@@ -114,18 +117,18 @@ async def test_dashi_preview_rejects_invalid_ids_kinds_and_escaped_resources(
     assert ignored_path.status == 200
 
     monkeypatch.setitem(
-        video_series._DASHI_TEMPLATE_PREVIEWS["dashi-notebook"],
+        video_series._HUASHU_TEMPLATE_PREVIEWS["huashu-whiteboard"],
         "poster",
-        ("../../outside.jpg", "JPEG"),
+        ("../../outside.png", "PNG"),
     )
     escaped_resource = await services_client.get(
-        "/api/video/style/templates/dashi-notebook/preview?kind=poster"
+        "/api/video/style/templates/huashu-whiteboard/preview?kind=poster"
     )
     assert escaped_resource.status == 404
 
 
 def test_series_and_draft_revision_are_atomic_and_conflict_safe(tmp_path: Path) -> None:
-    series = create_series(tmp_path, name="AI 编程课", template_id="tech-dark")
+    series = create_series(tmp_path, name="AI 编程课", template_id="huashu-ui-space")
     assert series["id"] == safe_series_id("AI 编程课")
     assert list_series(tmp_path)[0]["id"] == series["id"]
     assert read_style_draft(tmp_path, series["id"])["revision"] == 0
@@ -148,7 +151,7 @@ def test_series_enables_its_selected_default_aspect_ratio(tmp_path: Path) -> Non
     series = create_series(
         tmp_path,
         series_id="vertical-course",
-        template_id="tech-dark",
+        template_id="huashu-ui-space",
         default_aspect_ratio="9:16",
     )
 
@@ -159,7 +162,7 @@ def test_series_enables_its_selected_default_aspect_ratio(tmp_path: Path) -> Non
 
 
 def test_lock_creates_immutable_version_and_new_draft(tmp_path: Path) -> None:
-    create_series(tmp_path, series_id="course", template_id="minimal-business")
+    create_series(tmp_path, series_id="course", template_id="huashu-keynote")
     first = lock_style(tmp_path, "course", expected_revision=0)
     assert first["version"] == 1
     assert first["tokens"]["colors"]["primaryContrast"]
@@ -171,7 +174,6 @@ def test_lock_creates_immutable_version_and_new_draft(tmp_path: Path) -> None:
         preview = (previews / f"{role}.html").read_text(encoding="utf-8")
         assert f'data-role="{role}"' in preview
         assert "window.__timelines" in preview
-        assert 'data-template="new-guochao"' in preview
     first_snapshot = json.dumps(read_style_version(tmp_path, "course", 1), sort_keys=True)
 
     draft = create_style_draft_from_version(tmp_path, "course", 1)
@@ -184,7 +186,7 @@ def test_lock_creates_immutable_version_and_new_draft(tmp_path: Path) -> None:
 
 
 def test_lock_requires_series_default_aspect_to_remain_enabled(tmp_path: Path) -> None:
-    series = create_series(tmp_path, series_id="portrait", template_id="tech-dark", default_aspect_ratio="9:16")
+    series = create_series(tmp_path, series_id="portrait", template_id="huashu-ui-space", default_aspect_ratio="9:16")
     draft = save_style_draft(tmp_path, series["id"], {"aspectVariants": {"9:16": {"enabled": False}}}, expected_revision=0)
     result = validate_style(draft, tmp_path, series["id"])
     assert any(issue["code"] == "DEFAULT_ASPECT_DISABLED" and issue["field"] == "aspectVariants.9:16.enabled" for issue in result["errors"])
@@ -194,14 +196,14 @@ def test_lock_requires_series_default_aspect_to_remain_enabled(tmp_path: Path) -
 
 
 def test_style_rejects_an_unsupported_scene_transition() -> None:
-    style = get_builtin_template("tech-dark")
+    style = get_builtin_template("huashu-ui-space")
     style["motion"]["transitionPreset"] = "soft-pulse"
     result = validate_style(style)
     assert any(issue["field"] == "motion.transitionPreset" and issue["code"] == "INVALID_TRANSITION_PRESET" for issue in result["errors"])
 
 
 def test_background_import_normalizes_to_webp_and_snapshot_is_protected(tmp_path: Path) -> None:
-    series = create_series(tmp_path, series_id="images", template_id="tech-dark")
+    series = create_series(tmp_path, series_id="images", template_id="huashu-ui-space")
     source = tmp_path / "source.png"
     _image(source)
     asset = import_background_asset(
@@ -266,7 +268,7 @@ def test_background_import_normalizes_to_webp_and_snapshot_is_protected(tmp_path
 
 
 def test_background_rejects_fake_extension_and_oversize(tmp_path: Path) -> None:
-    series = create_series(tmp_path, series_id="safe", template_id="tech-dark")
+    series = create_series(tmp_path, series_id="safe", template_id="huashu-ui-space")
     fake = tmp_path / "fake.png"
     fake.write_bytes(b"not an image")
     with pytest.raises(BackgroundAssetError) as exc_info:
@@ -291,7 +293,7 @@ def test_invalid_series_id_and_style_are_rejected() -> None:
 
 
 def test_low_resolution_background_is_a_lock_gate(tmp_path: Path) -> None:
-    series = create_series(tmp_path, series_id="small", template_id="tech-dark")
+    series = create_series(tmp_path, series_id="small", template_id="huashu-ui-space")
     source = tmp_path / "small.png"
     _image(source, size=(64, 64))
     import_background_asset(tmp_path, series["id"], source, asset_id="small")

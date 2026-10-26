@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { uint8ToBase64 } from "./lib/fileBytes";
 
 // 邮件正文图片最大显示宽度（px），避免大图撑爆编辑区
 const MAX_DISPLAY_WIDTH = 600;
@@ -104,6 +105,8 @@ export interface EmailRichEditorProps {
   className?: string;
   /** 签名 HTML（在编辑器底部预览，发送时由调用方拼接到正文末尾） */
   signatureHtml?: string | null;
+  /** 编辑器下方的只读内容（回复/转发的原邮件引用块） */
+  footer?: React.ReactNode;
 }
 
 function textToHtml(text: string): string {
@@ -184,7 +187,7 @@ function computeDisplayWidth(dataUrl: string): Promise<number | null> {
 
 export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditorProps>(
   function EmailRichEditor(
-    { initialValue = "", initialHtml, onChange, placeholder = "邮件正文...", className, signatureHtml },
+    { initialValue = "", initialHtml, onChange, placeholder = "邮件正文...", className, signatureHtml, footer },
     ref,
   ) {
     // 用 ref 保存最新的 onChange 和 editor，避免闭包陷阱和频繁 setOptions
@@ -310,7 +313,7 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
         const { readFile } = await import("@tauri-apps/plugin-fs");
         const data = await readFile(selected);
         const ext = selected.split(".").pop() || "png";
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(data)));
+        const base64 = uint8ToBase64(data);
         const mime = ext === "svg" ? "image/svg+xml" : `image/${ext === "jpg" ? "jpeg" : ext}`;
         const dataUrl = `data:${mime};base64,${base64}`;
         await insertImageFromDataUrl(dataUrl);
@@ -337,7 +340,13 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
         <div className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
           <EditorContent
             editor={editor}
-            className="h-full text-[14px] leading-[1.7] text-foreground [&_.ProseMirror]:h-full [&_.ProseMirror]:min-h-full [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded [&_.ProseMirror_a]:text-[#2f7fca] [&_.ProseMirror_a]:underline"
+            className={cn(
+              "text-[14px] leading-[1.7] text-foreground [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded [&_.ProseMirror_a]:text-[#2f7fca] [&_.ProseMirror_a]:underline",
+              // 有 footer（回复/转发的原邮件引用）时不要撑满高度，否则引用块被挤到首屏以下
+              footer
+                ? "[&_.ProseMirror]:min-h-[160px]"
+                : "h-full [&_.ProseMirror]:h-full [&_.ProseMirror]:min-h-full",
+            )}
           />
           {signatureHtml && (
             <div
@@ -346,6 +355,7 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
               dangerouslySetInnerHTML={{ __html: `<br/>${signatureHtml}` }}
             />
           )}
+          {footer}
         </div>
       </div>
     );

@@ -30,7 +30,12 @@ from mona.development.executors.claude_account import (
 from mona.development.executors.codebuddy_catalog import inspect_codebuddy_catalog
 from mona.development.executors.codex import ApprovalHandler, QuestionHandler
 from mona.development.executors.diagnostics import ERRORS, failed_probe
-from mona.development.executors.host_tools import HostToolHandler, call_in_turn, tool_unavailable
+from mona.development.executors.host_tools import (
+    DESIGN_ENVELOPE,
+    HostToolHandler,
+    call_in_turn,
+    tool_unavailable,
+)
 from mona.development.executors.login import ACTIVE_LOGIN_STATES, NativeLogin, idle_login
 from mona.development.executors.rpc import JsonRpcProcess, RemoteRpcError, RpcError
 from mona.development.executors.sdk_policy import SDKProfile, sdk_version, worker_command
@@ -67,9 +72,23 @@ class _SDKSession:
     early: list[NativeEvent] = field(default_factory=list)
     closed: bool = False
     uses_local_account: bool = False
+    pending_delta: NativeEvent | None = None
 
     def emit(self, event: NativeEvent) -> None:
         if self.closed:
+            return
+        # Work consumes text directly; Code keeps each persisted vendor event.
+        is_delta = (self.start.work_prompt is not None
+                    and event.type in {"agent.message.delta", "reasoning.delta", "tool.input.delta"}
+                    and isinstance(event.payload.get("itemId"), str)
+                    and isinstance(event.payload.get("delta"), str))
+        previous = self.pending_delta
+        if (is_delta and previous is not None and previous.type == event.type
+                and previous.native_turn_id == event.native_turn_id
+                and previous.payload["itemId"] == event.payload["itemId"]
+                and len(previous.payload["delta"]) + len(event.payload["delta"]) <= 16_384):
+            previous.payload = {**previous.payload, "delta": previous.payload["delta"] + event.payload["delta"]}
+            previous.native_event_id = None
             return
         if self.queue.full():
             while not self.queue.empty():
@@ -78,8 +97,10 @@ class _SDKSession:
             self.queue.put_nowait(NativeEvent(type="run.unknown", native_turn_id=self.turn_id,
                                             payload={"reason": "event_buffer_exhausted"}))
             self.closed = True
+            self.pending_delta = None
             return
         self.queue.put_nowait(event)
+        self.pending_delta = event if is_delta else None
 
 
 class SDKExecutor:
@@ -291,12 +312,15 @@ class SDKExecutor:
         host_tools = (not work_mode and self.tool_handler is not None and not start.readonly
                       and not start.session.parent_session_id)
         work_tools = work_mode and self.tool_handler is not None
+        design_tools = not work_mode and self.tool_handler is not None
         async def request(_identifier, method, params):
-            if method == "host/collaboration":
+            if method in {"host/collaboration", "host/design-resource"}:
                 turn_id = params.get("turnId")
-                if not (host_tools or work_tools) or self.tool_handler is None or not isinstance(params.get("arguments"), dict):
+                resource = method == "host/design-resource"
+                if not (design_tools if resource else host_tools or work_tools) or self.tool_handler is None or not isinstance(params.get("arguments"), dict):
                     return tool_unavailable()
-                return await call_in_turn(self.tool_handler, runtime.binding, turn_id, params["arguments"],
+                arguments = {DESIGN_ENVELOPE: params["arguments"]} if resource else params["arguments"]
+                return await call_in_turn(self.tool_handler, runtime.binding, turn_id, arguments,
                     lambda: runtime.turn_id == turn_id and runtime.status in {"starting", "running", "waiting_user"}
                     and runtime.connection is not None and not runtime.connection.closed,
                     timeout_s=None if work_mode else 90)
@@ -346,7 +370,7 @@ class SDKExecutor:
                 "context": start.context.model_context(), "model": start.model, "resume": resume,
                 "permissionMode": start.session.permission_mode.value,
                 "effort": start.session.model_reasoning_effort if not start.session.model_provider else None,
-                "hostCollaboration": host_tools, "workPrompt": start.work_prompt},
+                "hostCollaboration": host_tools, "hostDesignResources": design_tools, "workPrompt": start.work_prompt},
                 classify_error=_worker_error)
             if not isinstance(reply, dict) or reply.get("nativeSessionId") != binding.native_session_id:
                 raise RpcError("native_protocol_error", "SDK 初始化回执身份不一致。", outcome_unknown=True)
@@ -355,6 +379,8 @@ class SDKExecutor:
             runtime.binding.state = "active"
             if reply.get("hostCollaboration", False) is not host_tools:
                 raise RpcError("native_protocol_error", "SDK 宿主协作能力未按要求装配。")
+            if reply.get("hostDesignResources", False) is not design_tools:
+                raise RpcError("native_protocol_error", "SDK 内置设计资源未按要求装配。")
             if reply.get("workMode", False) is not work_mode:
                 raise RpcError("native_protocol_error", "SDK Work 工具通道未按要求装配。")
             if reply.get("permissionMode") != start.session.permission_mode.value:
@@ -447,6 +473,8 @@ class SDKExecutor:
         runtime = self._runtime(binding)
         while True:
             event = await runtime.queue.get()
+            if event is runtime.pending_delta:
+                runtime.pending_delta = None
             if event is None:
                 return
             yield event

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
+use russh::keys::{decode_secret_key, load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, ChannelMsg, ChannelWriteHalf, Disconnect};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 use crate::terminal::config::AuthConfig;
+use crate::terminal::credential_store;
 use crate::terminal::error::TerminalError;
 use crate::terminal::session::{SessionManager, SessionStatus};
 use crate::terminal::shell::local::ScrollBuffer;
@@ -95,16 +96,6 @@ impl SshClient {
         known_hosts: Arc<KnownHostsStore>,
     ) -> Result<Self, TerminalError> {
         Self::connect_with_verify(host, port, username, auth, known_hosts, false).await
-    }
-
-    pub async fn connect_skip_verify(
-        host: &str,
-        port: u16,
-        username: &str,
-        auth: &AuthConfig,
-    ) -> Result<Self, TerminalError> {
-        let known_hosts = Arc::new(KnownHostsStore::new_in_memory());
-        Self::connect_with_verify(host, port, username, auth, known_hosts, true).await
     }
 
     async fn connect_with_verify(
@@ -248,10 +239,23 @@ impl SshClient {
             }
             AuthConfig::KeyFile {
                 key_path,
-                passphrase: _,
+                passphrase,
             } => {
-                let key_pair = load_secret_key(key_path, None)
-                    .map_err(|e| TerminalError::AuthFailed(e.to_string()))?;
+                let key_pair = if credential_store::ops_secret_name_from_marker(
+                    key_path,
+                    credential_store::OpsSecretField::PrivateKey,
+                )
+                .is_some()
+                {
+                    let private_key = credential_store::load_ops_private_key(key_path)
+                        .map_err(|_| TerminalError::AuthFailed("保存的私钥不可用。".into()))?
+                        .ok_or_else(|| TerminalError::AuthFailed("保存的私钥不可用。".into()))?;
+                    decode_secret_key(&private_key, passphrase.as_deref())
+                        .map_err(|_| TerminalError::AuthFailed("私钥无法解码或口令不正确。".into()))?
+                } else {
+                    load_secret_key(key_path, passphrase.as_deref())
+                        .map_err(|e| TerminalError::AuthFailed(e.to_string()))?
+                };
                 let auth_result = handle
                     .authenticate_publickey(
                         username,

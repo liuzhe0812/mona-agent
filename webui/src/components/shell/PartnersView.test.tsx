@@ -12,15 +12,15 @@ function agent(partial: Partial<AgentSummary> & { id: string }): AgentSummary {
   };
 }
 
-describe("PartnersView (stock-module design §4.4 visibility)", () => {
+describe("PartnersView agent visibility", () => {
   it("hides internal agents from the global partner list", () => {
     render(
       <PartnersView
         agents={[
           agent({ id: "mona", displayName: "Mona" }),
-          agent({ id: "com.mona.a-share-analyst", displayName: "A-Share Analyst" }),
+          agent({ id: "com.mona.team-analyst", displayName: "Team Analyst" }),
           agent({
-            id: "com.mona.stock-tech-analyst",
+            id: "com.mona.team-tech-analyst",
             displayName: "Tech Analyst",
             visibility: "internal",
           }),
@@ -30,7 +30,7 @@ describe("PartnersView (stock-module design §4.4 visibility)", () => {
       />,
     );
 
-    expect(screen.getByText("A-Share Analyst")).toBeInTheDocument();
+    expect(screen.getByText("Team Analyst")).toBeInTheDocument();
     expect(screen.queryByText("Tech Analyst")).not.toBeInTheDocument();
   });
 });

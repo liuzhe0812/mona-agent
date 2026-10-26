@@ -64,7 +64,7 @@ DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
         soul_template="agent/video_soul.md",
         skill_name="mona-video",
         tools_whitelist=_VIDEO_TOOLS,
-        skill_references=("creative-direction.md", "creative-library.md", "huashu/narration-grammars/index.md"),
+        skill_references=("creative-direction.md", "huashu-motion/library/README.md"),
     ),
 }
 

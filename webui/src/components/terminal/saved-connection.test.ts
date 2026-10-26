@@ -11,7 +11,8 @@ vi.mock("./ipc", () => ({
   onTerminalOutput: vi.fn().mockResolvedValue(() => {}),
   onTerminalSessionStatus: vi.fn().mockResolvedValue(() => {}),
   onTerminalMaintenanceUpdated: vi.fn().mockResolvedValue(() => {}),
-  terminalSaveConnections: vi.fn().mockResolvedValue(undefined),
+  terminalUpsertConnection: vi.fn().mockResolvedValue([]),
+  terminalDeleteSavedConnection: vi.fn().mockResolvedValue([]),
 }));
 const config: ConnectionConfig = { id: "saved-one", protocol: "ssh", name: "Fixture", host: "192.0.2.20", port: 22, username: "test", auth: { type: "agent" } };
 const initial = useTerminalStore.getInitialState();

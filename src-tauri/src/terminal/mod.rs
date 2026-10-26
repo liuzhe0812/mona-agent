@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod cloud_sync;
 pub mod commands;
 pub mod config;
 pub mod credential_store;

@@ -36,7 +36,7 @@ RUNTIME_KINDS = {
     "asr": "asr-runtime",
     "pandoc": "pandoc-runtime",
     "computer_use": "computer-use-runtime",
-    "westock": "stock-data-runtime",
+    "stock_vibe": "stock-vibe-runtime",
     **{name: kind for name, (_component_id, kind) in EXECUTOR_RUNTIMES.items()},
 }
 
@@ -48,7 +48,7 @@ _RUNTIME_COMPONENT_IDS = {
     "asr": ("asr-sensevoice",),
     "pandoc": ("pandoc",),
     "computer_use": ("cua-driver",),
-    "westock": ("westock-data",),
+    "stock_vibe": ("stock-vibe",),
     **{name: (component_id,) for name, (component_id, _kind) in EXECUTOR_RUNTIMES.items()},
 }
 _STATUS_CATALOG_WAIT_SECONDS = 2.0

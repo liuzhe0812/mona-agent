@@ -23,6 +23,7 @@ import {
   Plus,
   Printer,
   Search,
+  Settings,
   Star,
   Trash2,
   Upload,
@@ -30,6 +31,13 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { TooltipButton } from "@/components/ui/tooltip";
 import { resizeHandleInteractionClass } from "@/components/ui/resizable";
 import { Input } from "@/components/ui/input";
@@ -80,6 +88,7 @@ import {
 } from "@/lib/tauri";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
+import { AgentSearchScopeSettings } from "@/components/settings/AgentSearchScopeSettings";
 import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
 import { MindMapAgentPanel } from "./mindmap/MindMapAgentPanel";
@@ -174,6 +183,7 @@ export function NotesView({
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [searchScopeSettingsOpen, setSearchScopeSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeType, setNoticeType] = useState<"info" | "error">("info");
   const [editorMode, setEditorMode] = useState<EditorMode>("visual");
@@ -2107,6 +2117,7 @@ export function NotesView({
             <VaultBootstrap
               busy={vaultBusy}
               onOpenOrCreate={openOrCreateVault}
+              onOpenSettings={() => setSearchScopeSettingsOpen(true)}
             />
           ) : (
             <div className="flex min-w-0 flex-1 flex-col">
@@ -2206,6 +2217,11 @@ export function NotesView({
                                 </DropdownMenuRadioGroup>
                               </DropdownMenuSubContent>
                             </DropdownMenuSub>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => setSearchScopeSettingsOpen(true)}>
+                              <Settings className="mr-2 h-3.5 w-3.5" />
+                              设置
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onSelect={openOrCreateVault}>
                               <FolderOpen className="mr-2 h-3.5 w-3.5" />
@@ -2860,6 +2876,19 @@ export function NotesView({
         onConfirm={(templateId, title) => createNoteFromTemplateAction(templateId, title)}
         onOpenChange={setTemplatePickerOpen}
       />
+      <Dialog open={searchScopeSettingsOpen} onOpenChange={setSearchScopeSettingsOpen}>
+        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>笔记设置</DialogTitle>
+            <DialogDescription>管理 Agent 可检索的笔记范围。</DialogDescription>
+          </DialogHeader>
+          <AgentSearchScopeSettings
+            key={vaultPath ?? "no-vault"}
+            source="notes"
+            onConfigureNotesVault={() => void openOrCreateVault()}
+          />
+        </DialogContent>
+      </Dialog>
       <GlobalSearchDialog
         open={globalSearchOpen}
         onOpenChange={setGlobalSearchOpen}
@@ -2900,9 +2929,11 @@ export function NotesView({
 function VaultBootstrap({
   busy,
   onOpenOrCreate,
+  onOpenSettings,
 }: {
   busy: boolean;
   onOpenOrCreate: () => void;
+  onOpenSettings: () => void;
 }) {
   return (
     <div className="flex flex-1 items-center justify-center px-8">
@@ -2916,15 +2947,20 @@ function VaultBootstrap({
             笔记以 Markdown 文件形式保存在你选择的仓库目录中，笔记本为文件夹，可直接用外部编辑器访问。选择一个已有仓库或新建一个空文件夹作为新仓库。
           </p>
         </div>
-        <Button
-          type="button"
-          onClick={onOpenOrCreate}
-          disabled={busy}
-          className="h-9 gap-1.5 rounded-lg px-4"
-        >
-          <FolderOpen className="h-4 w-4" />
-          {busy ? "处理中..." : "选择仓库目录"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            onClick={onOpenOrCreate}
+            disabled={busy}
+            className="h-9 gap-1.5 rounded-lg px-4"
+          >
+            <FolderOpen className="h-4 w-4" />
+            {busy ? "处理中..." : "选择仓库目录"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onOpenSettings}>
+            设置
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -17,10 +17,40 @@ from mona.office.errors import OfficeError, OfficeErrorCode
 from mona.office.schemas import (
     CapabilitiesQuery,
     DocumentVersion,
+    OfficeApplyCommand,
     OfficeCommandSuccess,
     OfficeInspectSuccess,
     OfficeSessionState,
 )
+
+
+@pytest.mark.parametrize(("version", "operations", "missing"), [
+    ({}, [{"op": "slide_add", "payload": {"slideId": "slide_1"}}], "expected_version.editorEpoch"),
+    ({"editorEpoch": "epoch_1", "modelRevision": -1}, [{"op": "slide_add", "payload": {"slideId": "slide_1"}}], "expected_version.modelRevision"),
+    ({"editorEpoch": "epoch_1", "modelRevision": 0}, [{"op": "slide_add", "slideId": "slide_1"}], "operations[0].payload"),
+])
+def test_write_envelope_rejects_incomplete_arguments_before_dispatch(version, operations, missing) -> None:
+    errors = OfficeTool().validate_params({
+        "action": "apply", "expected_version": version, "operations": operations,
+    })
+    assert any(missing in error for error in errors)
+
+
+def test_write_envelope_matches_office_wire_command() -> None:
+    arguments = {
+        "action": "apply", "session_id": "office_1",
+        "expected_version": {"editorEpoch": "epoch_1", "modelRevision": 2},
+        "operations": [{"op": "slide_add", "payload": {
+            "slideId": "slide_1", "content": {
+                "columns": [1], "rows": [1],
+                "items": [{"type": "text", "column": 0, "row": 0, "text": "标题"}],
+            },
+        }}],
+    }
+    assert OfficeTool().validate_params(arguments) == []
+    command = OfficeApplyCommand(operation_id="op_1", **{key: value for key, value in arguments.items() if key != "action"})
+    assert command.expected_version.model_revision == 2
+    assert command.operations[0].payload == arguments["operations"][0]["payload"]
 
 
 class _FakeOfficeClient:
@@ -682,9 +712,11 @@ async def test_slide_add_image_asset_path_is_scoped_and_converted(
     )
 
 
+@pytest.mark.parametrize("operation_name", ["slide_compose", "slide_add"])
 async def test_slide_compose_converts_only_image_asset_paths(
     tmp_path: Path,
     monkeypatch,
+    operation_name: str,
 ) -> None:
     asset = tmp_path / "picture.svg"
     asset.write_bytes(b"<svg />")
@@ -695,30 +727,49 @@ async def test_slide_compose_converts_only_image_asset_paths(
     )
     tool = _tool(tmp_path)
 
+    content = {
+        "columns": [1], "rows": [1],
+        "items": [
+            {"type": "image", "column": 0, "row": 0, "assetPath": "picture.svg"},
+            {"type": "text", "column": 0, "row": 0, "assetPath": "keep"},
+        ],
+    }
+    payload = {"slideId": "slide_1", **content} if operation_name == "slide_compose" else {"slideId": "slide_1", "content": content}
     await tool.execute(
         action="apply",
         session_id="office_1",
         expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
         operations=[
             {
-                "op": "slide_compose",
-                "payload": {
-                    "slideId": "slide_1",
-                    "columns": [1],
-                    "rows": [1],
-                    "items": [
-                        {"type": "image", "column": 0, "row": 0, "assetPath": "picture.svg"},
-                        {"type": "text", "column": 0, "row": 0, "assetPath": "keep"},
-                    ],
-                },
+                "op": operation_name,
+                "payload": payload,
             }
         ],
     )
 
-    items = fake.applied_operations[0].payload["items"]
+    prepared = fake.applied_operations[0].payload
+    items = prepared["items"] if operation_name == "slide_compose" else prepared["content"]["items"]
     assert "assetPath" not in items[0]
     assert items[0]["dataUrl"].startswith("data:image/svg+xml;base64,")
     assert items[1]["assetPath"] == "keep"
+    assert content["items"][0]["assetPath"] == "picture.svg"
+
+
+async def test_slide_add_content_rejects_asset_outside_workspace(tmp_path: Path, monkeypatch) -> None:
+    outside = tmp_path.parent / "outside.png"
+    outside.write_bytes(b"png-bytes")
+    fake = _FakeOfficeClient()
+    monkeypatch.setattr("mona.agent.tools.office.OfficeServiceClient.from_port", lambda _port: fake)
+    result = await _tool(tmp_path).execute(
+        action="apply", session_id="office_1",
+        expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
+        operations=[{"op": "slide_add", "payload": {"slideId": "slide_1", "content": {
+            "columns": [1], "rows": [1],
+            "items": [{"type": "image", "column": 0, "row": 0, "assetPath": str(outside)}],
+        }}}],
+    )
+    assert result.startswith("Error:")
+    assert fake.applied_operations == []
 
 
 async def test_slide_add_preset_converts_only_the_required_image_asset_path(
@@ -815,16 +866,16 @@ async def test_preset_preview_resolves_asset_and_preserves_read_only_contract(tm
     assert fake.applied_operations == []
 
 
-def test_preset_candidate_query_and_result_cross_process_schema() -> None:
-    query = CapabilitiesQuery.model_validate({"mode": "capabilities", "presetContent": {"title": "季度复盘"}, "presetTheme": "light-editorial"})
-    assert query.model_dump(by_alias=True)["presetContent"]["title"] == "季度复盘"
+def test_native_capabilities_query_and_result_cross_process_schema() -> None:
+    query = CapabilitiesQuery.model_validate({"mode": "capabilities", "operations": ["slide_add_text"]})
+    assert query.operations == ["slide_add_text"]
     result = OfficeInspectSuccess.model_validate({
         "ok": True, "requestId": "q", "sessionId": "s",
         "version": {"editorEpoch": "e", "modelRevision": 0},
-        "result": {"mode": "capabilities", "documentType": "slides", "operations": [],
-                   "presets": [{"id": "light-metric", "family": "spotlight"}]},
+        "result": {"mode": "capabilities", "documentType": "slides",
+                   "operations": [{"op": "slide_add_text", "description": "添加原生文字"}]},
     })
-    assert result.result.model_dump(by_alias=True)["presets"][0]["id"] == "light-metric"
+    assert result.result.model_dump(by_alias=True)["operations"][0]["op"] == "slide_add_text"
 
 
 @pytest.mark.parametrize(

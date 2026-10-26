@@ -4114,7 +4114,7 @@ const zhCN: Record<string, string> = {
   "settingsSync.agent.traeCn": "Trae CN",
   "settingsSync.agent.kiroCli": "Kiro CLI",
   "settingsSync.agent.roo": "Roo Code",
-  "settingsSync.agent.codeBuddy": "CodeBuddy",
+  "settingsSync.agent.codeBuddy": "WorkBuddy",
   "settingsSync.agent.agents": "通用 .agents",
   "settingsSync.category.providers": "模型供应商",
   "settingsSync.category.providers.description": "对应设置中的模型供应商，导入连接与认证。",

@@ -44,7 +44,7 @@ def test_explicit_short_description_only_compacts_catalog(tmp_path: Path) -> Non
     assert "Full trigger and workflow description." in loader.load_skill("short")
 
 
-def test_builtin_catalog_keeps_all_names_and_trigger_phrases(tmp_path: Path) -> None:
+def test_builtin_catalog_keeps_all_names_and_effective_descriptions(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     builtin = repo_root / "mona" / "skills"
     loader = _loader(tmp_path, builtin)
@@ -52,13 +52,7 @@ def test_builtin_catalog_keeps_all_names_and_trigger_phrases(tmp_path: Path) -> 
 
     for entry in loader.list_skills(filter_unavailable=False):
         assert f"**{entry['name']}**" in summary
-
-    for phrase in (
-        '"create PPT"',
-        '"make presentation"',
-        '"生成PPT"',
-        '"制作演示文稿"',
-        '"create video"',
-        '"制作视频"',
-    ):
-        assert phrase in summary
+        metadata = loader.get_skill_metadata(entry["name"]) or {}
+        description = metadata.get("short_description") or metadata.get("description")
+        if description:
+            assert description.strip() in summary

@@ -85,17 +85,17 @@ async def native_release_entry(executor: str, *, current_platform: str = sys.pla
             artifact, entrypoint = "native-binary", binary
         else:
             if current_platform == "win32" and arch != "x64":
-                raise RuntimeCatalogError("官方 CodeBuddy 原生程序暂未提供 Windows ARM64 版本。")
+                raise RuntimeCatalogError("官方 CodeBuddy CLI 暂未提供 Windows ARM64 版本。")
             body, _ = await _metadata(client, f"{CODEBUDDY_RELEASES}/latest")
             version = body.decode().strip()
             if not _VERSION.fullmatch(version):
-                raise RuntimeCatalogError("CodeBuddy 版本清单格式无效。")
+                raise RuntimeCatalogError("CodeBuddy CLI 版本清单格式无效。")
             system = {"win32": "Windows", "darwin": "Darwin", "linux": "Linux"}[current_platform]
             filename = f"codebuddy-code_{system}_{'x86_64' if arch == 'x64' else 'arm64'}.{'zip' if current_platform == 'win32' else 'tar.gz'}"
             body, _ = await _metadata(client, f"{CODEBUDDY_RELEASES}/download/{version}/checksums.txt")
             hashes = {parts[1].lstrip("*"): parts[0] for line in body.decode().splitlines() if len(parts := line.split()) == 2}
             if filename not in hashes:
-                raise RuntimeCatalogError("官方 CodeBuddy 校验清单缺少对应平台资产。")
+                raise RuntimeCatalogError("官方 CodeBuddy CLI 校验清单缺少对应平台资产。")
             url = f"{CODEBUDDY_RELEASES}/download/{version}/{filename}"
             _, headers = await _metadata(client, url, head=True)
             size = int(headers.get("content-length", "0"))

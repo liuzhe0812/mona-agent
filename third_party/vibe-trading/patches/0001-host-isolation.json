@@ -1,0 +1,545 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Explicit private runtime paths, no independent Vibe dotenv or legacy migration; authenticated instance handshake.",
+  "files": [
+    {
+      "path": "agent/src/agent/skills.py",
+      "sha256": "ae33254da02ec1f8ba83c8830997077a4a58c8322fbd04943150af1b703dd95d",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/helpers.py",
+      "sha256": "7ecfe526e32bb74e872dfc0c998ea1d04babd8e2bf54cedf4e3dce79a15b9a74",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "LEGACY_ENV_PATH = AGENT_DIR / \".env\"",
+          "after": "LEGACY_ENV_PATH = ENV_PATH if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else AGENT_DIR / \".env\"",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/uploads_routes.py",
+      "sha256": "49aa0ed395196ca78041d4455c535d5e37e65ac57a4021a82c790bc7d777f079",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/br_data/store.py",
+      "sha256": "159609dcc0a9cd171a3516a0fe07dc22c714e7eeabf87f37667b56a4b7320133",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/channels/qq.py",
+      "sha256": "d8784d401d5e748391d61f20f8a35e625308a4bba3340127df8a355e92595df2",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 2
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/hypotheses/registry.py",
+      "sha256": "3768ea426004fab9da61205f56cd6cb984208067fcd8bb3deabd5024c0e2cf68",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "import os\n",
+          "after": "",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/memory/persistent.py",
+      "sha256": "1cd97986e27f0c35721478866900ea50c3041de7f22a14292019a696430c54a3",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/memory/search_index.py",
+      "sha256": "242cca1e67bcc67bd4792dc4a90679f769ca545ec5e2324d17dfe35538947915",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/providers/llm.py",
+      "sha256": "3792c1ffbd89cf4bd5615d49872adf7cd332e7e69a899c37263cfd8f5e21b197",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "_ENV_CANDIDATES = [\n",
+          "after": "_ENV_CANDIDATES = [get_runtime_root() / \".env\"] if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else [\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/fonts.py",
+      "sha256": "02441842ddc5864a367e62d7817a74fdeb569336608e1d33c50c94ba3058d9c5",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/strategy_discovery/evidence_store.py",
+      "sha256": "197f387fdcc0492e982ab0fae734255f0e655a2f47caadb075685a6ea6158c60",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "    try:\n        from src.config.paths import get_runtime_root\n\n        return get_runtime_root() / _DEFAULT_DB_FILENAME\n    except Exception:  # noqa: BLE001 — config layer optional for this package\n        return get_runtime_root() / _DEFAULT_DB_FILENAME",
+          "after": "    return get_runtime_root() / _DEFAULT_DB_FILENAME",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/strategy_store/sqlite_store.py",
+      "sha256": "5c0de1fa3e105d98ddc6809abd93ee349045a25933ad5c5da1f5c542013303a7",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/swarm/presets.py",
+      "sha256": "dcc0ea1419f77faf4b7ec97477279e7b14bce985edacafea1fee6e15050e063b",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/alpha_bench_tool.py",
+      "sha256": "634dc7f00c2f2f170a04ffde634849a151e8421b207791c59e7a176e17a3b7c3",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 2
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/autopilot_tool.py",
+      "sha256": "e0e95c0568a053a9afbd8bffcf14f1b65c899ad48e3e70b4bb5038bfcbd7cc39",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/qveris_tool.py",
+      "sha256": "3a9087a2e693c5d17bf11722db6da9af02190dd2f18dbce56ccfbc6fe6fbad18",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/trading/tap_forward.py",
+      "sha256": "e6cee67db5113dc8b2d8d60c175dfc27723ffe66554bbb871ce2d9dabad2c0be",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "_ENV_CANDIDATES = (\n",
+          "after": "_ENV_CANDIDATES = (get_runtime_root() / \".env\",) if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else (\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/base.py",
+      "sha256": "7f9bed1808490068ec2ab26527bed81d3e63604e58798add29460bf6edc6a609",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/gildata_codes.py",
+      "sha256": "584d359f264b237a41ebdef57fe7b2f5fc1b6a4e6cbdeab6be752e2f7ead3279",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/local_loader.py",
+      "sha256": "9b5587e411048146a97e5c043340f457800366fee0acbb437eb586b4e6340804",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/mt5_loader.py",
+      "sha256": "fbcd0d2bec8f459d6c783a41a92edcf24cd764303c2006fde693a24744b8d15f",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "from pathlib import Path\n",
+          "after": "",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/qveris_loader.py",
+      "sha256": "218a41f375bf34bfd38a69318ad06367ece68f4f18f4751643de2e393a5c8eef",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        },
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "from pathlib import Path\n",
+          "after": "",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/mcp_server.py",
+      "sha256": "6336fca9f7338556227781035436c30b37e386f29a97a407f2b1f2862ed88943",
+      "replacements": [
+        {
+          "before": "Path.home() / \".vibe-trading\"",
+          "after": "get_runtime_root()",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/config/schema.py",
+      "sha256": "4ef36939af85852b7b4afd72aa6345a62ca1ec7fa1192b866f3e26e2c0b9b24c",
+      "replacements": [
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "\"~/.vibe-trading/agent.json\"",
+          "after": "str(get_runtime_root() / \"agent.json\")",
+          "count": 1
+        },
+        {
+          "before": "\"~/.vibe-trading/live/robinhood/oauth\"",
+          "after": "str(get_runtime_root() / \"live/robinhood/oauth\")",
+          "count": 2
+        },
+        {
+          "before": "\"~/.vibe-trading/live/ibkr/oauth\"",
+          "after": "str(get_runtime_root() / \"live/ibkr/oauth\")",
+          "count": 1
+        },
+        {
+          "before": "\"~/.vibe-trading/live/scalable/oauth\"",
+          "after": "str(get_runtime_root() / \"live/scalable/oauth\")",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/config/migrate.py",
+      "sha256": "ae4cc9027566a526769276cfd7f43e0a4713f8ccabfdc065b98711080572f64b",
+      "replacements": [
+        {
+          "before": "    legacy_root = legacy_root if legacy_root is not None else default_legacy_root()",
+          "after": "    if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n        return []\n    legacy_root = legacy_root if legacy_root is not None else default_legacy_root()",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/path_utils.py",
+      "sha256": "eec0803cd879b10858f0a1707ac3593f4b970b7b5cf45056080fd3cef01e1f95",
+      "replacements": [
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "def _default_file_roots() -> list[Path]:\n    \"\"\"Return default roots for uploaded/imported user files.\"\"\"\n    from src.config.paths import get_runtime_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    return [\n        agent_root / \"uploads\",\n        agent_root / \"runs\",\n        cwd / \"uploads\",\n        cwd / \"data\",\n        home / \".vibe-trading\" / \"uploads\",\n        home / \".vibe-trading\" / \"imports\",\n        runtime_root / \"uploads\",\n        runtime_root / \"runs\",\n        runtime_root / \"imports\",\n    ]\n\n",
+          "after": "def _default_file_roots() -> list[Path]:\n    \"\"\"Return default roots for uploaded/imported user files.\"\"\"\n    from src.config.paths import get_runtime_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n        return [runtime_root / \"uploads\", runtime_root / \"runs\", runtime_root / \"imports\"]\n    return [\n        agent_root / \"uploads\",\n        agent_root / \"runs\",\n        cwd / \"uploads\",\n        cwd / \"data\",\n        home / \".vibe-trading\" / \"uploads\",\n        home / \".vibe-trading\" / \"imports\",\n        runtime_root / \"uploads\",\n        runtime_root / \"runs\",\n        runtime_root / \"imports\",\n    ]\n\n",
+          "count": 1
+        },
+        {
+          "before": "def _default_run_roots() -> list[Path]:\n    \"\"\"Return default roots for generated backtest/tool run directories.\"\"\"\n    from src.config.paths import get_runtime_root\n    from src.swarm.store import swarm_runs_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    return [\n        agent_root / \"runs\",\n        agent_root / \".swarm\" / \"runs\",  # un-migrated legacy swarm runs\n        swarm_runs_root(),\n        cwd / \"runs\",\n        home / \".vibe-trading\" / \"shadow_runs\",\n        home / \".vibe-trading\" / \"runs\",\n        runtime_root / \"shadow_runs\",\n        runtime_root / \"runs\",\n    ]\n\n",
+          "after": "def _default_run_roots() -> list[Path]:\n    \"\"\"Return default roots for generated backtest/tool run directories.\"\"\"\n    from src.config.paths import get_runtime_root\n    from src.swarm.store import swarm_runs_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n        return [runtime_root / \"runs\", runtime_root / \"shadow_runs\", swarm_runs_root()]\n    return [\n        agent_root / \"runs\",\n        agent_root / \".swarm\" / \"runs\",  # un-migrated legacy swarm runs\n        swarm_runs_root(),\n        cwd / \"runs\",\n        home / \".vibe-trading\" / \"shadow_runs\",\n        home / \".vibe-trading\" / \"runs\",\n        runtime_root / \"shadow_runs\",\n        runtime_root / \"runs\",\n    ]\n\n",
+          "count": 1
+        },
+        {
+          "before": "def allowed_write_roots() -> list[Path]:\n    \"\"\"Return all roots allowed for file writes and edits.\"\"\"\n    raw = get_env_config().api.vibe_trading_allowed_write_roots\n    configured: list[Path] = []\n    for item in raw.split(\",\"):\n        item = item.strip()\n        if not item:\n            continue\n        _rejects_unc(item)\n        configured.append(Path(item).expanduser().resolve())\n\n    from src.config.paths import get_runtime_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    defaults = [\n        agent_root / \"uploads\",\n        agent_root / \"runs\",\n        cwd / \"uploads\",\n        home / \".vibe-trading\" / \"uploads\",\n        home / \".vibe-trading\" / \"runs\",\n        runtime_root / \"uploads\",\n        runtime_root / \"runs\",\n    ]\n\n    roots: list[Path] = []\n    for root in [*defaults, *configured]:\n        resolved = root.resolve()\n        if resolved not in roots:\n            roots.append(resolved)\n    return roots\n\n",
+          "after": "def allowed_write_roots() -> list[Path]:\n    \"\"\"Return all roots allowed for file writes and edits.\"\"\"\n    raw = get_env_config().api.vibe_trading_allowed_write_roots\n    configured: list[Path] = []\n    for item in raw.split(\",\"):\n        item = item.strip()\n        if not item:\n            continue\n        _rejects_unc(item)\n        configured.append(Path(item).expanduser().resolve())\n\n    from src.config.paths import get_runtime_root\n\n    cwd = Path.cwd().resolve()\n    home = Path.home().resolve()\n    agent_root = _agent_root()\n    runtime_root = get_runtime_root()\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n        return [runtime_root / \"uploads\", runtime_root / \"runs\", runtime_root / \"shadow_runs\"]\n    defaults = [\n        agent_root / \"uploads\",\n        agent_root / \"runs\",\n        cwd / \"uploads\",\n        home / \".vibe-trading\" / \"uploads\",\n        home / \".vibe-trading\" / \"runs\",\n        runtime_root / \"uploads\",\n        runtime_root / \"runs\",\n    ]\n\n    roots: list[Path] = []\n    for root in [*defaults, *configured]:\n        resolved = root.resolve()\n        if resolved not in roots:\n            roots.append(resolved)\n    return roots\n\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/core/runner.py",
+      "sha256": "1732c653d6ab236e1e25668d6c3b88837f14e54bd351c78710c20b3945319e9b",
+      "replacements": [
+        {
+          "before": "from __future__ import annotations\n",
+          "after": "from __future__ import annotations\n\nfrom src.config.paths import get_runtime_root\n",
+          "count": 1
+        },
+        {
+          "before": "        src_root = real_home / \".vibe-trading\"",
+          "after": "        src_root = get_runtime_root() if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else real_home / \".vibe-trading\"",
+          "count": 1
+        },
+        {
+          "before": "        sandbox_home: Path | None = None\n",
+          "after": "        if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n            real_home = get_runtime_root()\n\n        sandbox_home: Path | None = None\n",
+          "count": 1
+        },
+        {
+          "before": "        except OSError as exc:\n            logger.warning(\n                \"Could not create ephemeral sandbox HOME",
+          "after": "        except OSError as exc:\n            if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n                raise RuntimeError(\"Could not create isolated strategy environment\") from exc\n            logger.warning(\n                \"Could not create ephemeral sandbox HOME",
+          "count": 1
+        },
+        {
+          "before": "            env[\"USERPROFILE\"] = str(sandbox_home)\n",
+          "after": "            env[\"USERPROFILE\"] = str(sandbox_home)\n            if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\":\n                env[\"VIBE_TRADING_HOME\"] = str(sandbox_home / \".vibe-trading\")\n                env[\"VIBE_TRADING_HOSTED\"] = \"1\"\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/runner.py",
+      "sha256": "746e6ac87195825aebb2fc5ee14c27b11a5d58ecdd30c8f0b8b532d9261a658f",
+      "replacements": [
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "        load_dotenv()\n",
+          "after": "        if os.environ.get(\"VIBE_TRADING_HOSTED\") != \"1\":\n            load_dotenv()\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/api_server.py",
+      "sha256": "49e8a8e8a2b74ad4c6e1763004e6833b7a79751027855d1bab0d76c198d7c184",
+      "replacements": [
+        {
+          "before": "def serve_main(argv:",
+          "after": "from src.api.mona_routes import register_mona_routes  # noqa: E402\nregister_mona_routes(app)\n\n\ndef serve_main(argv:",
+          "count": 1
+        },
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "    run_preflight(console)\n",
+          "after": "    if os.environ.get(\"VIBE_TRADING_HOSTED\") != \"1\":\n        run_preflight(console)\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {
+    "agent/src/api/mona_routes.py": "\"\"\"Authenticated host identity; no financial implementation lives here.\"\"\"\nfrom __future__ import annotations\n\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\n\nfrom fastapi import Depends, FastAPI\nfrom src.api.security import require_auth\nfrom src.config.paths import get_runtime_root\n\n\ndef register_mona_routes(app: FastAPI) -> None:\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") != \"1\":\n        return\n\n    @app.get(\"/mona/identity\", dependencies=[Depends(require_auth)])\n    async def identity():\n        receipt = json.loads((Path(__file__).resolve().parents[2] / \"mona-source.json\").read_text(encoding=\"utf-8\"))\n        return {\"service\": \"mona-stock-vibe\", \"protocol\": 1, \"pid\": os.getpid(),\n                \"instance_id\": os.environ[\"MONA_VIBE_INSTANCE_ID\"],\n                \"data_root_sha256\": hashlib.sha256(str(get_runtime_root().resolve()).encode()).hexdigest(),\n                \"source\": receipt}\n"
+  }
+}

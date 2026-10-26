@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSummary, WorkflowRun } from "@/lib/types";
 
 const INTERNAL_AGENT: AgentSummary = {
-  id: "com.mona.stock-tech-analyst",
-  displayName: "Tech Analyst",
+  id: "com.mona.team-tech-analyst",
+  displayName: "Team Analyst",
   enabled: true,
   visibility: "internal",
 };
@@ -95,21 +95,21 @@ vi.mock("@/components/workflow/WorkflowPanel", () => ({
 
 import { RoomContextPanel } from "./RoomContextPanel";
 
-describe("RoomContextPanel (stock-module design §4.4)", () => {
+describe("RoomContextPanel", () => {
   it("keeps internal members resolvable and tags them as team built-in", async () => {
     render(
       <RoomContextPanel
         chatId="room-1"
         conversation={{
           type: "room",
-          title: "Stock research",
-          agentIds: ["com.mona.stock-tech-analyst"],
+          title: "Team research",
+          agentIds: ["com.mona.team-tech-analyst"],
           hidden: true,
         }}
       />,
     );
 
-    expect(await screen.findByText("Tech Analyst")).toBeInTheDocument();
+    expect(await screen.findByText("Team Analyst")).toBeInTheDocument();
     expect(await screen.findByText("Built-in")).toBeInTheDocument();
 
     expect(screen.getByText("Group chat").parentElement?.parentElement).toHaveClass("bg-card");
@@ -137,7 +137,7 @@ describe("RoomContextPanel (stock-module design §4.4)", () => {
     expect(await screen.findByText("Current task")).toBeInTheDocument();
     expect(screen.getByText("Debate")).toBeInTheDocument();
     expect(screen.getByText("名画和猫只能救一个")).toBeInTheDocument();
-    expect(screen.getByText(/Round 1 \/ 2/)).toHaveTextContent("Tech Analyst is working");
+    expect(screen.getByText(/Round 1 \/ 2/)).toHaveTextContent("Team Analyst is working");
     expect(screen.getByText("20%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End topic" })).toBeInTheDocument();
     expect(screen.queryByText("unused static goal")).not.toBeInTheDocument();

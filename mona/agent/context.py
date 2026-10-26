@@ -1,9 +1,9 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import hashlib
 import mimetypes
 import platform
-import re
 from contextlib import suppress
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -19,7 +19,7 @@ from mona.utils.helpers import (
     detect_image_mime,
     truncate_text,
 )
-from mona.utils.prompt_templates import current_bootstrap_content, render_template
+from mona.utils.prompt_templates import render_template
 
 
 def _build_db_runtime_context(metadata: Mapping[str, Any]) -> str | None:
@@ -49,7 +49,7 @@ def _build_db_runtime_context(metadata: Mapping[str, Any]) -> str | None:
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
+    BOOTSTRAP_FILES = ["SOUL.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
@@ -246,34 +246,9 @@ class ContextBuilder:
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self) -> str:
-        """Load bootstrap files from the active agent's private memory dir."""
-        parts = []
-
-        for filename in self.BOOTSTRAP_FILES:
-            file_path = self.memory.memory_dir / filename
-            if file_path.exists():
-                content = current_bootstrap_content(filename, file_path.read_text(encoding="utf-8"))
-                if filename == "USER.md" and self.agent_id == MONA_AGENT_ID:
-                    content = self._strip_legacy_generated_profile_sections(content)
-                parts.append(f"## {filename}\n\n{content}")
-
-        return "\n\n".join(parts) if parts else ""
-
-    @staticmethod
-    def _strip_legacy_generated_profile_sections(content: str) -> str:
-        """Hide stale distill-owned sections left in Mona's private USER.md."""
-        for section in (
-            "Profile",
-            "Current Focus",
-            "Work Patterns",
-            "Agent Assistance Patterns",
-        ):
-            pattern = re.compile(
-                r"(^##\s+" + re.escape(section) + r"\s*\n)(.*?)(?=^##\s+|\Z)",
-                re.MULTILINE | re.DOTALL,
-            )
-            content = pattern.sub("", content)
-        return content.strip()
+        """Load this Agent's persona, including custom rules from old versions."""
+        content = self.memory.read_soul()
+        return f"## SOUL.md\n\n{content}" if content else ""
 
     @staticmethod
     def _load_shared_user_profile(
@@ -298,7 +273,7 @@ class ContextBuilder:
         return "\n\n---\n\n".join(part for part in parts if part)
 
     def build_private_bootstrap_context(self) -> str:
-        """Return only this Agent's private SOUL/USER/AGENTS bootstrap."""
+        """Return only this Agent's private persona."""
         return self._load_bootstrap_files()
 
     @staticmethod
@@ -334,18 +309,40 @@ class ContextBuilder:
         theme = (message_metadata or {}).get("ui_theme")
         if theme in ("dark", "light"):
             extra.append(f"Current UI Theme: {theme}")
+        historical_context = [
+            text
+            for message in history
+            for text in (
+                [message["content"]] if isinstance(message.get("content"), str)
+                else [block.get("text", "") for block in (message.get("content") or []) if isinstance(block, dict)]
+            )
+            if isinstance(text, str) and self._RUNTIME_CONTEXT_TAG in text
+        ]
         background = []
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
-            capped = entries[-self._MAX_RECENT_HISTORY:]
-            history_text = "\n".join(
-                f"- [{e['timestamp']}] {e['content']}" for e in capped
-            )
-            background.append(
-                "# Recent History\n\n" + truncate_text(history_text, self._MAX_HISTORY_CHARS)
-            )
-        if session_summary:
-            background.append(f"[Archived Context Summary]\n\n{session_summary}")
+            rendered_entries = []
+            remaining = self._MAX_HISTORY_CHARS
+            for entry in entries[-self._MAX_RECENT_HISTORY:]:
+                if entry["content"].strip() == (session_summary or "").strip():
+                    continue
+                line = f"- [{entry['timestamp']}] {entry['content']}"
+                marker = f"[History entry: {hashlib.sha256(line.encode()).hexdigest()[:16]}]"
+                if any(marker in text for text in historical_context):
+                    continue
+                line = f"{marker}\n{line}"
+                if remaining <= len(marker) + 1:
+                    break
+                rendered_entries.append(truncate_text(line, remaining))
+                remaining -= len(rendered_entries[-1]) + 1
+            history_text = "\n".join(rendered_entries)
+            if history_text:
+                background.append(
+                    "# Recent History\n\n" + truncate_text(history_text, self._MAX_HISTORY_CHARS)
+                )
+        summary_context = f"[Archived Context Summary]\n\n{session_summary}" if session_summary else ""
+        if summary_context and not any(summary_context in text for text in historical_context):
+            background.append(summary_context)
         if background:
             extra.append(
                 "Conversation background (historical context, not a new request or expanded authorization):\n"

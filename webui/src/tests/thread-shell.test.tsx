@@ -442,7 +442,7 @@ describe("ThreadShell", () => {
 
     render(wrap(client, <ThreadShell onToggleSidebar={() => {}} onNewChat={() => {}} />));
 
-    const trigger = await screen.findByRole("button", { name: "shared-model" });
+    const trigger = await screen.findByRole("button", { name: "API Shared" });
     await waitFor(() => expect(providerRequest).toHaveBeenCalledTimes(1));
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     await waitFor(() => expect(
@@ -452,7 +452,7 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(selectionRequest).toHaveBeenCalledWith({
       executor: "codex", model: "codex-model", effort: "high",
     }));
-    await screen.findByRole("button", { name: "codex-model" });
+    await screen.findByRole("button", { name: "原生 Codex" });
 
     providerRequest.mockResolvedValue({ executors: [{
       ...codex,
@@ -463,7 +463,7 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(settingsRequest).toHaveBeenCalledTimes(2));
     expect(currentSettings.agent.executor).toBe("codex");
     expect(currentSettings.agent.native_model).toBe("codex-model");
-    fireEvent.pointerDown(screen.getByRole("button", { name: "codex-model" }), { button: 0, ctrlKey: false });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "原生 Codex" }), { button: 0, ctrlKey: false });
     expect(await screen.findByRole("menuitem", { name: "OpenAI · 目录更新模型" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Example API · API Shared" }));
     await waitFor(() => expect(selectionRequest).toHaveBeenLastCalledWith({
@@ -1561,15 +1561,18 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "网页生成笔记" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Mona 快捷提示词" })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "网页生成笔记" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mona 快捷提示词" }));
+    const suggestions = await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
+    fireEvent.click(within(suggestions).getByRole("button", { name: "网页生成笔记" }));
 
     // Hero chips fill the composer (cursor marker stripped); the user then sends.
     await waitFor(() =>
       expect(screen.getByLabelText("Message input")).toHaveValue("把这个网页转成笔记："),
     );
+    expect(client.sendMessage).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
     await waitFor(() =>
@@ -1646,7 +1649,7 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("com.mona.academic-researcher")).not.toBeInTheDocument();
   });
 
-  it("keeps the empty landing branded with Mona's human form and no workspace ornament", async () => {
+  it("keeps only Mona's interactive companion above the empty landing composer", async () => {
     const client = makeClient();
 
     render(
@@ -1666,14 +1669,14 @@ describe("ThreadShell", () => {
     );
 
     const heroComposer = screen.getByTestId("mona-hero-composer");
-    expect(within(heroComposer).getByTestId("mona-human-portrait")).toHaveClass("mona-home-avatar");
-    expect(within(heroComposer).getByTestId("mona-human-portrait-image")).toHaveClass("mona-home-avatar-image");
-    expect(within(heroComposer).getByTestId("mona-human-portrait-image")).toHaveAttribute(
+    const companion = within(heroComposer).getByRole("button", { name: "Mona 快捷提示词" });
+    expect(companion.querySelector("img")).toHaveAttribute(
       "src",
-      "/brand/mona_human_solid.png",
+      "/brand/v2/composer-human-chibi-resting.png",
     );
     expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
-    expect(screen.getByText("MONA")).toBeInTheDocument();
+    expect(within(heroComposer).queryByText("MONA")).not.toBeInTheDocument();
+    expect(within(heroComposer).queryByText("网页生成笔记")).not.toBeInTheDocument();
     expect(screen.queryByText("WORKSPACE")).not.toBeInTheDocument();
     expect(screen.queryByTestId("mona-brand-marker")).not.toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Mona AI ready" })).not.toBeInTheDocument();
@@ -1688,7 +1691,7 @@ describe("ThreadShell", () => {
     );
   });
 
-  it("shows the user's Mona avatar on the empty landing", async () => {
+  it("keeps the interactive companion distinct from a custom Mona avatar", async () => {
     const client = makeClient();
     const customAvatar = "data:image/png;base64,dXNlci1hdmF0YXI=";
     invalidateAgents();
@@ -1714,11 +1717,10 @@ describe("ThreadShell", () => {
       />,
     ));
 
-    const portrait = await within(screen.getByTestId("mona-hero-composer"))
-      .findByTestId("mona-human-portrait-image");
-    expect(portrait).toHaveAttribute("src", customAvatar);
-    expect(portrait).toHaveClass("object-cover");
-    expect(portrait).not.toHaveClass("mona-home-avatar-image");
+    const companion = await within(screen.getByTestId("mona-hero-composer"))
+      .findByRole("button", { name: "Mona 快捷提示词" });
+    expect(companion.querySelector("img")).toHaveAttribute("src", "/brand/v2/composer-human-chibi-resting.png");
+    expect(document.querySelector(`img[src="${customAvatar}"]`)).not.toBeInTheDocument();
   });
 
   it("animates the activity icon without a top working line", async () => {

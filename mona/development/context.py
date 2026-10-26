@@ -1,4 +1,4 @@
-"""Bounded project-only context; no private memory or ambient Skill loader."""
+"""Bounded project context and one explicit design catalog; no ambient Skill loader."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import yaml
 
 from mona.config.schema import DevelopmentConfig
 from mona.development.contracts import DevelopmentSession, Project
+from mona.development.design_resources import design_resource_context
 from mona.development.executors.host_tools import DELEGATION_INSTRUCTIONS, SUBAGENT_INSTRUCTIONS
 from mona.development.store import DevelopmentError
 from mona.session.manager import Session
@@ -62,7 +63,8 @@ class ProjectContext:
             "projectSkills": [{"name": s.name, "description": s.description,
                                "path": s.path, "sha256": s.sha256} for s in self.skills],
             "resourceIssues": self.issues,
-            "resourcePolicy": "只使用这些项目资源；Skill 正文通过 read_file 按需读取，发现阶段不执行脚本。",
+            "builtinDesignResource": design_resource_context(),
+            "resourcePolicy": "项目 Skill 正文通过 read_file 按需读取；内置设计包只通过其专用只读工具按需读取。项目规则和已有设计系统优先，不执行资源脚本。",
         }, ensure_ascii=False)
 
 

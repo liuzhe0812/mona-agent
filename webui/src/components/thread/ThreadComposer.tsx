@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleHelp,
+  Cpu,
   Folder,
   Globe,
   History,
@@ -41,10 +42,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Popover } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
 import { FileSystemIcon } from "@/components/ui/file-system-icon";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipButton, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
   useAttachedImages,
@@ -58,6 +60,7 @@ import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { MessageQuote, RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import { MonaComposerPeek } from "@/components/thread/MonaComposerPeek";
 import {
   getDesktopSettings,
   isTauri,
@@ -187,7 +190,6 @@ interface ThreadComposerProps {
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
   onWorkspaceChange?: (workspace: string | null) => void;
-  heroBrand?: ReactNode;
   showHeroPromptChips?: boolean;
   onOpenSettings?: (section?: string) => void;
   attachmentsEnabled?: boolean;
@@ -603,7 +605,6 @@ export function ThreadComposer({
   isPendingFull = false,
   workspace,
   onWorkspaceChange,
-  heroBrand,
   showHeroPromptChips = true,
   onOpenSettings,
   attachmentsEnabled = true,
@@ -666,9 +667,11 @@ export function ThreadComposer({
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
+  const suppressHeroPopoverTriggerFocusRef = useRef(false);
+  const [heroPromptPopoverOpen, setHeroPromptPopoverOpen] = useState(false);
   const isHero = variant === "hero";
   const activeModelOption = modelOptions.find((option) => option.active) ?? null;
-  const triggerModelLabel = activeModelOption?.model || modelLabel;
+  const triggerModelLabel = activeModelOption?.label || modelLabel;
   const resolvedPlaceholder = isCompacting
     ? t("thread.composer.placeholderCompacting")
     : isAwaitingModelResponse
@@ -1346,40 +1349,86 @@ export function ThreadComposer({
           </div>
         </div>
       ) : null}
-      {isHero && (heroBrand || showHeroPromptChips) ? (
+      {isHero && showHeroPromptChips ? (
         <div
           data-testid="hero-composer-prelude"
-          className="absolute bottom-full left-1/2 z-20 mb-2.5 flex w-full max-w-[58rem] -translate-x-1/2 flex-wrap items-end justify-between gap-x-4 gap-y-2"
+          className="pointer-events-none absolute bottom-full left-1/2 z-20 flex w-full max-w-[58rem] -translate-x-1/2 justify-end"
         >
-          {heroBrand}
-          {showHeroPromptChips ? (
-            <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
-              {HERO_PROMPT_CHIPS.map((chip) => {
-                const Icon = chip.Icon;
-                return (
-                  <button
-                    key={chip.label}
-                    type="button"
-                    onClick={() => applyHeroChip(chip)}
-                    className={cn(
-                      "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3",
-                      "border-border/55 bg-muted/40 text-[12px] font-medium text-foreground/75",
-                      "hover:bg-muted hover:text-foreground transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    )}
+          <div className="pointer-events-auto relative mr-10 translate-y-0.5">
+            <Popover.Root open={heroPromptPopoverOpen} onOpenChange={setHeroPromptPopoverOpen} modal={false}>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Popover.Trigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Mona 快捷提示词"
+                        disabled={disabled}
+                        className="group flex min-h-11 w-12 items-end border-0 bg-transparent p-0 leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <MonaComposerPeek paused={disabled || isStreaming || heroPromptPopoverOpen || value.trim().length > 0} />
+                      </button>
+                    </Popover.Trigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" sideOffset={8}>
+                    Mona 快捷提示词
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <Popover.Portal>
+                <Popover.Content
+                  align="end"
+                  side="left"
+                  sideOffset={12}
+                  className={cn(
+                    "relative isolate z-50 aspect-[3/2] w-[216px] max-w-[min(216px,var(--radix-popover-content-available-width,calc(100vw-1rem)),calc(100vw-1rem))]",
+                    "bg-transparent p-0 text-foreground outline-none",
+                    "data-[state=open]:motion-safe:animate-in data-[state=open]:motion-safe:fade-in-0 data-[state=open]:motion-safe:slide-in-from-right-2 data-[state=open]:motion-safe:zoom-in-95 motion-reduce:animate-none",
+                  )}
+                  aria-label="Mona 快捷提示词"
+                  onCloseAutoFocus={(event) => {
+                    if (!suppressHeroPopoverTriggerFocusRef.current) return;
+                    suppressHeroPopoverTriggerFocusRef.current = false;
+                    event.preventDefault();
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 216 144"
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 h-full w-full fill-muted dark:fill-foreground/10"
                   >
-                    <Icon className={cn("h-3.5 w-3.5", chip.iconClass)} aria-hidden />
-                    {chip.label}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
+                    <path d="M184 88C188 100 198 105 212 106C200 116 183 111 176 103C160 124 130 136 96 136C43 136 4 110 4 72C4 34 43 8 96 8C149 8 188 34 188 72C188 78 187 84 184 88Z" />
+                  </svg>
+                  <div className="relative flex h-full w-[calc(100%-1.5rem)] flex-col justify-center pl-4 pr-3">
+                    {HERO_PROMPT_CHIPS.map((chip) => (
+                      <button
+                        key={chip.label}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          suppressHeroPopoverTriggerFocusRef.current = true;
+                          setHeroPromptPopoverOpen(false);
+                          applyHeroChip(chip);
+                        }}
+                        className={cn(
+                          "block min-h-8 border-0 bg-transparent py-1.5 text-center text-body text-foreground/85",
+                          "transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4",
+                          "disabled:cursor-not-allowed disabled:opacity-50",
+                        )}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          </div>
         </div>
       ) : null}
       <div
         className={cn(
-          "relative mx-auto flex w-full flex-col overflow-visible transition-all duration-200",
+          "mona-composer relative mx-auto flex min-w-0 w-full flex-col overflow-visible transition-all duration-200",
           isHero
             ? "max-w-[58rem] rounded-2xl border border-border/60 bg-card dark:border-white/10"
             : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card dark:border-white/10",
@@ -1507,11 +1556,11 @@ export function ThreadComposer({
         ) : null}
         <div
           className={cn(
-            "flex items-center justify-between gap-2",
+            "mona-composer-toolbar flex items-center justify-between gap-2 whitespace-nowrap",
             isHero ? "px-4 pb-4" : "px-3 pb-2",
           )}
         >
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="mona-composer-leading flex min-w-0 items-center gap-2">
             {attachmentsEnabled && <>
               <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePick} />
               <Button
@@ -1523,7 +1572,7 @@ export function ThreadComposer({
                 title={fileAttachLabel}
                 onClick={() => void openAttachmentPicker()}
                 className={cn(
-                  "rounded-md text-foreground",
+                  "shrink-0 rounded-md text-foreground",
                   isHero
                     ? "h-7 w-7"
                     : "h-6 w-6",
@@ -1540,7 +1589,7 @@ export function ThreadComposer({
               aria-label={resolvedAttachLabel}
               title={resolvedAttachLabel}
               onClick={onAttach}
-              className={cn("rounded-full text-muted-foreground hover:text-foreground", isHero ? "h-7 w-7" : "h-6 w-6")}
+              className={cn("shrink-0 rounded-full text-muted-foreground hover:text-foreground", isHero ? "h-7 w-7" : "h-6 w-6")}
             >
               <Folder className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
             </Button>}
@@ -1555,7 +1604,7 @@ export function ThreadComposer({
               />
             ) : null}
           </div>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="mona-composer-trailing flex min-w-0 items-center gap-2">
             {triggerModelLabel ? <ContextUsageIndicator usage={contextUsage} /> : null}
             {triggerModelLabel ? (
               modelOptions.length > 0 && (onModelSelect || onModelSwitch) ? (
@@ -1566,16 +1615,26 @@ export function ThreadComposer({
                     : onModelSwitch?.(option.provider, option.model, effort)}
                   onManage={onOpenSettings ? () => onOpenSettings("models_providers") : undefined} />
               ) : (
-                <span
-                  title={triggerModelLabel}
-                  className={cn(
-                    "inline-flex h-7 min-w-0 items-center rounded-md px-1",
-                    "font-medium text-caption text-foreground/85",
-                    isHero ? "max-w-[13rem]" : "max-w-[10rem]",
-                  )}
-                >
-                  <span className="truncate">{triggerModelLabel}</span>
-                </span>
+                <TooltipProvider delayDuration={300}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        role="img"
+                        tabIndex={0}
+                        aria-label={triggerModelLabel}
+                        className={cn(
+                          "composer-icon-control inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1",
+                          "font-medium text-caption text-foreground/85",
+                          isHero ? "max-w-[13rem]" : "max-w-[10rem]",
+                        )}
+                      >
+                        <Cpu className="h-4 w-4 shrink-0" aria-hidden />
+                        <span className="composer-control-label min-w-0 truncate">{triggerModelLabel}</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{triggerModelLabel}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )
             ) : null}
           <Button
@@ -1586,7 +1645,7 @@ export function ThreadComposer({
             title={showStopButton ? stopButtonLabel : undefined}
             onClick={showStopButton && !stopping ? onStop : undefined}
             className={cn(
-              "h-8 w-8 rounded-full border-0 transition-transform",
+              "h-8 w-8 shrink-0 rounded-full border-0 transition-transform",
               showStopButton
                 ? "bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground disabled:bg-destructive/60 disabled:text-destructive-foreground/75"
                 : "bg-action text-action-foreground hover:bg-action-hover disabled:bg-muted disabled:text-muted-foreground",
@@ -1654,28 +1713,34 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
     const parts = normalized.split("/").filter(Boolean);
     const basename = parts[parts.length - 1] ?? workspace;
     return (
-      <div className="flex items-center gap-2">
-        <button
+      <div className="flex min-w-0 items-center gap-2">
+        <TooltipButton
           type="button"
+          variant="ghost"
+          size="sm"
           disabled={disabled || picking}
           onClick={pickWorkspace}
           title={workspace}
+          aria-label={workspace}
           className={cn(
-            "inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg px-2.5",
+            "composer-icon-control inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg px-2.5",
             "bg-transparent text-[12px] font-medium text-foreground/80",
             "hover:bg-muted/80 transition-colors cursor-pointer",
             (disabled || picking) && "pointer-events-none opacity-55",
           )}
         >
           <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate max-w-[12rem]">{basename}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-        </button>
-        <button
+          <span className="composer-control-label min-w-0 max-w-[12rem] truncate whitespace-nowrap">{basename}</span>
+          <ChevronDown className="composer-control-chevron h-3 w-3 shrink-0 text-muted-foreground/70" />
+        </TooltipButton>
+        <TooltipButton
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={clearWorkspace}
           disabled={disabled || picking}
           aria-label={t("thread.composer.workspace.clear")}
+          title={t("thread.composer.workspace.clear")}
           className={cn(
             "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
             "text-muted-foreground/80 hover:bg-muted/70 hover:text-foreground",
@@ -1684,27 +1749,31 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
           )}
         >
           <X className="h-3 w-3" />
-        </button>
+        </TooltipButton>
       </div>
     );
   }
 
   return (
-    <button
+    <TooltipButton
       type="button"
+      variant="ghost"
+      size="sm"
       disabled={disabled || picking}
       onClick={pickWorkspace}
+      title={t("thread.composer.workspace.placeholder")}
+      aria-label={t("thread.composer.workspace.placeholder")}
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5",
+        "composer-icon-control inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg px-2.5",
         "bg-transparent text-[12px] font-medium text-foreground/65",
         "hover:bg-muted transition-colors cursor-pointer",
         (disabled || picking) && "pointer-events-none opacity-55",
       )}
     >
       <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground/80" />
-      <span>{t("thread.composer.workspace.placeholder")}</span>
-      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/60" />
-    </button>
+      <span className="composer-control-label min-w-0 truncate whitespace-nowrap">{t("thread.composer.workspace.placeholder")}</span>
+      <ChevronDown className="composer-control-chevron h-3 w-3 shrink-0 text-muted-foreground/60" />
+    </TooltipButton>
   );
 }
 

@@ -1,25 +1,29 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ listen: vi.fn(), isTauri: vi.fn(), stop: vi.fn() }));
+const state = vi.hoisted(() => ({ listen: vi.fn(), isTauri: vi.fn(), stop: vi.fn(), loadSavedConnections: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: state.listen }));
 vi.mock("@/lib/tauri", () => ({ isTauri: state.isTauri }));
+vi.mock("@/components/terminal/store/terminalStore", () => ({ useTerminalStore: { getState: () => ({ loadSavedConnections: state.loadSavedConnections }) } }));
 import { useCloudUpdates } from "./useCloudUpdates";
 
 beforeEach(() => {
   vi.useFakeTimers();
   state.isTauri.mockReturnValue(true);
   state.stop.mockReset();
+  state.loadSavedConnections.mockReset().mockResolvedValue(undefined);
   state.listen.mockReset().mockResolvedValue(state.stop);
 });
 afterEach(() => { vi.useRealTimers(); });
 
 async function setup(callback = vi.fn()) {
   const hook = renderHook(({ cb }) => useCloudUpdates(cb), { initialProps: { cb: callback } });
-  await act(async () => { await Promise.resolve(); });
+  await act(async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); });
   expect(state.listen).toHaveBeenCalledWith("mona-cloud-updated", expect.any(Function));
-  const emit = (payload: unknown) => state.listen.mock.calls[0][1]({ payload });
-  return { ...hook, emit, callback };
+  expect(state.listen).toHaveBeenCalledWith("operations-connections-changed", expect.any(Function));
+  const emit = (payload: unknown) => state.listen.mock.calls.find(([event]) => event === "mona-cloud-updated")![1]({ payload });
+  const emitOperations = () => state.listen.mock.calls.find(([event]) => event === "operations-connections-changed")![1]({ payload: undefined });
+  return { ...hook, emit, emitOperations, callback };
 }
 
 it("coalesces successful imports and passes no source payload or credentials to consumers", async () => {
@@ -41,7 +45,13 @@ it("uses the current consumer without re-registering native listeners", async ()
   act(() => { emit({ work_keys: [], planning: true }); vi.advanceTimersByTime(75); });
   expect(callback).not.toHaveBeenCalled();
   expect(next).toHaveBeenCalledOnce();
-  expect(state.listen).toHaveBeenCalledOnce();
+  expect(state.listen).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes the saved host list after an operations import without opening a connection", async () => {
+  const { emitOperations } = await setup();
+  await act(async () => { emitOperations(); await Promise.resolve(); await Promise.resolve(); });
+  expect(state.loadSavedConnections).toHaveBeenCalledOnce();
 });
 
 it.each([null, {}, { work_keys: ["development:x"], planning: false },
@@ -56,7 +66,10 @@ it.each([null, {}, { work_keys: ["development:x"], planning: false },
 it("cancels pending refreshes and releases a late native subscription on unmount", async () => {
   let ready!: (stop: () => void) => void;
   state.listen.mockReturnValue(new Promise((resolve) => { ready = resolve; }));
-  const { callback, emit, unmount } = await setup();
+  const callback = vi.fn();
+  const { unmount } = renderHook(() => useCloudUpdates(callback));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const emit = (payload: unknown) => state.listen.mock.calls[0][1]({ payload });
   act(() => emit({ work_keys: ["websocket:a"], planning: false }));
   unmount();
   await act(async () => { ready(state.stop); await Promise.resolve(); vi.advanceTimersByTime(100); });

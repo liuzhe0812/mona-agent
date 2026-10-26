@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import type { Session, SessionStatus, ConnectionConfig } from "../types/terminal";
 import {
-  terminalSaveConnections,
   terminalLoadConnections,
+  terminalUpsertConnection,
+  terminalDeleteSavedConnection,
   onTerminalOutput,
   onTerminalSessionStatus,
   onTerminalMaintenanceUpdated,
@@ -44,6 +45,16 @@ export interface TerminalSettings {
   fontFamily: string;
   scrollback: number;
   cursorStyle: "block" | "underline" | "bar";
+}
+
+let savedConnectionMutationQueue: Promise<void> = Promise.resolve();
+let savedConnectionReadGeneration = 0;
+let savedConnectionMutationGeneration = 0;
+
+function serializeSavedConnectionMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = savedConnectionMutationQueue.then(operation, operation);
+  savedConnectionMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 interface TerminalState {
@@ -91,7 +102,7 @@ interface TerminalState {
   setBatchActiveTabId: (id: string | null) => void;
   loadSavedConnections: () => Promise<void>;
   saveConnection: (config: ConnectionConfig) => Promise<void>;
-  deleteConnection: (id: string) => Promise<void>;
+  deleteConnection: (id: string, expectedRevision?: string) => Promise<void>;
   showHostKeyDialog: (dialog: Omit<HostKeyDialogState, "open">) => void;
   closeHostKeyDialog: () => void;
   showSshPasswordDialog: (dialog: Omit<SshPasswordDialogState, "open">) => void;
@@ -410,40 +421,41 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   loadSavedConnections: async () => {
-    try {
-      const connections = await terminalLoadConnections();
+    const readGeneration = ++savedConnectionReadGeneration;
+    const mutationGeneration = savedConnectionMutationGeneration;
+    const connections = await terminalLoadConnections();
+    if (readGeneration === savedConnectionReadGeneration && mutationGeneration === savedConnectionMutationGeneration) {
       set({ savedConnections: connections });
-    } catch {
-      set({ savedConnections: [] });
     }
   },
 
-  saveConnection: async (config) => {
-    const { savedConnections } = get();
-    const existing = savedConnections.findIndex((c) => c.id === config.id);
-    const updated =
-      existing >= 0
-        ? savedConnections.map((c) => (c.id === config.id ? config : c))
-        : [...savedConnections, config];
-    set({ savedConnections: updated });
-    try {
-      await terminalSaveConnections(updated);
-    } catch (error) {
-      set({ savedConnections: savedConnections });
-      throw error;
-    }
-  },
+  saveConnection: (config) => serializeSavedConnectionMutation(async () => {
+      try {
+        const savedConnections = await terminalUpsertConnection(config, config.storageRevision);
+        savedConnectionMutationGeneration += 1;
+        savedConnectionReadGeneration += 1;
+        set({ savedConnections });
+      } catch (error) {
+        await get().loadSavedConnections().catch(() => console.warn("Saved host list could not be refreshed."));
+        throw error;
+      }
+    }),
 
-  deleteConnection: async (id) => {
-    const { savedConnections } = get();
-    const updated = savedConnections.filter((c) => c.id !== id);
-    set({ savedConnections: updated });
-    try {
-      await terminalSaveConnections(updated);
-    } catch {
-      set({ savedConnections: savedConnections });
-    }
-  },
+  deleteConnection: (id, expectedRevision) => serializeSavedConnectionMutation(async () => {
+      if (!expectedRevision) {
+        await get().loadSavedConnections().catch(() => console.warn("Saved host list could not be refreshed."));
+        throw new Error("连接列表已更新，请刷新后重试。");
+      }
+      try {
+        const next = await terminalDeleteSavedConnection(id, expectedRevision);
+        savedConnectionMutationGeneration += 1;
+        savedConnectionReadGeneration += 1;
+        set({ savedConnections: next });
+      } catch (error) {
+        await get().loadSavedConnections().catch(() => console.warn("Saved host list could not be refreshed."));
+        throw error;
+      }
+    }),
 
   showHostKeyDialog: (dialog) => {
     set({ hostKeyDialog: { ...dialog, open: true } });

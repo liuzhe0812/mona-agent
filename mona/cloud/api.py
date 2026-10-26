@@ -7,7 +7,7 @@ from aiohttp import web
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from mona.cloud.coordinator import CloudCoordinator, SyncPreferences
+from mona.cloud.coordinator import CloudCoordinator
 from mona.cloud.crypto import CloudCryptoError
 from mona.cloud.transfer import CloudTransferError
 from mona.cloud.work_snapshot import is_work_session
@@ -38,6 +38,8 @@ class Scope(RequestBody):
     sync_planning: bool | None = None
     sync_notes: bool | None = None
     sync_preferences: bool | None = None
+    sync_operations: bool | None = None
+    sync_operations_credentials: bool | None = None
 
     @field_validator("session_keys")
     @classmethod
@@ -184,13 +186,15 @@ async def enable(request):
     data = await body(request, Enable)
     return web.json_response(await (await get_coordinator(request)).enable(
         data.draft_id, data.session_keys, data.confirmed, data.sync_new_conversations is True,
-        data.sync_planning is True, data.sync_notes is True, data.sync_preferences is True))
+        data.sync_planning is True, data.sync_notes is True, data.sync_preferences is True,
+        data.sync_operations is True, data.sync_operations_credentials is True))
 
 
 async def scope(request):
     data = await body(request, Scope)
     return web.json_response(await (await get_coordinator(request)).select(
-        data.session_keys, data.sync_new_conversations, data.sync_planning, data.sync_notes, data.sync_preferences))
+        data.session_keys, data.sync_new_conversations, data.sync_planning, data.sync_notes, data.sync_preferences,
+        data.sync_operations, data.sync_operations_credentials))
 
 
 async def pause(request):
@@ -198,12 +202,17 @@ async def pause(request):
     return web.json_response(await (await get_coordinator(request)).pause())
 
 
+async def resume(request):
+    await body(request, RequestBody)
+    return web.json_response(await (await get_coordinator(request)).resume())
+
+
 async def sync(request):
     await body(request, RequestBody)
     coordinator = await get_coordinator(request)
     import asyncio
     config = await asyncio.to_thread(coordinator.preferences.read)
-    if not config.enabled:
+    if not config.enabled and (config.upload_enabled is not None or config.account_id):
         raise CloudTransferError("sync_disabled", "请先开启云同步。")
     coordinator.wake.set()
     return web.json_response({"scheduled": True})
@@ -244,16 +253,15 @@ async def restore(request):
 
 async def startup(app):
     try:
-        import asyncio
-        config = await asyncio.to_thread(SyncPreferences(get_config_path()).read)
-        if config.enabled:
-            loop = app.get("agent_loop")
-            if loop is not None and getattr(loop, "sessions", None) is not None:
+        loop = app.get("agent_loop")
+        if loop is not None and getattr(loop, "sessions", None) is not None:
+            coordinator = app.get(RUNTIME_KEY)
+            if coordinator is None:
                 coordinator = CloudCoordinator(loop, config_path=get_config_path(),
                     state_path=get_data_dir() / "cloud-sync" / "state.sqlite3", media_root=get_media_dir("websocket"),
                     transcript_for=webui_transcript_path)
                 app[RUNTIME_KEY] = coordinator
-                await coordinator.start()
+            await coordinator.start()
     except Exception as exc:
         # Sync must never prevent the ordinary local Agent from starting.
         logger.warning("Cloud startup deferred ({})", type(exc).__name__)
@@ -280,7 +288,7 @@ def register_cloud_routes(app: web.Application) -> None:
         manager.cloud_file_resolver = resolve_file
     app.middlewares.append(cloud_auth)
     app.router.add_get(PREFIX + "/status", status)
-    for path, handler in [("prepare", prepare), ("enable", enable), ("scope", scope), ("pause", pause), ("sync", sync),
+    for path, handler in [("prepare", prepare), ("enable", enable), ("scope", scope), ("pause", pause), ("resume", resume), ("sync", sync),
                           ("history", history), ("files", files), ("download", download), ("ensure-file", ensure_file), ("restore", restore),
                           ("cleanup-preview", cleanup_preview), ("cleanup", cleanup_uploads)]:
         app.router.add_post(PREFIX + "/" + path, handler)

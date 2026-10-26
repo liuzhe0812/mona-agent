@@ -62,7 +62,7 @@ impl ServicesManager {
 
         let port = settings.services_port;
         let external = backend_process::prepare_ports(
-            &[(port, "mona-services", "stock-v1")],
+            &[(port, "mona-services", "stock-vibe-v1")],
             !cfg!(debug_assertions),
         )?;
 
@@ -101,7 +101,6 @@ impl ServicesManager {
 
             // 同 gateway：把 Rust 侧 app_data_dir 传给 Python，用于定位 email.sqlite3 等
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
-            cmd.env("MONA_ENABLE_WESTOCK", "1");
 
             // Set PYTHONPATH if source tree exists.
             // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
@@ -150,7 +149,6 @@ impl ServicesManager {
 
             // 同 dev 模式：把 Rust 侧 app_data_dir 传给 Python
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
-            cmd.env("MONA_ENABLE_WESTOCK", "1");
         }
 
         if let Ok(resource_dir) = app_handle.path().resource_dir() {
@@ -321,7 +319,7 @@ fn open_services_log(port: u16) -> Option<std::fs::File> {
 }
 
 fn services_health_response_compatible(response: &str) -> bool {
-    backend_process::health_response_compatible(response, "mona-services", "stock-v1")
+    backend_process::health_response_compatible(response, "mona-services", "stock-vibe-v1")
 }
 
 fn services_payload_compatible(payload: &serde_json::Value) -> bool {
@@ -330,7 +328,7 @@ fn services_payload_compatible(payload: &serde_json::Value) -> bool {
         && payload
             .get("capabilities")
             .and_then(|value| value.as_array())
-            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("stock-v1")))
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("stock-vibe-v1")))
 }
 
 /// 判断当前复用中的外部 services 是否仍健康。
@@ -349,7 +347,7 @@ mod tests {
     #[test]
     fn services_health_requires_current_capability() {
         assert!(services_health_response_compatible(
-            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"service\":\"mona-services\",\"capabilities\":[\"stock-v1\"]}"
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"service\":\"mona-services\",\"capabilities\":[\"stock-vibe-v1\"]}"
         ));
         assert!(!services_health_response_compatible(
             "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"

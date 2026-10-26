@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from mona.agent.partners import ConversationMetadata
 
 FILE_MAX_MESSAGES = 2000
+_MODEL_INPUTS_KEY = "_model_user_inputs"
+_MODEL_REQUEST_HEAD_KEY = "_model_request_head"
 
 # Message author fields (multi-agent phase 0 — docs/design/multi-agent-development-guide.md
 # section 5.3). Messages are plain dicts; these keys are stamped on write and
@@ -251,6 +254,11 @@ class Session:
         self.updated_at = datetime.now()
         self.update_ui_summary(msg)
 
+    def remember_model_input(self, message: dict[str, Any], content: Any) -> None:
+        """Keep the model projection separate from the original user message."""
+        if message.get("role") == "user" and message.get("timestamp"):
+            self.metadata.setdefault(_MODEL_INPUTS_KEY, {})[message["timestamp"]] = copy.deepcopy(content)
+
     def update_ui_summary(self, message: dict[str, Any]) -> None:
         """Refresh the cached IM list summary from a newly persisted message.
 
@@ -285,6 +293,7 @@ class Session:
         *,
         max_tokens: int = 0,
         include_timestamps: bool = False,
+        model_view: bool = False,
     ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input.
 
@@ -313,7 +322,9 @@ class Session:
         for message in sliced:
             if message.get("_command"):
                 continue
-            content = message.get("content", "")
+            snapshots = self.metadata.get(_MODEL_INPUTS_KEY, {}) if model_view else {}
+            snapshot = snapshots.get(message.get("timestamp")) if message.get("role") == "user" else None
+            content = copy.deepcopy(snapshot) if snapshot is not None else message.get("content", "")
             role = message.get("role")
             if role == "assistant" and isinstance(content, str):
                 content = _sanitize_assistant_replay_text(content)
@@ -323,12 +334,12 @@ class Session:
             # replays as an empty user message — the assistant's reply then
             # looks like it's responding to nothing.
             media = message.get("media")
-            if role == "user" and isinstance(media, list) and media and isinstance(content, str):
+            if snapshot is None and role == "user" and isinstance(media, list) and media and isinstance(content, str):
                 breadcrumbs = "\n".join(
                     image_placeholder_text(p) for p in media if isinstance(p, str) and p
                 )
                 content = f"{content}\n{breadcrumbs}" if content else breadcrumbs
-            if include_timestamps:
+            if include_timestamps and snapshot is None:
                 content = self._annotate_message_time(message, content)
             if role == "assistant" and isinstance(content, str) and not content.strip():
                 if not any(key in message for key in ("tool_calls", "reasoning_content", "thinking_blocks")):
@@ -379,6 +390,8 @@ class Session:
         self.updated_at = datetime.now()
         self.metadata.pop("_last_summary", None)
         self.metadata.pop("_shared_room_summary", None)
+        self.metadata.pop(_MODEL_INPUTS_KEY, None)
+        self.metadata.pop(_MODEL_REQUEST_HEAD_KEY, None)
         self.metadata.pop(_UI_SUMMARY_KEY, None)
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
@@ -704,7 +717,10 @@ class SessionManager:
             "key": session.key,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
-            "metadata": session.metadata,
+            "metadata": {
+                key: value for key, value in session.metadata.items()
+                if key not in (_MODEL_INPUTS_KEY, _MODEL_REQUEST_HEAD_KEY)
+            },
             "messages": session.messages,
         }
 
@@ -720,6 +736,16 @@ class SessionManager:
         """
         if session.key in self._deleted_keys:
             raise SessionDeletedError("Session has been permanently deleted")
+        if session.last_consolidated >= len(session.messages):
+            session.metadata.pop(_MODEL_REQUEST_HEAD_KEY, None)
+        if _MODEL_INPUTS_KEY in session.metadata:
+            retained = {
+                message.get("timestamp") for message in session.messages[session.last_consolidated:]
+                if message.get("role") == "user"
+            }
+            session.metadata[_MODEL_INPUTS_KEY] = {
+                key: value for key, value in session.metadata[_MODEL_INPUTS_KEY].items() if key in retained
+            }
         path = self._get_session_path(session.key)
         tmp_path: Path | None = None
 
@@ -861,7 +887,10 @@ class SessionManager:
                 "key": stored_key or key,
                 "created_at": created_at,
                 "updated_at": updated_at,
-                "metadata": metadata,
+                "metadata": {
+                    key: value for key, value in metadata.items()
+                    if key not in (_MODEL_INPUTS_KEY, _MODEL_REQUEST_HEAD_KEY)
+                },
                 "messages": messages,
             }
         except Exception as e:

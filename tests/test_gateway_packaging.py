@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 _ALLOWED_SCRIPTS = {
+    "mona/skills/mona-pptx/scripts/extract_source_images.py",
     "mona/skills/pdf/scripts/helpers/convert.py",
     "mona/skills/mona-video/scripts/render.py",
     "mona/skills/mona-video/scripts/nested/storyboard.py",
@@ -75,7 +76,8 @@ def _prepare_fixture(root: Path, *, include_office: bool) -> None:
     for relative in _ALLOWED_SCRIPTS | _EXCLUDED_SCRIPTS | {_ORDINARY_MODULE} | _WEB_DIST_FILES:
         _write_fixture_file(root, relative)
     _write_fixture_file(root, "mona/development/sandbox_node/component.json")
-    _write_fixture_file(root, "mona/skills/mona-video/runtime/remotion.js")
+    _write_fixture_file(root, "mona/skills/mona-video/runtime/mona-player.js")
+    _write_fixture_file(root, "mona/skills/mona-design/provenance.json")
     if include_office:
         _write_fixture_file(root, f"{_OFFICE_ROOT}/manifest.json")
 

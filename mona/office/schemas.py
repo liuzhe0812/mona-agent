@@ -152,24 +152,6 @@ class CapabilitiesQuery(OfficeWireModel):
     document_type: OfficeDocumentType | None = None
     element_type: str | None = Field(default=None, min_length=1)
     operations: list[str] = Field(default_factory=list, max_length=20)
-    preset_content: dict[str, object] | None = None
-    preset_role: str | None = None
-    preset_relation: Literal[
-        "none",
-        "parallel",
-        "sequence",
-        "hierarchy",
-        "matrix",
-        "cycle",
-        "network",
-    ] | None = None
-    used_preset_ids: list[str] = Field(default_factory=list, max_length=100)
-    preset_limit: int = Field(default=3, ge=1, le=5)
-    preset_content_ref: str | None = None
-    preset_family: str | None = None
-    preset_theme: str | None = None
-    preset_scenario: str | None = None
-    template_id: str | None = None
 
 
 class VisualRegion(OfficeWireModel):
@@ -192,10 +174,6 @@ class VisualQuery(OfficeWireModel):
     review_reason: str | None = Field(default=None, min_length=1, max_length=1000)
     preset_id: str | None = None
     preset_content: dict[str, object] | None = None
-    preset_content_ref: str | None = None
-    template_id: str | None = None
-    template_fields: dict[str, str] | None = None
-    template_assets: dict[str, str] | None = None
 
 
 class ReviewQuery(OfficeWireModel):
@@ -402,14 +380,6 @@ class CapabilitiesResult(OfficeWireModel):
     inapplicable_operations: list[str] | None = None
     next_operations: list[str] | None = None
     note: str | None = None
-    designs: list[dict[str, object]] | None = None
-    presets: list[dict[str, object]] | None = None
-    content_ref: str | None = None
-    preset_roles: list[dict[str, object]] | None = None
-    preset_scenarios: list[dict[str, object]] | None = None
-    preset_diagnostics: list[dict[str, object]] | None = None
-    templates: list[dict[str, object]] | None = None
-    template_scenarios: list[dict[str, object]] | None = None
 
 
 class SelectionResult(OfficeWireModel):
@@ -600,7 +570,6 @@ class SlidesOperation(OfficeWireModel):
         "slide_add_svg",
         "slide_compose",
         "slide_add_preset",
-        "slide_add_template",
         "slide_delete_element",
         "slide_add_design",
         "slide_add_path",

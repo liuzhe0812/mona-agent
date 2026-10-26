@@ -102,7 +102,9 @@ class Client:
             assert self.options.tools == []
             assert self.options.allowed_tools == ["mcp__mona_work__mona_tool"]
         elif self.options.mcp_servers:
-            assert self.options.allowed_tools == ["mcp__mona_development__development_collaboration"]
+            tools = self.options.mcp_servers["mona_development"]["instance"]
+            assert set(tools).issubset({"development_collaboration", "development_design_resource"})
+            assert set(self.options.allowed_tools) == {f"mcp__mona_development__{name}" for name in tools}
         assert self.options.env == {} and self.options.permission_mode == "default"
         assert "Skill" in self.options.disallowed_tools
         self.owner = asyncio.current_task()
@@ -160,6 +162,9 @@ class Client:
             return
         if text == "work_tool":
             self.tasks.append(asyncio.create_task(self.call_work_tool()))
+            return
+        if text.startswith("design_resource:"):
+            self.tasks.append(asyncio.create_task(self.call_design_resources(json.loads(text.partition(":")[2]))))
             return
         if text == "hold":
             return
@@ -220,6 +225,30 @@ class Client:
             await self.finish("HOST_RESULT_CONSUMED:" + value.get("result", ""))
         except Exception as exc:
             await self.finish("Host callback failed: " + type(exc).__name__, "error")
+
+    async def call_design_resources(self, paths):
+        wrapped = self.options.mcp_servers["mona_development"]["instance"]["development_design_resource"]
+        name = "mcp__mona_development__development_design_resource"
+        for index, path in enumerate(paths):
+            arguments = {"path": path}
+            permission = await self.options.can_use_tool(name, arguments, None)
+            assert isinstance(permission, Allow)
+            for hook in self.options.hooks.get("PreToolUse", []):
+                for callback in hook.hooks:
+                    decision = await callback({"hook_event_name": "PreToolUse", "tool_name": name,
+                                               "tool_input": arguments}, None, None)
+                    assert decision["hookSpecificOutput"]["permissionDecision"] == "allow"
+            call_id = f"design-{index}"
+            await self.events.put({"type": "assistant", "content": [{"type": "tool_use",
+                "id": call_id, "name": name, "input": arguments}]})
+            result = await wrapped.handler(arguments)
+            trace({"method": "design-resource-result", "nativeId": self.id, "result": result})
+            await self.events.put({"type": "user", "content": [{"type": "tool_result",
+                "tool_use_id": call_id, "content": result["content"], "is_error": result.get("isError", False)}]})
+            if result.get("isError"):
+                await self.finish("Design resource failed", "error")
+                return
+        await self.finish("DESIGN_RESOURCE_READ")
 
     async def call_work_tool(self):
         wrapped = self.options.mcp_servers["mona_work"]["instance"]["mona_tool"]

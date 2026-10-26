@@ -162,12 +162,10 @@ def test_video_tool_loads_in_director_with_legacy_permissions_without_subscripti
     registered = ToolLoader(test_classes=discovered).load(ToolContext(config=ToolsConfig(), workspace=str(workspace), agent_kind="video"), registry)
     assert registered == ["video"]
     registry.set_allowed_tool_names(set(effective.allowed_tools or []))
-    registry.set_subscription_access(False)
     context = RequestContext(channel="websocket", chat_id="bound-chat", metadata={"agent_kind": "video"})
     bind_capability_context(context)
     registry.get("video").set_context(context)
     assert registry.is_visible("video")
-    assert not registry.requires_subscription_check
 
 
 def test_video_tool_stays_hidden_outside_director_context(tool_workspace):
@@ -231,22 +229,22 @@ async def test_auto_video_workbench_inspects_and_selects_an_available_style(
         assert isinstance(inspected, str)
         current = json.loads(inspected)
         assert current["stylePreference"] == "auto"
-        dashi_style = next(style for style in current["availableStyles"] if style["id"] == "dashi-flow")
-        assert {"id", "name", "description", "mode"} <= set(dashi_style)
+        huashu_style = next(style for style in current["availableStyles"] if style["id"] == "huashu-whiteboard")
+        assert {"id", "name", "description", "mode"} <= set(huashu_style)
 
         selected = await tool.execute(
             "style", "automatic-style", plan_revision=current["planRevision"],
-            style_id=dashi_style["id"],
+            style_id=huashu_style["id"],
         )
 
     assert isinstance(selected, str)
     result = json.loads(selected)
     assert result["ok"] is True
-    assert result["style"]["id"] == "dashi-flow"
+    assert result["style"]["id"] == "huashu-whiteboard"
     assert result["planRevision"] == current["planRevision"] + 1
     saved = server._load_video_meta(tmp_path / "video_projects" / "automatic-style")
     assert saved["stylePreference"] == "auto"
-    assert saved["templateId"] == "dashi-flow"
+    assert saved["templateId"] == "huashu-whiteboard"
     assert saved["approvedPlanRevision"] is None
 
 
@@ -377,14 +375,13 @@ async def test_director_agent_plans_then_waits_for_frontend_confirmation_through
             LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="inspect", name="video", arguments={"action": "inspect", "name": "automatic"})]),
             LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="plan", name="video", arguments={"action": "plan", "name": "automatic", "scenes": [{"title": "Agent scene", "duration": 3, "visual": "Show two choices", "animation": "Choices move into view as they are introduced", "narration": "", "assets": []}]})]),
             LLMResponse(content="请在导演台确认方案", finish_reason="stop"),
-            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="draft", name="write_file", arguments={"path": "video_projects/automatic/drafts/scene_01.tsx", "content": 'export default function Scene() { return <div>Prepared by the Agent</div>; }'})]),
-            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="sync", name="video", arguments={"action": "sync", "name": "automatic", "scene_index": 1, "plan_revision": 1, "source_file": "drafts/scene_01.tsx"})]),
+            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="draft", name="write_file", arguments={"path": "video_projects/automatic/drafts/film.html", "content": '<!doctype html><html><head></head><body><div data-composition-id="film" data-width="1920" data-height="1080"><div id="subject">Prepared by the Agent</div></div><script>const tl=gsap.timeline({paused:true});tl.to("#subject",{x:200,duration:3});window.__timelines={film:tl};</script></body></html>'})]),
+            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[ToolCallRequest(id="sync", name="video", arguments={"action": "sync", "name": "automatic", "plan_revision": 1, "source_file": "drafts/film.html"})]),
             LLMResponse(content="画面已准备", finish_reason="stop"),
         ])
         loop = DocumentAgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test", agent_kind="video", services_port=service.port)
         effective = resolve_effective_agent_config(AgentDefinition(id="mona", display_name="Mona"), AgentUserConfig(granted_tools=["read_file", "write_file", "exec"]))
         loop.tools.set_allowed_tool_names(set(effective.allowed_tools or []))
-        loop.tools.set_subscription_access(False)
         session = loop.sessions.get_or_create("websocket:director")
         session.metadata["agent_kind"] = "video"
         loop._set_tool_context("websocket", "director", session=session)

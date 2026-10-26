@@ -1,4 +1,4 @@
-"""Agent tool for the active Mona flowchart canvas."""
+"""Agent tool for the active Mona flowchart or mindmap canvas."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class CanvasToolConfig(Base):
                 "ops": ArraySchema(ObjectSchema({}, additional_properties=True), max_items=50),
             },
             description=(
-                "Validated Mona flowchart patch with baseHash, baseDocumentHash, and ops. "
+                "Mona canvas patch with baseHash, baseDocumentHash, and ops for the open canvas kind. "
                 "Required for apply. Send an object, not a JSON string."
             ),
             required=["ops"],
@@ -89,12 +89,15 @@ class CanvasTool(Tool, ContextAware):
 
     name = "canvas"
     description = (
-        "Open, inspect, edit, and export the active Mona flowchart canvas. "
-        "Use open once to obtain stable object IDs and both hashes, then apply a minimal patch. "
+        "Open, inspect, edit, and export the active Mona flowchart or mindmap canvas. "
+        "Call canvas with action='open' to obtain kind, object IDs, and both hashes, "
+        "then apply a minimal patch using the protocol for that kind. "
+        "Mindmap uses addChild/insertSibling/updateTopic/removeNode/moveNode, not replaceGraph. "
         "For a complex new diagram, submit complete module batches with the latest hashes "
         "so each real edit is visible in the conversation sidebar. "
         "Inspect with include_visual after generation or layout changes so the actual rendered canvas "
-        "is reviewed. The editor rejects stale hashes and returns exact quality issues."
+        "is reviewed. The editor rejects stale hashes and returns exact quality issues. "
+        "If unavailable, report the canvas incomplete; do not substitute an inline widget."
     )
 
     @classmethod

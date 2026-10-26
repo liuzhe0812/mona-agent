@@ -804,6 +804,7 @@ export function FlowchartDocumentEditor({
             result = {
               ok: true,
               status: "ready",
+              kind: "flowchart",
               canvasId: note.id,
               editorInstanceId,
               document: cloneFlowchartDocument(current),

@@ -81,10 +81,6 @@ def _local_component_available(component: str) -> bool:
             / CUA_DRIVER_VERSION
             / executable
         ).is_file()
-    if component == "westock":
-        from mona.services.stock.westock_runtime import _runtime_paths
-
-        return _runtime_paths() is not None
     return False
 
 

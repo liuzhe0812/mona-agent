@@ -202,7 +202,142 @@ async function inspectError(bridge: TestBridgeLike, sessionId: string, requestId
 }
 
 describe('Slides Mona entry', () => {
-  it('filters scenarios and inherits the successful scene without rebuilding existing pages', async () => {
+  it('atomically creates populated native pages at the end and returns reusable IDs with one revision and undo', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'atomic-content-success'
+    let version = { editorEpoch: 'atomic-content-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const initial = await inspect(bridge, sessionId, version, 'atomic-content-initial', { mode: 'slides' })
+    const anchor = String((initial.slides as Array<{ id: string }>)[0]!.id)
+    const seed = await apply(bridge, sessionId, version, 'atomic-content-seed', [{ op: 'slide_add_text', payload: { slideId: anchor, text: '保留旧页', x: 80, y: 80, width: 500, height: 80 } }])
+    version = seed.version as typeof version
+    const capture = async () => {
+      bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+      const message = await waitForPost((candidate) => candidate.type === 'office_checkpoint' && (candidate.version as typeof version)?.modelRevision === version.modelRevision)
+      return openSlidesDocument(message.file as ArrayBuffer)
+    }
+    const before = await capture()
+    const operations = [
+      { op: 'slide_add', payload: { slideId: anchor, content: { columns: [1, 1], rows: [1, 4], gap: 24, items: [
+        { type: 'text', column: 0, row: 0, columnSpan: 2, text: '新增原生页', font: { fontSize: 30 } },
+        { type: 'shape', column: 0, row: 1, shape: 'rect', fillColor: '#D9EAF0' },
+        { type: 'chart', column: 1, row: 1, kind: 'bar', categories: ['Q1', 'Q2'], series: [{ name: '收入', values: [12, 18] }], style: { seriesColors: ['#25856B'], textColor: '#172621' } },
+      ] } } },
+      { op: 'slide_add', payload: { slideId: anchor, content: { columns: [1], rows: [1], items: [
+        { type: 'text', column: 0, row: 0, text: '第二个新增页' },
+      ] } } },
+    ]
+    const expectedVersion = version
+    const result = await apply(bridge, sessionId, version, 'atomic-content-create', operations)
+    expect(result).toEqual(expect.objectContaining({ ok: true, version: { ...version, modelRevision: version.modelRevision + 1 } }))
+    version = result.version as typeof version
+    const createdSlides = result.createdSlides as Array<{ id: string; index: number }>
+    const createdElements = result.createdElements as Array<{ id: string; slideId: string; type: string; text: string; chart?: unknown }>
+    expect(createdSlides).toHaveLength(2)
+    expect(createdSlides.map((slide) => slide.index)).toEqual([1, 2])
+    expect(createdElements).toHaveLength(4)
+    const title = createdElements.find((element) => element.text === '新增原生页')!
+    const chart = createdElements.find((element) => element.type === 'chart')!
+    expect(title.slideId).toBe(createdSlides[1]!.id)
+    expect(chart.slideId).toBe(title.slideId)
+    expect(chart.chart).toEqual(expect.objectContaining({ textStyle: expect.objectContaining({ textColor: '#172621' }) }))
+    expect(result.changedTargets).toEqual(expect.arrayContaining([anchor, ...createdSlides.map((slide) => slide.id)]))
+    expect(result.pendingVisualSlideIds).toEqual(expect.arrayContaining(createdSlides.map((slide) => slide.id)))
+    const saved = await capture()
+    expect(saved.opened.archive.readText(before.opened.deck.slides[0]!.path)).toBe(before.opened.archive.readText(before.opened.deck.slides[0]!.path))
+    const chartPath = [...saved.opened.archive.entries.keys()].find((path) => /^ppt\/charts\/chart\d+\.xml$/.test(path))!
+    expect(saved.opened.archive.readText(chartPath)).toContain('25856B')
+    expect(saved.opened.archive.readText(chartPath)).toContain('18')
+
+    const replayStart = harness.posts.length
+    bridge.emit({ type: 'office_command', command: { sessionId, operationId: 'atomic-content-create', expectedVersion, operations } })
+    const replay = await waitForPost((message) => harness.posts.indexOf(message) >= replayStart && message.type === 'office_command_result')
+    expect(resultOf(replay)).toEqual(result)
+    const stale = await apply(bridge, sessionId, expectedVersion, 'atomic-content-expired', operations)
+    expect(stale).toEqual(expect.objectContaining({ ok: false, currentVersion: version, error: expect.objectContaining({ code: 'VERSION_CONFLICT' }) }))
+    expect((await inspect(bridge, sessionId, version, 'atomic-content-replayed', { mode: 'slides' })).slides).toHaveLength(3)
+
+    const edited = await apply(bridge, sessionId, version, 'atomic-content-edit', [{ op: 'slide_set_text', payload: { slideId: title.slideId, elementId: title.id, text: '按真实 ID 继续修改' } }])
+    expect(edited.ok).toBe(true)
+    version = edited.version as typeof version
+    expect((await inspect(bridge, sessionId, version, 'atomic-content-edited', { mode: 'search', text: '按真实 ID 继续修改' })).matches).toHaveLength(1)
+    const api = (window as unknown as { slidesApi: SlidesApi }).slidesApi
+    await api.undo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    expect((await inspect(bridge, sessionId, version, 'atomic-content-undo-edit', { mode: 'search', text: '新增原生页' })).matches).toHaveLength(1)
+    await api.undo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    const undone = await inspect(bridge, sessionId, version, 'atomic-content-undo-create', { mode: 'slides' })
+    expect(undone.slides).toHaveLength(1)
+    expect((await inspect(bridge, sessionId, version, 'atomic-content-old-page', { mode: 'search', text: '保留旧页' })).matches).toHaveLength(1)
+    await api.redo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    expect((await inspect(bridge, sessionId, version, 'atomic-content-redo-create', { mode: 'slides' })).slides).toHaveLength(3)
+  })
+
+  it('rolls back populated pages for later native and style failures and enforces content budgets before mutation', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'atomic-content-failure'
+    let version = { editorEpoch: 'atomic-content-failure-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const initial = await inspect(bridge, sessionId, version, 'atomic-failure-initial', { mode: 'slides' })
+    const slideId = String((initial.slides as Array<{ id: string }>)[0]!.id)
+    const content = { columns: [1], rows: [1], items: [{ type: 'text', column: 0, row: 0, text: '失败时不能留下' }] }
+    const chart = { type: 'chart', column: 0, row: 0, kind: 'bar', categories: ['A'], series: [{ name: '数据', values: [1] }], style: { textColor: '#172621' } }
+    const shape = { type: 'shape', column: 0, row: 0, shape: 'rect', fillColor: '#D9EAF0' }
+    const cases = [
+      { id: 'later-native', operations: [
+        { op: 'slide_add', payload: { slideId, content } },
+        { op: 'slide_add', payload: { slideId, content } },
+        { op: 'slide_apply_txn', payload: { ops: [{ op: 'missingNativeOperation', target: { slide: slideId } }] } },
+      ] },
+      { id: 'later-style', operations: [
+        { op: 'slide_add', payload: { slideId, content } },
+        { op: 'slide_add', payload: { slideId, content: { ...content, items: [{ ...chart, style: { unsupported: true } }] } } },
+      ] },
+      { id: 'content-data', operations: [{ op: 'slide_add', payload: { slideId, content: { ...content, items: [{ ...chart, series: [{ name: '数据', values: [] }] }] } } }] },
+      { id: 'content-slide-id', operations: [{ op: 'slide_add', payload: { slideId, content: { ...content, slideId } } }] },
+      { id: 'content-element-id', operations: [{ op: 'slide_add', payload: { slideId, content: { ...content, items: [{ ...shape, elementId: 'temporary-id' }] } } }] },
+      { id: 'unknown-anchor', operations: [{ op: 'slide_add', payload: { slideId: 'unknown-slide', content } }] },
+      { id: 'add-budget', operations: [{ op: 'slide_add', payload: { slideId, content: { ...content, items: Array.from({ length: 50 }, () => shape) } } }] },
+      { id: 'style-budget', operations: [{ op: 'slide_add', payload: { slideId, content: { ...content, items: [...Array.from({ length: 48 }, () => shape), chart] } } }] },
+      { id: 'design-no-bypass', operations: [
+        { op: 'slide_add_design', payload: { slideId, design: 'items', region: { x: 20, y: 20, width: 320, height: 220 }, content: { title: '', items: [{ label: '不能扩容' }] } } },
+        { op: 'slide_add', payload: { slideId, content: { ...content, items: [...Array.from({ length: 48 }, () => shape), chart] } } },
+      ] },
+    ]
+    for (const test of cases) {
+      const result = await apply(bridge, sessionId, version, `atomic-failure-${test.id}`, test.operations)
+      expect(result, test.id).toEqual(expect.objectContaining({ ok: false, currentVersion: version, changedTargets: [] }))
+      const pages = await inspect(bridge, sessionId, version, `atomic-failure-pages-${test.id}`, { mode: 'slides' })
+      expect(pages.slides, test.id).toEqual(initial.slides)
+      expect((await inspect(bridge, sessionId, version, `atomic-failure-review-${test.id}`, { mode: 'review' })).pendingSlideIds).toEqual([])
+    }
+    const boundary = await apply(bridge, sessionId, version, 'atomic-content-budget-50', [{ op: 'slide_add', payload: { slideId, content: { ...content, items: [...Array.from({ length: 47 }, () => shape), chart] } } }])
+    expect(boundary.ok, JSON.stringify(boundary.error)).toBe(true)
+    expect(boundary.createdSlides).toHaveLength(1)
+    expect(boundary.createdElements).toHaveLength(48)
+    expect(boundary.version).toEqual({ ...version, modelRevision: 1 })
+    version = boundary.version as typeof version
+    const api = (window as unknown as { slidesApi: SlidesApi }).slidesApi
+    await api.undo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    expect((await inspect(bridge, sessionId, version, 'atomic-failure-undo', { mode: 'slides' })).slides).toEqual(initial.slides)
+  })
+
+  it('keeps explicit native drawing without recommending or inheriting scene designs', async () => {
     vi.resetModules()
     harness.posts = []; harness.cleanups = []; harness.bridge = undefined
     ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
@@ -215,9 +350,15 @@ describe('Slides Mona entry', () => {
     await waitForPost((message) => message.type === 'office_editor_ready')
     const pages = await inspect(bridge, sessionId, version, 'scenario-pages', { mode: 'slides' })
     const firstId = String((pages.slides as Array<Record<string, unknown>>)[0]!.id)
-    const catalog = await inspect(bridge, sessionId, version, 'scenario-catalog', { mode: 'capabilities', presetScenario: 'education-training' })
-    expect(catalog.presetScenarios).toHaveLength(12)
-    expect((catalog.presets as Array<{scenarios: string[]}>).every((preset) => preset.scenarios.includes('education-training'))).toBe(true)
+    const catalog = await inspect(bridge, sessionId, version, 'scenario-catalog', { mode: 'capabilities' })
+    expect(catalog).not.toHaveProperty('presetScenarios')
+    expect(catalog).not.toHaveProperty('presets')
+    expect(catalog).not.toHaveProperty('templates')
+    const missing = await apply(bridge, sessionId, version, 'scenario-missing-preset', [{ op: 'slide_add_preset', payload: { slideId: firstId, content: { title: '不自动选版' } } }])
+    expect(missing.ok).toBe(false)
+    expect(JSON.stringify(missing.error)).toContain('presetId')
+    const automatic = await apply(bridge, sessionId, version, 'scenario-auto-preset', [{ op: 'slide_add_preset', payload: { slideId: firstId, presetId: 'auto', content: { title: '不自动选版' } } }])
+    expect(automatic.ok).toBe(false)
     const first = await apply(bridge, sessionId, version, 'scenario-first', [{ op: 'slide_add_preset', payload: {
       slideId: firstId, presetId: 'education-practice', content: { title: '练习：复核证据', scenario: 'education-training', relation: 'sequence',
         nodes: ['观察', '练习', '检查'], items: ['阅读原始资料', '独立解释结论', '复核数字和口径'], takeaway: '保留判断依据' },
@@ -232,7 +373,7 @@ describe('Slides Mona entry', () => {
     const second = await apply(bridge, sessionId, version, 'scenario-second', [{op:'slide_add_preset',payload:{slideId:secondId,
       presetId:'light-transition-statement',content:{title:'练习之后，检查依据',summary:'每个结论对应证据',takeaway:'逐项复核'}}}])
     expect(second.ok, JSON.stringify(second.error)).toBe(true)
-    expect((second.presetPages as Array<{scenario:string}>)[0]!.scenario).toBe('education-training')
+    expect((second.presetPages as Array<{scenario:string}>)[0]!.scenario).toBeUndefined()
     version = second.version as typeof version
     const after = await inspect(bridge, sessionId, version, 'scenario-after', {mode:'slides',slideId:firstId})
     expect((after.slides as Array<{id:string}>).find((slide) => slide.id === firstId))
@@ -836,20 +977,16 @@ describe('Slides Mona entry', () => {
     expect((heroPage.presetPages as Array<Record<string, unknown>>)[0]!.pendingChartStyles).toEqual([])
 
     const processId = await addSlideAfter(heroId, 'preset-add-process')
-    const selection = await inspect(bridge, sessionId, version, 'preset-select-process', {
-      mode: 'capabilities', operations:['slide_add_preset'], presetRelation:'sequence', presetRole:'process',
-      presetContent: {
+    const processContent = {
         title: '实施路径分三步推进', summary: '每个阶段都有明确验收口径，避免返工',
+        relation: 'sequence',
         nodes: ['输入', '判断', '执行'],
         items: ['先冻结输入范围', '再验证判断口径', '最后按执行结果复盘'],
-      },
-    })
-    expect(selection.contentRef).toMatch(/^preset-content:/)
-    expect((selection.presets as Array<Record<string,unknown>>).every((preset) => preset.relation === 'sequence')).toBe(true)
+    }
     const processPage = await apply(bridge, sessionId, version, 'preset-process', [{
       op: 'slide_add_preset', payload: {
         slideId: processId, presetId: 'light-process-map',
-        contentRef: selection.contentRef,
+        content: processContent,
       },
     }])
     expect(processPage.ok).toBe(true)
@@ -893,7 +1030,7 @@ describe('Slides Mona entry', () => {
     expect(xml).toContain('<c:gapWidth val="60"/>')
   })
 
-  it('supports explicitly requested basic drafts, applies brand charts and inherits the deck theme', async () => {
+  it('supports explicitly requested basic drafts and applies only each page supplied brand settings', async () => {
     vi.resetModules()
     harness.posts = []
     harness.cleanups = []
@@ -924,7 +1061,7 @@ describe('Slides Mona entry', () => {
     version = added.version as typeof version
     const listed = await inspect(bridge,sessionId,version,'auto-slides-2',{mode:'slides'})
     const secondId = String((listed.slides as Array<Record<string,unknown>>)[1]!.id)
-    const following = await apply(bridge,sessionId,version,'auto-following',[{op:'slide_add_preset',payload:{slideId:secondId,content:workflowFixture.pages[1]!.content}}])
+    const following = await apply(bridge,sessionId,version,'auto-following',[{op:'slide_add_preset',payload:{slideId:secondId,presetId:'auto-content',content:{...workflowFixture.pages[1]!.content,accentColor:'#25856B'}}}])
     expect(following.ok,JSON.stringify(following.error)).toBe(true)
     version = following.version as typeof version
     bridge.emit({type:'office_checkpoint_request',sessionId,version})
@@ -935,11 +1072,8 @@ describe('Slides Mona entry', () => {
     for (const fact of workflowFixture.pages[0]!.content.facts!) expect(allXml.join('')).toContain(fact.text)
     const chartPath = [...reopened.opened.archive.entries.keys()].find((name)=>/^ppt\/charts\/chart\d+\.xml$/.test(name))!
     expect(reopened.opened.archive.readText(chartPath)).toContain('D85A00')
-    expect(reopened.opened.archive.readText(reopened.opened.deck.slides[1]!.path)).toContain('D85A00')
-    const rejected = await inspect(bridge,sessionId,version,'auto-diagnostics',{mode:'capabilities',operations:['slide_add_preset'],
-      presetContent:{title:'不能猜关系',nodes:['甲','乙'],items:['说明一','说明二']}})
-    expect(rejected.presets).toEqual([])
-    expect(JSON.stringify(rejected.presetDiagnostics)).toContain('relation')
+    expect(reopened.opened.archive.readText(reopened.opened.deck.slides[1]!.path)).toContain('25856B')
+    expect(reopened.opened.archive.readText(reopened.opened.deck.slides[1]!.path)).not.toContain('D85A00')
   })
 
   it('continues with styled native charts after a preset mismatch and rolls back invalid styles', async () => {
@@ -958,11 +1092,11 @@ describe('Slides Mona entry', () => {
     const initial = await inspect(bridge, sessionId, version, 'native-initial', { mode: 'slides' })
     const slideId = String((initial.slides as Array<Record<string, unknown>>)[0]!.id)
     const content = { title: '复杂关联不应被模板限制', relation: 'network', nodes: ['甲', '乙'], items: ['说明一', '说明二'] }
-    const candidates = await inspect(bridge, sessionId, version, 'native-candidates', { mode: 'capabilities', operations: ['slide_add_preset'], presetContent: content })
-    expect(candidates.presets).toEqual([])
-    const mismatch = await apply(bridge, sessionId, version, 'native-mismatch', [{ op: 'slide_add_preset', payload: { slideId, content } }])
+    const candidates = await inspect(bridge, sessionId, version, 'native-candidates', { mode: 'capabilities', operations: ['slide_add_preset'] })
+    expect(candidates).not.toHaveProperty('presets')
+    const mismatch = await apply(bridge, sessionId, version, 'native-mismatch', [{ op: 'slide_add_preset', payload: { slideId, presetId: 'light-process-map', content } }])
     expect(mismatch.ok).toBe(false)
-    expect(JSON.stringify(mismatch.error)).toContain('slide_compose')
+    expect(JSON.stringify(mismatch.error)).toContain('network')
     const empty = await inspect(bridge, sessionId, version, 'native-empty', { mode: 'slides' })
     expect((empty.slides as Array<{ elements: unknown[] }>)[0]!.elements).toEqual([])
 

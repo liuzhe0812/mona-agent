@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "description": "Expose bounded authenticated A-share name/code search using native Eastmoney lookup; supplement unavailable upstream with fixed Tencent security suggestions, preserving source and verified exchange identity.",
+  "files": [
+    {
+      "path": "agent/api_server.py",
+      "sha256": "eae7ff60e4e5878bdb388bc8258875d8e962dfe48e4baa99bf1503c9bc24c259",
+      "replacements": [
+        {
+          "before": "from src.api.mona_workbench import register_mona_workbench  # noqa: E402\nregister_mona_workbench(app)\nfrom src.api.mona_workbench_market import register_mona_workbench_market  # noqa: E402\nregister_mona_workbench_market(app)\n",
+          "after": "from src.api.mona_workbench import register_mona_workbench  # noqa: E402\nregister_mona_workbench(app)\nfrom src.api.mona_workbench_market import register_mona_workbench_market  # noqa: E402\nregister_mona_workbench_market(app)\nfrom src.api.mona_symbol_search import register_mona_symbol_search  # noqa: E402\nregister_mona_symbol_search(app)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/symbol_search_tool.py",
+      "sha256": "830ddbe4280a96f40d085adb4423571da08571cd5717d049a51b71492d63cd96",
+      "replacements": [
+        {
+          "before": "    rows = _eastmoney_data_rows(payload)\n",
+          "after": "    table = payload.get(\"QuotationCodeTable\") if isinstance(payload, dict) else None\n    if not isinstance(table, dict) or not isinstance(table.get(\"Data\"), list):\n        return [], \"eastmoney search returned an invalid table\"\n\n    rows = _eastmoney_data_rows(payload)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/backtest/loaders/_http.py",
+      "sha256": "4e3a0c3b5e5e397fd00ecad14e63b8a26fc0eb3270b63b3742af79e8f32d8f46",
+      "replacements": [
+        {
+          "before": "    timeout: float = 15.0,\n) -> requests.Response:\n",
+          "after": "    timeout: float = 15.0,\n    allow_redirects: bool = True,\n) -> requests.Response:\n",
+          "count": 1
+        },
+        {
+          "before": "    return session.get(url, params=params, headers=merged_headers, timeout=timeout)\n",
+          "after": "    return session.get(url, params=params, headers=merged_headers, timeout=timeout, allow_redirects=allow_redirects)\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {
+    "agent/src/api/mona_symbol_search.py": "\"\"\"Hosted A-share lookup over native symbol search and a fixed Tencent supplement.\"\"\"\nimport json\nimport logging\nimport os\nimport re\n\nfrom fastapi import Depends, FastAPI, HTTPException, Request\nfrom starlette.concurrency import run_in_threadpool\nfrom src.api.security import require_auth\nfrom src.tools.symbol_search_tool import _search_eastmoney\nfrom backtest.loaders._http import throttled_get\n\n_LOG = logging.getLogger(__name__)\n_EXCHANGES = ((\"SH\", r\"(?:600|601|603|605|688)[0-9]{3}\"),\n              (\"SZ\", r\"(?:000|001|002|003|300|301)[0-9]{3}\"),\n              (\"BJ\", r\"(?:43|83|87|92)[0-9]{4}\"))\n\n\ndef _candidates(rows):\n    result, seen = [], set()\n    for row in rows:\n        symbol, name = row.get(\"symbol\", \"\"), row.get(\"name\")\n        if not isinstance(symbol, str) or not isinstance(name, str) or not 1 <= len(name.strip()) <= 128:\n            continue\n        code, _, suffix = symbol.partition(\".\")\n        exchange = next((venue for venue, pattern in _EXCHANGES if re.fullmatch(pattern, code)), None)\n        # Native Eastmoney maps market 0 to SZ, including Beijing equities.\n        if exchange == \"BJ\" and suffix == \"SZ\" and row.get(\"type\") in {\"北A\", \"京A\"}:\n            suffix = \"BJ\"\n        if exchange is None or suffix != exchange:\n            continue\n        symbol = f\"{code}.{exchange}\"\n        if symbol not in seen:\n            seen.add(symbol)\n            result.append({\"symbol\": symbol, \"name\": name.strip()})\n    return result[:10]\n\n\ndef _tencent_search(query):\n    response = throttled_get(\"https://smartbox.gtimg.cn/s3/\", host_key=\"tencent\",\n                             min_interval=1.0, params={\"q\": query, \"t\": \"gp\"}, timeout=8, allow_redirects=False)\n    response.raise_for_status()\n    if len(response.content) > 128_000:\n        raise ValueError(\"search response too large\")\n    match = re.fullmatch(r'\\s*v_hint=(\"[^\\r\\n]*\");?\\s*', response.content.decode(\"utf-8\"))\n    if match is None:\n        raise ValueError(\"unexpected search response\")\n    content = json.loads(match[1])\n    rows = []\n    for item in content.split(\"^\"):\n        parts = item.split(\"~\")\n        if len(parts) >= 5 and parts[0] in {\"sh\", \"sz\", \"bj\"} and parts[4] == \"GP-A\":\n            rows.append({\"symbol\": f\"{parts[1]}.{parts[0].upper()}\", \"name\": parts[2]})\n    return rows\n\n\ndef search_symbols(query):\n    rows, status = _search_eastmoney(query)\n    source = \"eastmoney\"\n    if status != \"ok\":\n        _LOG.warning(\"Native Eastmoney symbol search unavailable; using Tencent\")\n        try:\n            rows = _tencent_search(query)\n            source = \"tencent\"\n        except Exception as exc:\n            _LOG.warning(\"Symbol search unavailable (%s)\", type(exc).__name__)\n            raise HTTPException(502, \"symbol search unavailable\") from None\n    return {\"query\": query, \"candidates\": _candidates(rows), \"source\": source}\n\n\ndef register_mona_symbol_search(app: FastAPI):\n    if os.environ.get(\"VIBE_TRADING_HOSTED\") != \"1\":\n        return\n\n    @app.get(\"/mona/symbol-search\", dependencies=[Depends(require_auth)])\n    async def search(request: Request, q: str):\n        if set(request.query_params) != {\"q\"} or len(request.query_params.getlist(\"q\")) != 1:\n            raise HTTPException(422, \"unsupported search fields\")\n        q = q.strip()\n        if not 1 <= len(q) <= 40 or any(ord(char) < 32 for char in q):\n            raise HTTPException(422, \"invalid search query\")\n        return await run_in_threadpool(search_symbols, q)\n"
+  }
+}

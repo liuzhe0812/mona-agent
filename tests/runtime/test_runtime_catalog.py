@@ -30,6 +30,7 @@ def _archive(
     dependencies: list[str] | None = None,
     entrypoints: dict[str, str] | None = None,
     python_requirements: bool = False,
+    python_environment: str = "official",
 ) -> bytes:
     dependencies = dependencies or []
     entrypoints = entrypoints or {}
@@ -48,6 +49,7 @@ def _archive(
                     "pythonRequirements": "requirements.lock",
                     "pythonWheelhouse": "wheels",
                     "healthImports": ["numpy"],
+                    "pythonEnvironment": python_environment,
                 }
             )
         bundle.writestr(
@@ -66,6 +68,11 @@ class FakePythonEnvironmentBuilder:
     def __init__(self, error: BaseException | None = None) -> None:
         self.calls: list[list[str]] = []
         self.error = error
+        self.environments: list[str] = []
+
+    def for_environment(self, name: str):
+        self.environments.append(name)
+        return self
 
     async def ensure(self, refs: list[str]) -> None:
         self.calls.append(refs)
@@ -102,7 +109,8 @@ def allow_test_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(download_module, "validate_url_target", lambda _url: (True, ""))
 
 
-async def test_installs_dependency_closure_from_official_catalog(tmp_path: Path) -> None:
+@pytest.mark.parametrize("environment", ["official", "stock-vibe"])
+async def test_installs_dependency_closure_from_official_catalog(tmp_path: Path, environment: str) -> None:
     python_payload = _archive(
         tmp_path / "python.zip",
         "python-base",
@@ -117,6 +125,7 @@ async def test_installs_dependency_closure_from_official_catalog(tmp_path: Path)
         kind="python-pack",
         dependencies=["python-base@3.12"],
         python_requirements=True,
+        python_environment=environment,
     )
     catalog = {
         "schemaVersion": 1,
@@ -162,6 +171,7 @@ async def test_installs_dependency_closure_from_official_catalog(tmp_path: Path)
     assert installer.store.active("python-base")[0].version == "3.12"  # type: ignore[index]
     assert installer.store.active("scientific")[0].version == "1"  # type: ignore[index]
     assert environment_builder.calls == [["python-base@3.12", "scientific@1"]]
+    assert environment_builder.environments == [environment]
 
     python_root = installer.store.active("python-base")[1]  # type: ignore[index]
     (python_root / "bin" / "python.exe").unlink()

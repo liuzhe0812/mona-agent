@@ -49,6 +49,29 @@ describe("SettingsView advanced features section", () => {
     api.fetchSettings.mockRejectedValue(new Error("settings unavailable"));
   });
 
+  it("opens account independently of general settings and keeps billing out of the navigation", async () => {
+    const onOpenLogin = vi.fn();
+    render(<SettingsView {...props} initialSection="account" onOpenLogin={onOpenLogin} />);
+
+    expect(screen.getByRole("heading", { name: "Account" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Account", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "Balance & billing" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "登录或注册" }));
+    expect(onOpenLogin).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "General", exact: true }));
+    expect(screen.queryByRole("button", { name: "登录或注册" })).not.toBeInTheDocument();
+    await screen.findByText("settings unavailable");
+  });
+
+  it("routes the existing billing destination into account", async () => {
+    render(<SettingsView {...props} initialSection="billing" />);
+
+    expect(screen.getByRole("button", { name: "Account", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "登录或注册" })).toBeInTheDocument();
+    await waitFor(() => expect(api.fetchSettings).toHaveBeenCalledWith("tok"));
+  });
+
   it("keeps the provider layout visible and edits the decision model only in the shared settings dialog", async () => {
     const payload = {
       agent: { model: "", provider: "", model_preset: "default", timezone: "UTC", tool_hint_max_length: 40 },
@@ -56,7 +79,7 @@ describe("SettingsView advanced features section", () => {
       providers: [],
       chat_providers: [],
       runtime: { workspace_path: "" },
-      web_search: { provider: "anysearch", max_results: 5, timeout: 30 },
+      web_search: { provider: "anysearch", max_results: 5, timeout: 30, providers: [] },
       image_generation: { enabled: false, provider: "", model: "", default_aspect_ratio: "1:1", default_image_size: "1K", max_images_per_turn: 4, model_parameters: {}, providers: [] },
       video_generation: { enabled: false, provider: "", model: "", default_aspect_ratio: "16:9", default_duration: 5, model_parameters: {}, providers: [] },
       tts: { provider: "edge", voice: "", api_base: null, model: null },
@@ -70,7 +93,7 @@ describe("SettingsView advanced features section", () => {
     render(<SettingsView {...props} initialSection="models_providers" />);
 
     const openJev = await screen.findByRole("button", { name: "决策模型" });
-    expect(screen.getByRole("heading", { name: "模型供应商" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "模型来源" })).toBeVisible();
     expect(screen.getByRole("button", { name: "添加供应商" })).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
@@ -86,7 +109,7 @@ describe("SettingsView advanced features section", () => {
     }));
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByRole("heading", { name: "模型供应商" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "模型来源" })).toBeVisible();
 
     fireEvent.click(openJev);
     expect(screen.getByLabelText("模型")).toHaveValue("jev-preview");
@@ -114,7 +137,7 @@ describe("SettingsView advanced features section", () => {
       providers: [],
       chat_providers: [],
       runtime: { workspace_path: "" },
-      web_search: { provider: "anysearch", max_results: 5, timeout: 30 },
+      web_search: { provider: "anysearch", max_results: 5, timeout: 30, providers: [] },
       image_generation: { enabled: false, provider: "", model: "", default_aspect_ratio: "1:1", default_image_size: "1K", max_images_per_turn: 4, model_parameters: {}, providers: [] },
       video_generation: { enabled: false, provider: "", model: "", default_aspect_ratio: "16:9", default_duration: 5, model_parameters: {}, providers: [] },
       tts: { provider: "edge", voice: "", api_base: null, model: null },
@@ -185,6 +208,11 @@ describe("SettingsView advanced features section", () => {
     tauri.checkForUpdates.mockRejectedValue(new Error("update server unavailable"));
 
     render(<SettingsView {...props} initialSection="about" />);
+
+    expect(screen.queryByText("Pro 功能", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText("机器码", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText("授权", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "选择文件" })).not.toBeInTheDocument();
 
     const checkButton = await screen.findByRole("button", { name: "立即检查" });
     fireEvent.click(checkButton);

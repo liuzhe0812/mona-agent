@@ -45,7 +45,7 @@ def with_skill_previews(skill_dir: Path, content: str, reference: str | None = N
                 if decoded.width > 4096 or decoded.height > 8192 or decoded.width * decoded.height > 16_000_000:
                     raise ValueError('预览图片尺寸超过限制')
                 decoded.verify()
-            blocks.extend(build_image_content_blocks(data, mime, str(image), f'设计参考：{value}。这是组件实际渲染，仅用于理解完成度，不是成品目标或版式清单；请按当前内容自主设计，不能照搬示例事实。'))
+            blocks.extend(build_image_content_blocks(data, mime, str(image), f'设计参考：{value}。这是 Skill 随附的实际样张，仅用于理解视觉表达，不是成品目标或版式清单；请按当前内容自主设计，不能照搬示例事实。'))
         return blocks if paths else content
     except (OSError, ValueError, TypeError, AttributeError, Image.DecompressionBombError) as exc:
         return content + f'\n\n[设计参考加载失败：{exc}。不能把未看到的参考称为已检查；可继续使用原生操作。]'

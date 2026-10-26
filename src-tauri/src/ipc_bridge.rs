@@ -942,13 +942,10 @@ impl IpcBridge {
                     crate::notes::notes_save_image(file_path, file_name).await?;
                 Ok(Value::String(saved_path))
             }
-            "license_has_access" => {
-                let has_access = crate::license::check_license_access();
-                Ok(Value::Bool(has_access))
-            }
             "cloud_sync_context" => crate::license::cloud_bridge::context().await,
             "cloud_preferences" => crate::license::cloud_bridge::preferences_request(&self.app_handle, &args).await,
             "cloud_notes" => crate::license::cloud_bridge::notes_request(&self.app_handle, &args).await,
+            "cloud_operations" => crate::license::cloud_bridge::operations_request(&self.app_handle, &args).await,
             "cloud_sync_request" => crate::license::cloud_bridge::request(&args).await,
             "cloud_sync_store_key" => crate::license::cloud_bridge::store_key(&args).await,
             "cloud_sync_notify" => crate::license::cloud_bridge::notify(&self.app_handle, &args).await,

@@ -53,6 +53,13 @@ function rect(init: Partial<DOMRect>): DOMRect {
   };
 }
 
+function getMonaPeek(trigger: HTMLElement): SVGSVGElement {
+  const peek = trigger.querySelector<SVGSVGElement>("svg.mona-composer-peek");
+  expect(peek).toBeInTheDocument();
+  expect(peek).toHaveAttribute("aria-hidden", "true");
+  return peek!;
+}
+
 describe("ThreadComposer", () => {
   it("renders a readonly hero model composer when provided", () => {
     render(
@@ -77,8 +84,31 @@ describe("ThreadComposer", () => {
       "left-1/2",
       "max-w-[58rem]",
       "-translate-x-1/2",
-      "flex-wrap",
+      "pointer-events-none",
     );
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveClass("w-12", "min-h-11", "items-end");
+    expect(trigger.parentElement).toHaveClass("mr-10", "translate-y-0.5");
+    expect(getMonaPeek(trigger)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
+  });
+
+  it("keeps the vector peek still while typing or opening quick prompts", async () => {
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    const peek = getMonaPeek(trigger);
+    expect(peek).toHaveAttribute("data-paused", "false");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message input" }), { target: { value: "继续这项工作" } });
+    expect(peek).toHaveAttribute("data-paused", "true");
+    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
+    fireEvent.change(screen.getByRole("textbox", { name: "Message input" }), { target: { value: "" } });
+    expect(peek).toHaveAttribute("data-paused", "false");
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
+    expect(peek).toHaveAttribute("data-paused", "true");
+    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
   });
 
   it("can hide global hero prompt chips for a dedicated agent", () => {
@@ -91,8 +121,82 @@ describe("ThreadComposer", () => {
       />,
     );
 
+    expect(screen.queryByRole("button", { name: "Mona 快捷提示词" })).not.toBeInTheDocument();
     expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
     expect(screen.queryByText("邮件整理今日待办")).not.toBeInTheDocument();
+  });
+
+  it("offers hero prompt choices in a bubble and fills the input without sending", async () => {
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} variant="hero" autoFocus={false} />);
+
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    const peek = getMonaPeek(trigger);
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
+    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
+    expect(dialog.textContent).toBe("网页生成笔记邮件整理今日待办帮我想想关于…");
+    expect(within(dialog).getAllByRole("button")).toHaveLength(3);
+    expect(within(dialog).getByRole("button", { name: "网页生成笔记" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "邮件整理今日待办" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "帮我想想关于…" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "帮我想想关于…" }));
+
+    const input = screen.getByRole("textbox", { name: "Message input" }) as HTMLTextAreaElement;
+    const expectedValue = "帮我找找记录过关于「」的内容，从笔记、资料、邮件、记忆里整理出来";
+    await waitFor(() => {
+      expect(input).toHaveValue(expectedValue);
+      expect(input).toHaveFocus();
+      expect(input.selectionStart).toBe(expectedValue.indexOf("」"));
+      expect(input.selectionEnd).toBe(expectedValue.indexOf("」"));
+      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("closes the Mona prompt bubble with Escape and returns focus to the trigger", async () => {
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
+
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    const peek = getMonaPeek(trigger);
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
+    });
+  });
+
+  it("closes the Mona prompt bubble when clicking outside", async () => {
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
+
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    const peek = getMonaPeek(trigger);
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "Mona 快捷提示词" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
+    });
+  });
+
+  it("does not show the Mona shortcut in thread mode or open it when disabled", async () => {
+    const { rerender } = render(<ThreadComposer onSend={vi.fn()} autoFocus={false} />);
+    expect(screen.queryByRole("button", { name: "Mona 快捷提示词" })).not.toBeInTheDocument();
+
+    rerender(<ThreadComposer onSend={vi.fn()} variant="hero" disabled autoFocus={false} />);
+    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
+    expect(trigger).toBeDisabled();
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("keeps the thread composer compact while matching the hero style", () => {
@@ -112,6 +216,24 @@ describe("ThreadComposer", () => {
     expect(input.parentElement?.className).not.toContain("shadow-sm");
     expect(input.parentElement?.className).not.toContain("focus-within:ring");
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-action");
+  });
+
+  it("keeps the workspace shortcut named and described when no folder is selected", async () => {
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" onWorkspaceChange={vi.fn()} />);
+    const label = i18n.t("thread.composer.workspace.placeholder");
+    const workspace = screen.getByRole("button", { name: label });
+    fireEvent.focus(workspace);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(label);
+  });
+
+  it("keeps the full workspace path available and can clear the selection", async () => {
+    const path = "D:\\projects\\a-very-long-workspace-name";
+    const onWorkspaceChange = vi.fn();
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" workspace={path} onWorkspaceChange={onWorkspaceChange} />);
+    fireEvent.focus(screen.getByRole("button", { name: path }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(path);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("thread.composer.workspace.clear") }));
+    expect(onWorkspaceChange).toHaveBeenCalledWith(null);
   });
 
   it("sends with Enter by default and keeps Shift+Enter for a newline", () => {
@@ -215,14 +337,14 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "qwen3.7-plus" }), {
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Qwen 3.7 Plus" }), {
       button: 0,
       ctrlKey: false,
     });
     expect(await screen.findByPlaceholderText("搜索模型…")).toBeInTheDocument();
     expect(screen.getByText("阿里云百炼 Coding Plan（包月）")).toBeInTheDocument();
     expect(screen.getByText("Mona AI")).toBeInTheDocument();
-    expect(screen.getByText("Qwen 3.7 Plus")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "阿里云百炼 Coding Plan（包月） · Qwen 3.7 Plus" })).toBeInTheDocument();
     expect(screen.queryByText("免费")).not.toBeInTheDocument();
     const modelRow = screen.getByText("DeepSeek V4 Flash");
     fireEvent.pointerMove(screen.getByRole("menuitem", { name: "Mona AI · DeepSeek V4 Flash" }), { pointerType: "mouse" });
@@ -247,7 +369,7 @@ describe("ThreadComposer", () => {
         label: "DeepSeek V4 Pro", active: true, isBuiltin: true,
         reasoningEfforts: ["high", "max"], reasoningEffort: "high", defaultReasoningEffort: "high" }]}
       onModelSwitch={onModelSwitch} />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "deepseek-v4-pro-0813" }), { button: 0, ctrlKey: false });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "DeepSeek V4 Pro" }), { button: 0, ctrlKey: false });
     fireEvent.pointerMove(await screen.findByRole("menuitem", { name: "Mona AI · DeepSeek V4 Pro" }), { pointerType: "mouse" });
     const slider = await screen.findByRole("slider", { name: "思考强度" });
     fireEvent.keyDown(slider, { key: "End" });
@@ -256,7 +378,7 @@ describe("ThreadComposer", () => {
     expect(screen.queryByText("private upstream detail")).not.toBeInTheDocument();
   });
 
-  it("shows only the active model id in the composer trigger", () => {
+  it("shows the active model label in the composer trigger", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
@@ -273,7 +395,7 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "ZHIPU/GLM-5.3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "GLM-5.3" })).toBeInTheDocument();
     expect(screen.queryByText("Mona AI")).not.toBeInTheDocument();
     expect(screen.queryByText("默认")).not.toBeInTheDocument();
   });
@@ -587,7 +709,7 @@ describe("ThreadComposer", () => {
     expect(screen.getByRole("img", { name: "暂无上下文用量" })).toBeInTheDocument();
   });
 
-  it("shows the supplying source on the shared model selector without changing its accessible name", () => {
+  it("shows the active model label and supplying source on the shared model selector", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
@@ -604,10 +726,10 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    const trigger = screen.getByRole("button", { name: "Deepseek-V4" });
+    const trigger = screen.getByRole("button", { name: "Deepseek V4" });
     expect(trigger.className).toContain("h-8");
     expect(trigger.className).toContain("text-caption");
-    expect(trigger.querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png");
+    expect(trigger.querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png?v=a829e97b8751");
     expect(trigger.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -628,7 +750,7 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    const trigger = screen.getByTitle("hy4-preview");
+    const trigger = screen.getByRole("button", { name: "Hy4 preview" });
     const send = screen.getByRole("button", { name: "Send message" });
     expect(trigger.parentElement).toBe(send.parentElement);
   });

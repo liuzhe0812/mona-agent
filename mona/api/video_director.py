@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib.util
 import json
@@ -19,7 +20,6 @@ from loguru import logger
 from mona.materials.auth import SERVICES_TOKEN_HEADER, is_valid_services_token
 from mona.video_authoring import (
     authored_scene_html,
-    authored_scene_source_path,
     refresh_authored_scene,
 )
 from mona.video_style import VideoStyleError
@@ -291,7 +291,7 @@ def _saved_video_style(root: Path, series_id: str) -> tuple[dict[str, Any], dict
             raise ValueError("风格创作规则不可用")
         for field in ("rulesPath", "samplePath", "poster", "motion"):
             resolve_style_sample_media(root, series_id, version, str(authoring.get(field) or ""))
-        if not any((source / "authoring" / "scene_sources").glob("scene_*.*")):
+        if not any((source / "authoring" / "scene_sources").glob("*.html")):
             raise ValueError("风格示例不可用")
     return series, style, source
 
@@ -476,6 +476,66 @@ async def _capture_frames(
     return result
 
 
+async def _sync_composition(project: Path, meta: dict, body: dict) -> web.Response:
+    from mona.api import server
+    from mona.video_assets import validate_asset_references
+    from mona.video_authoring import refresh_huashu_composition
+
+    server._require_video_plan_approval(meta, body.get("plan_revision"), check_revision=True)
+    proposed = copy.deepcopy(meta)
+    scenes = proposed.get("scenes") or []
+    if not scenes:
+        raise ValueError("请先准备并确认分镜方案")
+    values = body.get("scene") or {}
+    if values:
+        target = next((scene for scene in scenes if scene["index"] == body.get("scene_index")), None)
+        if not isinstance(values, dict) or set(values) != {"assets"} or target is None:
+            raise ValueError("整片同步只保存动画代码；内容修改请先更新导演方案")
+        additions = values["assets"]
+        if not isinstance(additions, list) or not set(target.get("assets") or []).issubset(additions):
+            raise ValueError("制作时只能添加已授权的素材，不能替换原素材")
+        validate_asset_references(project, additions)
+        target["assets"] = additions
+    source = Path(str(body.get("source_file") or "drafts/film.html"))
+    source = (project / source).resolve() if not source.is_absolute() else source.resolve()
+    canonical = project / "scene_sources/film.html"
+    if not canonical.resolve().is_relative_to(project.resolve()) or not source.is_relative_to(project.resolve()) or not source.is_file() or source.suffix.lower() != ".html" or source == canonical.resolve():
+        raise ValueError("请将完整动画页面保存在当前项目的 drafts 目录，再同步制作")
+    original = source.read_text(encoding="utf-8")
+    style = json.loads((project / "style/design-system.json").read_text(encoding="utf-8"))
+    authored_scene_html(original, project, scenes[0], proposed, style)
+    for scene in scenes:
+        validate_asset_references(project, scene.get("assets") or [])
+    server._create_video_project_version(project, label="修改整片动画前", reason="composition-code-save")
+    previous = canonical.read_bytes() if canonical.is_file() else None
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    server._atomic_write_text(canonical, original)
+    digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+    proposed.update({"authoringMode": "huashu-motion", "structuredCompiler": False,
+                     "composition": {"sourcePath": "scene_sources/film.html", "htmlPath": "composition/index.html",
+                                     "sourceHash": digest, "planRevision": proposed.get("planRevision", 0)}})
+    try:
+        refresh_huashu_composition(project, proposed)
+    except Exception:
+        if previous is None:
+            canonical.unlink(missing_ok=True)
+        else:
+            canonical.write_bytes(previous)
+        raise
+    server._invalidate_video_outputs(project, proposed, None, reset_html=False, reset_audio=False)
+    for scene in scenes:
+        scene.update({"authored": True, "authoredRuntime": "huashu-motion", "layout": "authored",
+                      "sourcePath": "scene_sources/film.html", "sourceHash": digest, "htmlStatus": "previewing",
+                      "htmlPath": f"scenes/scene_{int(scene['index']):02d}.html",
+                      "htmlMtime": (project / "scenes" / f"scene_{int(scene['index']):02d}.html").stat().st_mtime})
+        server._write_scene_motion_without_narration(project, scene)
+    proposed["phase"] = "exportable"
+    server._sync_storyboard(project, scenes)
+    server._save_video_meta(project, proposed)
+    server._schedule_video_push(str(body.get("name")), "scenes")
+    return web.json_response({"ok": True, "scenes": scenes, "composition": proposed["composition"], "needsVisualReview": True})
+
+
 async def handle_video_agent(request: web.Request) -> web.Response:
     from mona.api import server
 
@@ -491,16 +551,16 @@ async def handle_video_agent(request: web.Request) -> web.Response:
             from mona.video_assets import list_project_assets
 
             style = json.loads((project / "style" / "design-system.json").read_text(encoding="utf-8"))
-            shared_style = {key: style.get(key) for key in ("name", "tokens", "motion", "subtitle", "brand", "authoring")}
+            shared_style = {key: style.get(key) for key in ("name", "tokens", "motion", "subtitle", "brand", "authoring", "source")}
             shared_style.update({"id": _active_video_style_id(meta), "version": meta.get("styleVersion")})
             examples = []
             if style.get("authoring"):
-                for path in sorted((project / "style" / "authoring" / "scene_sources").glob("scene_*.*")):
+                for path in sorted((project / "style" / "authoring" / "scene_sources").glob("*.html")):
                     if not path.resolve().is_relative_to((project / "style").resolve()):
                         raise ValueError("风格示例超出项目范围")
                     if path.is_file():
                         examples.append(str(path))
-            if meta.get("authoringMode") == "remotion":
+            if meta.get("authoringMode") == "huashu-motion":
                 shared_style["motion"] = {key: value for key, value in (style.get("motion") or {}).items()
                                           if key in {"intensity", "enterDurationMs", "exitDurationMs", "transitionDurationMs"}}
             return web.json_response({
@@ -518,7 +578,7 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                 "sources": [str(path) for path in sorted((project / "sources").glob("source-*")) if path.is_file()],
                 "draftDirectory": str(project / "drafts"),
                 "renderStatus": server._read_render_status(project),
-                "authoringContract": "Apply the active creative direction and content-to-library router. When stylePreference is auto, select an available style before the final plan; preserve fixed user choices. Save the director plan and wait for its initial confirmation. Then audio(plan_revision) supplies actual speech timing. Reuse copied Dashi templates and motion source where appropriate. Write drafts/scene_NN.tsx with a default React component and sync it. Modules: react, remotion, @remotion/shapes, @remotion/paths, @remotion/transitions (+ /fade, /slide, /wipe), mona-video (asset, cue => startFrame/endFrame, MotionCanvas, createMotionToolkit, Dashi). Drive React/SVG/Canvas from useCurrentFrame/useVideoConfig at 60 fps, real speech cues, shared style and authorized scene assets. Narration, music, effects and source sound use managed project audioTracks in global seconds; never add Audio or unmuted video to scene code. Explicit local user revisions use edit with current plan_revision and the user's instruction; preserve other segments and use the returned approved revision. sync refines implementation and may append assets for approved intent. preview returns real images and diagnostics; timestamps selects up to eight scene-relative seconds without replacing full review. Observe actual actions and readability, repair, then run full preview before export. Screenshots and motion counters do not certify continuity or aesthetics. Canonical scenes/scene_sources/meta belong to the tool. No fixed scene or effect menu limits composition.",
+                "authoringContract": 'Use the bundled Huashu Motion director, motion languages and real template source. Prepare the director plan and stop for initial confirmation. Then generate actual audio for every narrated scene, inspect global speech cues, write one complete drafts/film.html using GSAP + OM and sync(source_file,plan_revision) once for the whole film; scene_index is not required for sync. Every segment shares this continuous global timeline. Use registered assets, shared --mona-* style variables, OM.cue/OM.clock/OM.camera and local vendor scripts from the bundled Huashu resources. Audio remains in managed audioTracks; no audio elements in scene code. Do not run upstream installers, voice or render commands. Preserve data-om-id anchors and existing scene intentions during local edits. Preview each segment with scene_index; exact timestamps are partial observations, default preview completes the technical review. Inspect actual images and repair meaningful actions, continuity and readability before export. Pixel changes do not certify creative quality. Canonical scene_sources/film.html, composition/index.html and scene slices belong to the tool.',
             })
         if action == "style_rules":
             from mona.video_style import RevisionConflictError, read_style_draft, save_style_draft
@@ -617,7 +677,7 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                 validate_asset_references(project, assets)
                 scene.update({"index": index, "duration": duration, "durationRaw": f"{duration:g}s",
                               "assets": assets, "role": "content", "layout": "authored", "backgroundSlot": "content",
-                              "authored": True, "authoredRuntime": "remotion" if meta.get("authoringMode") == "remotion" else "html", "htmlStatus": "pending"})
+                              "authored": True, "authoredRuntime": "huashu-motion", "htmlStatus": "pending"})
                 planned.append(scene)
             previous = meta.get("scenes") or []
             if [server._scene_content(scene) for scene in previous] != [server._scene_content(scene) for scene in planned]:
@@ -723,92 +783,13 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                 server._save_video_meta(project, meta)
                 server._schedule_video_push(name, "scenes")
             return await server.handle_video_project_settings(_BodyRequest({"name": name, **settings}))
+        if action == "sync":
+            return await _sync_composition(project, meta, body)
         scenes = meta.get("scenes") or []
         index = body.get("scene_index")
         if isinstance(index, bool) or not isinstance(index, int) or index < 1:
             raise ValueError("请指定有效的视频片段")
         target = next((scene for scene in scenes if scene.get("index") == index), None)
-        if action == "sync":
-            server._require_video_plan_approval(meta, body.get("plan_revision"), check_revision=True)
-            values = body.get("scene") or {}
-            if not isinstance(values, dict):
-                raise ValueError("片段内容格式无效")
-            if meta.get("requirePlanApproval"):
-                if target is None:
-                    raise ValueError("请先在导演台添加并确认这个片段")
-                allowed = {"title", "duration", "narration", "visual", "animation", "assets", "role", "layout", "backgroundSlot"}
-                additions = values.get("assets", target.get("assets") or [])
-                assets_added = isinstance(additions, list) and all(isinstance(item, str) for item in additions) and set(target.get("assets") or []).issubset(additions)
-                if set(values) - allowed or any(value != target.get(key) for key, value in values.items() if key != "assets") or not assets_added:
-                    raise ValueError("制作时不能改写已确认的分镜方案，请先回导演台调整并确认")
-            if target is None and index != len(scenes) + 1:
-                raise ValueError("新片段应按顺序添加")
-            duration = values.get("duration", (target or {}).get("duration", 5))
-            if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
-                raise ValueError("片段时长必须大于零")
-            remotion = (target or {}).get("authoredRuntime") == "remotion" or meta.get("authoringMode") == "remotion"
-            suffix = ".tsx" if remotion else ".html"
-            source = project / "scene_sources" / f"scene_{index:02d}{suffix}"
-            source_path = Path(str(body.get("source_file") or project / "drafts" / source.name))
-            if not source_path.is_absolute():
-                source_path = project / source_path
-            source_path = source_path.resolve()
-            if not source_path.is_relative_to(project.resolve()) or not source_path.is_file():
-                raise ValueError("场景代码必须位于当前视频项目内")
-            if target is not None and source_path == source.resolve():
-                raise ValueError("请先将修改稿保存到 drafts 目录，再同步片段")
-            if remotion and source_path.suffix.lower() != ".tsx":
-                raise ValueError("请保存对应口播的动画组件后再同步片段")
-            if source_path.suffix.lower() == ".tsx":
-                remotion = True
-            original = source_path.read_text(encoding="utf-8")
-            edited = {**(target or {}), **{key: value for key, value in values.items() if key in {"title", "narration", "visual", "animation", "assets", "role"}},
-                      "index": index, "duration": duration, "durationRaw": f"{duration:g}s", "authored": True, "layout": "authored"}
-            if remotion:
-                edited["authoredRuntime"] = "remotion"
-            source = authored_scene_source_path(project, edited)
-            edited.pop("motionReviewSourceHash", None)
-            edited.pop("motionReview", None)
-            from mona.video_assets import validate_asset_references
-
-            validate_asset_references(project, [str(item) for item in edited.get("assets") or []])
-            edited.setdefault("title", f"片段 {index}")
-            edited.setdefault("role", "content")
-            edited.setdefault("backgroundSlot", "content")
-            for key in ("title", "narration", "visual", "role"):
-                if key in edited and not isinstance(edited[key], str):
-                    raise ValueError("片段文字内容格式无效")
-            cached_audio = {
-                key: value for key, value in (target or {}).items()
-                if key.startswith("audio")
-            } if (target or {}).get("narration") == edited.get("narration") else {}
-            timing_path = project / "audio" / f"scene_{index:02d}.timing.json"
-            cached_timing = timing_path.read_bytes() if cached_audio and timing_path.is_file() else None
-            style = json.loads((project / "style" / "design-system.json").read_text(encoding="utf-8"))
-            rendered = authored_scene_html(original, project, edited, meta, style, json.loads(cached_timing) if cached_timing else None)
-            if target is not None:
-                server._create_video_project_version(project, label=f"修改片段 {index} 前", reason="scene-code-save", changed_scene_indices=[index])
-            if target is None:
-                scenes.append(edited)
-            else:
-                scenes[scenes.index(target)] = edited
-            meta["scenes"] = scenes
-            server._invalidate_video_outputs(project, meta, {index}, reset_html=False)
-            edited.update(cached_audio)
-            if cached_timing is not None:
-                timing_path.write_bytes(cached_timing)
-            source.parent.mkdir(parents=True, exist_ok=True)
-            server._atomic_write_text(source, original)
-            scene_path = project / "scenes" / f"scene_{index:02d}.html"
-            scene_path.parent.mkdir(parents=True, exist_ok=True)
-            server._atomic_write_text(scene_path, rendered)
-            edited.update({"htmlStatus": "previewing", "htmlPath": scene_path.relative_to(project).as_posix(), "sourcePath": source.relative_to(project).as_posix(), "sourceHash": hashlib.sha256(source.read_bytes()).hexdigest(), "htmlMtime": scene_path.stat().st_mtime})
-            meta.update({"authoringMode": "remotion" if remotion else "agent", "structuredCompiler": False, "phase": "exportable" if all(server._video_scene_ready(project, s) for s in scenes) else "producing"})
-            server._write_scene_motion_without_narration(project, edited)
-            server._sync_storyboard(project, scenes)
-            server._save_video_meta(project, meta)
-            server._schedule_video_push(name, "scenes")
-            return web.json_response({"ok": True, "scene": edited, "needsVisualReview": True})
         if target is None:
             raise ValueError("视频片段不存在")
         if action == "audio":
@@ -835,12 +816,14 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                     raise server.TTSError("配音服务没有返回可用声音，请检查服务配置或稍后重试；已保留当前声音。", code="TTS_SYNTHESIS_FAILED")
                 meta = server._save_video_narration_meta(project, target, meta)
             refresh_authored_scene(project, target, meta)
+            if meta.get("authoringMode") == "huashu-motion":
+                server._save_video_meta(project, meta)
             server._schedule_video_push(name, "scenes")
             if timestamps is None:
                 captured = await _capture_frames(project, target, meta)
             else:
                 captured = await _capture_frames(project, target, meta, timestamps=timestamps)
-            if target.get("authoredRuntime") == "remotion":
+            if target.get("authoredRuntime") == "huashu-motion":
                 current = server._load_video_meta(project)
                 server._require_video_plan_approval(current, body.get("plan_revision"), check_revision=True)
                 current_scene = next((scene for scene in current.get("scenes") or [] if scene.get("index") == index), None)

@@ -2,7 +2,6 @@ import type {
   AgentDetailPayload,
   AgentModelBinding,
   AgentInstruction,
-  AgentInstructionHistoryItem,
   AgentSkill,
   AgentSkillDetail,
   AgentSummary,
@@ -26,7 +25,6 @@ import type {
   SettingsUpdate,
   SidebarStatePayload,
   SlashCommand,
-  StockSettingsUpdate,
   TtsSettingsUpdate,
   VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
@@ -37,9 +35,11 @@ import type {
 import {
   isTauri,
   getGatewayStatus,
-  getServicesStatus,
   httpFetch,
 } from "./tauri";
+import { getServicesHttpBase, resetServicesHttpBase } from "./services-http-base";
+
+export { getServicesHttpBase, resetServicesHttpBase };
 
 export class ApiError extends Error {
   status: number;
@@ -54,7 +54,6 @@ export class ApiError extends Error {
 
 let _apiBase: string | null = null;
 let _gatewayHttpBase: string | null = null;
-let _servicesHttpBase: string | null = null;
 
 export async function getApiBase(): Promise<string> {
   if (_apiBase) return _apiBase;
@@ -95,41 +94,10 @@ export async function getGatewayHttpBase(): Promise<string> {
   return "";
 }
 
-/** Return the services HTTP base URL (e.g. ``http://127.0.0.1:17174``).
- *
- * The services process serves business-domain routes (email / schedule /
- * video / materials / profile / hoard / contacts). Mirrors
- * ``getGatewayHttpBase()``: caches the base and lazily starts the services
- * process when it is not running. */
-export async function getServicesHttpBase(): Promise<string> {
-  if (_servicesHttpBase) return _servicesHttpBase;
-  if (isTauri()) {
-    let status = await getServicesStatus();
-    if (!status.running || !status.port) {
-      try {
-        const { startServices } = await import("./tauri");
-        await startServices();
-        status = await getServicesStatus();
-      } catch {
-        return "";
-      }
-    }
-    if (status.port) {
-      _servicesHttpBase = `http://127.0.0.1:${status.port}`;
-      return _servicesHttpBase;
-    }
-  }
-  return "";
-}
-
 export function resetApiBase(): void {
   _apiBase = null;
   _gatewayHttpBase = null;
-  _servicesHttpBase = null;
-}
-
-export function resetServicesHttpBase(): void {
-  _servicesHttpBase = null;
+  resetServicesHttpBase();
 }
 
 /** Return the cached API base synchronously (empty string if not yet resolved).
@@ -428,20 +396,6 @@ export async function listAgentInstructions(
     token,
   );
   return body.instructions;
-}
-
-export async function listAgentInstructionHistory(
-  token: string,
-  agentId: string,
-  key: AgentInstruction["key"],
-  base?: string,
-): Promise<AgentInstructionHistoryItem[]> {
-  const effectiveBase = base ?? (await getApiBase());
-  const body = await request<{ history: AgentInstructionHistoryItem[] }>(
-    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/instructions/${key}/history`,
-    token,
-  );
-  return body.history;
 }
 
 export async function listAgentSkills(
@@ -910,36 +864,6 @@ export async function updateTtsSettings(
   if (update.clearKey) query.set("clearKey", "true");
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/tts/update?${query}`,
-    token,
-  );
-}
-
-export async function updateStockSettings(
-  token: string,
-  update: StockSettingsUpdate,
-  base?: string,
-): Promise<SettingsPayload> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (update.enabled !== undefined)
-    query.set("enabled", String(update.enabled));
-  if (update.autoReviewEnabled !== undefined) {
-    query.set("autoReviewEnabled", String(update.autoReviewEnabled));
-  }
-  if (update.reviewTime !== undefined)
-    query.set("reviewTime", update.reviewTime);
-  if (update.reviewScope !== undefined)
-    query.set("reviewScope", update.reviewScope);
-  if (update.pushNotification !== undefined) {
-    query.set("pushNotification", String(update.pushNotification));
-  }
-  if (update.pushEmail !== undefined)
-    query.set("pushEmail", String(update.pushEmail));
-  if (update.quoteRefreshSec !== undefined) {
-    query.set("quoteRefreshSec", String(update.quoteRefreshSec));
-  }
-  return request<SettingsPayload>(
-    `${effectiveBase}/api/settings/stock/update?${query}`,
     token,
   );
 }

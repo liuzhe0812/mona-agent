@@ -27,7 +27,6 @@ block_cipher = None
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 MONA_PKG = PROJECT_ROOT / "mona"
 sys.path.insert(0, str(PROJECT_ROOT))
-from mona.office.ppt_packaging import should_include_mona_pptx_package_resource
 
 # ============== Hidden Imports ==============
 
@@ -35,7 +34,6 @@ hidden_imports_mona = [
     "mona",
     "mona.__main__",
     "mona.cli.commands",
-    "mona.cli.onboard",
     "mona.config.schema",
     "mona.config.loader",
     "mona.agent.loop",
@@ -99,18 +97,11 @@ hidden_imports_third_party = [
     "yarl",
     "frozenlist",
     "aiosignal",
-    # CLI / TUI
+    # Backend entry point and logging
     "typer",
     "typer.core",
     "click",
     "rich",
-    "prompt_toolkit",
-    "prompt_toolkit.completion",
-    "prompt_toolkit.formatted_text",
-    "prompt_toolkit.history",
-    "prompt_toolkit.key_binding",
-    "prompt_toolkit.keys",
-    "questionary",
     # Config / data
     "yaml",
     "dotenv",
@@ -239,7 +230,11 @@ excludes = [
 # ============== Data Files ==============
 
 datas = []
-# PPT Skill assets are read by package-relative paths. Keep previews out of both specs.
+design_resources = MONA_PKG / "skills/mona-design"
+if not (design_resources / "provenance.json").is_file():
+    raise FileNotFoundError("Mona Design resources missing")
+datas.append((str(design_resources), "mona/skills/mona-design"))
+# Include the native Office instruction entry and its operation references.
 for source, destination in collect_data_files("mona"):
     normalized_destination = str(destination).replace("\\", "/").rstrip("/")
     if normalized_destination != "mona/skills/mona-pptx" and not normalized_destination.startswith("mona/skills/mona-pptx/"):
@@ -248,12 +243,11 @@ for source, destination in collect_data_files("mona"):
         Path(normalized_destination).parts
     ):
         continue
-    if should_include_mona_pptx_package_resource(source, destination):
-        datas.append((source, destination))
+    datas.append((source, destination))
 
 video_runtime = MONA_PKG / "skills/mona-video/runtime"
-if not (video_runtime / "remotion.js").is_file():
-    raise FileNotFoundError("Video animation runtime missing: run npm run build:video-runtime in webui")
+if not (video_runtime / "mona-player.js").is_file():
+    raise FileNotFoundError("Huashu Motion preview bridge missing")
 datas.append((str(video_runtime), "mona/skills/mona-video/runtime"))
 binaries = []
 

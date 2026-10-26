@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "description": "Add a durable strict factor validation operation for bundled alpha101/qlib158 factors over the native CSI300 panel. Require an explicit OOS split and Tushare environment token, preserve native rows/skips/source metadata, and refuse degraded baskets.",
+  "files": [
+    {
+      "path": "agent/src/api/mona_operations.py",
+      "sha256": "61db3bcb5dd8ef936b43a42dd40de1b6f6395c1d3200c2f349cb7ffdd447ad77",
+      "replacements": [
+        {
+          "before": "from fastapi.responses import Response\n",
+          "after": "from fastapi.responses import Response\n\n",
+          "count": 1
+        },
+        {
+          "before": "        \"strategy_oos_validation\",\n",
+          "after": "        \"strategy_oos_validation\",\n        \"strict_factor_validation\",\n",
+          "count": 1
+        },
+        {
+          "before": "_DATE_RE = re.compile(r\"^\\d{4}-\\d{2}-\\d{2}$\")\n",
+          "after": "_DATE_RE = re.compile(r\"^\\d{4}-\\d{2}-\\d{2}$\")\n_STRICT_FACTOR_ZOOS = frozenset({\"alpha101\", \"qlib158\"})\n",
+          "count": 1
+        },
+        {
+          "before": "def _resolve_upload(upload_id: Any) -> Path:\n",
+          "after": "def _run_strict_factor_validation(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:\n    \"\"\"Run the shipped cross-sectional strict benchmark through native code only.\"\"\"\n    inputs = {\n        \"zoo\": payload[\"zoo\"],\n        \"universe\": \"csi300\",\n        \"start_date\": payload[\"start_date\"],\n        \"end_date\": payload[\"end_date\"],\n        \"oos_cutoff\": payload[\"oos_cutoff\"],\n        \"period\": payload[\"period\"],\n        \"random_control\": True,\n        \"n_random_seeds\": payload[\"n_random_seeds\"],\n        \"horizon\": payload[\"horizon\"],\n        \"top\": payload[\"top\"],\n    }\n    references = {\n        \"zoo\": inputs[\"zoo\"],\n        \"universe\": inputs[\"universe\"],\n        \"period\": inputs[\"period\"],\n        \"oos_cutoff\": inputs[\"oos_cutoff\"],\n    }\n\n    # The hosted Mona runtime has no legacy dotenv/global Vibe credential\n    # source. Only an explicitly injected process environment token may enable\n    # the native Tushare loader; never ask the legacy settings accessor to find\n    # one on disk.\n    token = os.environ.get(\"TUSHARE_TOKEN\", \"\").strip()\n    if not token or token == \"your-tushare-token\":\n        result = {\n            \"status\": \"error\",\n            \"experiment_status\": \"unavailable\",\n            \"reason_code\": \"tushare_token_unconfigured\",\n            \"no_network_attempt\": True,\n            \"inputs\": inputs,\n            \"native_result\": None,\n        }\n        return json.dumps(result, ensure_ascii=False, allow_nan=False), references\n\n    try:\n        from src.factors.bench_runner_strict import run_bench_strict\n\n        native_result = run_bench_strict(\n            zoo=inputs[\"zoo\"],\n            universe=\"csi300\",\n            period=inputs[\"period\"],\n            random_control=True,\n            n_random_seeds=inputs[\"n_random_seeds\"],\n            oos_split=inputs[\"oos_cutoff\"],\n            horizon=inputs[\"horizon\"],\n            top=inputs[\"top\"],\n        )\n    except Exception:  # persist a category only; never include provider secrets\n        result = {\n            \"status\": \"error\",\n            \"experiment_status\": \"failed\",\n            \"reason_code\": \"strict_factor_execution_failed\",\n            \"no_network_attempt\": False,\n            \"inputs\": inputs,\n            \"native_result\": None,\n        }\n        return json.dumps(result, ensure_ascii=False, allow_nan=False), references\n\n    metadata = native_result.get(\"meta\") if isinstance(native_result, dict) else None\n    error = native_result.get(\"error\") if isinstance(native_result, dict) else None\n    experiment_status = \"failed\"\n    reason_code: str | None = \"strict_factor_execution_failed\"\n    if isinstance(metadata, dict) and metadata and (\n        metadata.get(\"degraded\") is True\n        or metadata.get(\"universe\") != \"csi300\"\n        or metadata.get(\"constituent_source\") != \"tushare index_weight\"\n    ):\n        experiment_status = \"unavailable\"\n        reason_code = \"csi300_constituents_degraded\"\n    elif not isinstance(native_result, dict) or native_result.get(\"status\") != \"ok\":\n        error_text = error if isinstance(error, str) else \"\"\n        if error_text.startswith(\"universe load failed:\") or error_text.startswith(\"forward returns failed:\"):\n            experiment_status = \"unavailable\"\n            reason_code = \"csi300_data_unavailable\"\n        elif error_text.startswith(\"OOS boundary \") or \"no valid alpha rows\" in error_text:\n            experiment_status = \"unavailable\"\n            reason_code = \"strict_factor_oos_unavailable\"\n        elif \"no alphas registered\" in error_text:\n            experiment_status = \"failed\"\n            reason_code = \"strict_factor_execution_failed\"\n        else:\n            experiment_status = \"failed\"\n            reason_code = \"strict_factor_execution_failed\"\n    elif (\n        not isinstance(metadata, dict)\n        or not metadata\n        or metadata.get(\"universe\") != \"csi300\"\n        or metadata.get(\"constituent_source\") != \"tushare index_weight\"\n    ):\n        experiment_status = \"unavailable\"\n        reason_code = \"csi300_constituents_degraded\"\n    elif not native_result.get(\"rows\") or native_result.get(\"n_alphas_tested\", 0) < 1:\n        experiment_status = \"unavailable\"\n        reason_code = \"strict_factor_no_testable_rows\"\n    else:\n        experiment_status = \"completed\"\n        reason_code = None\n\n    result = {\n        \"status\": \"ok\" if experiment_status == \"completed\" else \"error\",\n        \"experiment_status\": experiment_status,\n        \"reason_code\": reason_code,\n        \"no_network_attempt\": False,\n        \"inputs\": inputs,\n        # Keep the native payload intact, including degraded metadata, skips,\n        # and partial rows; the outer status prevents degraded data being read\n        # as a valid CSI300 result.\n        \"native_result\": native_result,\n    }\n    return json.dumps(result, ensure_ascii=False, allow_nan=False), references\n\n\ndef _resolve_upload(upload_id: Any) -> Path:\n",
+          "count": 1
+        },
+        {
+          "before": "        \"strategy_oos_validation\": ({\"operation\", \"run_id\", \"window_start\", \"window_end\"}, {\"cost_scenarios\"}),\n",
+          "after": "        \"strategy_oos_validation\": ({\"operation\", \"run_id\", \"window_start\", \"window_end\"}, {\"cost_scenarios\"}),\n        \"strict_factor_validation\": (\n            {\"operation\", \"zoo\", \"start_date\", \"end_date\", \"oos_cutoff\"},\n            {\"n_random_seeds\", \"horizon\", \"top\"},\n        ),\n",
+          "count": 1
+        },
+        {
+          "before": "            \"_source_context\": source_context,\n",
+          "after": "            \"_source_context\": source_context,\n        }\n    elif operation == \"strict_factor_validation\":\n        zoo = clean[\"zoo\"]\n        if not isinstance(zoo, str) or zoo not in _STRICT_FACTOR_ZOOS:\n            raise HTTPException(status_code=422, detail=\"zoo must be alpha101 or qlib158\")\n        start_date = _valid_iso_date(clean[\"start_date\"], \"start_date\")\n        end_date = _valid_iso_date(clean[\"end_date\"], \"end_date\")\n        oos_cutoff = _valid_iso_date(clean[\"oos_cutoff\"], \"oos_cutoff\")\n        start_value = date.fromisoformat(start_date)\n        end_value = date.fromisoformat(end_date)\n        cutoff_value = date.fromisoformat(oos_cutoff)\n        if not start_value < cutoff_value < end_value:\n            raise HTTPException(status_code=422, detail=\"oos_cutoff must be strictly inside the requested period\")\n        try:\n            max_end = start_value.replace(year=start_value.year + 5)\n        except ValueError:  # Feb 29 anniversary falls on Feb 28 in a non-leap year.\n            max_end = start_value.replace(year=start_value.year + 5, day=28)\n        if end_value > max_end:\n            raise HTTPException(status_code=422, detail=\"strict factor period may not exceed five calendar years\")\n        clean.setdefault(\"n_random_seeds\", 5)\n        clean.setdefault(\"horizon\", 1)\n        clean.setdefault(\"top\", 20)\n        _strict_int(clean, \"n_random_seeds\", 1, 5)\n        _strict_int(clean, \"horizon\", 1, 21)\n        _strict_int(clean, \"top\", 1, 100)\n        period = f\"{start_date}/{end_date}\"\n        clean = {\n            \"operation\": operation,\n            \"zoo\": zoo,\n            \"start_date\": start_date,\n            \"end_date\": end_date,\n            \"oos_cutoff\": oos_cutoff,\n            \"period\": period,\n            \"n_random_seeds\": clean[\"n_random_seeds\"],\n            \"horizon\": clean[\"horizon\"],\n            \"top\": clean[\"top\"],\n        }\n        references = {\n            \"zoo\": zoo,\n            \"universe\": \"csi300\",\n            \"period\": period,\n            \"oos_cutoff\": oos_cutoff,\n",
+          "count": 1
+        },
+        {
+          "before": "            raw, tool_references = _run_strategy_oos_validation(payload, on_run_created=record_oos_runs)\n",
+          "after": "            raw, tool_references = _run_strategy_oos_validation(payload, on_run_created=record_oos_runs)\n        elif operation == \"strict_factor_validation\":\n            raw, tool_references = _run_strict_factor_validation(payload)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/factors/bench_runner_strict.py",
+      "sha256": "473abc7a1ca1ebbe8e75fb414cdf15d3dbbfb97136d27bafda022ecdc5928a8e",
+      "replacements": [
+        {
+          "before": "        \"meta\": {},\n    }\n",
+          "after": "        \"meta\": {},\n    }\n    universe_meta: dict[str, Any] = {}\n",
+          "count": 1
+        },
+        {
+          "before": "        entry[\"error\"] = msg\n",
+          "after": "        entry[\"error\"] = msg\n        entry[\"meta\"] = universe_meta\n",
+          "count": 1
+        },
+        {
+          "before": "        return _finish_error(f\"universe load failed: {exc}\")\n",
+          "after": "        return _finish_error(f\"universe load failed: {exc}\")\n\n    universe_meta_raw = panel.get(\"_meta\") if isinstance(panel, dict) else None\n    if universe_meta_raw is not None:\n        try:\n            if hasattr(universe_meta_raw, \"to_dict\"):\n                universe_meta = dict(universe_meta_raw.to_dict())\n            else:\n                universe_meta = dict(universe_meta_raw)\n        except Exception:  # noqa: BLE001\n            universe_meta = {\"raw\": str(universe_meta_raw)}\n    entry[\"meta\"] = universe_meta\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

@@ -48,4 +48,4 @@ chat history for self-contained questions.
 
 - **Do NOT edit SOUL.md, USER.md, or MEMORY.md.** They are automatically managed by Dream.
 - If you notice outdated information, it will be corrected when Dream runs next.
-- Users can view Dream's activity with the `/dream-log` command.
+- Restore the previous long-term memory or persona version with `/dream-restore [memory|soul]`.

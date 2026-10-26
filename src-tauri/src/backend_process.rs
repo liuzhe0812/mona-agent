@@ -561,7 +561,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         assert_eq!(
-            prepare_ports(&[(port, "mona-services", "stock-v1")], true),
+            prepare_ports(&[(port, "mona-services", "stock-vibe-v1")], true),
             Ok(false)
         );
     }
@@ -604,20 +604,20 @@ mod tests {
     #[test]
     fn release_replaces_legacy_version_and_incompatible_mona_services() {
         for field in ["version", "capabilities"] {
-            let mut payload = health("mona-services", "stock-v1");
+            let mut payload = health("mona-services", "stock-vibe-v1");
             payload.as_object_mut().unwrap().remove(field);
             let services = HealthServer::start(payload, Arc::new(AtomicBool::new(false)));
             assert_eq!(
-                prepare_ports(&[(services.port, "mona-services", "stock-v1")], true),
+                prepare_ports(&[(services.port, "mona-services", "stock-vibe-v1")], true),
                 Ok(false)
             );
             assert!(services.was_shutdown());
         }
-        let mut payload = health("mona-services", "stock-v1");
+        let mut payload = health("mona-services", "stock-vibe-v1");
         payload["version"] = serde_json::json!("0.0.0");
         let services = HealthServer::start(payload, Arc::new(AtomicBool::new(false)));
         assert_eq!(
-            prepare_ports(&[(services.port, "mona-services", "stock-v1")], true),
+            prepare_ports(&[(services.port, "mona-services", "stock-vibe-v1")], true),
             Ok(false)
         );
         assert!(services.was_shutdown());
@@ -657,7 +657,7 @@ mod tests {
         );
         for allow_reuse in [false, true] {
             assert!(
-                prepare_ports(&[(server.port, "mona-services", "stock-v1")], allow_reuse).is_err()
+                prepare_ports(&[(server.port, "mona-services", "stock-vibe-v1")], allow_reuse).is_err()
             );
         }
         assert!(stop(server.port, &[server.port]).is_err());

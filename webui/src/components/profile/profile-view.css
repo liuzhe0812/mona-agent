@@ -1,0 +1,63 @@
+/* 配色 3.0；保留共享组件的 HSL 通道契约，迁移仅作用于画像页。 */
+.profile-view {
+  --background: 48 100% 99.02%;
+  --foreground: 45 11.111% 7.059%;
+  --card: 45 54.545% 95.686%;
+  --muted: 45 36.364% 91.373%;
+  --muted-foreground: 46.667 8.911% 39.608%;
+  --border: 46.364 28.205% 84.706%;
+  --action: 45 11.111% 7.059%;
+  --action-hover: 43.636 14.667% 14.706%;
+  --action-foreground: 48 100% 99.02%;
+  --brand-red: 356.1 79.365% 50.588%;
+  --info: 206.445 92.952% 44.51%;
+  --text-700: 44 12.195% 24.118%;
+  --data-1: 208.264 56.279% 42.157%;
+  --data-2: 171.034 48.603% 35.098%;
+  --data-3: 32.847 61.435% 43.725%;
+  --data-4: 273.462 21.667% 47.059%;
+  --data-5: 341.053 30.4% 50.98%;
+  --data-6: 72 32.609% 36.078%;
+  --primary: var(--action);
+  --primary-foreground: var(--action-foreground);
+  --card-foreground: var(--foreground);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
+  --input: var(--border);
+  --ring: var(--brand-red);
+  color-scheme: light;
+}
+
+.dark .profile-view {
+  --background: 50 12.5% 9.412%;
+  --foreground: 44.211 48.718% 92.353%;
+  --card: 48 16.667% 11.765%;
+  --muted: 49.091 14.286% 15.098%;
+  --muted-foreground: 46 15.957% 63.137%;
+  --border: 47.143 13.725% 20%;
+  --action: 39.231 52% 90.196%;
+  --action-hover: 43.2 24.272% 79.804%;
+  --action-foreground: 45 11.111% 7.059%;
+  --brand-red: 3.618 100% 60.98%;
+  --info: 207.059 76.884% 60.98%;
+  --text-700: 43.2 24.272% 79.804%;
+  --data-1: 207.835 50.785% 62.549%;
+  --data-2: 168.571 34.711% 52.549%;
+  --data-3: 34.711 57.895% 59.02%;
+  --data-4: 275.294 28.177% 64.51%;
+  --data-5: 337.941 40.964% 67.451%;
+  --data-6: 69.706 29.565% 54.902%;
+  color-scheme: dark;
+}
+
+.profile-panel {
+  @apply flex min-h-0 min-w-0 flex-col rounded-lg border border-border/60 bg-background p-4;
+}
+
+@screen xl {
+  .profile-panel {
+    @apply p-5;
+  }
+}

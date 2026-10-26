@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-18",
+  "pinned_files_matched": 2544,
+  "native_frontend_page_components": 13,
+  "native_frontend_router_paths": 17,
+  "frontend_inventory_rows": 16,
+  "sidebar_items_including_settings": 10,
+  "tool_source_files": 93,
+  "static_named_tool_candidates": 125,
+  "skill_documents": 90,
+  "skill_categories": 9,
+  "skill_support_files": 419,
+  "bundled_swarm_presets": 30,
+  "static_factor_modules": 478,
+  "quantlib_allowlisted_modules": 23,
+  "backend_capability_groups": 17,
+  "scope": "Static source and product-capability audit only; counts are not runtime availability or live financial verification."
+}

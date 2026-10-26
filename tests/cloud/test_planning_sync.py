@@ -82,6 +82,16 @@ async def settle(*devices, rounds=2):
             assert device[0].problem is None, device[0].problem
 
 
+async def receive_without_upload(device):
+    coordinator = device[0]
+    config = coordinator.preferences.read()
+    assert config.enabled is True and config.upload_enabled is None
+    await coordinator.run_once()
+    config = coordinator.preferences.read()
+    assert config.enabled is True and config.upload_enabled is False
+    assert coordinator.problem is None, coordinator.problem
+
+
 def count_versions(cloud):
     return sum(map(len, cloud.versions.values()))
 
@@ -125,6 +135,28 @@ async def test_actual_two_service_ports_sync_edit_complete_and_stay_idle(plannin
     assert a[1].notifications[-1] == {"work_keys": [], "planning": True}
     for blob in cloud.objects.values():
         assert "准备材料".encode() not in blob and "第二台设备".encode() not in blob
+
+
+@pytest.mark.asyncio
+async def test_new_device_receives_planning_without_uploading_private_items(planning_pair):
+    cloud, a, b = planning_pair
+    await a[3].add_item(todo())
+    await a[2].add_item(event())
+    await enable(a)
+    before_versions, before_objects = count_versions(cloud), set(cloud.objects)
+    assert before_versions == 2
+
+    await b[3].add_item(todo("private-todo", "LOCAL_ONLY_TODO"))
+    await b[2].add_item(event("private-event", "LOCAL_ONLY_EVENT"))
+    await receive_without_upload(b)
+
+    assert b[0].preferences.read().sync_planning is False
+    assert {item.title for item in await b[3].list_items()} == {"准备材料", "LOCAL_ONLY_TODO"}
+    assert {item.title for item in await b[2].list_items()} == {"会议", "LOCAL_ONLY_EVENT"}
+    assert count_versions(cloud) == before_versions
+    assert set(cloud.objects) == before_objects
+    assert b"LOCAL_ONLY_TODO" not in b"".join(cloud.objects.values())
+    assert b"LOCAL_ONLY_EVENT" not in b"".join(cloud.objects.values())
 
 
 @pytest.mark.asyncio
@@ -221,7 +253,7 @@ async def test_lost_commit_ack_is_reconciled_without_duplicate_item(planning_pai
 
 
 @pytest.mark.asyncio
-async def test_pause_scope_and_reenable_recover_remote_changes(planning_pair):
+async def test_planning_upload_scope_still_receives_cloud_changes_and_blocks_uploads(planning_pair):
     cloud, a, b = planning_pair
     await a[3].add_item(todo())
     await enable(a)
@@ -229,11 +261,14 @@ async def test_pause_scope_and_reenable_recover_remote_changes(planning_pair):
     await b[0].select([], sync_planning=False)
     await a[3].update_item("todo-origin", {"notes": "等待同步"})
     await settle(a, b)
-    assert (await b[3].list_items())[0].notes == ""
-    await b[0].select([], sync_planning=True)
-    await settle(b, a)
     assert (await b[3].list_items())[0].notes == "等待同步"
-    assert count_versions(cloud) == 2
+    before = count_versions(cloud)
+    imported = (await b[3].list_items())[0]
+    await b[3].update_item(imported.id, {"notes": "LOCAL_ONLY_TODO_EDIT"})
+    await b[0].run_once()
+    assert b[0].problem is None
+    assert (await b[3].get_item(imported.id)).notes == "LOCAL_ONLY_TODO_EDIT"
+    assert count_versions(cloud) == before == 2
 
 
 @pytest.mark.asyncio

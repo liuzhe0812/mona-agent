@@ -34,6 +34,7 @@ from loguru import logger
 from pydantic import Field, field_validator, model_validator
 
 from mona.agent import run_artifacts
+from mona.agent.jobs import RetiredTaskError
 from mona.agent.partners import (
     AgentRegistry,
     ConversationMetadata,
@@ -116,16 +117,6 @@ _WORKFLOW_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 # Cap on the upstream digest injected into a downstream step's task (guide
 # 7.6: structured summaries only, never full tool traces).
 MAX_UPSTREAM_DIGEST_CHARS = 4000
-# Debate and referee stock agents must read the upstream artifacts themselves.
-# Key this by agent identity rather than generic step IDs so another workflow
-# can still use a step named ``bull``/``bear``/``referee`` normally.
-_ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS = frozenset(
-    {
-        "com.mona.stock-bull-researcher",
-        "com.mona.stock-bear-researcher",
-        "com.mona.stock-referee",
-    }
-)
 
 
 class WorkflowValidationError(ValueError):
@@ -832,6 +823,7 @@ class WorkflowRunStore:
         """
         with self._lock_for(run_id):
             run = self.load(run_id)
+            _check_legacy_stock_resume(run)
             if run.status != RUN_STATUS_FAILED:
                 code = "retry_in_progress" if run.status in {
                     RUN_STATUS_QUEUED,
@@ -1017,11 +1009,8 @@ StepExecutor = Callable[
 # Called after every persisted run change (UI projection / events).
 RunObserver = Callable[[WorkflowRun], None]
 
-# Optional per-run bootstrap hook (stock-module T21): invoked once right
-# after the run snapshot is created and before the first step executes —
-# e.g. building the evidence bundle for ``run.inputs["symbols"]``. Raising
-# fails the run (queued -> failed) and propagates to the caller, so a
-# missing prerequisite never silently produces an evidence-free run.
+# Optional prerequisite hook, invoked after persistence and before dispatch.
+# A failure marks the run failed and propagates to the caller.
 RunInitializer = Callable[[WorkflowRun], Awaitable[None]]
 
 
@@ -1061,23 +1050,21 @@ def compose_step_task(
                     for raw in raw_artifacts:
                         ref = coerce_artifact_ref(raw)
                         artifacts.append(ref.uri if ref is not None else str(raw))
-            artifact_only = step.agent_id in _ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS
             full_result = json.dumps({
-                "step_id": step_id, "summary": "" if artifact_only else summary, "artifacts": artifacts,
+                "step_id": step_id, "summary": summary, "artifacts": artifacts,
             }, ensure_ascii=False)
             reference = shared_context_ref(f"workflow:{run_id}:{step_id}", full_result)
             if source_documents is not None:
                 source_documents[reference] = full_result
             entry = f"### {step_id}\nResult reference: {reference}"
             summary_budget = preview_budget // 2 if artifacts else preview_budget
-            if not artifact_only:
-                preview = summary[:summary_budget]
-                entry += f"\n{preview}"
-                if len(summary) > summary_budget:
-                    entry += "\n[Incomplete result preview; read the reference with collaboration_read.]"
+            preview = summary[:summary_budget]
+            entry += f"\n{preview}"
+            if len(summary) > summary_budget:
+                entry += "\n[Incomplete result preview; read the reference with collaboration_read.]"
             if artifacts:
                 visible_artifacts: list[str] = []
-                remaining = preview_budget if artifact_only else preview_budget - summary_budget
+                remaining = preview_budget - summary_budget
                 for artifact in artifacts:
                     cost = len(artifact) + (2 if visible_artifacts else 0)
                     if cost > remaining:
@@ -1152,6 +1139,18 @@ def _missing_required_artifacts(
     return [name for name in required if name not in registered]
 
 
+def _legacy_stock_workflow(room_id: str, workflow: WorkflowDefinition) -> bool:
+    return room_id in {"stock_research", "stock_ai_diagnosis"} or any(
+        (step.agent_id or "").startswith("com.mona.stock") or step.agent_id == "com.mona.a-share-analyst"
+        for step in workflow.steps
+    )
+
+
+def _check_legacy_stock_resume(run: WorkflowRun) -> None:
+    if _legacy_stock_workflow(run.room_id, run.workflow):
+        raise RetiredTaskError("旧股票模块已移除，历史任务不能重新执行")
+
+
 class WorkflowRunner:
     """Executes a WorkflowRun: serial/parallel scheduling, failure, cancel.
 
@@ -1212,6 +1211,7 @@ class WorkflowRunner:
         meantime are returned untouched.
         """
         run = self._runs.load(run_id)
+        _check_legacy_stock_resume(run)
         if run.status not in (RUN_STATUS_QUEUED, RUN_STATUS_WAITING_APPROVAL):
             raise WorkflowTransitionError(
                 f"run {run_id} is {run.status!r}; only queued or "
@@ -1220,6 +1220,7 @@ class WorkflowRunner:
         lock = self._room_lock(run.room_id)
         async with lock:
             run = self._runs.load(run_id)
+            _check_legacy_stock_resume(run)
             if run.status not in (RUN_STATUS_QUEUED, RUN_STATUS_WAITING_APPROVAL):
                 return run
             cancel_event = asyncio.Event()
@@ -1247,6 +1248,8 @@ class WorkflowRunner:
         remaining step. An expired approval fails the run. All state changes
         are compare-and-set, so duplicate clicks stay idempotent.
         """
+        if approve:
+            _check_legacy_stock_resume(self._runs.load(run_id))
         try:
             self._runs.resolve_approval_step(
                 run_id, step_id, token=token, approve=approve, decided_by=decided_by,
@@ -1314,6 +1317,8 @@ class WorkflowRunner:
         async with lock:
             if conversation is not None:
                 validate_workflow(workflow, conversation, registry)
+            if _legacy_stock_workflow(room_id, workflow):
+                raise RetiredTaskError("旧股票模块已移除，历史任务不能重新执行")
             run = self._runs.create(
                 room_id=room_id,
                 workflow=workflow,

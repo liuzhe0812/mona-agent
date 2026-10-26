@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import gzip
-import io
 import json
-import tarfile
 import zipfile
 from pathlib import Path
-
-import pytest
 
 from scripts import prepare_official_runtimes as prepare
 
@@ -118,45 +114,3 @@ def test_prepares_pandoc_and_cua_archives(monkeypatch, tmp_path: Path) -> None:
     assert cua_manifest["version"] == "0.23.2"
     assert cua_manifest["kind"] == "computer-use-runtime"
     assert cua_manifest["entrypoints"] == {"driver": "cua-driver.exe"}
-
-
-def test_prepares_westock_from_npm_package(tmp_path: Path) -> None:
-    package_tgz = tmp_path / "westock-data-skillhub.tgz"
-    package_json = json.dumps(
-        {
-            "name": "westock-data-skillhub",
-            "version": "1.0.5",
-            "main": "index.js",
-        }
-    ).encode()
-    with tarfile.open(package_tgz, "w:gz") as bundle:
-        for name, content in {
-            "package/index.js": b"module.exports = {};",
-            "package/package.json": package_json,
-        }.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            bundle.addfile(info, io.BytesIO(content))
-
-    target = prepare.prepare_westock(package_tgz, tmp_path / "components")
-
-    assert (target / "index.js").read_bytes() == b"module.exports = {};"
-    manifest = _manifest(target)
-    assert manifest["id"] == "westock-data"
-    assert manifest["version"] == "1.0.5"
-    assert manifest["kind"] == "stock-data-runtime"
-    assert manifest["entrypoints"] == {"main": "index.js"}
-    assert manifest["dependencies"] == ["node-base@22.23.2"]
-
-
-def test_westock_rejects_archive_path_escape(tmp_path: Path) -> None:
-    package_tgz = tmp_path / "unsafe.tgz"
-    with tarfile.open(package_tgz, "w:gz") as bundle:
-        content = b"escape"
-        info = tarfile.TarInfo("package/../escape.js")
-        info.size = len(content)
-        bundle.addfile(info, io.BytesIO(content))
-
-    with pytest.raises(RuntimeError, match="unsafe archive path"):
-        prepare.prepare_westock(package_tgz, tmp_path / "components")
-    assert not (tmp_path / "escape.js").exists()

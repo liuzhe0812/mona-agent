@@ -1,3 +1,7 @@
+export function isCommandTrace(trace: string): boolean {
+  return /^(?:exec|exec_command|run_command|execute_command|write_stdin|exec_session)\s*\(/.test(trace.trim());
+}
+
 /** Drop duplicate tool_call objects (same id or identical formatted trace). */
 export function dedupeToolCallsForUi(calls: unknown): unknown[] {
   if (!Array.isArray(calls) || calls.length === 0) return [];

@@ -19,7 +19,7 @@ vi.mock("@/components/doc/DocChatPanel", () => ({ DocChatPanel: ({ chatId }: { c
 vi.mock("@/components/doc/video/VideoModelSelector", () => ({ VideoModelSelector: ({ value, onChange, disabled }: any) => <button disabled={disabled} aria-label="选择制作模型" onClick={() => onChange({ executor: "codex", model: "gpt-6.1-sol", provider: null, effort: "high" })}>{value?.model ?? "跟随 Mona"}</button> }));
 
 const initial: VideoStyleDraft = {
-  seriesId: "my-style", revision: 0, name: "我的纸张风格", baseTemplateId: "dashi-paper",
+  seriesId: "my-style", revision: 0, name: "我的纸张风格", baseTemplateId: "huashu-collage",
   tokens: { colors: { primary: "#123456", background: "#ffffff" }, typography: { bodyFamily: "Microsoft YaHei" } },
 };
 
@@ -59,7 +59,7 @@ describe("custom video style workflow", () => {
     expect(screen.queryByRole("button", { name: "保存并使用" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成样片" }));
     await waitFor(() => expect(mocks.client.sendMessage).toHaveBeenCalledOnce());
-    expect(mocks.createVideoProject).toHaveBeenCalledWith("test", "风格样片-my-style", "1080x1920", expect.objectContaining({ templateId: "dashi-paper" }));
+    expect(mocks.createVideoProject).toHaveBeenCalledWith("test", "风格样片-my-style", "1080x1920", expect.objectContaining({ templateId: "huashu-collage" }));
     expect(mocks.createVideoSeries).toHaveBeenCalledWith("test", expect.objectContaining({ baseTemplateId: "custom" }));
     expect(mocks.saveVideoChatId).toHaveBeenCalledWith("test", "风格样片-my-style", "style-chat");
     expect(mocks.client.sendMessage.mock.calls[0][1]).toContain("不要导出");

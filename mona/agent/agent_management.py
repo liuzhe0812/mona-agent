@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from mona.agent.memory_versions import write_text_atomic as _atomic_write
 from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
 from mona.agent.user_config import (
@@ -38,8 +39,6 @@ from mona.config.paths import (
 
 INSTRUCTION_FILES: dict[str, str] = {
     "soul": "SOUL.md",
-    "agents": "AGENTS.md",
-    "user": "USER.md",
     "memory": "MEMORY.md",
 }
 _MAX_INSTRUCTION_CHARS = 64_000
@@ -178,7 +177,7 @@ def create_custom_agent(
         )
         prompt = [
             f"You are {name}, a user-created local partner in Mona.",
-            "Follow the user's current request and your private personality and preferences.",
+            "Follow the user's current request and your private persona.",
         ]
         if summary:
             prompt.append(f"Expertise: {summary}")
@@ -186,7 +185,7 @@ def create_custom_agent(
         os.replace(staging, destination)
         published = True
         if role:
-            write_instruction(agent_id, "soul", role, message="创建个性")
+            write_instruction(agent_id, "soul", role, message="创建人设")
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         if published and destination.resolve().parent == root.resolve():
@@ -201,21 +200,6 @@ def _now() -> datetime:
 
 def _now_iso() -> str:
     return _now().isoformat()
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=".agent_", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-        os.replace(temp_name, path)
-    except Exception:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
 
 
 def _sha256(content: str) -> str:
@@ -264,17 +248,18 @@ def _memory_store(agent_id: str):
 
 def read_instruction(agent_id: str, key: str) -> dict[str, Any]:
     path = _instruction_path(agent_id, key)
-    try:
-        content = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        content = ""
+    store = _memory_store(agent_id)
+    content = store.read_soul() if key == "soul" else store.read_memory()
+    sources = [path, store.agents_file] if key == "soul" else [path]
+    updated_at = max((source.stat().st_mtime for source in sources if source.exists()), default=None)
     return {
         "key": key,
         "filename": path.name,
         "content": content,
         "contentHash": _sha256(content),
-        "updatedAt": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
-        if path.exists()
+        "hasPrevious": store.previous_file(key).exists(),
+        "updatedAt": datetime.fromtimestamp(updated_at, tz=timezone.utc).isoformat()
+        if updated_at is not None
         else None,
     }
 
@@ -436,30 +421,22 @@ def write_instruction(agent_id: str, key: str, content: str, *, message: str) ->
         raise AgentManagementError(
             f"instruction content exceeds {_MAX_INSTRUCTION_CHARS} characters"
         )
-    path = _instruction_path(agent_id, key)
+    _instruction_path(agent_id, key)
     store = _memory_store(agent_id)
-    # The initial commit snapshots pre-existing files before a user edit.
-    store.git.init()
-    _atomic_write(path, content)
-    store.git.auto_commit(message)
+    if key == "soul":
+        store.write_soul(content)
+    else:
+        store.write_memory(content)
     return read_instruction(agent_id, key)
 
 
-def instruction_history(agent_id: str, key: str) -> list[dict[str, str]]:
-    _instruction_path(agent_id, key)  # validate key before accessing GitStore
-    entries = _memory_store(agent_id).git.log()
-    return [
-        {"sha": item.sha, "message": item.message, "timestamp": item.timestamp} for item in entries
-    ]
-
-
-def restore_instruction(agent_id: str, key: str, commit: str) -> dict[str, Any]:
-    path = _instruction_path(agent_id, key)
+def restore_instruction(agent_id: str, key: str) -> dict[str, Any]:
+    _instruction_path(agent_id, key)
     store = _memory_store(agent_id)
-    content = store.git.read_file_at_commit(commit, path.name)
+    content = store.read_previous(key)
     if content is None:
-        raise AgentManagementError("instruction version was not found")
-    return write_instruction(agent_id, key, content, message=f"restore {path.name} from {commit}")
+        raise AgentManagementError("没有可恢复的上一版。")
+    return write_instruction(agent_id, key, content, message="restore previous")
 
 
 def _validate_skill_name(name: str) -> str:
@@ -850,7 +827,6 @@ __all__ = [
     "SkillManager",
     "agent_data_summary",
     "agent_tool_catalog",
-    "instruction_history",
     "is_skill_script_enabled",
     "list_instructions",
     "read_instruction",

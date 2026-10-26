@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PRESETS, PRESET_SCENARIOS, PRESET_THEMES, expandPreset, findPreset, findPresetScenario, presetScenarioCatalog, rankPresets, resolvePresetTheme } from './slides-presets'
+import { PRESETS, PRESET_SCENARIOS, PRESET_THEMES, expandPreset, findPreset, findPresetScenario, resolvePresetTheme } from './slides-presets'
 import { presetBoundaryContent } from './slides-preset-capacity'
 import { getSlidesCapabilities } from './slides-capabilities'
 
@@ -21,16 +21,12 @@ describe('按用途选择原生 PPT 场景', () => {
         expect(findPreset(page.preferredPresetId)?.relation ?? 'none', page.id).toBe(page.relation)
       }
     }
-    expect(presetScenarioCatalog().map((scenario) => scenario.id)).toEqual(PRESET_SCENARIOS.map((scenario) => scenario.id))
   })
 
-  it('所有场景特色页能自动匹配并把真实内容写入原生对象', () => {
+  it('明确指定的原生结构能把真实内容写入对象', () => {
     for (const scenario of PRESET_SCENARIOS) {
       const preset = PRESETS.find((item) => item.id === scenario.id) ?? findPreset(scenario.signaturePages.at(-1)!.preferredPresetId)!
       const content = { ...presetBoundaryContent(preset), scenario: scenario.id, relation: preset.relation }
-      const candidates = rankPresets(content)
-      expect(candidates.length, scenario.id).toBeGreaterThan(0)
-      for (const candidate of candidates) expect(scenario.templateIds).toContain(candidate.preset.id)
       const expanded = expandPreset({ slideId: 'test-slide', presetId: preset.id, content })
       expect(expanded.operations.length).toBeLessThanOrEqual(50)
       const visible = expanded.operations.map((operation) => operation.payload.text ?? '').join('\n')
@@ -56,12 +52,11 @@ describe('按用途选择原生 PPT 场景', () => {
     expect(PRESET_THEMES).toEqual(before)
   })
 
-  it('未知场景明确失败，能力目录公开实际可用场景', () => {
+  it('未知场景明确失败，原生绘制目录不推荐场景设计', () => {
     expect(() => findPresetScenario('missing')).toThrow('未知 PPT 场景')
-    expect(() => rankPresets({ title: '标题', scenario: 'missing' })).toThrow('未知 PPT 场景')
     const capabilities = getSlidesCapabilities(undefined, ['slide_add_preset'])
-    expect(capabilities.presetScenarios).toHaveLength(12)
-    const schema = capabilities.operations[0]!.payloadSchema as { properties: { content: { properties: { scenario: { enum: string[] } } } } }
-    expect(schema.properties.content.properties.scenario.enum).toEqual(PRESET_SCENARIOS.map((scenario) => scenario.id))
+    expect(capabilities).not.toHaveProperty('presetScenarios')
+    const schema = capabilities.operations[0]!.payloadSchema as { properties: { content: { properties: Record<string, unknown> } } }
+    expect(schema.properties.content.properties).not.toHaveProperty('scenario')
   })
 })

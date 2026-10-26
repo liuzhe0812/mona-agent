@@ -1,0 +1,41 @@
+{
+  "source": "极简红底黑猫头像图标.png",
+  "source_sha256": "0ea1fb4ba1524bad1011325cfb50042cd2740eab5962c240746d764857b6cda9",
+  "source_bounds": [
+    223,
+    251,
+    1030,
+    981
+  ],
+  "crop_bounds": [
+    223,
+    251,
+    1030,
+    899
+  ],
+  "width": 807,
+  "height": 648,
+  "eyes": [
+    [
+      160,
+      371,
+      306,
+      556
+    ],
+    [
+      496,
+      371,
+      642,
+      556
+    ]
+  ],
+  "eye_height": 185,
+  "under_eye_margin": 92,
+  "background": "transparent",
+  "pupils": false,
+  "hands": false,
+  "files": {
+    "head.png": "2159aa7a8dedaf37ec302929b9a84e748f290d60073960e9c55e94a743c7b233",
+    "eyes.png": "595f944a06c5ee809aaaad515b46bc13c3a7c8d38df824c0bd28e0abb3f2d9bd"
+  }
+}

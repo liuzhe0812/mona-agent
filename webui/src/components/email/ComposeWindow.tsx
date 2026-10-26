@@ -109,6 +109,17 @@ export function ComposeWindow() {
       account={account}
       standalone
       presetTo={payload?.presetTo ?? null}
+      onDraftSaved={(result, accountId, folder) => {
+        void import("@tauri-apps/api/event")
+          .then(({ emitTo }) =>
+            emitTo("main", "email-draft-saved", {
+              accountId,
+              folder,
+              draftUid: result.draftUid,
+            }),
+          )
+          .catch(() => console.warn("[email] draft list refresh notification failed"));
+      }}
     />
   );
 }

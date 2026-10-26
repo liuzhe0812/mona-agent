@@ -523,13 +523,11 @@ export class MonaClient {
   restoreAgentInstruction(
     agentId: string,
     key: AgentInstruction["key"],
-    commit: string,
   ): Promise<AgentInstruction> {
     return this.sendAgentCommandRaw("agent_instruction_restore_result", (requestId) => ({
       type: "agent_instruction_restore",
       agent_id: agentId,
       key,
-      commit,
       request_id: requestId,
     })).then((result) => {
       const instruction = (result as { instruction?: AgentInstruction }).instruction;
@@ -648,10 +646,8 @@ export class MonaClient {
   }
 
   /** Start a run of the room's active workflow. Run state arrives via
-   *  ``workflow_run_updated`` pushes. Optional ``inputs`` ride along
-   *  verbatim as the run's structured input (stock-module design §4.2).
-   *  ``templateRef`` is an optional installed-package template selector;
-   *  omitting it preserves the legacy active-workflow behavior. */
+   *  ``workflow_run_updated`` pushes. Optional structured inputs and an
+   *  installed-package template selector are sent with the run request. */
   runWorkflow(
     chatId: string,
     inputs?: Record<string, unknown>,
@@ -751,43 +747,6 @@ export class MonaClient {
       expected_hash: expectedHash,
       request_id: requestId,
     })).then(() => undefined);
-  }
-
-  /** Synchronize the persisted stock-selection schedule with the gateway
-   * cron service.  This is deliberately separate from the HTTP strategy save:
-   * a successful save must not be presented as a registered schedule. */
-  syncStockScreenSchedule(
-    chatId: string,
-    strategyId: string,
-    schedule: Record<string, unknown>,
-  ): Promise<{ status: "registered" | "disabled" | "unavailable" | string; code?: string; detail?: string; job_id?: string }> {
-    return this.sendRoomCommandRaw("sync_stock_selection_schedule_result", (requestId) => ({
-      type: "sync_stock_selection_schedule",
-      chat_id: chatId,
-      strategy_id: strategyId,
-      schedule,
-      request_id: requestId,
-    } as unknown as Outbound)).then((result) => {
-      const payload = result as unknown as {
-        status?: string;
-        registered?: boolean;
-        unavailable?: boolean;
-        code?: string;
-        detail?: string;
-        job_id?: string;
-      };
-      if (!payload.status && payload.registered === undefined && payload.unavailable === undefined) {
-        throw new Error("malformed sync_stock_selection_schedule_result");
-      }
-      const status = payload.status
-        ?? (payload.registered === true ? "registered" : payload.unavailable === true ? "unavailable" : "disabled");
-      return {
-        status,
-        code: payload.code,
-        detail: payload.detail,
-        job_id: payload.job_id,
-      };
-    });
   }
 
   /** Cancel a non-terminal run (defaults to the room's active run);
@@ -1187,7 +1146,6 @@ export class MonaClient {
       parsed.event === "retry_workflow_step_result" ||
       parsed.event === "workflow_run_state_result" ||
       parsed.event === "resolve_workflow_approval_result" ||
-      (parsed as unknown as { event?: string }).event === "sync_stock_selection_schedule_result" ||
       parsed.event === "agent_config_update_result" ||
       parsed.event === "video_model_binding_result" ||
       parsed.event === "custom_agent_create_result" ||

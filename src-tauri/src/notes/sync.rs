@@ -44,7 +44,7 @@ fn component(value: &str) -> bool {
             "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9")
 }
 
-fn linked(meta: &fs::Metadata) -> bool {
+pub(super) fn linked(meta: &fs::Metadata) -> bool {
     if meta.file_type().is_symlink() { return true; }
     #[cfg(windows)] {
         use std::os::windows::fs::MetadataExt;

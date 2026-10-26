@@ -1,0 +1,2620 @@
+{
+  "schemaVersion": 1,
+  "integration": {
+    "name": "mona-design",
+    "displayName": "Mona Design"
+  },
+  "upstream": {
+    "repository": "https://github.com/alchaincyf/huashu-design",
+    "ref": "master",
+    "commit": "4fc7bfdbd5ec3fa2d43ce7a6433de60976a5e4b1",
+    "commitDate": "2026-10-23T23:31:58+08:00",
+    "licenseFile": "LICENSE",
+    "license": "MIT"
+  },
+  "sourceFileCount": 382,
+  "sourceBytes": 13958571,
+  "files": [
+    {
+      "originalPath": ".env.example",
+      "targetPath": ".env.example",
+      "sizeBytes": 463,
+      "sha256": "ee04a1e71a37d698b68cda506eba579c47d7559b345ae90a350e890130cfafb4"
+    },
+    {
+      "originalPath": ".gitignore",
+      "targetPath": ".gitignore",
+      "sizeBytes": 844,
+      "sha256": "c263d044826b41803d8fe9f04ec74b6d43dfed469fa1a5cd51131cffa157292e"
+    },
+    {
+      "originalPath": "LICENSE",
+      "targetPath": "LICENSE",
+      "sizeBytes": 1086,
+      "sha256": "6d6a2a9caf2e6d2b76974050427053b2892d8aa4c33fd168ce63a537fcee9d96"
+    },
+    {
+      "originalPath": "README.en.md",
+      "targetPath": "README.en.md",
+      "sizeBytes": 28408,
+      "sha256": "95c5e128ea29cb1a887109af6ea9745cd18731db44f08300f37a2486d0a7c6bc",
+      "upstreamSha256": "299071fbe75039e7ca7739a77f995224f67fe925370a3deafd0351a0530e6b9f",
+      "upstreamSizeBytes": 28564,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "README.md",
+      "targetPath": "README.md",
+      "sizeBytes": 28667,
+      "sha256": "14a49992bf21272de70e420999b8b2ccd40805ea0789d3d057a3643a862d0749",
+      "upstreamSha256": "695017b495712dce57a9476527c403260c88446d33180b1a6ff93d0e0832b04d",
+      "upstreamSizeBytes": 28831,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "SECURITY.md",
+      "targetPath": "SECURITY.md",
+      "sizeBytes": 7396,
+      "sha256": "ff44af3fb26a8411bf94bd4d0704bc6aa2c205256f7c636bf7a2ce28e5ca4bdb"
+    },
+    {
+      "originalPath": "SKILL.md",
+      "targetPath": "references/upstream-skill.md",
+      "sizeBytes": 15558,
+      "sha256": "63cbc2ffcfd99f7b8acb6ff92adbbbba4bfaeec84373703d81df6a6fc6055a23"
+    },
+    {
+      "originalPath": "assets/android_frame.jsx",
+      "targetPath": "assets/android_frame.jsx",
+      "sizeBytes": 4506,
+      "sha256": "8c1c951518e5f0d39c07212d0bb9e8f1b5363b4ad4d1f903dca26d6a485e08bf"
+    },
+    {
+      "originalPath": "assets/animations.jsx",
+      "targetPath": "assets/animations.jsx",
+      "sizeBytes": 10528,
+      "sha256": "5cbb50b6d0c78af36678d13e47df363aec6c6e7d011131f503c1f99d45158b9d"
+    },
+    {
+      "originalPath": "assets/banner.svg",
+      "targetPath": "assets/banner.svg",
+      "sizeBytes": 9502,
+      "sha256": "d8660a8e0cd300a773b21308b651ffdd4258ecdc723505724216e47425016b05"
+    },
+    {
+      "originalPath": "assets/browser_window.jsx",
+      "targetPath": "assets/browser_window.jsx",
+      "sizeBytes": 3975,
+      "sha256": "59e412322a5ca34d68716978b4e1147efc95ba65f6fd4d4a99abcc96909f7d55"
+    },
+    {
+      "originalPath": "assets/cursor.jsx",
+      "targetPath": "assets/cursor.jsx",
+      "sizeBytes": 14408,
+      "sha256": "6321767cf44d7b95aeb2eeef756fc45d44e53985dc060f8e1c8805bb5f8e45a4"
+    },
+    {
+      "originalPath": "assets/deck_index.html",
+      "targetPath": "assets/deck_index.html",
+      "sizeBytes": 21320,
+      "sha256": "83d63a9ed531fb4f4a7b47c23c13024cb0b1831ab4883fc902bda351724c6820"
+    },
+    {
+      "originalPath": "assets/deck_stage.js",
+      "targetPath": "assets/deck_stage.js",
+      "sizeBytes": 11678,
+      "sha256": "a7a2af14c2f8001d2c7e2590dacbf8110b38b37da7b82cbce12382286e8ed6cf"
+    },
+    {
+      "originalPath": "assets/design_canvas.jsx",
+      "targetPath": "assets/design_canvas.jsx",
+      "sizeBytes": 5195,
+      "sha256": "5376c8ebdc59ec8b969161cb815d9455ccd233e6d6baa0d49f8af337883ed3d6"
+    },
+    {
+      "originalPath": "assets/director-notes-samples/launch-film-30s-sample.md",
+      "targetPath": "assets/director-notes-samples/launch-film-30s-sample.md",
+      "sizeBytes": 76213,
+      "sha256": "012c5e26edbb809cfc909f5d529dc9a5e5118a37f117fa222845834ed5110eec",
+      "upstreamSha256": "92929cba00fee525a70cbe3cd3f6e7b4d2ca7afb9a91a707721cfce9b34b92cd",
+      "upstreamSizeBytes": 80207,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "assets/ios_frame.jsx",
+      "targetPath": "assets/ios_frame.jsx",
+      "sizeBytes": 4753,
+      "sha256": "e19b4dd028aed54f8c20cea8b070c349e89f2ebcb9ff6b29fd37a9b2381789bd"
+    },
+    {
+      "originalPath": "assets/macos_window.jsx",
+      "targetPath": "assets/macos_window.jsx",
+      "sizeBytes": 2536,
+      "sha256": "ebe16aea22d9421dc64b649c4c6f985545abf976fdcd525f16dc010235c87b96"
+    },
+    {
+      "originalPath": "assets/narration_stage.jsx",
+      "targetPath": "assets/narration_stage.jsx",
+      "sizeBytes": 20715,
+      "sha256": "a60a6421e26ca6b6d20feed7233873e1c19dea47bb00e60be3c686c3fa596bef"
+    },
+    {
+      "originalPath": "assets/personal-asset-index.example.json",
+      "targetPath": "assets/personal-asset-index.example.json",
+      "sizeBytes": 1826,
+      "sha256": "b35ca20aa41f6a52ad7248969a25eadaf607d3379f79fd1f4cb841fca423886c"
+    },
+    {
+      "originalPath": "assets/sfx/container/card-flip.mp3",
+      "targetPath": "assets/sfx/container/card-flip.mp3",
+      "sizeBytes": 12164,
+      "sha256": "346cc1953650959216780ba6e167ce5819f9cf87fa6e01c170249f2f941d5b59"
+    },
+    {
+      "originalPath": "assets/sfx/container/card-snap.mp3",
+      "targetPath": "assets/sfx/container/card-snap.mp3",
+      "sizeBytes": 8821,
+      "sha256": "0870f1b9c0e1d7457f12a9204d627b8e1755b449d6299022edc304f3feb60b7b"
+    },
+    {
+      "originalPath": "assets/sfx/container/modal-open.mp3",
+      "targetPath": "assets/sfx/container/modal-open.mp3",
+      "sizeBytes": 10493,
+      "sha256": "5a493c07db344478e1c69821bacabdc9fe3ed1e9743afc2c7c4a1ead328f7cdd"
+    },
+    {
+      "originalPath": "assets/sfx/container/stack-collapse.mp3",
+      "targetPath": "assets/sfx/container/stack-collapse.mp3",
+      "sizeBytes": 13836,
+      "sha256": "69f5f5764251c5e08c2700561caf5df668aead8d411375e13a6a072b631692df"
+    },
+    {
+      "originalPath": "assets/sfx/feedback/achievement.mp3",
+      "targetPath": "assets/sfx/feedback/achievement.mp3",
+      "sizeBytes": 24703,
+      "sha256": "b8fb9d8806d6bde21c8a2a9d78f751fa79ddfb82fe09a5e5c49e069c14cdc754"
+    },
+    {
+      "originalPath": "assets/sfx/feedback/error-tone.mp3",
+      "targetPath": "assets/sfx/feedback/error-tone.mp3",
+      "sizeBytes": 12164,
+      "sha256": "a85727f1afe67c948e5246e17ebfb5c144db9d5ccb414e4fa1011563230541c6"
+    },
+    {
+      "originalPath": "assets/sfx/feedback/notification-pop.mp3",
+      "targetPath": "assets/sfx/feedback/notification-pop.mp3",
+      "sizeBytes": 10493,
+      "sha256": "e455a187df06e7e0b9b51d1722ddcf225abaa704cb0d0b7fd2d56eb7d0b3ace5"
+    },
+    {
+      "originalPath": "assets/sfx/feedback/success-chime.mp3",
+      "targetPath": "assets/sfx/feedback/success-chime.mp3",
+      "sizeBytes": 17180,
+      "sha256": "95a1aa98d046f08d412e59d50ea00d955f486964ea4368537e2754eb2313502c"
+    },
+    {
+      "originalPath": "assets/sfx/impact/brand-stamp.mp3",
+      "targetPath": "assets/sfx/impact/brand-stamp.mp3",
+      "sizeBytes": 17180,
+      "sha256": "2fd4d6fe3df413d6c19dbd3da93f39df93b30c31eb106dc000a36f7dc6737ab7"
+    },
+    {
+      "originalPath": "assets/sfx/impact/drop-thud.mp3",
+      "targetPath": "assets/sfx/impact/drop-thud.mp3",
+      "sizeBytes": 12164,
+      "sha256": "57ba7f12272a258e02280ec6839c00980ebe6b7e800080c899c9c03787bffc40"
+    },
+    {
+      "originalPath": "assets/sfx/impact/logo-reveal-v2.mp3",
+      "targetPath": "assets/sfx/impact/logo-reveal-v2.mp3",
+      "sizeBytes": 24703,
+      "sha256": "7fe974ee3267ff30071dfa03722da448600e4834d79a5451377b187ecf88241b"
+    },
+    {
+      "originalPath": "assets/sfx/impact/logo-reveal.mp3",
+      "targetPath": "assets/sfx/impact/logo-reveal.mp3",
+      "sizeBytes": 24703,
+      "sha256": "7fe974ee3267ff30071dfa03722da448600e4834d79a5451377b187ecf88241b"
+    },
+    {
+      "originalPath": "assets/sfx/keyboard/delete-key.mp3",
+      "targetPath": "assets/sfx/keyboard/delete-key.mp3",
+      "sizeBytes": 8821,
+      "sha256": "a554ca3a23535ea62da265b35ec9542299aafaa1c0334adf432b02b40a67e0da"
+    },
+    {
+      "originalPath": "assets/sfx/keyboard/enter.mp3",
+      "targetPath": "assets/sfx/keyboard/enter.mp3",
+      "sizeBytes": 8821,
+      "sha256": "f97e86cfb43f04900e43c771dee38f777e48ddd86a00389e3dd1e4d98c7f496b"
+    },
+    {
+      "originalPath": "assets/sfx/keyboard/space-tap.mp3",
+      "targetPath": "assets/sfx/keyboard/space-tap.mp3",
+      "sizeBytes": 8821,
+      "sha256": "b138014934488629241fb7132e99ea850c34b1865d712bc3c67de5962e6fc411"
+    },
+    {
+      "originalPath": "assets/sfx/keyboard/type-fast.mp3",
+      "targetPath": "assets/sfx/keyboard/type-fast.mp3",
+      "sizeBytes": 24703,
+      "sha256": "bc2dcab144e81b08f4b6e1a0d482f2497d2da4d9975d6e354e8396c02ae9cc8d"
+    },
+    {
+      "originalPath": "assets/sfx/keyboard/type.mp3",
+      "targetPath": "assets/sfx/keyboard/type.mp3",
+      "sizeBytes": 13836,
+      "sha256": "5a5850c157fd7b7ab54c722399a3e1c3d3214667bdb68ba40003aa036adcb879"
+    },
+    {
+      "originalPath": "assets/sfx/magic/ai-process.mp3",
+      "targetPath": "assets/sfx/magic/ai-process.mp3",
+      "sizeBytes": 20106,
+      "sha256": "600d06dcaa8eeb18226bbd37bb354c8ea323debc5d9edc021137533f29847901"
+    },
+    {
+      "originalPath": "assets/sfx/magic/sparkle.mp3",
+      "targetPath": "assets/sfx/magic/sparkle.mp3",
+      "sizeBytes": 13836,
+      "sha256": "e2a23a322d5e1d973f1e5df406ec754c1543a53b1ea1ce3ec54b632b254e0743"
+    },
+    {
+      "originalPath": "assets/sfx/magic/transform.mp3",
+      "targetPath": "assets/sfx/magic/transform.mp3",
+      "sizeBytes": 17180,
+      "sha256": "835c037a1390b18118e04d4915256958b2bf8bf8196a726aea9ec81fbf629a04"
+    },
+    {
+      "originalPath": "assets/sfx/progress/complete-done.mp3",
+      "targetPath": "assets/sfx/progress/complete-done.mp3",
+      "sizeBytes": 13836,
+      "sha256": "1e43d66e8c9da873e942f5f71d4eebce3decf71a581c17be12c4997ec6434c0d"
+    },
+    {
+      "originalPath": "assets/sfx/progress/generate-start.mp3",
+      "targetPath": "assets/sfx/progress/generate-start.mp3",
+      "sizeBytes": 13836,
+      "sha256": "88b9599e41334ec21e1cc8ceb89f2b7209a2526bc81cd891f0c49a64301379d2"
+    },
+    {
+      "originalPath": "assets/sfx/progress/loading-tick.mp3",
+      "targetPath": "assets/sfx/progress/loading-tick.mp3",
+      "sizeBytes": 8821,
+      "sha256": "72dba49889cbe89903865502476d19abf0a6b51b9b6c21eabc62bc1a278e0a46"
+    },
+    {
+      "originalPath": "assets/sfx/terminal/command-execute.mp3",
+      "targetPath": "assets/sfx/terminal/command-execute.mp3",
+      "sizeBytes": 8821,
+      "sha256": "d47b1cb64682b7e6fe005ed87a65f454948f4a7e6d4d4acd848a5b8d7a5a3cf1"
+    },
+    {
+      "originalPath": "assets/sfx/terminal/cursor-blink.mp3",
+      "targetPath": "assets/sfx/terminal/cursor-blink.mp3",
+      "sizeBytes": 8821,
+      "sha256": "bb0d13bdf7bc476e9e9ba20afb6643e7b868bbe41c7b82a670f6133e5ab91b66"
+    },
+    {
+      "originalPath": "assets/sfx/terminal/output-appear.mp3",
+      "targetPath": "assets/sfx/terminal/output-appear.mp3",
+      "sizeBytes": 10493,
+      "sha256": "c55596314afe8130a9e06a9698fbea2db4c66052a3608e75d2a6b9da53bb3637"
+    },
+    {
+      "originalPath": "assets/sfx/transition/dissolve.mp3",
+      "targetPath": "assets/sfx/transition/dissolve.mp3",
+      "sizeBytes": 13836,
+      "sha256": "39e8c79015f98aa3c3b251fa289d0d154cf9264d8edcc16d323a02912c9a2e72"
+    },
+    {
+      "originalPath": "assets/sfx/transition/slide-in.mp3",
+      "targetPath": "assets/sfx/transition/slide-in.mp3",
+      "sizeBytes": 10493,
+      "sha256": "f0050b0c649306fd900fd4fd90db0472f0fc58e250821fd6ed877a6cea0f8dc8"
+    },
+    {
+      "originalPath": "assets/sfx/transition/swipe-horizontal.mp3",
+      "targetPath": "assets/sfx/transition/swipe-horizontal.mp3",
+      "sizeBytes": 12164,
+      "sha256": "b8da68f93a57e8cc27bf62ec796991d3c459d09a2c8cf342755bb97bfb143eff"
+    },
+    {
+      "originalPath": "assets/sfx/transition/whoosh-fast.mp3",
+      "targetPath": "assets/sfx/transition/whoosh-fast.mp3",
+      "sizeBytes": 8821,
+      "sha256": "941f258f25c3dd7bd9d381e65d8ece7556eb4b666360c99f7adb4ccd0c15637e"
+    },
+    {
+      "originalPath": "assets/sfx/transition/whoosh.mp3",
+      "targetPath": "assets/sfx/transition/whoosh.mp3",
+      "sizeBytes": 10493,
+      "sha256": "6a665acf18881c9b70288676929491584a0b99471fbebb1962cf91925daded43"
+    },
+    {
+      "originalPath": "assets/sfx/ui/click-soft.mp3",
+      "targetPath": "assets/sfx/ui/click-soft.mp3",
+      "sizeBytes": 8821,
+      "sha256": "48ab6362e64156c8a907b7705608eaa484494e878eaa4fae77ad32f703990bf3"
+    },
+    {
+      "originalPath": "assets/sfx/ui/click.mp3",
+      "targetPath": "assets/sfx/ui/click.mp3",
+      "sizeBytes": 8821,
+      "sha256": "c3acef5b24b47c6895bf4d74c3b47d9b25cf3b63e0db81303dcd6fe9d7bb9560"
+    },
+    {
+      "originalPath": "assets/sfx/ui/focus.mp3",
+      "targetPath": "assets/sfx/ui/focus.mp3",
+      "sizeBytes": 8821,
+      "sha256": "6c395c13bbf4eaa99d6434c3cb96622990e840d3cebe7c539626117aba74b936"
+    },
+    {
+      "originalPath": "assets/sfx/ui/hover-subtle.mp3",
+      "targetPath": "assets/sfx/ui/hover-subtle.mp3",
+      "sizeBytes": 8821,
+      "sha256": "565ef4d0d8dfcdc6696ef57ec142fffb90ef980f24af753cbe3a1f8ca807e57a"
+    },
+    {
+      "originalPath": "assets/sfx/ui/tap-finger.mp3",
+      "targetPath": "assets/sfx/ui/tap-finger.mp3",
+      "sizeBytes": 8821,
+      "sha256": "abe259fac618b97e28463122cda1ffc739649815da346b5ed279fd617f28a3c3"
+    },
+    {
+      "originalPath": "assets/sfx/ui/toggle-on.mp3",
+      "targetPath": "assets/sfx/ui/toggle-on.mp3",
+      "sizeBytes": 8821,
+      "sha256": "5cb28331ecc00dc18386808ad3502f712af2b617ac7fec1748674209c98c5c7c"
+    },
+    {
+      "originalPath": "assets/showcases/INDEX.md",
+      "targetPath": "assets/showcases/INDEX.md",
+      "sizeBytes": 5538,
+      "sha256": "576c8c1c6ca508e074337a9bcc001615c72ab7bf13611421ff2b13007fd970f9"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-build.html",
+      "targetPath": "assets/showcases/cover/cover-build.html",
+      "sizeBytes": 5664,
+      "sha256": "9d35f6687f3cac442dd5d8e2e5ed431d7d3d70b17b60dc44eefecdb3f4d84cd9"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-build.png",
+      "targetPath": "assets/showcases/cover/cover-build.png",
+      "sizeBytes": 116336,
+      "sha256": "a5494a78ae0e6b7553a961fcd830a817cc75c6d9c85e5f5a714b42f74b587824"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-pentagram.html",
+      "targetPath": "assets/showcases/cover/cover-pentagram.html",
+      "sizeBytes": 4914,
+      "sha256": "8480a08fe2231822e6236c0aad41741faece30a5bf0059f9fece76ef0190dfec"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-pentagram.png",
+      "targetPath": "assets/showcases/cover/cover-pentagram.png",
+      "sizeBytes": 36047,
+      "sha256": "d8482c018e4bb15957f95eb0d5f349a318fbd223d5e62d728f667351244bae92"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-takram.html",
+      "targetPath": "assets/showcases/cover/cover-takram.html",
+      "sizeBytes": 11823,
+      "sha256": "c8436fb562d34a76931bc936bcbd907be2d29ea33b476d306b3a80b5c9594b1b"
+    },
+    {
+      "originalPath": "assets/showcases/cover/cover-takram.png",
+      "targetPath": "assets/showcases/cover/cover-takram.png",
+      "sizeBytes": 155362,
+      "sha256": "8aa520e057fd5acf7030db6568dd10b493c898f175d7f7d71836b66e30ca6817"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-build.html",
+      "targetPath": "assets/showcases/infographic/infographic-build.html",
+      "sizeBytes": 11696,
+      "sha256": "b69e1cad7ca1db69c0b2498ceec55ef4746fc23c4288169a41c497dbc1321234"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-build.png",
+      "targetPath": "assets/showcases/infographic/infographic-build.png",
+      "sizeBytes": 108710,
+      "sha256": "fa9afbfdf559ed0c541f8dc77aedd3796a7a98dcbb75ad2c6e2ac0121f0c0c1b"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-pentagram.html",
+      "targetPath": "assets/showcases/infographic/infographic-pentagram.html",
+      "sizeBytes": 13911,
+      "sha256": "c427b9c5fd351463caac85445c0bef83d702ab39e54407bc6ae6a3f93c04b632"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-pentagram.png",
+      "targetPath": "assets/showcases/infographic/infographic-pentagram.png",
+      "sizeBytes": 159021,
+      "sha256": "15692b204e9f7ead259983441476e69a12a8f65aa81f72d9ec0619b5cbeccc17"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-takram.html",
+      "targetPath": "assets/showcases/infographic/infographic-takram.html",
+      "sizeBytes": 22396,
+      "sha256": "3a6f65940c847186f881101b6958d822880bdad81a39c8121653c756cc37b8ee"
+    },
+    {
+      "originalPath": "assets/showcases/infographic/infographic-takram.png",
+      "targetPath": "assets/showcases/infographic/infographic-takram.png",
+      "sizeBytes": 162976,
+      "sha256": "5eba3094dd2a860083c150665772c7d96a5bf93a47f3cfbe5d797f51989ae3ea"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-build.html",
+      "targetPath": "assets/showcases/ppt/ppt-build.html",
+      "sizeBytes": 9083,
+      "sha256": "8140f3860e039ea18f090c53b32b2bebcd926de56a6e099250d4aced66ef45f8"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-build.png",
+      "targetPath": "assets/showcases/ppt/ppt-build.png",
+      "sizeBytes": 84423,
+      "sha256": "6aa21e66a1077e24521939dd3bfbf907a7ed6266a40870cd925ee1a03e2b3c69"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-pentagram.html",
+      "targetPath": "assets/showcases/ppt/ppt-pentagram.html",
+      "sizeBytes": 11955,
+      "sha256": "a4b9461533cdd58e339235f4dad9396a47a389f84f1f19a72d230409d1ef8b1a"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-pentagram.png",
+      "targetPath": "assets/showcases/ppt/ppt-pentagram.png",
+      "sizeBytes": 101335,
+      "sha256": "e426bd70703fd6557772006c8db84a6230eab154d1ec6730b9069a327547c7bf"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-takram.html",
+      "targetPath": "assets/showcases/ppt/ppt-takram.html",
+      "sizeBytes": 15656,
+      "sha256": "77273fcb09a128d9fe9ef41ba38ee90ae3474640614c591ac645b5ba83812ff6"
+    },
+    {
+      "originalPath": "assets/showcases/ppt/ppt-takram.png",
+      "targetPath": "assets/showcases/ppt/ppt-takram.png",
+      "sizeBytes": 467187,
+      "sha256": "88bc00e535912eb9bd7d22dc50c9b737704ae81a257af0d3d9273847f3816a2c"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-build.html",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-build.html",
+      "sizeBytes": 9621,
+      "sha256": "9ad1fe678e9ba0fcc6fb7753d07f141b17e9fd27c72225b59521f63e841c9fed"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-build.png",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-build.png",
+      "sizeBytes": 85064,
+      "sha256": "a1f380d9aa9dbb891c73682b0d9627760e2c1e39370ed29338cb4372da3f861c"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-pentagram.html",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-pentagram.html",
+      "sizeBytes": 10553,
+      "sha256": "d729fbbc6dcf067c8bf97eb654e4c6063908e89d09f91e769a73fca990038d70"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-pentagram.png",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-pentagram.png",
+      "sizeBytes": 105575,
+      "sha256": "04b65a201170453d4f4261f9fed835b3e516b2ecbeb528560991c33d0a582dd0"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-takram.html",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-takram.html",
+      "sizeBytes": 12747,
+      "sha256": "f553f875fe60498e177e5c99c0444895b444fe37c5969364f7f6af53c909e42f"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-nav/ainav-takram.png",
+      "targetPath": "assets/showcases/website-ai-nav/ainav-takram.png",
+      "sizeBytes": 121675,
+      "sha256": "8c16c90993f499aadd35d8a597d9793824181c17e7e5ed29a17f4f4b53958400"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-build.html",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-build.html",
+      "sizeBytes": 14066,
+      "sha256": "9f35620be810d44ce44e5828684efb5d31c68f6a4ae6dfd77947e800236f786b"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-build.png",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-build.png",
+      "sizeBytes": 130604,
+      "sha256": "171556a04eb950ae17469a0f040d64b6ee145324f43d76f1d6a8b551582f85d1"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-pentagram.html",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-pentagram.html",
+      "sizeBytes": 14226,
+      "sha256": "15a913d13ebfceb4631931e0a5aa0d616b42854b4fafe76ccdf50fd11c67e352"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-pentagram.png",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-pentagram.png",
+      "sizeBytes": 150195,
+      "sha256": "c7eba9cf29218c5a0896d594791c7f1540c37e12855c0969d10b19ba0c2ec71d"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-takram.html",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-takram.html",
+      "sizeBytes": 18003,
+      "sha256": "d038d88ffed699a8f7867737731d175484c97552c32bdeb5d6ba18e90bbb59f3"
+    },
+    {
+      "originalPath": "assets/showcases/website-ai-writing/aiwriting-takram.png",
+      "targetPath": "assets/showcases/website-ai-writing/aiwriting-takram.png",
+      "sizeBytes": 157158,
+      "sha256": "3c18cc8997f817cba5b4363edb5b7687ee564740f63511ce7d8535d49688704e"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-build.html",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-build.html",
+      "sizeBytes": 9928,
+      "sha256": "772b8a0de4be25b310c412398d9392da31947e1a97cb4ea5213fe001157acd81"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-build.png",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-build.png",
+      "sizeBytes": 68230,
+      "sha256": "9d5f29a7c6985ac923217f5d1b3f829f254fde237f7726ef6d8f01ef18c1ac1f"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-pentagram.html",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-pentagram.html",
+      "sizeBytes": 12801,
+      "sha256": "d2486d80dc12b0930a757f294f5679c2877ff0233ee016d90921b7eb8306ec32"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-pentagram.png",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-pentagram.png",
+      "sizeBytes": 117051,
+      "sha256": "a40c2b6b029110a79a81ccfaebcfd02f2c9dee3f0eaec333483c13bbdb2afa1b"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-takram.html",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-takram.html",
+      "sizeBytes": 13106,
+      "sha256": "c0e0f30700539996f21261f6d2ae13cb097d0ae1698d9b39742b818def2752b9"
+    },
+    {
+      "originalPath": "assets/showcases/website-devdocs/devdocs-takram.png",
+      "targetPath": "assets/showcases/website-devdocs/devdocs-takram.png",
+      "sizeBytes": 111854,
+      "sha256": "40ac110037d94c5caf3e7210e66cd1fc1909b754ed21a4ae0191cf6150374549"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-build.html",
+      "targetPath": "assets/showcases/website-homepage/homepage-build.html",
+      "sizeBytes": 8314,
+      "sha256": "4c207d33dca1cb0d9a5eb4cf63583d30aa2d88b4576668881bd8437f68539090"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-build.png",
+      "targetPath": "assets/showcases/website-homepage/homepage-build.png",
+      "sizeBytes": 61708,
+      "sha256": "2be9f198345749735b403e364e7835d30fbd4521d455c817caab5db023282146"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-pentagram.html",
+      "targetPath": "assets/showcases/website-homepage/homepage-pentagram.html",
+      "sizeBytes": 8491,
+      "sha256": "315dc0a438dce2668dde109f97ecaec6ac9e6f49d99aad1f69cd95dcf26c7738"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-pentagram.png",
+      "targetPath": "assets/showcases/website-homepage/homepage-pentagram.png",
+      "sizeBytes": 57093,
+      "sha256": "5199e4d1d26e0d333a74a2e54b793ff29dccf6c88e577f9c8efd42ad18d2e485"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-takram.html",
+      "targetPath": "assets/showcases/website-homepage/homepage-takram.html",
+      "sizeBytes": 10543,
+      "sha256": "08f0f7625edbc91733979de526d5a2a270b02f84089aa15b27cc9cd47bbc8a04"
+    },
+    {
+      "originalPath": "assets/showcases/website-homepage/homepage-takram.png",
+      "targetPath": "assets/showcases/website-homepage/homepage-takram.png",
+      "sizeBytes": 127610,
+      "sha256": "daaf7e9f1f99bc8dd8ee81fe5dcca3b6f37493c0afbce097b247a834c26b7e78"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-build.html",
+      "targetPath": "assets/showcases/website-saas/saas-build.html",
+      "sizeBytes": 12901,
+      "sha256": "dcaade14100656640375cd86409af3298077a16dc34ce880f2bf630f6a6fa059"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-build.png",
+      "targetPath": "assets/showcases/website-saas/saas-build.png",
+      "sizeBytes": 99745,
+      "sha256": "ac0158d2581567d755dd8fd759d0b453b30fdef189f926efe8662c70f3fb41aa"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-pentagram.html",
+      "targetPath": "assets/showcases/website-saas/saas-pentagram.html",
+      "sizeBytes": 15050,
+      "sha256": "7de234517804ffe59698f1b74eed296fc926296bb996c1718e32be0299e90c73"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-pentagram.png",
+      "targetPath": "assets/showcases/website-saas/saas-pentagram.png",
+      "sizeBytes": 96559,
+      "sha256": "6017150ea044cbcb00f121f549b0e9cffce583c2a06063b0a6479b18793fbf72"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-takram.html",
+      "targetPath": "assets/showcases/website-saas/saas-takram.html",
+      "sizeBytes": 18209,
+      "sha256": "122f274623e47b33516caabcc57648a98fb4512d8ca27f6f145c16feec63c08c"
+    },
+    {
+      "originalPath": "assets/showcases/website-saas/saas-takram.png",
+      "targetPath": "assets/showcases/website-saas/saas-takram.png",
+      "sizeBytes": 123532,
+      "sha256": "5f877b12ca5fb876a92f8b44f1f7968de4366dd30c88479e7bf3f361dd2df455"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/01-hardware-panel.html",
+      "targetPath": "assets/style-specimens/app/01-hardware-panel.html",
+      "sizeBytes": 7283,
+      "sha256": "d5e4e7d6dcf9363131f4792a7bdccf582b0b29953f20d9c27c63cea60dd15e9e"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/01-hardware-panel.jpg",
+      "targetPath": "assets/style-specimens/app/01-hardware-panel.jpg",
+      "sizeBytes": 75421,
+      "sha256": "17baae2788df3f48a7aceb65a9e1e929932a51f1154da6b9546343825453a6e9"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/02-liquid-glass.html",
+      "targetPath": "assets/style-specimens/app/02-liquid-glass.html",
+      "sizeBytes": 6962,
+      "sha256": "9e0af28bb1d37de3a7067f9b03c2fc32fe2eaf0106775f3a74e9c8b61b574a86"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/02-liquid-glass.jpg",
+      "targetPath": "assets/style-specimens/app/02-liquid-glass.jpg",
+      "sizeBytes": 90008,
+      "sha256": "1052b50f7ad652bd2d671b117da359543b3ae87f7aae64c554288838b327d1d6"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/03-playful-3d.html",
+      "targetPath": "assets/style-specimens/app/03-playful-3d.html",
+      "sizeBytes": 5753,
+      "sha256": "a84cca82724b5bd75a7d3e75329285214bcf452b1cc3fdb4832d7c51b4651065"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/03-playful-3d.jpg",
+      "targetPath": "assets/style-specimens/app/03-playful-3d.jpg",
+      "sizeBytes": 94978,
+      "sha256": "bd79f2fa5b86b9a5aff59060043f33c2950267038d4be0ca617f5ec826fedf8c"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/04-friendly-fintech.html",
+      "targetPath": "assets/style-specimens/app/04-friendly-fintech.html",
+      "sizeBytes": 6381,
+      "sha256": "b5248496d8256f9b928127e47ee97d0e5d94b7c74708e6b8b1c5462167376eee"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/04-friendly-fintech.jpg",
+      "targetPath": "assets/style-specimens/app/04-friendly-fintech.jpg",
+      "sizeBytes": 93529,
+      "sha256": "1de1ee8a5d485c338a6d5ef96a4bd16e2ec4a527db6e4dac639db0759c4c0414"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/05-pro-camera.html",
+      "targetPath": "assets/style-specimens/app/05-pro-camera.html",
+      "sizeBytes": 7254,
+      "sha256": "3bd9e62b49fa54ce4ff9529612637c9d1858663fdac6e980fededa449f77b12f"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/05-pro-camera.jpg",
+      "targetPath": "assets/style-specimens/app/05-pro-camera.jpg",
+      "sizeBytes": 76334,
+      "sha256": "f3edb0ff5d65e920b14475096ff4d7feae2dbe02c174ef2f0166c6cb152ecd82"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/06-topo-outdoor.html",
+      "targetPath": "assets/style-specimens/app/06-topo-outdoor.html",
+      "sizeBytes": 9151,
+      "sha256": "0baceb953f5bcaf279a55e7104142089eabec72af00be63de9907643ff512595"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/06-topo-outdoor.jpg",
+      "targetPath": "assets/style-specimens/app/06-topo-outdoor.jpg",
+      "sizeBytes": 92581,
+      "sha256": "daab07d59c5d5c9708ff6fb335caeb1376df960ccb466f44b2aa07742f73286c"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/07-feed-waterfall.html",
+      "targetPath": "assets/style-specimens/app/07-feed-waterfall.html",
+      "sizeBytes": 7716,
+      "sha256": "c65f0a8fa9296b3845d0d6269bdcd8272af55a9e308e9f24c847a7df51514f2c"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/07-feed-waterfall.jpg",
+      "targetPath": "assets/style-specimens/app/07-feed-waterfall.jpg",
+      "sizeBytes": 83495,
+      "sha256": "01995163559aaa994bbd3389f8b4d994c51c2159e2bd9312c6d1160983589a9a"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/08-command-palette.html",
+      "targetPath": "assets/style-specimens/app/08-command-palette.html",
+      "sizeBytes": 6505,
+      "sha256": "d4b1e0c12b3cd2c99c04c71f9eb439e8a0e28e626c338ad35169bd1ebcb4f120"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/08-command-palette.jpg",
+      "targetPath": "assets/style-specimens/app/08-command-palette.jpg",
+      "sizeBytes": 56758,
+      "sha256": "94dfaa2adb3f182a0bf8f6a8e1999e635a7a65ba68632b0c239b79bdbf9a4d80"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/09-health-color-code.html",
+      "targetPath": "assets/style-specimens/app/09-health-color-code.html",
+      "sizeBytes": 7485,
+      "sha256": "6856f15940eb62559034d2bf455e21205c811dc1cf93aa903c49abe9d3797fe0"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/09-health-color-code.jpg",
+      "targetPath": "assets/style-specimens/app/09-health-color-code.jpg",
+      "sizeBytes": 75935,
+      "sha256": "6e39a9b9a9474261ce32d8abc908480246dcb6ddd379d11fa45983bc8d7c5b25"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/10-native-polish.html",
+      "targetPath": "assets/style-specimens/app/10-native-polish.html",
+      "sizeBytes": 6513,
+      "sha256": "37ab518616a0286ca72900d617978d0a5ab44f7cb41b1ac8af4db8fa2bb555be"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/10-native-polish.jpg",
+      "targetPath": "assets/style-specimens/app/10-native-polish.jpg",
+      "sizeBytes": 76319,
+      "sha256": "738a4783963c2f684df4247fb01475704edfdae3e2ad6c16fd55241268bb3fc4"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/11-gentle-encouraging.html",
+      "targetPath": "assets/style-specimens/app/11-gentle-encouraging.html",
+      "sizeBytes": 6438,
+      "sha256": "4ea3caa190edd364af6b76161354777981511a39c6c9d4ee325c0c6ef7c9c84e"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/11-gentle-encouraging.jpg",
+      "targetPath": "assets/style-specimens/app/11-gentle-encouraging.jpg",
+      "sizeBytes": 81985,
+      "sha256": "03f37da5e77b8086f5c8cb0daf9ebda8750c33a6a61987fe2dc8ae8ae5df04d1"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/12-editorial-reader.html",
+      "targetPath": "assets/style-specimens/app/12-editorial-reader.html",
+      "sizeBytes": 6078,
+      "sha256": "3feb16f7afb1763bdb0a7af7e0ddb9cad62d4380b1512093511298324f97e718"
+    },
+    {
+      "originalPath": "assets/style-specimens/app/12-editorial-reader.jpg",
+      "targetPath": "assets/style-specimens/app/12-editorial-reader.jpg",
+      "sizeBytes": 116882,
+      "sha256": "e6368309e162ef14a8a111f56eb82fba47d332ac19deda2407af9f000f0d752a"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/01-lu-jingren-bookcraft.html",
+      "targetPath": "assets/style-specimens/east/01-lu-jingren-bookcraft.html",
+      "sizeBytes": 4128,
+      "sha256": "88b5a1c89af9d789112212da0f2c1f232d4d408a023f87b56028eb8014d2e59d"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/01-lu-jingren-bookcraft.jpg",
+      "targetPath": "assets/style-specimens/east/01-lu-jingren-bookcraft.jpg",
+      "sizeBytes": 70152,
+      "sha256": "a18a4224002862a1052ef5c97bbcb04768cc4ee7276b8af94b924a1e20030851"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/02-song-block-print.html",
+      "targetPath": "assets/style-specimens/east/02-song-block-print.html",
+      "sizeBytes": 4835,
+      "sha256": "e68fac02350c6ddc913f0ecec20737b4421c72165809e75f5fb51572bde7e408"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/02-song-block-print.jpg",
+      "targetPath": "assets/style-specimens/east/02-song-block-print.jpg",
+      "sizeBytes": 149839,
+      "sha256": "ae3d457ad80fb11217daf2800f27cee6018cb5bebba49ff06ae3dc993e3ba295"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/03-republic-book-jacket.html",
+      "targetPath": "assets/style-specimens/east/03-republic-book-jacket.html",
+      "sizeBytes": 4717,
+      "sha256": "f16a55e5766604f29de568b25d2a90319d03ec2aaa78641b4c75b31f6591c6cf"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/03-republic-book-jacket.jpg",
+      "targetPath": "assets/style-specimens/east/03-republic-book-jacket.jpg",
+      "sizeBytes": 59094,
+      "sha256": "180e9beddd9104ef52ff613aa9357d3638fb2ee633b01d6ef00c0cb704fcd9ea"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/04-shanghai-deco-calendar.html",
+      "targetPath": "assets/style-specimens/east/04-shanghai-deco-calendar.html",
+      "sizeBytes": 5104,
+      "sha256": "34745cfa8a07298375ba7cbdb5882a7b72d400974d395b1dab43e8d59639e8cf"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/04-shanghai-deco-calendar.jpg",
+      "targetPath": "assets/style-specimens/east/04-shanghai-deco-calendar.jpg",
+      "sizeBytes": 78134,
+      "sha256": "cff470c256366f06e56a20872ce1d0036d5216df5b7f4ce6323c95a653b8e79e"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/05-hanzi-experimental-poster.html",
+      "targetPath": "assets/style-specimens/east/05-hanzi-experimental-poster.html",
+      "sizeBytes": 5087,
+      "sha256": "7022996f64ff7a1f56754b599d43ebc3d55708baab18028d08f770aee8d2c3f5"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/05-hanzi-experimental-poster.jpg",
+      "targetPath": "assets/style-specimens/east/05-hanzi-experimental-poster.jpg",
+      "sizeBytes": 55436,
+      "sha256": "93401c18c734872d702d8c70ec2ed053b6be67a7e73e09e501e6a098abe57795"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/06-hk-street-signs.html",
+      "targetPath": "assets/style-specimens/east/06-hk-street-signs.html",
+      "sizeBytes": 4496,
+      "sha256": "e6c3c5f54c5164485cb5363c78474974fd3f07eecdcc8a987aa2c1e1cfc27079"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/06-hk-street-signs.jpg",
+      "targetPath": "assets/style-specimens/east/06-hk-street-signs.jpg",
+      "sizeBytes": 118281,
+      "sha256": "a24288318c1d1065b0dd631b72197724bdc53e21f64920cf6b72cabc00e33c00"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/07-traditional-colors-solar-terms.html",
+      "targetPath": "assets/style-specimens/east/07-traditional-colors-solar-terms.html",
+      "sizeBytes": 6097,
+      "sha256": "ea7951d9e6b978ff49220046df8601aa72c5fe9c6a31688bd2f5f8aa790a7217"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/07-traditional-colors-solar-terms.jpg",
+      "targetPath": "assets/style-specimens/east/07-traditional-colors-solar-terms.jpg",
+      "sizeBytes": 81663,
+      "sha256": "e6f8e1753e9a3071b2dced70e7f2981cc0459b1698d5aba82c685297a0d1e514"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/08-sugiura-info-mandala.html",
+      "targetPath": "assets/style-specimens/east/08-sugiura-info-mandala.html",
+      "sizeBytes": 28521,
+      "sha256": "700d7770b16cb425721676d10f88945ff675ef9fe8a779f0da65ec1602807370"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/08-sugiura-info-mandala.jpg",
+      "targetPath": "assets/style-specimens/east/08-sugiura-info-mandala.jpg",
+      "sizeBytes": 130342,
+      "sha256": "ba5054c1e6c7b8adc438d2d03198d112e827fc10b3a75feef8771f927e38b27d"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/09-tanaka-geometric-poster.html",
+      "targetPath": "assets/style-specimens/east/09-tanaka-geometric-poster.html",
+      "sizeBytes": 3179,
+      "sha256": "b738974d0826eddbdbd5f46c92528cd1816476e2a28d55320f9b4a968bac0e3f"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/09-tanaka-geometric-poster.jpg",
+      "targetPath": "assets/style-specimens/east/09-tanaka-geometric-poster.jpg",
+      "sizeBytes": 54851,
+      "sha256": "47266f3a69e54d4e4683c2367ba4e44fa7509ed7d9126e0d99495cab0c3a1b8d"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/10-hattori-playful-offset.html",
+      "targetPath": "assets/style-specimens/east/10-hattori-playful-offset.html",
+      "sizeBytes": 2990,
+      "sha256": "17b02b67a43c6d15a795857f7c473b4f5700f4e825e253def716935804bda48a"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/10-hattori-playful-offset.jpg",
+      "targetPath": "assets/style-specimens/east/10-hattori-playful-offset.jpg",
+      "sizeBytes": 91746,
+      "sha256": "d046c05e1ab331fe54a6d633904a6cf5327eeadfa949895da91481bfecb2af2c"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/11-sato-minimal-symbol.html",
+      "targetPath": "assets/style-specimens/east/11-sato-minimal-symbol.html",
+      "sizeBytes": 2827,
+      "sha256": "10896e14e1fe1290446a93bb38f69f926babf81e4375842ee5c6313032e8e258"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/11-sato-minimal-symbol.jpg",
+      "targetPath": "assets/style-specimens/east/11-sato-minimal-symbol.jpg",
+      "sizeBytes": 46514,
+      "sha256": "c2cd9dcc545c3c89d4124a37b4403f54a24205f778820ec2f2d5253dacd17e81"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/12-japan-magazine-dense.html",
+      "targetPath": "assets/style-specimens/east/12-japan-magazine-dense.html",
+      "sizeBytes": 14513,
+      "sha256": "65643f8d9cfec47ab6301105a2c53dc39a847241a7017beef2bdce2b8a20a159"
+    },
+    {
+      "originalPath": "assets/style-specimens/east/12-japan-magazine-dense.jpg",
+      "targetPath": "assets/style-specimens/east/12-japan-magazine-dense.jpg",
+      "sizeBytes": 125558,
+      "sha256": "27c3002c9f4b9cc551cc6a59920a5512e5a1e44a1df077ed4d4f7cf13202d02b"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/01-personal-annual-report.html",
+      "targetPath": "assets/style-specimens/info/01-personal-annual-report.html",
+      "sizeBytes": 9510,
+      "sha256": "cc2e35e924d1a93f7a2bc59ef2235bacf2a8189a9bae2666d6e35ff32039909d"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/01-personal-annual-report.jpg",
+      "targetPath": "assets/style-specimens/info/01-personal-annual-report.jpg",
+      "sizeBytes": 124360,
+      "sha256": "d0683fe42d498828e178cd59cf2f84f1cf541f7c58df8783bb576f44b6634e03"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/02-explanation-graphics.html",
+      "targetPath": "assets/style-specimens/info/02-explanation-graphics.html",
+      "sizeBytes": 5055,
+      "sha256": "81c91e42ea6cf9401c1490a2f2ea0dfdc74b12626df88a748fc34adf57dec420"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/02-explanation-graphics.jpg",
+      "targetPath": "assets/style-specimens/info/02-explanation-graphics.jpg",
+      "sizeBytes": 112423,
+      "sha256": "cea60ba8740409b39b1ff891e15c8396e1a727aba333cb99d89841bcface0ae4"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/03-cross-section-epic.html",
+      "targetPath": "assets/style-specimens/info/03-cross-section-epic.html",
+      "sizeBytes": 7255,
+      "sha256": "2d55c50e7f31607d260769439d221d698c6e6039dc8200e2576a454f34422611"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/03-cross-section-epic.jpg",
+      "targetPath": "assets/style-specimens/info/03-cross-section-epic.jpg",
+      "sizeBytes": 153950,
+      "sha256": "dd12e567da01086b96f9aceff66a48d6cf7d1854562cc0c5222f49ea1d872111"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/04-magazine-pop-data.html",
+      "targetPath": "assets/style-specimens/info/04-magazine-pop-data.html",
+      "sizeBytes": 3682,
+      "sha256": "b460783b39e0625881b6a7c050ee044f71f46de1cde34db6a390eda0dac141b3"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/04-magazine-pop-data.jpg",
+      "targetPath": "assets/style-specimens/info/04-magazine-pop-data.jpg",
+      "sizeBytes": 86801,
+      "sha256": "71fd894c2342c2e31073612d37114d9b0a552579f0ed5944a1efcba299a41e18"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/05-isotype.html",
+      "targetPath": "assets/style-specimens/info/05-isotype.html",
+      "sizeBytes": 4001,
+      "sha256": "fc8f3f52b9100f73013f78fe84e05064a37bcaad3f10deaf6b86e1915d969301"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/05-isotype.jpg",
+      "targetPath": "assets/style-specimens/info/05-isotype.jpg",
+      "sizeBytes": 123494,
+      "sha256": "7afe3cba97941bbd7904a0c8f00ed557188bb085344af21d218439d7563fac74"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/06-data-humanism.html",
+      "targetPath": "assets/style-specimens/info/06-data-humanism.html",
+      "sizeBytes": 6064,
+      "sha256": "482fe2a2c3556803974840181908624d608c2ed93943b8d7289322e2ad880864"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/06-data-humanism.jpg",
+      "targetPath": "assets/style-specimens/info/06-data-humanism.jpg",
+      "sizeBytes": 87739,
+      "sha256": "d3867b5667bc18b4506425b00778f4864e76918496faaba4b107ac20e1201d5c"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/07-scrollytelling.html",
+      "targetPath": "assets/style-specimens/info/07-scrollytelling.html",
+      "sizeBytes": 5031,
+      "sha256": "f78938a03ef01b196164a9305e7e840fc6f7d1d5ec83036825c5695c7c98fba9"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/07-scrollytelling.jpg",
+      "targetPath": "assets/style-specimens/info/07-scrollytelling.jpg",
+      "sizeBytes": 71448,
+      "sha256": "41abff0a3eb941b7e865c58eeb33940f96ff5886f163cc5dd4214257fde8f5f6"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/08-cartographic-lead.html",
+      "targetPath": "assets/style-specimens/info/08-cartographic-lead.html",
+      "sizeBytes": 4747,
+      "sha256": "d68e13f51a35ea273c9cc359b063375d55f3e5cb848b681f29a9394b7029b3b2"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/08-cartographic-lead.jpg",
+      "targetPath": "assets/style-specimens/info/08-cartographic-lead.jpg",
+      "sizeBytes": 85839,
+      "sha256": "4c73b0ab08b40387539bf092369ec9236ba009fc5ec19f6084b26f89a172bb4e"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/09-newsroom-chart.html",
+      "targetPath": "assets/style-specimens/info/09-newsroom-chart.html",
+      "sizeBytes": 5185,
+      "sha256": "89ffd58e6a8e1a4f3d0d869e9846c5087367b5812b6f37efdb3bd51c26126d45"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/09-newsroom-chart.jpg",
+      "targetPath": "assets/style-specimens/info/09-newsroom-chart.jpg",
+      "sizeBytes": 65398,
+      "sha256": "483d39f9628df5a059646f930210c4a5e472a38c3312a06e30a852f594ed2c60"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/10-computational-portrait.html",
+      "targetPath": "assets/style-specimens/info/10-computational-portrait.html",
+      "sizeBytes": 4471,
+      "sha256": "a86d723d0b1a1c8ff6ace7f77225cfbd45c90ac55307343eb1250d7d3d5949b2"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/10-computational-portrait.jpg",
+      "targetPath": "assets/style-specimens/info/10-computational-portrait.jpg",
+      "sizeBytes": 150930,
+      "sha256": "9872cdc6ef5c3be1f140c4546b000706f6dd1e1c70a10f7d8613b9297197870f"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/11-beautiful-information.html",
+      "targetPath": "assets/style-specimens/info/11-beautiful-information.html",
+      "sizeBytes": 4309,
+      "sha256": "127068a30a630025a544d175149ceebe14fc578bba03980c4368d57c16fcd8c4"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/11-beautiful-information.jpg",
+      "targetPath": "assets/style-specimens/info/11-beautiful-information.jpg",
+      "sizeBytes": 94419,
+      "sha256": "f3980defee4b1bb3085eab17d132d1077526379e5a1622bc0368d39e0f3536e9"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/12-open-research-data.html",
+      "targetPath": "assets/style-specimens/info/12-open-research-data.html",
+      "sizeBytes": 3497,
+      "sha256": "3e7e3337fe6858334dffd7327916e9bcd65cc9e646889c33278fd6eb497df53c"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/12-open-research-data.jpg",
+      "targetPath": "assets/style-specimens/info/12-open-research-data.jpg",
+      "sizeBytes": 86806,
+      "sha256": "dccb6ddf86aef0805e6a0bb2704051a247ab57185184ae13976ac3c88bfe5c99"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/13-speculative-tech-diagram.html",
+      "targetPath": "assets/style-specimens/info/13-speculative-tech-diagram.html",
+      "sizeBytes": 4103,
+      "sha256": "12e5204aab8b2e99acc7961523ec5306755c504d2f0ceaa2a5bb889f25ccaae9"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/13-speculative-tech-diagram.jpg",
+      "targetPath": "assets/style-specimens/info/13-speculative-tech-diagram.jpg",
+      "sizeBytes": 50160,
+      "sha256": "c29e907095988a0750cebea76613ab651fb4211bd56ec6a2eb534557743f5911"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/14-pictogram-system.html",
+      "targetPath": "assets/style-specimens/info/14-pictogram-system.html",
+      "sizeBytes": 4402,
+      "sha256": "40d611d0a4ecf35b3dafc12819164bf3a08f64e8f1cfa9f1cb2bc38871f0fc8b"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/14-pictogram-system.jpg",
+      "targetPath": "assets/style-specimens/info/14-pictogram-system.jpg",
+      "sizeBytes": 81737,
+      "sha256": "22cd68b1c0a080cbddbe2a29db845a0d6e21732be5e006de3c0ba86a89b9b59b"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/15-small-multiples.html",
+      "targetPath": "assets/style-specimens/info/15-small-multiples.html",
+      "sizeBytes": 3028,
+      "sha256": "d833bc247900a2458348af449bb40480a8a60e04db305bf896112ae93db0338c"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/15-small-multiples.jpg",
+      "targetPath": "assets/style-specimens/info/15-small-multiples.jpg",
+      "sizeBytes": 70229,
+      "sha256": "9bc2e0e57d6d832c480b23634ea0907c5d69cdeb525683afe36b334294548a3a"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/16-topological-transit-map.html",
+      "targetPath": "assets/style-specimens/info/16-topological-transit-map.html",
+      "sizeBytes": 3662,
+      "sha256": "ae3d5e5af17ddc6d37de07ff4e50c5b69d15ce5b97d047b7c7380352ed642f59"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/16-topological-transit-map.jpg",
+      "targetPath": "assets/style-specimens/info/16-topological-transit-map.jpg",
+      "sizeBytes": 64615,
+      "sha256": "7730317c9e42bf5c30022cff515ff19af81b863cab05d642ce6b1d6e077452af"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/17-ma-emptiness.html",
+      "targetPath": "assets/style-specimens/info/17-ma-emptiness.html",
+      "sizeBytes": 2035,
+      "sha256": "d66a9d1d8acfb94f50dc424c2a5cddf71a6b86c4fbb5063f2103d9f4cfafc120"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/17-ma-emptiness.jpg",
+      "targetPath": "assets/style-specimens/info/17-ma-emptiness.jpg",
+      "sizeBytes": 21024,
+      "sha256": "acc39ebfaed91a54ae1e15b441e432bf05fd434b607e0c6f2837dcc818d1e462"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/18-bookcraft-data.html",
+      "targetPath": "assets/style-specimens/info/18-bookcraft-data.html",
+      "sizeBytes": 3087,
+      "sha256": "fe67bc3766136121a0b3dbba0fb0d2aca0743cc2da4da54a6eecab667b87e9ab"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/18-bookcraft-data.jpg",
+      "targetPath": "assets/style-specimens/info/18-bookcraft-data.jpg",
+      "sizeBytes": 99155,
+      "sha256": "4820a9fb03a2057cf498dcf2e459e251a40c86b9f651ef267708b26603676f34"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/19-scientific-figure-plate.html",
+      "targetPath": "assets/style-specimens/info/19-scientific-figure-plate.html",
+      "sizeBytes": 5291,
+      "sha256": "c9211878ed04097cbe9c950d7022b5ff6ecddab22590af721c3f7ed1c4a58c23"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/19-scientific-figure-plate.jpg",
+      "targetPath": "assets/style-specimens/info/19-scientific-figure-plate.jpg",
+      "sizeBytes": 82562,
+      "sha256": "b4f143d737d3a837756ce9432c55b9dc86be1ba8b0499b04946a8a2f33966625"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/20-swiss-grid-report.html",
+      "targetPath": "assets/style-specimens/info/20-swiss-grid-report.html",
+      "sizeBytes": 3271,
+      "sha256": "3c359424e539394a0e4d9cf4b66cd77945e7f8dd5c491490e10860f2127cea0e"
+    },
+    {
+      "originalPath": "assets/style-specimens/info/20-swiss-grid-report.jpg",
+      "targetPath": "assets/style-specimens/info/20-swiss-grid-report.jpg",
+      "sizeBytes": 70845,
+      "sha256": "1df972f662d7c4f2aff7bb2e5dd824f2a0a898dec5d0eda78ac36cb05bdefd01"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/01-neo-swiss-billboard.html",
+      "targetPath": "assets/style-specimens/ppt/01-neo-swiss-billboard.html",
+      "sizeBytes": 2642,
+      "sha256": "49d739d24466d9e2bd4c89b1ca486c3cfe5bb06f5a6e606573df865196ddbe6f"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/01-neo-swiss-billboard.jpg",
+      "targetPath": "assets/style-specimens/ppt/01-neo-swiss-billboard.jpg",
+      "sizeBytes": 69373,
+      "sha256": "3f8381294c83f814128740aa890c4a6d0098799ab66ab2570c42ad1822f79634"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/02-black-big-number-stage.html",
+      "targetPath": "assets/style-specimens/ppt/02-black-big-number-stage.html",
+      "sizeBytes": 1297,
+      "sha256": "a0139a0822c08c806e46aaf78883b26c4205a7f4e6d797ecc022fef6757b1167"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/02-black-big-number-stage.jpg",
+      "targetPath": "assets/style-specimens/ppt/02-black-big-number-stage.jpg",
+      "sizeBytes": 29916,
+      "sha256": "c0e23767d35937522f46fc4aa5d22f9459a4cd5b1bc466e0ad8685edb3ad67a7"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/03-mono-brand-type-hero.html",
+      "targetPath": "assets/style-specimens/ppt/03-mono-brand-type-hero.html",
+      "sizeBytes": 1633,
+      "sha256": "2ecb0639539c3d8ba255ed5f29c36ae295a0be6c1ce3ac0622d3a02834cb5454"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/03-mono-brand-type-hero.jpg",
+      "targetPath": "assets/style-specimens/ppt/03-mono-brand-type-hero.jpg",
+      "sizeBytes": 51475,
+      "sha256": "d826de5001a9630b5d5c6d457026dfecdb21197ae209a75497446b33bdac5f0b"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/04-full-bleed-gradient-manifesto.html",
+      "targetPath": "assets/style-specimens/ppt/04-full-bleed-gradient-manifesto.html",
+      "sizeBytes": 1488,
+      "sha256": "f7f89a68831e71348309207a2f0e3e2a0ca6e98a4d076310251d3dcbd4ab535a"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/04-full-bleed-gradient-manifesto.jpg",
+      "targetPath": "assets/style-specimens/ppt/04-full-bleed-gradient-manifesto.jpg",
+      "sizeBytes": 77190,
+      "sha256": "72dedc5717e4390dbea9335751d645bb90cab38b30a517c84288f1dc86528b5c"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/05-candy-lecture-stage.html",
+      "targetPath": "assets/style-specimens/ppt/05-candy-lecture-stage.html",
+      "sizeBytes": 1573,
+      "sha256": "00c86946634f5728251c4f9ad47de2e8ce46cac0b98b9bb6d3bcd6ff3a68dc48"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/05-candy-lecture-stage.jpg",
+      "targetPath": "assets/style-specimens/ppt/05-candy-lecture-stage.jpg",
+      "sizeBytes": 35181,
+      "sha256": "4502460b3363aa3259c72928a632ce3d5b81f0679a04d0fd41d7387b4b82af66"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/06-playful-collins-editorial.html",
+      "targetPath": "assets/style-specimens/ppt/06-playful-collins-editorial.html",
+      "sizeBytes": 2455,
+      "sha256": "e68f65cfcb13362c6f5af41017bc1f099cd7cb214e6fe82b9d04693ed6a1fcfd"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/06-playful-collins-editorial.jpg",
+      "targetPath": "assets/style-specimens/ppt/06-playful-collins-editorial.jpg",
+      "sizeBytes": 83057,
+      "sha256": "9b6b08760dabd3f6ec1f86a609ad7ef75ff238190a71f4677630eb903ab47e9d"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/07-irreverent-pop.html",
+      "targetPath": "assets/style-specimens/ppt/07-irreverent-pop.html",
+      "sizeBytes": 2877,
+      "sha256": "10c8d55a8f09b195330377d58b0549b75fdccbb4d643aa964c677e033f1aef4c"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/07-irreverent-pop.jpg",
+      "targetPath": "assets/style-specimens/ppt/07-irreverent-pop.jpg",
+      "sizeBytes": 87248,
+      "sha256": "d4043c3954b29882eef4e1533f17ecb2fbbd2bac1ada6242c9e12ac7352208e3"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/08-y2k-inflated-wrapped.html",
+      "targetPath": "assets/style-specimens/ppt/08-y2k-inflated-wrapped.html",
+      "sizeBytes": 2434,
+      "sha256": "8ef6bd944fbd1f222ddfb1e7dfffdd1e0bda8ebe6390499584e7ae2c4e3a5580"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/08-y2k-inflated-wrapped.jpg",
+      "targetPath": "assets/style-specimens/ppt/08-y2k-inflated-wrapped.jpg",
+      "sizeBytes": 76749,
+      "sha256": "48fb317f52eb73ad656f59db4c2ec989809e9a341ef8ee3c211724755e8e4df6"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/09-bento-grid.html",
+      "targetPath": "assets/style-specimens/ppt/09-bento-grid.html",
+      "sizeBytes": 4237,
+      "sha256": "405d02432275be8b64eba1770bf17297f61910d1af0a7bdff7a80c7a3924f25d"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/09-bento-grid.jpg",
+      "targetPath": "assets/style-specimens/ppt/09-bento-grid.jpg",
+      "sizeBytes": 69785,
+      "sha256": "90d78334ae11ff9b22b0ea06be121a5833ac6826638857d4983313db76e3eb75"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/10-dark-hairline-terminal.html",
+      "targetPath": "assets/style-specimens/ppt/10-dark-hairline-terminal.html",
+      "sizeBytes": 2790,
+      "sha256": "d730a3a8ba6645d2e6a3ae0c062cc8e741600256994a0fb3c5e494119ec298a0"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/10-dark-hairline-terminal.jpg",
+      "targetPath": "assets/style-specimens/ppt/10-dark-hairline-terminal.jpg",
+      "sizeBytes": 56116,
+      "sha256": "1f03761282e9d64528e7685dc62a52591cf23fdac63cb146a7fb1d793849cd94"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/11-two-font-consulting.html",
+      "targetPath": "assets/style-specimens/ppt/11-two-font-consulting.html",
+      "sizeBytes": 3821,
+      "sha256": "c7ab93e9666f0e6a1d426c574fd102566ac0bf1c4fb9823a131e370bd63d8e09"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/11-two-font-consulting.jpg",
+      "targetPath": "assets/style-specimens/ppt/11-two-font-consulting.jpg",
+      "sizeBytes": 94912,
+      "sha256": "acc405fa6573376009ccf50d8345f1d5a270b87ab75ca97b293f3909f6a1af23"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/12-diagram-isotype.html",
+      "targetPath": "assets/style-specimens/ppt/12-diagram-isotype.html",
+      "sizeBytes": 5300,
+      "sha256": "9a47fef22c1d21cca139e115a7f39fa00e3919f2128f23ba4cdfed5a5498de4b"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/12-diagram-isotype.jpg",
+      "targetPath": "assets/style-specimens/ppt/12-diagram-isotype.jpg",
+      "sizeBytes": 96851,
+      "sha256": "ef1493cfc4901b80d63a31f9c7cff6f1580a58e8aa8f66fefc8914d0ff87dcc5"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/13-diagrammatic-minimalism.html",
+      "targetPath": "assets/style-specimens/ppt/13-diagrammatic-minimalism.html",
+      "sizeBytes": 3054,
+      "sha256": "b92e7681c6fe9d27ee4546956f4e0d8cead7258e4e83c2565216a6802d220df0"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/13-diagrammatic-minimalism.jpg",
+      "targetPath": "assets/style-specimens/ppt/13-diagrammatic-minimalism.jpg",
+      "sizeBytes": 77262,
+      "sha256": "9f4c83788bd492adecbd52a1fe4140512366d14d7e66860d0d04d170bcd082bb"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/14-narrative-sparkline.html",
+      "targetPath": "assets/style-specimens/ppt/14-narrative-sparkline.html",
+      "sizeBytes": 3755,
+      "sha256": "45b047d5258367c4406ed2b955cd74bad23a7601c8ba8175c139418c866d2079"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/14-narrative-sparkline.jpg",
+      "targetPath": "assets/style-specimens/ppt/14-narrative-sparkline.jpg",
+      "sizeBytes": 67301,
+      "sha256": "f6ff43699ed0efb8eed96470b37de886f7190138b217ec7b6dd8d679384b6b3d"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/15-assertion-evidence.html",
+      "targetPath": "assets/style-specimens/ppt/15-assertion-evidence.html",
+      "sizeBytes": 3295,
+      "sha256": "9ffc87de6a4664860963516aca4d9d6bdfd06bbff2e2a7007fb35294286ae349"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/15-assertion-evidence.jpg",
+      "targetPath": "assets/style-specimens/ppt/15-assertion-evidence.jpg",
+      "sizeBytes": 61037,
+      "sha256": "7f2dcc5b38338bb796af00c4f454a81e8817bea92582fc68b6deab190fc0e40b"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/16-institutional-swiss.html",
+      "targetPath": "assets/style-specimens/ppt/16-institutional-swiss.html",
+      "sizeBytes": 2651,
+      "sha256": "9cb0fe718d1c5f12e77158055e7bc255d176c57dbe1d00e2937e9334f1891170"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/16-institutional-swiss.jpg",
+      "targetPath": "assets/style-specimens/ppt/16-institutional-swiss.jpg",
+      "sizeBytes": 76585,
+      "sha256": "6b873145d2e56d111c3c0dd6e74ef77dab4ed5bbcc38df0eb15f29c55227be2a"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/17-editorial-longform.html",
+      "targetPath": "assets/style-specimens/ppt/17-editorial-longform.html",
+      "sizeBytes": 3985,
+      "sha256": "d419e5701e6b009cb0a7553f5fd482bc7c9a9d08f3b1e71730cb110291722faa"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/17-editorial-longform.jpg",
+      "targetPath": "assets/style-specimens/ppt/17-editorial-longform.jpg",
+      "sizeBytes": 107466,
+      "sha256": "b1f4906eb0272b2d1ecdf3765ab8e201da4bc793377b20c8ce467277e1501012"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/18-humanist-rounded-cards.html",
+      "targetPath": "assets/style-specimens/ppt/18-humanist-rounded-cards.html",
+      "sizeBytes": 4190,
+      "sha256": "f2276487b8200ba34025610258d38e43f21e8272af53b4415adde3354468b98d"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/18-humanist-rounded-cards.jpg",
+      "targetPath": "assets/style-specimens/ppt/18-humanist-rounded-cards.jpg",
+      "sizeBytes": 84719,
+      "sha256": "2fb1ec3b71316923b27eab8cbab0ee57c7ff3cb71f57da46c9ca06fa376beb6a"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/19-dense-research-report.html",
+      "targetPath": "assets/style-specimens/ppt/19-dense-research-report.html",
+      "sizeBytes": 5263,
+      "sha256": "417b352d07f8ceb28552d74f259439261a00ed9a26d65fba809ed9aed2c8a1e6"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/19-dense-research-report.jpg",
+      "targetPath": "assets/style-specimens/ppt/19-dense-research-report.jpg",
+      "sizeBytes": 94418,
+      "sha256": "ffea87ec45533c704fcedfb6c3648f774210f85c55f754d400bccf9a4d4bd614"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/20-all-text-manifesto.html",
+      "targetPath": "assets/style-specimens/ppt/20-all-text-manifesto.html",
+      "sizeBytes": 1612,
+      "sha256": "64eff20afc3a4e297ea15dce0e0cba56c385ca91595a431f06fa6a14965486d7"
+    },
+    {
+      "originalPath": "assets/style-specimens/ppt/20-all-text-manifesto.jpg",
+      "targetPath": "assets/style-specimens/ppt/20-all-text-manifesto.jpg",
+      "sizeBytes": 67491,
+      "sha256": "ddf14da94bd6bf8cd52c0aa027dd6826559ad9a8d0d6cd0b51a028b82eda4ff3"
+    },
+    {
+      "originalPath": "assets/style-specimens/sheet-app.jpg",
+      "targetPath": "assets/style-specimens/sheet-app.jpg",
+      "sizeBytes": 148578,
+      "sha256": "6968748b54bc587e08d36635024d54cbecb164313246180a8d78e315fa2210c5"
+    },
+    {
+      "originalPath": "assets/style-specimens/sheet-east.jpg",
+      "targetPath": "assets/style-specimens/sheet-east.jpg",
+      "sizeBytes": 159571,
+      "sha256": "22586e2ae6a34a52ee1d29c4bc8ef7893e1a8e335435d548ab11721fb6e7265e"
+    },
+    {
+      "originalPath": "assets/style-specimens/sheet-info.jpg",
+      "targetPath": "assets/style-specimens/sheet-info.jpg",
+      "sizeBytes": 236666,
+      "sha256": "d09eff02d9bff67f158aebe5eff35dce3a57fbf30041a3663dc655cbeb244355"
+    },
+    {
+      "originalPath": "assets/style-specimens/sheet-ppt.jpg",
+      "targetPath": "assets/style-specimens/sheet-ppt.jpg",
+      "sizeBytes": 235020,
+      "sha256": "3aae03870a686a3a0ff87a5eda1f3d89d945c9ce7b919a63f1ec7eb8f3ad8128"
+    },
+    {
+      "originalPath": "assets/style-specimens/sheet-web.jpg",
+      "targetPath": "assets/style-specimens/sheet-web.jpg",
+      "sizeBytes": 240289,
+      "sha256": "08f51463f68aacb88e1b4db44fce17cbe03bdb336bc75a169eade13f2618535e"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/01-editorial-brutalism.html",
+      "targetPath": "assets/style-specimens/web/01-editorial-brutalism.html",
+      "sizeBytes": 4348,
+      "sha256": "4c49116ec0ef45202727f9545e51518162714f9fc2e680fb2c2a3a0b167881f7"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/01-editorial-brutalism.jpg",
+      "targetPath": "assets/style-specimens/web/01-editorial-brutalism.jpg",
+      "sizeBytes": 106477,
+      "sha256": "1a70e829303e58d3cf67b6e9f0c1b617a7b81411887b9e3d9e8758f5e1125f8e"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/02-neo-brutalism.html",
+      "targetPath": "assets/style-specimens/web/02-neo-brutalism.html",
+      "sizeBytes": 4334,
+      "sha256": "9d9dbfbad5d86383c6e4f2a87b566cd1b548c0dd94588a00d08d10e259e3dd46"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/02-neo-brutalism.jpg",
+      "targetPath": "assets/style-specimens/web/02-neo-brutalism.jpg",
+      "sizeBytes": 116438,
+      "sha256": "f9ba3be4c448ef11b7d2c9d8c22cfb03f6f917377daa445653c54c131506291c"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/03-memphis-maximalism.html",
+      "targetPath": "assets/style-specimens/web/03-memphis-maximalism.html",
+      "sizeBytes": 4868,
+      "sha256": "c0a6c05cca835af676890b1dbc5cd14cfc64eb30824090c7cf47cdda51390429"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/03-memphis-maximalism.jpg",
+      "targetPath": "assets/style-specimens/web/03-memphis-maximalism.jpg",
+      "sizeBytes": 170654,
+      "sha256": "69640e0b4f733cbdab5a301738ffeda19c399135bb4ff04f84a84dae613f5852"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/04-friendly-candy.html",
+      "targetPath": "assets/style-specimens/web/04-friendly-candy.html",
+      "sizeBytes": 4946,
+      "sha256": "915740a37779ce5f5df0c0b6b16f99d1ef5507f7a4753e2291cbd8cfb4e167fc"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/04-friendly-candy.jpg",
+      "targetPath": "assets/style-specimens/web/04-friendly-candy.jpg",
+      "sizeBytes": 65788,
+      "sha256": "67699fbda4dd15bf3fc446f2e4d8768e4bf8db7e173e373d9747a8b87116155e"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/05-pure-css-art.html",
+      "targetPath": "assets/style-specimens/web/05-pure-css-art.html",
+      "sizeBytes": 5501,
+      "sha256": "58bc8e95d2de0224119a1209f971e258d73c19165189e44a992f850fd8a50117"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/05-pure-css-art.jpg",
+      "targetPath": "assets/style-specimens/web/05-pure-css-art.jpg",
+      "sizeBytes": 74833,
+      "sha256": "0df99ce1a3252897ac7b3a92832da2670e073a067ae473900b0be0c578002b04"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/06-bold-big-type.html",
+      "targetPath": "assets/style-specimens/web/06-bold-big-type.html",
+      "sizeBytes": 2594,
+      "sha256": "a057d7c38954333987ca97507d7710984070de73acbc62c9103cea0d691ebb3d"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/06-bold-big-type.jpg",
+      "targetPath": "assets/style-specimens/web/06-bold-big-type.jpg",
+      "sizeBytes": 68854,
+      "sha256": "1b19fd1e4df6e29683b3437e578a1faa27a27e114648597a35e279e4c251d324"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/07-cosmic-retro-futurism.html",
+      "targetPath": "assets/style-specimens/web/07-cosmic-retro-futurism.html",
+      "sizeBytes": 4124,
+      "sha256": "7bad5b4137696a86b49a6fd49511e1c0ed8436d83b6341e07400394bc81d0942"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/07-cosmic-retro-futurism.jpg",
+      "targetPath": "assets/style-specimens/web/07-cosmic-retro-futurism.jpg",
+      "sizeBytes": 85819,
+      "sha256": "0cdfb491a5abbc5f35b9d20eeaf5efec34c5179f638378d79520afce0a2c0c90"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/08-cinematic-sound-viz.html",
+      "targetPath": "assets/style-specimens/web/08-cinematic-sound-viz.html",
+      "sizeBytes": 12474,
+      "sha256": "e951e44bc6e0c7137bd9068142d4c8b356c5d8311db1f7528ae200a8efebf4f9"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/08-cinematic-sound-viz.jpg",
+      "targetPath": "assets/style-specimens/web/08-cinematic-sound-viz.jpg",
+      "sizeBytes": 89936,
+      "sha256": "e147bc5a692b832d3e1c70a5364d04ede600a917f37729d0404177fba8cbf6c9"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/09-pixel-side-scroller.html",
+      "targetPath": "assets/style-specimens/web/09-pixel-side-scroller.html",
+      "sizeBytes": 14976,
+      "sha256": "a119feff61af79b876018d44ff2fcf556ce32dad3f543307ed78545e6ff65a37"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/09-pixel-side-scroller.jpg",
+      "targetPath": "assets/style-specimens/web/09-pixel-side-scroller.jpg",
+      "sizeBytes": 60901,
+      "sha256": "2d363ed56b943b9234e5bceca3682900cddbbd68a0e89b31fe0eb3862ce34e37"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/10-bauhaus-geometric.html",
+      "targetPath": "assets/style-specimens/web/10-bauhaus-geometric.html",
+      "sizeBytes": 4955,
+      "sha256": "685664fb0b7b770ac3c82298adf19666d92876b721a549879df97d8284e74b88"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/10-bauhaus-geometric.jpg",
+      "targetPath": "assets/style-specimens/web/10-bauhaus-geometric.jpg",
+      "sizeBytes": 70772,
+      "sha256": "68c714cc3bdae6ca9850ae345b8b4a5bd03f9ea5cccd94fcbdeb4810127140f5"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/11-dark-editorial.html",
+      "targetPath": "assets/style-specimens/web/11-dark-editorial.html",
+      "sizeBytes": 4452,
+      "sha256": "e389f9eae9f15031bb214f6fcbcc049b08560c183ca5ce63eca2ff777d5c250d"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/11-dark-editorial.jpg",
+      "targetPath": "assets/style-specimens/web/11-dark-editorial.jpg",
+      "sizeBytes": 58035,
+      "sha256": "9a08db764f3fc67e36e253a4340e77385df80a8e91b9961ad2b2b421d9aef8e8"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/12-warm-editorial.html",
+      "targetPath": "assets/style-specimens/web/12-warm-editorial.html",
+      "sizeBytes": 3922,
+      "sha256": "1ea4568d632006069eafcb9a6f45d24b49f1a1fe22f5c33f5c1244ba2489250f"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/12-warm-editorial.jpg",
+      "targetPath": "assets/style-specimens/web/12-warm-editorial.jpg",
+      "sizeBytes": 77516,
+      "sha256": "074ad8e7194ed9526d6dc055b42a388fb1213498131e8813e83d44c7f4e04eb1"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/13-glassmorphism-bento.html",
+      "targetPath": "assets/style-specimens/web/13-glassmorphism-bento.html",
+      "sizeBytes": 5807,
+      "sha256": "3dd9bcde77c62c49177094069409df40efee58febf391881391ef56eacf3916a"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/13-glassmorphism-bento.jpg",
+      "targetPath": "assets/style-specimens/web/13-glassmorphism-bento.jpg",
+      "sizeBytes": 73854,
+      "sha256": "3f01e24b49a3095bfcf2ca32fa4926ed8fc108ab51a20f5d88420426ca0cced2"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/14-angled-fluid-gradient.html",
+      "targetPath": "assets/style-specimens/web/14-angled-fluid-gradient.html",
+      "sizeBytes": 4064,
+      "sha256": "d0a574946b3699c8d58f776df6789024243d70adb493d47eea6834c4601dbb00"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/14-angled-fluid-gradient.jpg",
+      "targetPath": "assets/style-specimens/web/14-angled-fluid-gradient.jpg",
+      "sizeBytes": 87254,
+      "sha256": "0634346b71bb0c57fe8d116368c5404b878b3eb470cc117eee3b2175d8e5cbdb"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/15-utility-colorful-docs.html",
+      "targetPath": "assets/style-specimens/web/15-utility-colorful-docs.html",
+      "sizeBytes": 5911,
+      "sha256": "8ba86721b3fcc443dde736562154dce5d027b25685e9dbf10607cbb676bec528"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/15-utility-colorful-docs.jpg",
+      "targetPath": "assets/style-specimens/web/15-utility-colorful-docs.jpg",
+      "sizeBytes": 67154,
+      "sha256": "9829ee9a9bac99668964381a9a652c93c5405642dd391055f4d4c9650fad2c4f"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/16-terminal-core.html",
+      "targetPath": "assets/style-specimens/web/16-terminal-core.html",
+      "sizeBytes": 5068,
+      "sha256": "d0c8bc0fc56b6dfd19a86be2bc7c6dbddea5ac13dce38e9e0626fa682a7c069c"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/16-terminal-core.jpg",
+      "targetPath": "assets/style-specimens/web/16-terminal-core.jpg",
+      "sizeBytes": 64169,
+      "sha256": "467bea81d4fcadfc07843deb595dbcb66d3e066adf914f2b880b9fff977713b7"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/17-functional-brutalism.html",
+      "targetPath": "assets/style-specimens/web/17-functional-brutalism.html",
+      "sizeBytes": 5608,
+      "sha256": "ef6eea5bda776402ec920459e4254ac300774150d78cc56009a9af6ddc445aef"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/17-functional-brutalism.jpg",
+      "targetPath": "assets/style-specimens/web/17-functional-brutalism.jpg",
+      "sizeBytes": 119761,
+      "sha256": "800bb9957bce73490abbbf3049b1047ebe915df14232e33e3ee67734af33b974"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/18-gallery-dark.html",
+      "targetPath": "assets/style-specimens/web/18-gallery-dark.html",
+      "sizeBytes": 5021,
+      "sha256": "22136de8ed2bf4321bd1d3f0395bec7a86a9bb2a96575cc9f17c050bc96a88e1"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/18-gallery-dark.jpg",
+      "targetPath": "assets/style-specimens/web/18-gallery-dark.jpg",
+      "sizeBytes": 23228,
+      "sha256": "8336268b8078a95c779ca052aa45e3ba180ed7410f0209007735babf53759425"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/19-swiss-monochrome.html",
+      "targetPath": "assets/style-specimens/web/19-swiss-monochrome.html",
+      "sizeBytes": 3363,
+      "sha256": "40c4cab166cbee428bcbc276a038361f619862e1fc4ca7d333c9e7650c443ef1"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/19-swiss-monochrome.jpg",
+      "targetPath": "assets/style-specimens/web/19-swiss-monochrome.jpg",
+      "sizeBytes": 68812,
+      "sha256": "63deec444647a10bfe5a4fae314889548c5cbc021ecb965c369eec63e5c4219d"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/20-kenya-hara-white-gallery.html",
+      "targetPath": "assets/style-specimens/web/20-kenya-hara-white-gallery.html",
+      "sizeBytes": 3263,
+      "sha256": "4d5bab9d1b3a33baba2c09fd9e8be704191925db5e6eb8558b92bc76abb1a3f9"
+    },
+    {
+      "originalPath": "assets/style-specimens/web/20-kenya-hara-white-gallery.jpg",
+      "targetPath": "assets/style-specimens/web/20-kenya-hara-white-gallery.jpg",
+      "sizeBytes": 35039,
+      "sha256": "ce229d702a9674a48bba239aaa862ba01cd6e0bf18f674a742b1924b323136f0"
+    },
+    {
+      "originalPath": "demos/c1-ios-prototype-en.html",
+      "targetPath": "demos/c1-ios-prototype-en.html",
+      "sizeBytes": 35163,
+      "sha256": "b615044b51a62785f09e429c03ccc0b9ed64575d216e856eb9de73735250ad5a"
+    },
+    {
+      "originalPath": "demos/c1-ios-prototype.html",
+      "targetPath": "demos/c1-ios-prototype.html",
+      "sizeBytes": 35149,
+      "sha256": "205f37f5953f493e0d64b182be38e2c8e72c75852d3f0802c1335dbf11e095b2"
+    },
+    {
+      "originalPath": "demos/c2-slides-pptx-en.html",
+      "targetPath": "demos/c2-slides-pptx-en.html",
+      "sizeBytes": 32906,
+      "sha256": "ff1f2710f601cc86811339eacd5e735bd7bfe88b94c4e8f9aee0b5bff6dd45e5"
+    },
+    {
+      "originalPath": "demos/c2-slides-pptx.html",
+      "targetPath": "demos/c2-slides-pptx.html",
+      "sizeBytes": 32975,
+      "sha256": "7008af7701cf515b681dff9b0d0141564cc72b1c7791f16d0b83f0268ba473c0"
+    },
+    {
+      "originalPath": "demos/c3-motion-design-en.html",
+      "targetPath": "demos/c3-motion-design-en.html",
+      "sizeBytes": 37031,
+      "sha256": "3bc25588bcd75bc8e2fd695844301d68288012ae7a5e7b32bffe2eaeed476282"
+    },
+    {
+      "originalPath": "demos/c3-motion-design.html",
+      "targetPath": "demos/c3-motion-design.html",
+      "sizeBytes": 37048,
+      "sha256": "e772e754e72b7a51894416703b56802df3d5dec76f0f23619825d23fddfc6608"
+    },
+    {
+      "originalPath": "demos/c4-tweaks-en.html",
+      "targetPath": "demos/c4-tweaks-en.html",
+      "sizeBytes": 31102,
+      "sha256": "a483395b34252310f1222c7b1a5836fa296c0ca7746c0d1a356111af879bd698"
+    },
+    {
+      "originalPath": "demos/c4-tweaks.html",
+      "targetPath": "demos/c4-tweaks.html",
+      "sizeBytes": 31150,
+      "sha256": "578fbbff7b635f8e5f1212a5cb9900135fb105cac4779c27d7359698ecdc79a0"
+    },
+    {
+      "originalPath": "demos/c5-infographic-en.html",
+      "targetPath": "demos/c5-infographic-en.html",
+      "sizeBytes": 24941,
+      "sha256": "c3db171ef0dd9475717569e10cd3cba54ea92893a38c1199a104768499015bec"
+    },
+    {
+      "originalPath": "demos/c5-infographic.html",
+      "targetPath": "demos/c5-infographic.html",
+      "sizeBytes": 24823,
+      "sha256": "9c48e3b670a6a3fab8c216e652b4906564c5663d39415e970305a18820b94ebb"
+    },
+    {
+      "originalPath": "demos/c6-expert-review-en.html",
+      "targetPath": "demos/c6-expert-review-en.html",
+      "sizeBytes": 26382,
+      "sha256": "161a47b07ad00e5cea652ca1142a95a5cf175c2c5ab8adc609726a74f5edd745"
+    },
+    {
+      "originalPath": "demos/c6-expert-review.html",
+      "targetPath": "demos/c6-expert-review.html",
+      "sizeBytes": 26822,
+      "sha256": "800cbf45ec3aebee7fb077dc7b9b2c7d871072fb5651cd534fed91d7a860188b"
+    },
+    {
+      "originalPath": "demos/hero-animation-v10-en.html",
+      "targetPath": "demos/hero-animation-v10-en.html",
+      "sizeBytes": 48712,
+      "sha256": "87d2f21994f2eb04981ef062f6cc21b0aa0e4bf4df565055166a1a1614414450"
+    },
+    {
+      "originalPath": "demos/md-html-narration/md-html-demo.html",
+      "targetPath": "demos/md-html-narration/md-html-demo.html",
+      "sizeBytes": 37926,
+      "sha256": "345ca77334f1d92f8a30a0ae4906a0719152138b14746695a91a59564fc04a46"
+    },
+    {
+      "originalPath": "demos/md-html-narration/script.md",
+      "targetPath": "demos/md-html-narration/script.md",
+      "sizeBytes": 3452,
+      "sha256": "2e368457a248cf4ac1c03bbfe7ccb088097222b7528fd526e892579b478c5354"
+    },
+    {
+      "originalPath": "demos/voiceover-demo/script.md",
+      "targetPath": "demos/voiceover-demo/script.md",
+      "sizeBytes": 589,
+      "sha256": "99245dbda4b4d09716ae14aa6a8cea45865035d45b88d2c6519723f3f26cb7fa"
+    },
+    {
+      "originalPath": "demos/voiceover-demo/什么是token.html",
+      "targetPath": "demos/voiceover-demo/什么是token.html",
+      "sizeBytes": 11988,
+      "sha256": "f7efee54f6f8230718e5c0fa362ce3e9f717ddce6c248ad6301d9242c1e8b522"
+    },
+    {
+      "originalPath": "demos/w1-brand-protocol-en.html",
+      "targetPath": "demos/w1-brand-protocol-en.html",
+      "sizeBytes": 20572,
+      "sha256": "9a1dffe8eed97be95330ef1cdff39c91580448866ed3b318d06c11c70d69cb38"
+    },
+    {
+      "originalPath": "demos/w1-brand-protocol.html",
+      "targetPath": "demos/w1-brand-protocol.html",
+      "sizeBytes": 20905,
+      "sha256": "782fb54e99e80ec5e8d6fd151a8041520a1755e97cfe1675e566922391b47858"
+    },
+    {
+      "originalPath": "demos/w2-junior-designer-en.html",
+      "targetPath": "demos/w2-junior-designer-en.html",
+      "sizeBytes": 31305,
+      "sha256": "a559552ab5409879a35f71cf1dfe2c456f0527a50ba202fd0fd06f708fb04f5e"
+    },
+    {
+      "originalPath": "demos/w2-junior-designer.html",
+      "targetPath": "demos/w2-junior-designer.html",
+      "sizeBytes": 31764,
+      "sha256": "5d1639ddc29834181fcd4336d80534b9977c7e955a5f43bb85f6ed2674044a1b"
+    },
+    {
+      "originalPath": "demos/w3-fallback-advisor-en.html",
+      "targetPath": "demos/w3-fallback-advisor-en.html",
+      "sizeBytes": 23901,
+      "sha256": "17ff8414f7e58923e91ade4161325f143788ca1baf29a1bce05864d7ff2ff29d"
+    },
+    {
+      "originalPath": "demos/w3-fallback-advisor.html",
+      "targetPath": "demos/w3-fallback-advisor.html",
+      "sizeBytes": 26413,
+      "sha256": "2ec9e8ed6c897d7e196dca3d6820cf92f1bb9408ad80bc4b964d746102d4b09d"
+    },
+    {
+      "originalPath": "package-lock.json",
+      "targetPath": "package-lock.json",
+      "sizeBytes": 28566,
+      "sha256": "0c334005bfe0da4ad5fa1ea805a1d99d3290f636add29faa861c841ddaac6a69"
+    },
+    {
+      "originalPath": "package.json",
+      "targetPath": "package.json",
+      "sizeBytes": 133,
+      "sha256": "144b28fbf3911f2969589bbddb3208bb02e98bfb33988723d33d3a724ad3b7d5"
+    },
+    {
+      "originalPath": "references/about-author.md",
+      "targetPath": "references/about-author.md",
+      "sizeBytes": 10181,
+      "sha256": "e1ea9261abb4877b09cfb0b9033b5ebeeae001a8a00823d1731dc55129efd102"
+    },
+    {
+      "originalPath": "references/ai-video-review.md",
+      "targetPath": "references/ai-video-review.md",
+      "sizeBytes": 4043,
+      "sha256": "745e8ab0067bfb05e205672046af044f95810ef2f8378ffee2715437a63b151e",
+      "upstreamSha256": "25475265cb8af01c38778f771db2b11199bc50c2dca8d58e7372ab555ad77809",
+      "upstreamSizeBytes": 4037,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/animation-best-practices.md",
+      "targetPath": "references/animation-best-practices.md",
+      "sizeBytes": 22356,
+      "sha256": "c914e7ab1a31eb9d217ba07c771c76f06ae5e2b72ac4b4f12597b22fe1f324a7",
+      "upstreamSha256": "5b135596a6b8da215e30747b68c706fda3f760f3f17204f94edb8e625f898d93",
+      "upstreamSizeBytes": 22500,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/animation-pitfalls.md",
+      "targetPath": "references/animation-pitfalls.md",
+      "sizeBytes": 30806,
+      "sha256": "7a1a6a6f9e545ebfde4921899c8f05a5477c6f31125e0656724a32de18ccd604"
+    },
+    {
+      "originalPath": "references/animations.md",
+      "targetPath": "references/animations.md",
+      "sizeBytes": 7762,
+      "sha256": "58f056917e469fe4b9e3d6422721ba80e68c980e5e30b17297f1bef2bcfca9c0"
+    },
+    {
+      "originalPath": "references/app-prototype.md",
+      "targetPath": "references/app-prototype.md",
+      "sizeBytes": 11895,
+      "sha256": "a00aab7726c72960e4859c0ee0df2ac1cb58ea3a42e55462f0373bea42428984"
+    },
+    {
+      "originalPath": "references/apple-gallery-showcase.md",
+      "targetPath": "references/apple-gallery-showcase.md",
+      "sizeBytes": 11568,
+      "sha256": "ac969d1a9a1b29bd84a00c0a787f7bee97cb70051ecda4e966c7656c67de312d"
+    },
+    {
+      "originalPath": "references/audio-design-rules.md",
+      "targetPath": "references/audio-design-rules.md",
+      "sizeBytes": 6470,
+      "sha256": "fdf97cbc3288d7955c8d9033225ef79d9e8ad0374327919ea1fee1165c7459f7",
+      "upstreamSha256": "aa8c76e64100507b7f264a78b9408028935b2bdafe2bbde695ed4a49555a75a0",
+      "upstreamSizeBytes": 9613,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/brand-asset-protocol.md",
+      "targetPath": "references/brand-asset-protocol.md",
+      "sizeBytes": 15424,
+      "sha256": "932c64e46fc60e3aff076fde5c98e7609c4365b7c1e84dd593994471c354cb4a"
+    },
+    {
+      "originalPath": "references/camera-language.md",
+      "targetPath": "references/camera-language.md",
+      "sizeBytes": 23221,
+      "sha256": "17d9ec457df9920953588ffdd1fdff92c3679093cebd3b022b48861105563c71"
+    },
+    {
+      "originalPath": "references/cinematic-patterns.md",
+      "targetPath": "references/cinematic-patterns.md",
+      "sizeBytes": 11052,
+      "sha256": "f39ea464494268e33fa657917910f9872cfa2949c0f533348b78684c2c277b61",
+      "upstreamSha256": "1266cb4feb14e44997b6abcc33091991565402ec6a7b22698628b31a4da472b8",
+      "upstreamSizeBytes": 11086,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/content-guidelines.md",
+      "targetPath": "references/content-guidelines.md",
+      "sizeBytes": 11791,
+      "sha256": "d9e1f08740bc6a1327b9bedaafad37b9791a1640a3b13b686b53f4a9483414e2"
+    },
+    {
+      "originalPath": "references/critique-guide.md",
+      "targetPath": "references/critique-guide.md",
+      "sizeBytes": 9022,
+      "sha256": "3636ed8422bb88a11bc3e1db00b252b707f20cf83f6ec900077abb020ff7a8ce"
+    },
+    {
+      "originalPath": "references/design-context.md",
+      "targetPath": "references/design-context.md",
+      "sizeBytes": 6704,
+      "sha256": "93a7e6be5f6cb29076d3651747d5033701362ddd03283b1ddf11b105757430b6"
+    },
+    {
+      "originalPath": "references/design-styles.md",
+      "targetPath": "references/design-styles.md",
+      "sizeBytes": 101285,
+      "sha256": "4bcf890ee28415684ad889a53cac1d6fcd8c2f09b460dad9069edc73b3a2a23a"
+    },
+    {
+      "originalPath": "references/directions.md",
+      "targetPath": "references/directions.md",
+      "sizeBytes": 12670,
+      "sha256": "78ad5a0df1536ad19cb9049f1a90d027c6c30a4a44acde657a0d4b410ad8efa7"
+    },
+    {
+      "originalPath": "references/editable-pptx.md",
+      "targetPath": "references/editable-pptx.md",
+      "sizeBytes": 18570,
+      "sha256": "cc76f248d3f22f6c2b42b9b02acc95a1b278f2e57bfcc22120d6fa0b09a285ad"
+    },
+    {
+      "originalPath": "references/evolution.md",
+      "targetPath": "references/evolution.md",
+      "sizeBytes": 7242,
+      "sha256": "28b87ec9305191a644af332bdc8b911c30d0bb0381d71df2c4832bc9afb6fabc"
+    },
+    {
+      "originalPath": "references/experience.md",
+      "targetPath": "references/experience.md",
+      "sizeBytes": 5220,
+      "sha256": "06ce6c443967b06f1d53f500b5b9a65dc7262bdf93d4e116396af4a9cd99a5aa"
+    },
+    {
+      "originalPath": "references/gsap-recipes.md",
+      "targetPath": "references/gsap-recipes.md",
+      "sizeBytes": 35243,
+      "sha256": "5bfbec26f8fe7450251ec66b929283aa0c171c525a590dd405e0b104c983e7b3",
+      "upstreamSha256": "374f346aeab61192f497130f933424bd3a3850e2f68e03f73cd3fa81e058a33a",
+      "upstreamSizeBytes": 35591,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/hero-animation-case-study.md",
+      "targetPath": "references/hero-animation-case-study.md",
+      "sizeBytes": 11548,
+      "sha256": "db6fc4a458ec76fe7f6842875f18e25a0c89adea32249c46e5567762d731574e",
+      "upstreamSha256": "631fdd9de016da9fc012fde754b1b81f02c2fbf60b69836aeb62d1fbfcfd8d44",
+      "upstreamSizeBytes": 11570,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/hyperframes-backend.md",
+      "targetPath": "references/hyperframes-backend.md",
+      "sizeBytes": 7356,
+      "sha256": "ce020c3ce373d4523a7d3e24f096337ff94dbd9493aa5084d8713f25382e92d4",
+      "upstreamSha256": "aad0356ea5f1c98c5ad11e7ef238b8e56d357165de7117d6702a946e69d79bdc",
+      "upstreamSizeBytes": 7480,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/launch-film-director-notes.md",
+      "targetPath": "references/launch-film-director-notes.md",
+      "sizeBytes": 14800,
+      "sha256": "e88c6612d6e5ae42a1f4173c3d74659686c49b2cb3d553d83dd035a21f6199c3",
+      "upstreamSha256": "1cc8c18d693231c3b2438057a1fc43fd72edbf7f2a60eec548dad6903cd13338",
+      "upstreamSizeBytes": 14886,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/materials.md",
+      "targetPath": "references/materials.md",
+      "sizeBytes": 5679,
+      "sha256": "3ed5df12fcd628bfc145f70b251c2f0837bfd6b196c3a7930a6039f8c7405bf8"
+    },
+    {
+      "originalPath": "references/modules/deck.md",
+      "targetPath": "references/modules/deck.md",
+      "sizeBytes": 4394,
+      "sha256": "40841180c49b73230261c1f9ad53f2cb273c553bab1879d5abecf0914996c5fd"
+    },
+    {
+      "originalPath": "references/modules/infographic.md",
+      "targetPath": "references/modules/infographic.md",
+      "sizeBytes": 2459,
+      "sha256": "714ca08b997f1a50daec10e5f4f8b1d63833ac111a096f87358c6bf77904f33f"
+    },
+    {
+      "originalPath": "references/modules/motion.md",
+      "targetPath": "references/modules/motion.md",
+      "sizeBytes": 6473,
+      "sha256": "93c1649fa712c4b76aede6ae64669b920c82679d32055c80e13958eedcec8c4e",
+      "upstreamSha256": "319da10cda9b7b293b3e60315c3ef0eb29eea32adb72f4818bad701f5ff032d8",
+      "upstreamSizeBytes": 6470,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/modules/web.md",
+      "targetPath": "references/modules/web.md",
+      "sizeBytes": 2467,
+      "sha256": "73733f02f6fa3c19ed56e1949f4f0c5511a09a5f45a98c8298a1222ddc9c3591"
+    },
+    {
+      "originalPath": "references/multi-perspective-parallel-case-study.md",
+      "targetPath": "references/multi-perspective-parallel-case-study.md",
+      "sizeBytes": 11093,
+      "sha256": "e1f80cc2e3e12d04405f897f3da49b371dbc7782c5ba23152a956c2780e738da"
+    },
+    {
+      "originalPath": "references/pptx-from-rendered-html.md",
+      "targetPath": "references/pptx-from-rendered-html.md",
+      "sizeBytes": 10415,
+      "sha256": "19d51068ca2377eec60b7261cbc450c98cce51f1584f0a1c7857575c1fed1b0d"
+    },
+    {
+      "originalPath": "references/react-setup.md",
+      "targetPath": "references/react-setup.md",
+      "sizeBytes": 9682,
+      "sha256": "97dfcbbea673131b9d10c5fe0c553fe489d3c2e583381de72e8c1b3c5eed5346"
+    },
+    {
+      "originalPath": "references/scene-templates.md",
+      "targetPath": "references/scene-templates.md",
+      "sizeBytes": 7144,
+      "sha256": "c91852062d923787896076368fff883bed2eb8b53087f1efdc2f81ed3014a314"
+    },
+    {
+      "originalPath": "references/sfx-library.md",
+      "targetPath": "references/sfx-library.md",
+      "sizeBytes": 9584,
+      "sha256": "c4495eb1afa23625c6792b8c0af7c00091c96f2dba72259f1f3f00b4b7ab4ab6",
+      "upstreamSha256": "43e5e00a23e72b78b1872fbf88c38f829a2d3feb5cc5dc49260cdeb98f1958f9",
+      "upstreamSizeBytes": 9762,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/slide-decks.md",
+      "targetPath": "references/slide-decks.md",
+      "sizeBytes": 36181,
+      "sha256": "f7c67305f9f169c6ce86bb35ddf5fd0b95bd543822f7aa0e27f0f66bbd95ac05"
+    },
+    {
+      "originalPath": "references/storyboard-basics.md",
+      "targetPath": "references/storyboard-basics.md",
+      "sizeBytes": 23987,
+      "sha256": "b8775952ae96bbe3e99f080520896fa9d853d324733c771da5f45da865b6f884"
+    },
+    {
+      "originalPath": "references/tweaks-system.md",
+      "targetPath": "references/tweaks-system.md",
+      "sizeBytes": 9015,
+      "sha256": "d3ec4727ae9d677ee7ade220180b803064310ef7e730436da4d66367362ec5d2"
+    },
+    {
+      "originalPath": "references/typography.md",
+      "targetPath": "references/typography.md",
+      "sizeBytes": 18751,
+      "sha256": "4aae63d6bc39a0f67a05398b11bc381b7190f51bb7cd83f1a933f2e7551984cb"
+    },
+    {
+      "originalPath": "references/ui-demo-animation.md",
+      "targetPath": "references/ui-demo-animation.md",
+      "sizeBytes": 29109,
+      "sha256": "38a2b52ad03d97442757016f1ef2c4c439d4f3e9f234cdce81cacc6fb60a894c"
+    },
+    {
+      "originalPath": "references/verification.md",
+      "targetPath": "references/verification.md",
+      "sizeBytes": 6998,
+      "sha256": "2481be020d5253efebcc6dd1a3bea80db25c1d03ce92d5a0347124c7407b366c"
+    },
+    {
+      "originalPath": "references/video-export.md",
+      "targetPath": "references/video-export.md",
+      "sizeBytes": 9854,
+      "sha256": "8e34e3e6299db2d5e1a001ae6b6e58d5621c09882506419c6971ccdaefe5d21a",
+      "upstreamSha256": "7ed97faa22b49f407c61a482eddb3b30a7463c3e5e491e5a4b2bcb48ad7929f6",
+      "upstreamSizeBytes": 11527,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/voiceover-pipeline.md",
+      "targetPath": "references/voiceover-pipeline.md",
+      "sizeBytes": 19964,
+      "sha256": "c0cf5e53269682e5fc43aae34cf624d10d6b5fd2320737c15f05f9be87261deb",
+      "upstreamSha256": "c8e992779eb3de74b7c46c195a46dd716ee922def7ea5f9e19beef814834e756",
+      "upstreamSizeBytes": 20121,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "references/workflow.md",
+      "targetPath": "references/workflow.md",
+      "sizeBytes": 10921,
+      "sha256": "b10d3e6702deffef717fbfc10851e9517fa274d4179967f60fc6ca0c0203648e"
+    },
+    {
+      "originalPath": "scripts/build_specimens.py",
+      "targetPath": "scripts/build_specimens.py",
+      "sizeBytes": 4456,
+      "sha256": "a1fb2a4cbe295b4350c5ec429d41b50056b4018c3d2dfb5d641ad80d393b0728"
+    },
+    {
+      "originalPath": "scripts/capabilities.py",
+      "targetPath": "scripts/capabilities.py",
+      "sizeBytes": 3888,
+      "sha256": "6ed98cb8fee5c00d103e1ebab60350ceea2a58e8e08799082d8056d94fb7266f"
+    },
+    {
+      "originalPath": "scripts/cloud/ai-review-video.py",
+      "targetPath": "scripts/cloud/ai-review-video.py",
+      "sizeBytes": 20433,
+      "sha256": "c882682ab99a3d61b1955240b2d386363893a0cc65e4c6930bc27857d33d2560"
+    },
+    {
+      "originalPath": "scripts/cloud/tts-doubao.mjs",
+      "targetPath": "scripts/cloud/tts-doubao.mjs",
+      "sizeBytes": 10071,
+      "sha256": "8ddc9980b76a60deaf057b732d80d187382ddd9188d9d673ebd9e35c461a0015"
+    },
+    {
+      "originalPath": "scripts/convert-formats.sh",
+      "targetPath": "scripts/convert-formats.sh",
+      "sizeBytes": 3000,
+      "sha256": "4fdf469a1f1c44b40858cea8484d92fcae48096de1dedc3d4b9d640b5026277b"
+    },
+    {
+      "originalPath": "scripts/design-gate-hook.sh",
+      "targetPath": "scripts/design-gate-hook.sh",
+      "sizeBytes": 3459,
+      "sha256": "e8f255791e1475202f84aa6ac9589cf5790aa3cb0afe6f294237099583a8c42b"
+    },
+    {
+      "originalPath": "scripts/design_lint.py",
+      "targetPath": "scripts/design_lint.py",
+      "sizeBytes": 28396,
+      "sha256": "46d649cd5a655a6f97dba3d8d5837ac8461bed7b3bfca8a5eb0c634917b3c3b2"
+    },
+    {
+      "originalPath": "scripts/export_deck_pdf.mjs",
+      "targetPath": "scripts/export_deck_pdf.mjs",
+      "sizeBytes": 3209,
+      "sha256": "323f3d5963e8b9245d468f051d4b676e67d9b97cc73b62d98239a13c65d8cc31"
+    },
+    {
+      "originalPath": "scripts/export_deck_pptx.mjs",
+      "targetPath": "scripts/export_deck_pptx.mjs",
+      "sizeBytes": 3800,
+      "sha256": "c44ec586b3a059f00cd4d1a214973a73cbb89765f8359286990536840857e0ad"
+    },
+    {
+      "originalPath": "scripts/export_deck_stage_pdf.mjs",
+      "targetPath": "scripts/export_deck_stage_pdf.mjs",
+      "sizeBytes": 4781,
+      "sha256": "d024a6b5fa84c1d25caf4c1acf47ca24a5c9e8c7ed3c45befa9fabac82765b04"
+    },
+    {
+      "originalPath": "scripts/fetch_images.py",
+      "targetPath": "scripts/fetch_images.py",
+      "sizeBytes": 4442,
+      "sha256": "6bb273e785513c965a14445a2daaabbf9afc38f1dd93802c28a35374c53def89"
+    },
+    {
+      "originalPath": "scripts/gen_deck_thumbs.mjs",
+      "targetPath": "scripts/gen_deck_thumbs.mjs",
+      "sizeBytes": 3037,
+      "sha256": "7a6ec5c4351e36aaeeec66f5488a3ef12574bb994b3f81c4b35fd33144066e33"
+    },
+    {
+      "originalPath": "scripts/html2pptx.js",
+      "targetPath": "scripts/html2pptx.js",
+      "sizeBytes": 34510,
+      "sha256": "79bd2df2c0aed3548ba78d88f7bf2906c2fbdef6bcf9dce8ee4a83013c6563ac"
+    },
+    {
+      "originalPath": "scripts/learn.py",
+      "targetPath": "scripts/learn.py",
+      "sizeBytes": 10510,
+      "sha256": "e4b01cc8c3d64bb7e83087a0ee646c142462e287e211b6d94388af1ff15e3bf9"
+    },
+    {
+      "originalPath": "scripts/mix-voiceover.sh",
+      "targetPath": "scripts/mix-voiceover.sh",
+      "sizeBytes": 2817,
+      "sha256": "a8980bf34be0ef98c9795a35d417690f8d0d4005b064032c07b928229b08ba12",
+      "upstreamSha256": "cae4cfdfabbf918a6bd9fa7a2cac63e463903b348461360a19ca163d98b960ed",
+      "upstreamSizeBytes": 4461,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "scripts/narrate-pipeline.mjs",
+      "targetPath": "scripts/narrate-pipeline.mjs",
+      "sizeBytes": 12530,
+      "sha256": "5b387544314c9f6374de7399a23b6692b77333e53a8fb4e2d892e2ae6e836a14"
+    },
+    {
+      "originalPath": "scripts/pptx_from_rendered.py",
+      "targetPath": "scripts/pptx_from_rendered.py",
+      "sizeBytes": 29541,
+      "sha256": "e8c4dcdc712ad8cbe6e9cd17e8c454ecb2edea7e22e77ca4246578c86f6a0a00"
+    },
+    {
+      "originalPath": "scripts/ref_board.py",
+      "targetPath": "scripts/ref_board.py",
+      "sizeBytes": 6865,
+      "sha256": "a6365647e91de2ef9c3802d3d043ba5974f533673678dd6c5b6e654909a85f67"
+    },
+    {
+      "originalPath": "scripts/render-narration.sh",
+      "targetPath": "scripts/render-narration.sh",
+      "sizeBytes": 4652,
+      "sha256": "3d3589a86c6d1e3a137c9d43f9ce73f7c4e97525731c0af1e9da90bf4b50e9ac",
+      "upstreamSha256": "30703fff8de2f7d94ceb0714dd8ce3c712ff1b7f5dd9803d41bcdc1c6a0330b2",
+      "upstreamSizeBytes": 5425,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "scripts/render-video-seek.js",
+      "targetPath": "scripts/render-video-seek.js",
+      "sizeBytes": 9778,
+      "sha256": "c6b68e89fc4f1709baf2b8a5e7910dfad5716aeb6bc40fb6aa4daaf92c7e9abb"
+    },
+    {
+      "originalPath": "scripts/render-video.js",
+      "targetPath": "scripts/render-video.js",
+      "sizeBytes": 12293,
+      "sha256": "2c56bba90d045a3108651e4602617466f839adb36a29a0576019f9884f5b2a36"
+    },
+    {
+      "originalPath": "scripts/sfx-cues.sh",
+      "targetPath": "scripts/sfx-cues.sh",
+      "sizeBytes": 1628,
+      "sha256": "842cda4237dd88d84b4de634bf23507ec01aacb621ce5f6ac17e2a1c60857244"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/assets/logo.png",
+      "targetPath": "scripts/tests/fixtures/assets/logo.png",
+      "sizeBytes": 76,
+      "sha256": "cb2e77c9e8f959033fce306468281a1c2c3fb66c8529e7a3d858da602fee75ae"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_broken.html",
+      "targetPath": "scripts/tests/fixtures/lint_broken.html",
+      "sizeBytes": 391,
+      "sha256": "71e32ad3a9059201faef0e9915a98c14c0586390fe82bf90026d69bdde485f12"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_clean.html",
+      "targetPath": "scripts/tests/fixtures/lint_clean.html",
+      "sizeBytes": 778,
+      "sha256": "a9549087308a305d0ce2ff727ef204d1a579b82268a3e1d6d22f085e1ddf2bde"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_offline.html",
+      "targetPath": "scripts/tests/fixtures/lint_offline.html",
+      "sizeBytes": 302,
+      "sha256": "c61756f15b30c57d233cabf94c06f9c3c7fe68b6d95f26a06436494d6d5934be"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_reskin.html",
+      "targetPath": "scripts/tests/fixtures/lint_reskin.html",
+      "sizeBytes": 1749,
+      "sha256": "e49bf584d93596b891517bcdfc1e2c719d150ddbe2c8e771b6a54496c8d1516a"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_slop.html",
+      "targetPath": "scripts/tests/fixtures/lint_slop.html",
+      "sizeBytes": 1742,
+      "sha256": "facad17c3839d0319b1b899fb9503b188ae819605778a5b968cfc5adcc764fc3"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_tricky_bad.html",
+      "targetPath": "scripts/tests/fixtures/lint_tricky_bad.html",
+      "sizeBytes": 633,
+      "sha256": "48bb2e71b5e350b36a0eed369d4f3cc32bbc3d8a09e73d5ca83d35d576fd4007"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/lint_tricky_ok.html",
+      "targetPath": "scripts/tests/fixtures/lint_tricky_ok.html",
+      "sizeBytes": 1347,
+      "sha256": "b006ed1f1b36e62b6ae21f20f86e609424f93338fa4e3cb1b585b9688bb56608"
+    },
+    {
+      "originalPath": "scripts/tests/fixtures/mixed_text.html",
+      "targetPath": "scripts/tests/fixtures/mixed_text.html",
+      "sizeBytes": 1091,
+      "sha256": "1d74749163760e65f138d77443f81a7adf7326348c22eb187ec631ec13e513f3"
+    },
+    {
+      "originalPath": "scripts/tests/test_design_lint.py",
+      "targetPath": "scripts/tests/test_design_lint.py",
+      "sizeBytes": 8606,
+      "sha256": "220d4ddf35fabe9d720dd999017733563bcaf0fd5d93ab5325243cfc9c2e4f41"
+    },
+    {
+      "originalPath": "scripts/tests/test_pptx_from_rendered.py",
+      "targetPath": "scripts/tests/test_pptx_from_rendered.py",
+      "sizeBytes": 3213,
+      "sha256": "eeefcc7e1a58ccb21c1da7974ca945057691911f6ea0be30893fff64045ee6d0"
+    },
+    {
+      "originalPath": "scripts/verify-video.sh",
+      "targetPath": "scripts/verify-video.sh",
+      "sizeBytes": 5013,
+      "sha256": "dcb78c7a8ad45c90fb9fefe4ede2a159a120e191b6c4371c2de80383f2c6b5f3",
+      "upstreamSha256": "cd7cf69f282f19dede1cd5aeae9c829a44b587f86f9518a51343dba264a81d85",
+      "upstreamSizeBytes": 4996,
+      "adaptationReason": "Remove background-music instructions and options; retain narration, sound effects and source audio."
+    },
+    {
+      "originalPath": "scripts/verify.py",
+      "targetPath": "scripts/verify.py",
+      "sizeBytes": 5451,
+      "sha256": "7a0a3243f51a1c816944a948a5caba239c63c9890327a60d80934d493153e9e4"
+    },
+    {
+      "originalPath": "test-prompts.json",
+      "targetPath": "test-prompts.json",
+      "sizeBytes": 3086,
+      "sha256": "25294eef2e98b7013caa28c0e3bae077e9fac2a4c24ee43bf095da136d776536"
+    }
+  ],
+  "monaAdaptations": {
+    "assets/previews.json": "Attach the relevant upstream contact sheets when reading the native PPT or frontend entry; no upstream image is modified.",
+    "SKILL.md": "Task routing and existing Mona execution boundaries; the unmodified upstream entry is references/upstream-skill.md.",
+    "references/native-pptx.md": "Use shared design resources with the existing native Office creation and editing protocol.",
+    "references/mona-web.md": "Apply upstream frontend design knowledge within the user's actual project stack and design system.",
+    "musicPolicy": "Background music assets, selection, composition and mixing removed at user request; narration, sound effects and source audio retained."
+  },
+  "excluded": [
+    {
+      "path": ".git/",
+      "reason": "Git metadata is not part of the distributable Skill resources."
+    },
+    {
+      "originalPath": "assets/bgm-ad.mp3",
+      "targetPath": "assets/bgm-ad.mp3",
+      "sizeBytes": 4950071,
+      "sha256": "538e4dbf911afd6c6502e8ea008e994f2f6c5219cd498dbda4053f02f0b7dd95",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "assets/bgm-educational-alt.mp3",
+      "targetPath": "assets/bgm-educational-alt.mp3",
+      "sizeBytes": 4468765,
+      "sha256": "e100757b60afa69ffd6200012dcaba3d7c2c55e8f543cc25c1765ce59e795f46",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "assets/bgm-educational.mp3",
+      "targetPath": "assets/bgm-educational.mp3",
+      "sizeBytes": 4047162,
+      "sha256": "f4d7fa4d6f612c92bbac39706757b331a333dc5ca125aff5f8d3c36b5903ebd3",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "assets/bgm-tech.mp3",
+      "targetPath": "assets/bgm-tech.mp3",
+      "sizeBytes": 4818429,
+      "sha256": "37f55c71ef0aea6312efb8c735ecbf028b06219b42cc265bddc482d7b4adc2e9",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "assets/bgm-tutorial-alt.mp3",
+      "targetPath": "assets/bgm-tutorial-alt.mp3",
+      "sizeBytes": 3937926,
+      "sha256": "ead7cefd527b3fee1ef4c83c82b284690717c89b6aeb4ece4b91603059a7bd3c",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "assets/bgm-tutorial.mp3",
+      "targetPath": "assets/bgm-tutorial.mp3",
+      "sizeBytes": 5542744,
+      "sha256": "2a49275922e2e197109d5c9969e6832e09f4c140da1edde22aa508fcddb9a46b",
+      "reason": "Removed background-music resource or workflow at the user request."
+    },
+    {
+      "originalPath": "scripts/add-music.sh",
+      "targetPath": "scripts/add-music.sh",
+      "sizeBytes": 4150,
+      "sha256": "d3d07de431975f15c05e04826e5df588f4a4eebecd70fa55b51bc79af7658a1b",
+      "reason": "Removed background-music resource or workflow at the user request."
+    }
+  ],
+  "includedCredentialTemplate": ".env.example contains placeholder values only; no live credentials were found.",
+  "submodules": [],
+  "symlinks": [],
+  "gitLfsPointers": [],
+  "trackedFilesMissingFromClone": [],
+  "externalRuntimeReferences": {
+    "10.255.255.1": [
+      "scripts/tests/fixtures/lint_offline.html"
+    ],
+    "cdn.jsdelivr.net": [
+      "assets/style-specimens/east/03-republic-book-jacket.html"
+    ],
+    "fonts.googleapis.com": [
+      "assets/showcases/cover/cover-build.html",
+      "assets/showcases/cover/cover-takram.html",
+      "assets/showcases/infographic/infographic-build.html",
+      "assets/showcases/infographic/infographic-takram.html",
+      "assets/showcases/ppt/ppt-build.html",
+      "assets/showcases/ppt/ppt-takram.html",
+      "assets/showcases/website-ai-nav/ainav-build.html",
+      "assets/showcases/website-ai-nav/ainav-pentagram.html",
+      "assets/showcases/website-ai-nav/ainav-takram.html",
+      "assets/showcases/website-ai-writing/aiwriting-build.html",
+      "assets/showcases/website-ai-writing/aiwriting-pentagram.html",
+      "assets/showcases/website-ai-writing/aiwriting-takram.html",
+      "assets/showcases/website-devdocs/devdocs-build.html",
+      "assets/showcases/website-devdocs/devdocs-pentagram.html",
+      "assets/showcases/website-devdocs/devdocs-takram.html",
+      "assets/showcases/website-homepage/homepage-build.html",
+      "assets/showcases/website-homepage/homepage-pentagram.html",
+      "assets/showcases/website-homepage/homepage-takram.html",
+      "assets/showcases/website-saas/saas-build.html",
+      "assets/showcases/website-saas/saas-pentagram.html",
+      "assets/showcases/website-saas/saas-takram.html",
+      "assets/style-specimens/app/01-hardware-panel.html",
+      "assets/style-specimens/app/02-liquid-glass.html",
+      "assets/style-specimens/app/03-playful-3d.html",
+      "assets/style-specimens/app/04-friendly-fintech.html",
+      "assets/style-specimens/app/05-pro-camera.html",
+      "assets/style-specimens/app/06-topo-outdoor.html",
+      "assets/style-specimens/app/07-feed-waterfall.html",
+      "assets/style-specimens/app/08-command-palette.html",
+      "assets/style-specimens/app/09-health-color-code.html",
+      "assets/style-specimens/app/10-native-polish.html",
+      "assets/style-specimens/app/11-gentle-encouraging.html",
+      "assets/style-specimens/app/12-editorial-reader.html",
+      "assets/style-specimens/east/01-lu-jingren-bookcraft.html",
+      "assets/style-specimens/east/02-song-block-print.html",
+      "assets/style-specimens/east/03-republic-book-jacket.html",
+      "assets/style-specimens/east/04-shanghai-deco-calendar.html",
+      "assets/style-specimens/east/05-hanzi-experimental-poster.html",
+      "assets/style-specimens/east/06-hk-street-signs.html",
+      "assets/style-specimens/east/07-traditional-colors-solar-terms.html",
+      "assets/style-specimens/east/08-sugiura-info-mandala.html",
+      "assets/style-specimens/east/09-tanaka-geometric-poster.html",
+      "assets/style-specimens/east/10-hattori-playful-offset.html",
+      "assets/style-specimens/east/11-sato-minimal-symbol.html",
+      "assets/style-specimens/east/12-japan-magazine-dense.html",
+      "assets/style-specimens/info/01-personal-annual-report.html",
+      "assets/style-specimens/info/02-explanation-graphics.html",
+      "assets/style-specimens/info/03-cross-section-epic.html",
+      "assets/style-specimens/info/04-magazine-pop-data.html",
+      "assets/style-specimens/info/05-isotype.html",
+      "assets/style-specimens/info/06-data-humanism.html",
+      "assets/style-specimens/info/07-scrollytelling.html",
+      "assets/style-specimens/info/08-cartographic-lead.html",
+      "assets/style-specimens/info/09-newsroom-chart.html",
+      "assets/style-specimens/info/10-computational-portrait.html",
+      "assets/style-specimens/info/11-beautiful-information.html",
+      "assets/style-specimens/info/12-open-research-data.html",
+      "assets/style-specimens/info/13-speculative-tech-diagram.html",
+      "assets/style-specimens/info/14-pictogram-system.html",
+      "assets/style-specimens/info/15-small-multiples.html",
+      "assets/style-specimens/info/16-topological-transit-map.html",
+      "assets/style-specimens/info/17-ma-emptiness.html",
+      "assets/style-specimens/info/18-bookcraft-data.html",
+      "assets/style-specimens/info/19-scientific-figure-plate.html",
+      "assets/style-specimens/info/20-swiss-grid-report.html",
+      "assets/style-specimens/ppt/01-neo-swiss-billboard.html",
+      "assets/style-specimens/ppt/02-black-big-number-stage.html",
+      "assets/style-specimens/ppt/03-mono-brand-type-hero.html",
+      "assets/style-specimens/ppt/04-full-bleed-gradient-manifesto.html",
+      "assets/style-specimens/ppt/05-candy-lecture-stage.html",
+      "assets/style-specimens/ppt/06-playful-collins-editorial.html",
+      "assets/style-specimens/ppt/07-irreverent-pop.html",
+      "assets/style-specimens/ppt/08-y2k-inflated-wrapped.html",
+      "assets/style-specimens/ppt/09-bento-grid.html",
+      "assets/style-specimens/ppt/10-dark-hairline-terminal.html",
+      "assets/style-specimens/ppt/11-two-font-consulting.html",
+      "assets/style-specimens/ppt/12-diagram-isotype.html",
+      "assets/style-specimens/ppt/13-diagrammatic-minimalism.html",
+      "assets/style-specimens/ppt/14-narrative-sparkline.html",
+      "assets/style-specimens/ppt/15-assertion-evidence.html",
+      "assets/style-specimens/ppt/16-institutional-swiss.html",
+      "assets/style-specimens/ppt/17-editorial-longform.html",
+      "assets/style-specimens/ppt/18-humanist-rounded-cards.html",
+      "assets/style-specimens/ppt/19-dense-research-report.html",
+      "assets/style-specimens/ppt/20-all-text-manifesto.html",
+      "assets/style-specimens/web/01-editorial-brutalism.html",
+      "assets/style-specimens/web/02-neo-brutalism.html",
+      "assets/style-specimens/web/03-memphis-maximalism.html",
+      "assets/style-specimens/web/04-friendly-candy.html",
+      "assets/style-specimens/web/05-pure-css-art.html",
+      "assets/style-specimens/web/06-bold-big-type.html",
+      "assets/style-specimens/web/07-cosmic-retro-futurism.html",
+      "assets/style-specimens/web/08-cinematic-sound-viz.html",
+      "assets/style-specimens/web/09-pixel-side-scroller.html",
+      "assets/style-specimens/web/10-bauhaus-geometric.html",
+      "assets/style-specimens/web/11-dark-editorial.html",
+      "assets/style-specimens/web/12-warm-editorial.html",
+      "assets/style-specimens/web/13-glassmorphism-bento.html",
+      "assets/style-specimens/web/14-angled-fluid-gradient.html",
+      "assets/style-specimens/web/15-utility-colorful-docs.html",
+      "assets/style-specimens/web/16-terminal-core.html",
+      "assets/style-specimens/web/17-functional-brutalism.html",
+      "assets/style-specimens/web/18-gallery-dark.html",
+      "assets/style-specimens/web/19-swiss-monochrome.html",
+      "assets/style-specimens/web/20-kenya-hara-white-gallery.html",
+      "demos/c1-ios-prototype-en.html",
+      "demos/c1-ios-prototype.html",
+      "demos/c2-slides-pptx-en.html",
+      "demos/c2-slides-pptx.html",
+      "demos/c3-motion-design-en.html",
+      "demos/c3-motion-design.html",
+      "demos/c4-tweaks-en.html",
+      "demos/c4-tweaks.html",
+      "demos/c5-infographic-en.html",
+      "demos/c5-infographic.html",
+      "demos/c6-expert-review-en.html",
+      "demos/c6-expert-review.html",
+      "demos/hero-animation-v10-en.html",
+      "demos/md-html-narration/md-html-demo.html",
+      "demos/w1-brand-protocol-en.html",
+      "demos/w1-brand-protocol.html",
+      "demos/w2-junior-designer-en.html",
+      "demos/w2-junior-designer.html",
+      "demos/w3-fallback-advisor-en.html",
+      "demos/w3-fallback-advisor.html"
+    ],
+    "fonts.gstatic.com": [
+      "assets/showcases/website-devdocs/devdocs-build.html",
+      "assets/showcases/website-devdocs/devdocs-pentagram.html",
+      "assets/showcases/website-devdocs/devdocs-takram.html",
+      "demos/c1-ios-prototype-en.html",
+      "demos/c1-ios-prototype.html",
+      "demos/c2-slides-pptx-en.html",
+      "demos/c2-slides-pptx.html",
+      "demos/c3-motion-design-en.html",
+      "demos/c3-motion-design.html",
+      "demos/c4-tweaks-en.html",
+      "demos/c4-tweaks.html",
+      "demos/c5-infographic-en.html",
+      "demos/c5-infographic.html",
+      "demos/c6-expert-review-en.html",
+      "demos/c6-expert-review.html",
+      "demos/hero-animation-v10-en.html",
+      "demos/md-html-narration/md-html-demo.html",
+      "demos/w1-brand-protocol-en.html",
+      "demos/w1-brand-protocol.html",
+      "demos/w2-junior-designer-en.html",
+      "demos/w2-junior-designer.html",
+      "demos/w3-fallback-advisor-en.html",
+      "demos/w3-fallback-advisor.html"
+    ],
+    "unpkg.com": [
+      "assets/showcases/website-ai-nav/ainav-build.html",
+      "assets/showcases/website-ai-nav/ainav-pentagram.html",
+      "assets/showcases/website-ai-nav/ainav-takram.html",
+      "assets/showcases/website-ai-writing/aiwriting-build.html",
+      "assets/showcases/website-ai-writing/aiwriting-pentagram.html",
+      "assets/showcases/website-ai-writing/aiwriting-takram.html",
+      "assets/showcases/website-devdocs/devdocs-build.html",
+      "assets/showcases/website-devdocs/devdocs-pentagram.html",
+      "assets/showcases/website-devdocs/devdocs-takram.html",
+      "assets/showcases/website-homepage/homepage-build.html",
+      "assets/showcases/website-homepage/homepage-pentagram.html",
+      "assets/showcases/website-homepage/homepage-takram.html",
+      "assets/showcases/website-saas/saas-build.html",
+      "assets/showcases/website-saas/saas-pentagram.html",
+      "assets/showcases/website-saas/saas-takram.html",
+      "demos/md-html-narration/md-html-demo.html",
+      "demos/voiceover-demo/什么是token.html"
+    ]
+  },
+  "externalResourceNotes": [
+    "HTML demos/specimens reference Google Fonts hosts and some CDN-hosted packages; these are upstream remote runtime references and were not downloaded or rewritten.",
+    "README links and YouTube preview resources are remote documentation media, not missing tracked repository files.",
+    "Voiceover examples reference generated audio outputs such as voiceover.mp3; these outputs are not tracked and are expected to be produced by the example workflow.",
+    "Optional cloud scripts require user-supplied provider credentials; only the placeholder .env.example is included."
+  ],
+  "hashBasis": "Unmodified files use raw Git blob bytes from the pinned upstream commit. Customized files record their bundled size and SHA-256 plus upstreamSizeBytes/upstreamSha256; excluded files keep their original metadata and removal reason.",
+  "upstreamFileCount": 389,
+  "upstreamBytes": 41740432
+}

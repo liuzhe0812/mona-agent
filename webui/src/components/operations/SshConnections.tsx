@@ -16,6 +16,7 @@ export function SshConnections({ query, active, onOpen }: { query: string; activ
   const activeId = useTerminalStore((s) => s.activeSessionId);
   const [editing, setEditing] = useState<{ config: ConnectionConfig; mode: "edit" | "copy" } | null>(null);
   const [contextOpenId, setContextOpenId] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const configs = new Map(connections.filter((c) => c.protocol === "ssh" && sessions.some((s) => s.configId === c.id)).map((c) => [c.id, c]));
   for (const config of saved) if (config.protocol === "ssh") configs.set(config.id, config);
   const open = (config: ConnectionConfig, newSession = false) => {
@@ -41,11 +42,17 @@ export function SshConnections({ query, active, onOpen }: { query: string; activ
     }));
   };
   const remove = async (config: ConnectionConfig) => {
+    setError("");
+    try {
+      await useTerminalStore.getState().deleteConnection(config.id, config.storageRevision);
+    } catch {
+      setError("删除连接失败，列表已刷新；请重新打开菜单后重试。");
+      return;
+    }
     await disconnect(config);
     for (const session of useTerminalStore.getState().sessions.filter((item) => item.type === "ssh" && item.configId === config.id)) {
       useTerminalStore.getState().removeSession(session.id);
     }
-    await useTerminalStore.getState().deleteConnection(config.id);
   };
   return <>
     {[...configs.values()].filter((c) => `${c.name} ${c.host}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((config) => {
@@ -85,6 +92,7 @@ export function SshConnections({ query, active, onOpen }: { query: string; activ
         </ContextMenuContent>
       </ContextMenu>;
     })}
+    {error && <p role="alert" className="px-3 py-1 text-caption text-destructive">{error}</p>}
     {editing && <EditConnectionDialog key={`${editing.mode}:${editing.config.id}`} config={editing.config} mode={editing.mode} onClose={() => setEditing(null)} />}
   </>;
 }

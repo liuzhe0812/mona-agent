@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ChevronRight, Layers } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ChevronRight, Pencil, SquareTerminal, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { FileReferenceChip } from "@/components/FileReferenceChip";
 import { ReasoningBubble, StreamingLabelSheen, TraceGroup } from "@/components/MessageBubble";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { isCommandTrace } from "@/lib/tool-traces";
 import type { UIFileEdit, UIMessage } from "@/lib/types";
-
-/** Scrollport height for the Cursor-style “live trace” strip (tailwind spacing). */
-const CLUSTER_SCROLL_MAX_CLASS = "max-h-52";
-const ACTIVITY_SCROLL_NEAR_BOTTOM_PX = 24;
 
 export function isReasoningOnlyAssistant(m: UIMessage): boolean {
   if (m.role !== "assistant" || m.kind === "trace" || m.kind === "widget") return false;
@@ -101,269 +99,107 @@ function countActivity(messages: UIMessage[], fileEdits: FileEditSummary[]): Act
   };
 }
 
-interface AgentActivityClusterProps {
-  messages: UIMessage[];
-  /** True while the session turn is still running (drives “Working…” copy + header sheen). */
+interface ActivityTimingHeaderProps {
   isTurnStreaming: boolean;
-  hasBodyBelow: boolean;
+  runStartedAt?: number | null;
+  latencyMs?: number;
+  startedAt: number;
+  expanded?: boolean;
+  onToggle?: () => void;
 }
 
-/**
- * Outer fold wrapping interleaved reasoning-only assistant rows and tool-trace rows.
- * Fixed max height with inner scroll; each block keeps its own small collapsible (reasoning / tools).
- */
-export function AgentActivityCluster({
-  messages,
-  isTurnStreaming,
-  hasBodyBelow,
-}: AgentActivityClusterProps) {
+export function ActivityTimingHeader({ isTurnStreaming, runStartedAt, latencyMs, startedAt, expanded, onToggle }: ActivityTimingHeaderProps) {
   const { t } = useTranslation();
-  const fileEdits = useMemo(
-    () => summarizeFileEdits(collectFileEdits(messages), isTurnStreaming),
-    [messages, isTurnStreaming],
-  );
-  const {
-    reasoningSteps,
-    toolCalls,
-    fileCount,
-    added,
-    deleted,
-    hasDiffStats,
-    hasEditingFiles,
-    hasFailedFiles,
-    primaryFilePath,
-    primaryFileTooltipPath,
-  } = countActivity(messages, fileEdits);
-  const hasPendingFileEdit = fileEdits.some((edit) => edit.pending);
-
-  const [userToggledOuter, setUserToggledOuter] = useState(false);
-  const [outerOpenLocal, setOuterOpenLocal] = useState(false);
-  const activityScrollRef = useRef<HTMLDivElement>(null);
-  const activityContentRef = useRef<HTMLDivElement>(null);
-  const autoFollowActivityRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  /** Collapsed by default during “Working…” and after the turn; user expands to inspect traces. */
-  const outerExpanded = userToggledOuter ? outerOpenLocal : false;
-
-  const hasLiveEditingFiles = isTurnStreaming && hasEditingFiles;
-  const headerBusy = fileCount > 0 ? hasEditingFiles : isTurnStreaming;
-  const singleFilePath = fileCount === 1 ? primaryFilePath : undefined;
-  const singleFileTooltipPath = fileCount === 1 ? primaryFileTooltipPath : undefined;
-  const hasVisibleActivity = reasoningSteps > 0 || toolCalls > 0 || fileCount > 0;
-
-  const fileActivitySummary = fileCount > 0
-    ? hasPendingFileEdit && !singleFilePath
-      ? t("message.fileActivityPreparing", { defaultValue: "Preparing edit…" })
-      : singleFilePath
-      ? t(fileActivitySummaryKey(hasLiveEditingFiles, hasFailedFiles), {
-          file: shortFileName(singleFilePath),
-          defaultValue: `${fileActivityVerb(hasLiveEditingFiles, hasFailedFiles)} {{file}}`,
-        })
-      : t(fileActivityManySummaryKey(hasLiveEditingFiles, hasFailedFiles), {
-          count: fileCount,
-          defaultValue: `${fileActivityVerb(hasLiveEditingFiles, hasFailedFiles)} {{count}} files`,
-        })
-    : "";
-
-  const summary = fileCount > 0
-    ? fileActivitySummary
-    : isTurnStreaming
-      ? reasoningSteps > 0
-        ? t("message.agentActivityLiveSummary", {
-            reasoning: reasoningSteps,
-            tools: toolCalls,
-            defaultValue: "Working… · {{reasoning}} steps · {{tools}} tool calls",
-          })
-        : toolCalls === 0 && fileCount > 0
-          ? t("message.agentActivityLiveFilesOnly", { defaultValue: "Working…" })
-        : t("message.agentActivityLiveToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "Working… · {{tools}} tool calls",
-          })
-      : reasoningSteps > 0
-        ? t("message.agentActivitySummary", {
-            reasoning: reasoningSteps,
-            tools: toolCalls,
-            defaultValue: "{{reasoning}} steps · {{tools}} tool calls",
-          })
-        : toolCalls === 0 && fileCount > 0
-          ? t("message.agentActivityFilesOnly", { defaultValue: "File changes" })
-        : t("message.agentActivityToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "{{tools}} tool calls",
-          });
-
-  const cancelActivityScrollFrame = useCallback(() => {
-    if (scrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-      scrollFrameRef.current = null;
-    }
-  }, []);
-
-  const scrollActivityToBottom = useCallback(() => {
-    const el = activityScrollRef.current;
-    if (!el) return;
-    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-  }, []);
-
-  const scheduleActivityScrollToBottom = useCallback(() => {
-    cancelActivityScrollFrame();
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      scrollActivityToBottom();
-    });
-  }, [cancelActivityScrollFrame, scrollActivityToBottom]);
-
-  const toggleOuter = () => {
-    const nextOpen = userToggledOuter ? !outerOpenLocal : !outerExpanded;
-    if (nextOpen) {
-      autoFollowActivityRef.current = true;
-    }
-    setUserToggledOuter(true);
-    setOuterOpenLocal(nextOpen);
-  };
-
-  useLayoutEffect(() => {
-    if (!outerExpanded || !autoFollowActivityRef.current) return;
-    scheduleActivityScrollToBottom();
-  }, [outerExpanded, messages, isTurnStreaming, scheduleActivityScrollToBottom]);
-
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!outerExpanded) {
-      autoFollowActivityRef.current = true;
-      return;
+    if (!isTurnStreaming) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isTurnStreaming, runStartedAt]);
+  const elapsedSeconds = Math.max(0, Math.floor((now - (runStartedAt != null ? runStartedAt * 1000 : startedAt)) / 1000));
+  const seconds = isTurnStreaming ? elapsedSeconds : Math.max(0, Math.floor((latencyMs ?? 0) / 1000));
+  const label = isTurnStreaming
+    ? seconds < 60
+      ? t("message.agentActivityElapsed", { seconds })
+      : t("message.agentActivityElapsedMinutes", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
+    : latencyMs != null
+      ? t("message.agentActivityDuration", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
+      : t("message.agentActivityFinished");
+  return <div data-testid="activity-timing" className="mb-2.5 border-b border-border/60 pb-1 text-caption text-muted-foreground">
+    {onToggle ? <Button type="button" variant="ghost" size="sm" onClick={onToggle} aria-expanded={expanded}
+      aria-label={t(expanded ? "message.collapseProcess" : "message.expandProcess")}
+      className="relative h-auto justify-start gap-1.5 p-0 font-normal text-muted-foreground before:absolute before:inset-x-0 before:-inset-y-2 hover:bg-transparent hover:text-foreground">
+      <span>{label}</span>
+      <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", expanded && "rotate-90")} />
+    </Button> : <span>{label}</span>}
+  </div>;
+}
+
+interface AgentActivityClusterProps {
+  messages: UIMessage[];
+  isTurnStreaming: boolean;
+  hasBodyBelow: boolean;
+  runStartedAt?: number | null;
+  latencyMs?: number;
+  showTiming?: boolean;
+}
+
+export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, runStartedAt, latencyMs, showTiming = true }: AgentActivityClusterProps) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const activityGroups = useMemo(() => {
+    const groups: UIMessage[][] = [];
+    for (const message of messages) {
+      const previous = groups[groups.length - 1];
+      if (message.kind === "trace" && previous?.[0].kind === "trace") previous.push(message);
+      else groups.push([message]);
     }
-    const target = activityContentRef.current;
-    if (!target || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (autoFollowActivityRef.current) {
-        scheduleActivityScrollToBottom();
-      }
-    });
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [outerExpanded, scheduleActivityScrollToBottom]);
-
-  useEffect(() => cancelActivityScrollFrame, [cancelActivityScrollFrame]);
-
-  const onActivityScroll = useCallback(() => {
-    const el = activityScrollRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    autoFollowActivityRef.current = distance < ACTIVITY_SCROLL_NEAR_BOTTOM_PX;
-  }, []);
-
-  if (!hasVisibleActivity) return null;
-
-  return (
-    <div className={cn("w-full", hasBodyBelow && "mb-2")}>
-      <button
-        type="button"
-        onClick={toggleOuter}
-        className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5",
-          "text-xs text-muted-foreground transition-colors hover:bg-muted/45",
-        )}
-        aria-expanded={outerExpanded}
-        aria-label={summary}
-      >
-        <Layers className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-left">
-          {singleFilePath ? (
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <StreamingLabelSheen
-                active={headerBusy}
-                className="shrink-0"
-              >
-                {fileActivityVerb(hasLiveEditingFiles, hasFailedFiles)}
-              </StreamingLabelSheen>
-              <FileReferenceChip
-                path={singleFilePath}
-                tooltipPath={singleFileTooltipPath}
-                absolutePath={singleFileTooltipPath}
-                active={hasLiveEditingFiles}
-                className="-my-0.5 min-w-0"
-                textClassName="text-xs"
-                testId="activity-header-file-reference"
-              />
-            </span>
-          ) : (
-            <StreamingLabelSheen
-              active={headerBusy}
-              className="min-w-0"
-            >
-              {summary}
-            </StreamingLabelSheen>
-          )}
-          {fileCount > 0 && hasDiffStats && (
-            <span className="inline-flex min-w-0 items-center gap-1 text-muted-foreground/85">
-              <DiffPair added={added} deleted={deleted} />
-            </span>
-          )}
-        </span>
-        <ChevronRight
-          aria-hidden
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 transition-transform duration-200",
-            outerExpanded && "rotate-90",
-          )}
-        />
-      </button>
-
-      {outerExpanded && (
-        <div
-          className={cn(
-            "mt-1 overflow-hidden rounded-md border border-border/50 bg-muted/25",
-          )}
-        >
-          <div
-            ref={activityScrollRef}
-            data-testid="agent-activity-scroll"
-            onScroll={onActivityScroll}
-            className={cn(
-              CLUSTER_SCROLL_MAX_CLASS,
-              "overflow-y-auto px-2 py-1.5 scrollbar-thin scrollbar-track-transparent",
-            )}
-          >
-            <div ref={activityContentRef} className="flex flex-col gap-2">
-              {messages.map((m) => {
-                if (isReasoningOnlyAssistant(m)) {
-                  return (
-                    <ReasoningBubble
-                      key={m.id}
-                      text={m.reasoning ?? ""}
-                      streaming={isTurnStreaming && !!m.reasoningStreaming}
-                      hasBodyBelow={false}
-                      embeddedInCluster
-                    />
-                  );
-                }
-                if (m.kind === "trace") {
-                  const hasTraceLines = (m.traces?.length ?? 0) > 0 || m.content.trim().length > 0;
-                  return hasTraceLines ? (
-                    <div key={m.id} className="flex flex-col gap-1">
-                      <TraceGroup message={m} animClass="" />
-                    </div>
-                  ) : null;
-                }
-                return null;
-              })}
-              {fileEdits.length ? <FileEditGroup edits={fileEdits} /> : null}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    return groups;
+  }, [messages]);
+  const fileEdits = useMemo(() => summarizeFileEdits(collectFileEdits(messages), isTurnStreaming), [messages, isTurnStreaming]);
+  const { reasoningSteps, toolCalls, fileCount, added, deleted, hasDiffStats, hasEditingFiles, hasFailedFiles, primaryFilePath } = countActivity(messages, fileEdits);
+  const hasLiveEditingFiles = isTurnStreaming && hasEditingFiles;
+  const hasPendingFileEdit = fileEdits.some((edit) => edit.pending);
+  const hasCommands = messages.some((message) => message.kind === "trace" && (message.traces ?? [message.content]).some(isCommandTrace));
+  const fileSummary = hasPendingFileEdit && !primaryFilePath
+    ? t("message.fileActivityPreparing")
+    : fileCount === 1 && primaryFilePath
+      ? t(fileActivitySummaryKey(hasLiveEditingFiles, hasFailedFiles), { file: shortFileName(primaryFilePath) })
+      : t(fileActivityManySummaryKey(hasLiveEditingFiles, hasFailedFiles), { count: fileCount });
+  const summary = fileCount > 0 && hasCommands
+    ? t("message.activityFilesAndCommands")
+    : fileCount > 0 ? fileSummary : t(hasCommands ? "message.activityCommands" : "message.activityDetails");
+  if (reasoningSteps === 0 && toolCalls === 0 && fileCount === 0) return null;
+  const Icon = fileCount > 0 ? Pencil : hasCommands ? SquareTerminal : Wrench;
+  return <div className={cn("w-full", hasBodyBelow && "mb-1")}>
+    {showTiming && <ActivityTimingHeader isTurnStreaming={isTurnStreaming} runStartedAt={runStartedAt}
+      startedAt={messages[0]?.createdAt ?? Date.now()}
+      latencyMs={latencyMs ?? messages.find((message) => message.latencyMs != null)?.latencyMs} />}
+    <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-label={summary}
+      className="flex max-w-full items-center gap-2 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+      <StreamingLabelSheen active={isTurnStreaming} className="min-w-0 text-left">{summary}</StreamingLabelSheen>
+      {fileCount > 0 && hasDiffStats && <DiffPair added={added} deleted={deleted} />}
+      <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", expanded && "rotate-90")} />
+    </button>
+    {expanded && <div data-testid="agent-activity-details" className="mt-2 flex flex-col gap-2">
+      {activityGroups.map((group) => {
+        const message = group[0];
+        if (isReasoningOnlyAssistant(message)) return <ReasoningBubble key={message.id} text={message.reasoning ?? ""}
+          streaming={isTurnStreaming && !!message.reasoningStreaming} hasBodyBelow={false} embeddedInCluster />;
+        if (message.kind === "trace") {
+          return <TraceGroup key={message.id} message={group} animClass="" inline />;
+        }
+        return null;
+      })}
+      {fileEdits.length > 0 && <FileEditGroup edits={fileEdits} />}
+    </div>}
+  </div>;
 }
 
 function shortFileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
-}
-
-function fileActivityVerb(editing: boolean, failed: boolean): string {
-  if (failed) return "Failed";
-  return editing ? "Editing" : "Edited";
 }
 
 function fileActivitySummaryKey(editing: boolean, failed: boolean): string {
@@ -524,7 +360,7 @@ function hasVisibleDiffStats(edit: Pick<FileEditSummary, "added" | "deleted">): 
 function FileEditGroup({ edits }: { edits: FileEditSummary[] }) {
   if (edits.length === 0) return null;
   return (
-    <ul className="space-y-1 border-l border-muted-foreground/15 pl-3">
+    <ul className="space-y-2">
       {edits.map((edit) => (
         <FileEditRow key={edit.key} edit={edit} />
       ))}
@@ -538,8 +374,10 @@ function FileEditRow({ edit }: { edit: FileEditSummary }) {
   const failed = edit.status === "error";
   const hasCountedDiff = !failed && !edit.binary && hasVisibleDiffStats(edit);
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-1.5 text-xs">
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-1.5 text-caption text-muted-foreground">
       <div className="flex min-w-0 items-center gap-2">
+        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+        {edit.path && !failed && <span className="shrink-0">{t(editing ? "message.activityFileEditing" : "message.activityFileEdited")}</span>}
         {edit.pending && !edit.path ? (
           <StreamingLabelSheen
             active={editing}
@@ -552,10 +390,10 @@ function FileEditRow({ edit }: { edit: FileEditSummary }) {
             path={edit.path}
             tooltipPath={edit.absolute_path}
             absolutePath={edit.absolute_path}
-            display="path"
+            variant="inline"
             active={editing}
             className="min-w-0"
-            textClassName="text-[12px]"
+            textClassName="text-caption"
             testId="activity-file-reference"
           />
         )}

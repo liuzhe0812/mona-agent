@@ -19,13 +19,14 @@
 连接模型：
 - 每账号 1 个操作连接（串行复用）
 - IDLE 连接独立，不参与复用（IDLE 会阻塞连接）
-- 操作连接由 asyncio.Lock 在协程层串行化（_run_imap_locked 已实现）
+- 操作连接由 server 的 asyncio.Lock 和池内线程锁串行化；keepalive 共用池内线程锁。
 """
 
 from __future__ import annotations
 
 import contextlib
 import imaplib
+import socket
 import ssl
 import threading
 import time
@@ -34,6 +35,11 @@ from typing import Any, Callable, TypeVar
 from loguru import logger
 
 _T = TypeVar("_T")
+
+
+class ImapOperationDeferred(RuntimeError):  # noqa: N818
+    """A background read was interrupted to make room for a foreground operation."""
+
 
 # 腾讯邮箱（exmail.qq.com / imap.qq.com）在 IMAP 响应中插入 X-QQ-FEAT 行
 # 作为 feature 广告，不以 * / + / tag 开头，imaplib 的 _get_response 无法解析，
@@ -60,11 +66,14 @@ _RETRYABLE_EXC: tuple[type[BaseException], ...] = (
     TimeoutError,
     OSError,
     imaplib.IMAP4.abort,
-    imaplib.IMAP4.readonly,
 )
 
 
 def _is_retryable(e: Exception) -> bool:
+    if isinstance(e, ImapOperationDeferred):
+        return False
+    if isinstance(e, imaplib.IMAP4.readonly):
+        return False
     if isinstance(e, _RETRYABLE_EXC):
         return True
     msg = str(e).lower()
@@ -83,6 +92,8 @@ def _is_permanent_auth_error(e: Exception) -> bool:
     这些错误不应重试，否则会加剧邮箱服务器对该账号的风控。
     同时匹配中文常见提示，避免中文错误信息被误判为可重试。
     """
+    if isinstance(e, ImapOperationDeferred):
+        return False
     msg = str(e).lower()
     markers = (
         # 英文
@@ -110,8 +121,7 @@ def _is_permanent_auth_error(e: Exception) -> bool:
 class _AccountImapPool:
     """单账号的 IMAP 操作连接池（1 个持久连接）。
 
-    线程安全：通过外部 asyncio.Lock（_run_imap_locked）保证同一账号
-    同时只有一个协程/线程在使用连接，所以内部不需要额外加锁。
+    操作线程锁同时保护 run 和 keepalive，避免协程取消后后台线程仍在使用连接。
     """
 
     def __init__(self, body: dict[str, Any]) -> None:
@@ -120,10 +130,13 @@ class _AccountImapPool:
         # 永久性失败时间戳（0 表示未失败）；失败后 1 小时内不再尝试 login
         self._failed_until: float = 0
         self._last_use: float = time.time()
+        self._operation_lock = threading.Lock()
+        self._operation_lock_timeout = 10.0
+        self._interrupt_lock = threading.Lock()
+        self._interrupt_event = threading.Event()
+        self._active_background = False
         # 配置指纹，用于检测配置变更
         self._config_fingerprint = self._compute_fingerprint(body)
-        # 正在被 op 使用（keepalive 线程跳过使用中的池，避免并发访问 imaplib）
-        self._in_use: bool = False
 
     @staticmethod
     def _compute_fingerprint(body: dict[str, Any]) -> str:
@@ -139,14 +152,28 @@ class _AccountImapPool:
         """检测配置是否变更（密码修改等）。"""
         return self._compute_fingerprint(body) != self._config_fingerprint
 
-    def run(self, op: Callable[[imaplib.IMAP4], _T]) -> _T:
+    def run(self, op: Callable[[imaplib.IMAP4], _T], *, background: bool = False) -> _T:
         """执行 IMAP 操作，自动管理连接生命周期。
 
+        `background=True` 仅用于允许让出连接的纯读操作。
         - 首次调用时新建连接 + login
         - 复用已有连接（NOOP 健康检查）
         - 连接断开时自动重连 + 重试一次
         - 永久性认证错误标记池失败，1 小时内不再 login
         """
+        if not self._operation_lock.acquire(timeout=self._operation_lock_timeout):
+            raise RuntimeError("邮箱正忙，请稍后重试。")
+        try:
+            return self._run_locked(op, background=background)
+        finally:
+            self._operation_lock.release()
+
+    def _run_locked(
+        self,
+        op: Callable[[imaplib.IMAP4], _T],
+        *,
+        background: bool = False,
+    ) -> _T:
         # 检查永久失败状态
         if self._failed_until > 0:
             wait = self._failed_until - time.time()
@@ -160,41 +187,78 @@ class _AccountImapPool:
             logger.info("[imap-pool] failed period expired, retrying login")
 
         last_error: Exception | None = None
-        self._in_use = True
-        try:
-            for attempt in range(2):  # 最多 2 次：原始 + 重连后重试
-                try:
-                    client = self._get_or_reconnect()
-                    result = op(client)
-                    self._last_use = time.time()
-                    return result
-                except Exception as e:
-                    last_error = e
-                    # 永久性认证错误：标记池失败
-                    if _is_permanent_auth_error(e):
-                        self._failed_until = time.time() + 3600  # 1 小时
-                        self._invalidate()
-                        logger.error(
-                            f"[imap-pool] permanent auth error, marking pool failed for 1h: {e}"
-                        )
-                        raise
-                    # 可重试的连接错误：失效连接，重连后重试一次
-                    if _is_retryable(e):
-                        self._invalidate()
-                        if attempt == 0:
-                            logger.debug(
-                                f"[imap-pool] connection lost, will reconnect and retry: {e}"
-                            )
-                            continue
-                    # 业务错误（如文件夹不存在）或非可重试错误：直接抛出
-                    # 但仍标记连接可能已失效（部分服务器在错误后关闭连接）
+        for attempt in range(2):  # 最多 2 次：原始 + 重连后重试
+            try:
+                client = self._get_or_reconnect()
+                if background:
+                    self._begin_background()
+                result = op(client)
+            except Exception as e:
+                interrupted = self._finish_background() if background else False
+                if interrupted:
+                    self._invalidate()
+                    raise ImapOperationDeferred("后台邮件读取已让位给前台操作。") from e
+                last_error = e
+                # 永久性认证错误：标记池失败
+                if _is_permanent_auth_error(e):
+                    self._failed_until = time.time() + 3600  # 1 小时
+                    self._invalidate()
+                    logger.error(
+                        f"[imap-pool] permanent auth error, marking pool failed for 1h: {e}"
+                    )
                     raise
-        finally:
-            self._in_use = False
+                # 可重试的连接错误：失效连接，重连后重试一次
+                if _is_retryable(e):
+                    self._invalidate()
+                    if attempt == 0:
+                        logger.debug(
+                            f"[imap-pool] connection lost, will reconnect and retry: {e}"
+                        )
+                        continue
+                # 业务错误（如文件夹不存在）或非可重试错误：直接抛出
+                raise
+            else:
+                interrupted = self._finish_background() if background else False
+                if interrupted:
+                    # 完整结果可以交付，但被打断的 socket 不再复用。
+                    self._invalidate()
+                self._last_use = time.time()
+                return result
+            finally:
+                if background:
+                    self._finish_background()
 
         # 理论上不会到达
         assert last_error is not None
         raise last_error
+
+    def _begin_background(self) -> None:
+        with self._interrupt_lock:
+            self._interrupt_event.clear()
+            self._active_background = True
+
+    def _finish_background(self) -> bool:
+        with self._interrupt_lock:
+            interrupted = self._interrupt_event.is_set()
+            self._active_background = False
+            self._interrupt_event.clear()
+            return interrupted
+
+    def interrupt_background(self) -> bool:
+        """Wake an active background read without blocking on file close or LOGOUT."""
+        with self._interrupt_lock:
+            client = self._client
+            if not self._active_background or client is None:
+                return False
+            sock = getattr(client, "sock", None)
+            if sock is None:
+                return False
+            self._interrupt_event.set()
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            return True
 
     def _get_or_reconnect(self) -> imaplib.IMAP4:
         """获取可用连接，必要时重连。
@@ -212,9 +276,7 @@ class _AccountImapPool:
             logger.debug(
                 "[imap-pool] connection in LOGOUT state, will reconnect"
             )
-            with contextlib.suppress(Exception):
-                self._client.logout()
-            self._client = None
+            self._invalidate()
 
         recently_used = self._client is not None and (now - self._last_use) < 300
         if recently_used or (self._client is not None and self._is_alive()):
@@ -222,9 +284,7 @@ class _AccountImapPool:
 
         # 关闭旧连接
         if self._client is not None:
-            with contextlib.suppress(Exception):
-                self._client.logout()
-            self._client = None
+            self._invalidate()
 
         # 新建连接
         self._client = self._create_client()
@@ -277,16 +337,16 @@ class _AccountImapPool:
             client.login(username, password)
         except Exception:
             with contextlib.suppress(Exception):
-                client.logout()
+                client.shutdown()
             raise
         return client
 
     def _invalidate(self) -> None:
         """标记连接失效，下次使用时重连。"""
-        if self._client is not None:
+        client, self._client = self._client, None
+        if client is not None:
             with contextlib.suppress(Exception):
-                self._client.logout()
-            self._client = None
+                client.shutdown()
 
     def close(self) -> None:
         """关闭池，释放连接。"""
@@ -327,9 +387,26 @@ class ImapPoolManager:
                 self._pools[key] = pool
             return pool
 
-    def run(self, body: dict[str, Any], op: Callable[[imaplib.IMAP4], _T]) -> _T:
-        """便捷方法：获取池并执行操作。"""
-        return self.get_pool(body).run(op)
+    def run(
+        self,
+        body: dict[str, Any],
+        op: Callable[[imaplib.IMAP4], _T],
+        *,
+        background: bool = False,
+    ) -> _T:
+        """获取池并执行操作；background 仅用于允许让出连接的纯读调用。"""
+        return self.get_pool(body).run(op, background=background)
+
+    def interrupt_background(self, body: dict[str, Any]) -> bool:
+        """Interrupt an existing pool's read without creating a pool or waiting for a socket close."""
+        key = self._pool_key(body)
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            pool = self._pools.get(key)
+        finally:
+            self._lock.release()
+        return pool.interrupt_background() if pool is not None else False
 
     def remove_pool(self, host: str, username: str) -> None:
         """删除账号的连接池（账号删除时调用）。"""
@@ -363,8 +440,7 @@ class ImapPoolManager:
 
         注意：
         - NOOP 失败时只标记连接失效，不在此处重连 login，避免后台任务触发风控。
-        - 跳过正在使用中的池（_in_use=True），因为 imaplib 不是线程安全的，
-          keepalive 的 NOOP 与 op 的 FETCH 并发会导致内部状态混乱、连接被关闭。
+        - 使用操作线程锁非阻塞地跳过忙碌池，避免 NOOP 与 FETCH 并发。
         下次用户操作时由 run() 自动重连。
         """
         while True:
@@ -372,22 +448,29 @@ class ImapPoolManager:
             with self._lock:
                 pools = list(self._pools.values())
             for pool in pools:
-                if pool._failed_until > time.time():
-                    continue
-                if pool._in_use:
-                    continue
-                client = pool._client
-                if client is None:
-                    continue
-                try:
-                    status, _ = client.noop()
-                    if status == "OK":
-                        pool._last_use = time.time()
-                    else:
-                        pool._invalidate()
-                except Exception as e:
-                    logger.debug(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
+                self._keepalive_pool(pool)
+
+    @staticmethod
+    def _keepalive_pool(pool: _AccountImapPool) -> None:
+        if pool._failed_until > time.time():
+            return
+        if not pool._operation_lock.acquire(blocking=False):
+            return
+        try:
+            client = pool._client
+            if client is None:
+                return
+            try:
+                status, _ = client.noop()
+                if status == "OK":
+                    pool._last_use = time.time()
+                else:
                     pool._invalidate()
+            except Exception as e:
+                logger.debug(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
+                pool._invalidate()
+        finally:
+            pool._operation_lock.release()
 
     def status(self) -> list[dict[str, Any]]:
         """返回所有池的状态（用于监控/调试）。"""

@@ -22,7 +22,6 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
-  updateStockSettings,
   updateVideoGenerationSettings,
   updateVideoProjectSettings,
   updateWebSearchSettings,
@@ -519,35 +518,6 @@ describe("webui API helpers", () => {
       waitingApproval: false,
       scheduled: false,
     });
-  });
-
-  it("serializes stock settings updates", async () => {
-    await updateStockSettings("tok", {
-      enabled: true,
-      autoReviewEnabled: false,
-      reviewTime: "16:00",
-      pushNotification: false,
-      pushEmail: true,
-      quoteRefreshSec: 60,
-    });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/stock/update?enabled=true&autoReviewEnabled=false&reviewTime=16%3A00&pushNotification=false&pushEmail=true&quoteRefreshSec=60",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
-  });
-
-  it("serializes partial stock settings updates", async () => {
-    await updateStockSettings("tok", { reviewTime: "09:30" });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/stock/update?reviewTime=09%3A30",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
   });
 
   it("maps slash command metadata from the commands endpoint", async () => {

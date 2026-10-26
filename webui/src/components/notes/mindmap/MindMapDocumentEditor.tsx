@@ -66,6 +66,7 @@ import { FindReplacePanel } from "./FindReplacePanel";
 import { NodePropertyDialog, type NodePropertyData } from "./NodePropertyDialog";
 import { useMindMapSelection } from "./MindMapSelectionContext";
 import { useMindMapBridge } from "./MindMapBridge";
+import { useMindMapCanvasAgent } from "./useMindMapCanvasAgent";
 import { downloadMediaUrl } from "@/lib/tauri";
 import {
   readDecorations,
@@ -380,18 +381,14 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
     requestAnimationFrame(() => fitWhenReady());
   }, []);
 
-  // 同步外部 contentMarkdown 变化
-  useEffect(() => {
-    if (note.contentMarkdown === lastContentRef.current) return;
-    if (isRefreshingRef.current) return;
-
-    const result = parseMindMap(note.contentMarkdown);
+  const refreshContent = useCallback((markdown: string) => {
+    const result = parseMindMap(markdown);
     if (!result.ok) {
       setParseError(`第 ${result.line} 行：${result.message}`);
       return;
     }
     setParseError(null);
-    lastContentRef.current = note.contentMarkdown;
+    lastContentRef.current = markdown;
 
     // 外部内容更新（如 AI Patch）会触发 refresh 重建 DOM，需重置查找状态
     setFindMatches([]);
@@ -418,7 +415,27 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
       }
       fitMindMapAfterRefresh();
     }
-  }, [fitMindMapAfterRefresh, note.contentMarkdown]);
+  }, [fitMindMapAfterRefresh]);
+
+  // 同步外部 contentMarkdown 变化
+  useEffect(() => {
+    if (note.contentMarkdown === lastContentRef.current || isRefreshingRef.current) return;
+    refreshContent(note.contentMarkdown);
+  }, [note.contentMarkdown, refreshContent]);
+
+  useMindMapCanvasAgent({
+    noteId: note.id,
+    contentRef: lastContentRef,
+    mindRef,
+    containerRef,
+    readRoot: () => stripParent(mindRef.current!.getData().nodeData),
+    commit: (markdown) => {
+      refreshContent(markdown);
+      const parsed = parseMindMap(markdown);
+      onContentChange({ contentMarkdown: markdown, plainText: parsed.ok ? parsed.plainText : markdown });
+      updateBaseHash(note.id, computeBaseHash(markdown));
+    },
+  });
 
   // 初始化 Mind Elixir
   useEffect(() => {

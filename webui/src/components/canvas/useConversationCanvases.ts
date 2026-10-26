@@ -232,10 +232,9 @@ export function useConversationCanvases({
     const tab = tabsRef.current.find((item) => item.note.id === pending.noteId);
     if (!tab) return;
     const currentHash = conversationCanvasBaseHash(tab.note);
-    const toolApplied = tab.note.type === "flowchart"
-      && currentHash.length > 0
+    const toolApplied = currentHash.length > 0
       && currentHash !== pending.requestBaseHash
-      && !/```mona-flowchart-patch\s/i.test(response.content);
+      && !/```(?:mona-flowchart-patch|mindmap-patch|mindmap)\s/i.test(response.content);
     if (toolApplied) {
       setTabState(setTabs, tab.note.id, {
         generationStatus: "idle",

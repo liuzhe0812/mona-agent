@@ -100,16 +100,16 @@ export function StoragePanel({ scan, onHandoff, onSelectionChange, onAnalyzeFile
         const removable = scan.result?.disks.find((item) => item.driveLetter === disk.driveLetter)?.isRemovable;
         const low = disk.usagePercent >= 90;
         const scanLabel = scanning ? "正在扫描" : scan.result && selected ? "重新扫描" : "开始扫描";
-        return <div key={drive} role="group" aria-label={`${drive} 磁盘`} style={{ containerType: "inline-size" }} className={cn("group relative flex min-w-0 flex-col rounded-lg p-3 transition-colors hover:bg-accent/30 focus-within:bg-accent/30", selected && "bg-accent/30")}>
+        return <div key={drive} role="group" aria-label={`${drive} 磁盘`} style={{ containerType: "inline-size" }} className={cn("group relative flex min-w-0 flex-col rounded-xl border border-border/60 bg-card p-5 transition-colors hover:bg-accent/30 focus-within:bg-accent/30", selected && "bg-accent/30")}>
           <Button type="button" variant="ghost" aria-label={`查看 ${drive} 磁盘`} aria-pressed={selected} disabled={scan.status === "scanning" && !selected} onClick={() => { scan.selectDrive(drive); setBreadcrumb([]); setSelectedPath(null); }} className="block h-auto w-full p-0 text-left font-normal hover:bg-transparent">
             <div className="flex items-center gap-3 pr-16 [@container(min-width:360px)]:pr-48">
-              <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full", selected ? "bg-info/10 text-info" : "bg-muted text-muted-foreground")}><HardDrive className="h-5 w-5" /></span>
+              <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-full", selected ? "bg-info/10 text-info" : "bg-muted text-muted-foreground")}><HardDrive className="h-[18px] w-[18px]" /></span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-caption font-medium">{drive} {drive === "C:" ? "系统盘" : removable ? "移动磁盘" : "磁盘"}</span>
+                  <span className="truncate text-caption font-medium text-muted-foreground">{drive} {drive === "C:" ? "系统盘" : removable ? "移动磁盘" : "磁盘"}</span>
                   {low && <span className="shrink-0 rounded-md bg-warning/10 px-1.5 py-0.5 text-micro text-warning">空间不足</span>}
                 </div>
-                <p className="text-title-sm font-semibold">{formatPercent(disk.usagePercent)}</p>
+                <p className="text-display-sm font-semibold tracking-tight tabular-nums">{formatPercent(disk.usagePercent)}</p>
               </div>
             </div>
             <div className="mt-3"><ProgressBar value={disk.usagePercent} color={low ? "bg-warning" : "bg-info"} /></div>
@@ -127,11 +127,11 @@ export function StoragePanel({ scan, onHandoff, onSelectionChange, onAnalyzeFile
       {disks.length === 0 && <p role="status" className="py-4 text-caption text-muted-foreground">{overviewError ? "暂时无法读取磁盘，请稍后重试。" : "正在读取磁盘…"}</p>}
     </div>
 
-    <div id="storage-distribution">
+    <div id="storage-distribution" className="rounded-xl border border-border/60 bg-card p-5">
       {directories.length ? <>
-        <div className="flex flex-wrap items-start gap-6">
-          <div className="h-72 min-w-0 flex-1 basis-64"><DirectoryTreeView directories={directories} currentPath={currentPath} selectedPath={selectedPath} onSelect={setSelectedPath} onDrillDown={drillDown} onAnalyze={onAnalyzeDirectory ? analyzeDirectory : undefined} /></div>
-          <div className="min-w-0 flex-[1.5] basis-96"><TreemapView directories={currentDirectory?.children ?? directories} currentTotalGb={currentDirectory?.sizeGb ?? scan.result?.totalScannedGb} breadcrumb={breadcrumb} loading={false} error={null} selectedPath={selectedPath} onSelect={setSelectedPath} onDrillDown={drillDown} onAnalyze={onAnalyzeDirectory ? analyzeDirectory : undefined} onNavigate={(path) => {
+        <div className="flex flex-wrap items-start gap-0">
+          <div className="h-72 min-w-0 flex-1 basis-64 pr-6"><DirectoryTreeView directories={directories} currentPath={currentPath} selectedPath={selectedPath} onSelect={setSelectedPath} onDrillDown={drillDown} onAnalyze={onAnalyzeDirectory ? analyzeDirectory : undefined} /></div>
+          <div className="min-w-0 flex-[1.5] basis-96 border-l border-border/50 pl-6"><TreemapView directories={currentDirectory?.children ?? directories} currentTotalGb={currentDirectory?.sizeGb ?? scan.result?.totalScannedGb} breadcrumb={breadcrumb} loading={false} error={null} selectedPath={selectedPath} onSelect={setSelectedPath} onDrillDown={drillDown} onAnalyze={onAnalyzeDirectory ? analyzeDirectory : undefined} onNavigate={(path) => {
             setBreadcrumb((previous) => path ? previous.slice(0, previous.findIndex((entry) => entry.path === path) + 1) : []);
             setSelectedPath(path);
           }} /></div>
@@ -140,28 +140,33 @@ export function StoragePanel({ scan, onHandoff, onSelectionChange, onAnalyzeFile
     </div>
 
     <Tabs value={section} onValueChange={setSection}>
-      <TabsList aria-label="存储文件操作" className="h-auto justify-start gap-2 rounded-none bg-transparent p-0 [&_[role=tab]]:shadow-none">
-        <TabsTrigger id="storage-cleanup" value="cleanup" className="rounded-sm px-3 py-1.5 font-normal data-[state=active]:bg-muted data-[state=active]:font-medium data-[state=active]:shadow-none">清理空间</TabsTrigger>
-        <TabsTrigger id="storage-large-files" value="files" className="rounded-sm px-3 py-1.5 font-normal data-[state=active]:bg-muted data-[state=active]:font-medium data-[state=active]:shadow-none">大文件</TabsTrigger>
-      </TabsList>
+      <div className="flex items-center justify-between gap-4">
+        <TabsList aria-label="存储文件操作" className="h-auto justify-start gap-0.5 rounded-lg bg-muted p-0.5 [&_[role=tab]]:shadow-none">
+          <TabsTrigger id="storage-cleanup" value="cleanup" className="rounded-md px-3 py-1 font-normal text-muted-foreground data-[state=active]:bg-card data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-none">清理空间</TabsTrigger>
+          <TabsTrigger id="storage-large-files" value="files" className="rounded-md px-3 py-1 font-normal text-muted-foreground data-[state=active]:bg-card data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-none">大文件</TabsTrigger>
+        </TabsList>
+        {section === "cleanup" && cleanupItems.length > 0 && <p className="text-micro text-muted-foreground">共 {cleanupItems.length} 项 · {formatStorage(cleanupItems.reduce((total, item) => total + item.sizeGb, 0))}</p>}
+      </div>
       <TabsContent value="cleanup">
-        {cleanupItems.length ? <table className="w-full table-fixed text-left text-caption">
-          <colgroup><col /><col className="w-24" /><col className="w-16" /></colgroup>
-          <thead className="text-muted-foreground [&_th:not(:last-child)]:border-r [&_th]:border-border/60"><tr className="h-8 bg-muted/60"><th scope="col" className="px-3 py-1 font-normal">项目</th><th scope="col" className="px-3 py-1 font-normal">预计释放</th><th scope="col" className="px-3 py-1 text-right font-normal">操作</th></tr></thead>
-          <tbody>{cleanupItems.map((item) => {
-            const busy = scan.cleaningIds.has(item.id);
-            const Icon = item.id === "trash" ? Trash2 : /chrome|edge|browser/.test(item.id) ? Globe : FileText;
-            return <tr key={item.id} className="border-b border-border/30 last:border-b-0">
-              <td className="px-3 py-2.5"><div className="flex min-w-0 items-center gap-2.5"><Icon className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="truncate" title={item.name}>{item.name}</span></div></td>
-              <td className="px-3 tabular-nums">{formatStorage(item.sizeGb)}</td>
-              <td className="px-3 text-right"><Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" title={busy ? `正在清理${item.name}` : `清理${item.name}`} aria-label={busy ? `正在清理${item.name}` : `清理${item.name}`} aria-busy={busy} disabled={busy} onClick={() => { if (scan.result) setCleanupTarget({ item, drive: scan.selectedDrive, scanId: scan.result.scanId }); }}>{busy ? <Loader2 className="h-4 w-4 animate-spin text-info" aria-hidden="true" /> : <Eraser className="h-4 w-4" aria-hidden="true" />}</Button></td>
-            </tr>;
-          })}</tbody>
-        </table> : <p className="py-4 text-caption text-muted-foreground">{scan.result ? "当前磁盘未发现可直接清理的项目。" : "扫描后显示可清理项目。"}</p>}
-        {scan.cleaning && <p role="status" className="mt-2 text-micro text-muted-foreground">清理在后台进行，可继续操作其他内容。</p>}
-        {notice && <p role="status" className="mt-2 text-caption text-muted-foreground">{notice}</p>}
+        <div className="rounded-xl border border-border/60 bg-card px-5 py-2">
+          {cleanupItems.length ? <table className="w-full table-fixed text-left text-caption">
+            <colgroup><col /><col className="w-24" /><col className="w-16" /></colgroup>
+            <thead className="text-micro text-muted-foreground"><tr><th scope="col" className="py-2.5 pr-3 font-normal">项目</th><th scope="col" className="px-3 py-2.5 font-normal">预计释放</th><th scope="col" className="py-2.5 pl-3 text-right font-normal">操作</th></tr></thead>
+            <tbody>{cleanupItems.map((item) => {
+              const busy = scan.cleaningIds.has(item.id);
+              const Icon = item.id === "trash" ? Trash2 : /chrome|edge|browser/.test(item.id) ? Globe : FileText;
+              return <tr key={item.id} className="border-t border-border/50">
+                <td className="py-3 pr-3"><div className="flex min-w-0 items-center gap-2.5"><Icon className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="truncate" title={item.name}>{item.name}</span></div></td>
+                <td className="px-3 py-3 tabular-nums text-muted-foreground">{formatStorage(item.sizeGb)}</td>
+                <td className="py-3 pl-3 text-right"><Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" title={busy ? `正在清理${item.name}` : `清理${item.name}`} aria-label={busy ? `正在清理${item.name}` : `清理${item.name}`} aria-busy={busy} disabled={busy} onClick={() => { if (scan.result) setCleanupTarget({ item, drive: scan.selectedDrive, scanId: scan.result.scanId }); }}>{busy ? <Loader2 className="h-4 w-4 animate-spin text-info" aria-hidden="true" /> : <Eraser className="h-4 w-4" aria-hidden="true" />}</Button></td>
+              </tr>;
+            })}</tbody>
+          </table> : <p className="py-6 text-caption text-muted-foreground">{scan.result ? "当前磁盘未发现可直接清理的项目。" : "扫描后显示可清理项目。"}</p>}
+          {scan.cleaning && <p role="status" className="py-2 text-micro text-muted-foreground">清理在后台进行，可继续操作其他内容。</p>}
+          {notice && <p role="status" className="py-2 text-caption text-muted-foreground">{notice}</p>}
+        </div>
       </TabsContent>
-      <TabsContent value="files"><LargeFileTable files={scan.result?.topFiles ?? []} onTrash={scan.trashFiles} onAnalyze={onAnalyzeFile} analyzingFileId={analyzingFileId} /></TabsContent>
+      <TabsContent value="files"><div className="rounded-xl border border-border/60 bg-card px-5 py-4"><LargeFileTable files={scan.result?.topFiles ?? []} onTrash={scan.trashFiles} onAnalyze={onAnalyzeFile} analyzingFileId={analyzingFileId} /></div></TabsContent>
     </Tabs>
 
     <AlertDialog open={cleanupTarget !== null} onOpenChange={(open) => { if (!open) setCleanupTarget(null); }}>

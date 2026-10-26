@@ -1,0 +1,27 @@
+[
+  {
+    "path": "docs/plans/stock-vibe-development-plan.md",
+    "sha256": "b9302d474259b1ed672cb8a6069aec283a6b4cc81dbc7e89df02ddcffae3f72b",
+    "matchesSource": true
+  },
+  {
+    "path": "docs/design/stock-vibe-functional-design-v1.md",
+    "sha256": "5e9e971edbfb88fafcd5304220d7590da570a639aae2e8c6386f6b9c8f38d961",
+    "matchesSource": true
+  },
+  {
+    "path": "docs/design/stock-vibe-functional-design-v1/01-investment-workbench.png",
+    "sha256": "46a73c8504f1f44e6a34334b3276311696189ad17d5a6d769ab9cc732ff11e25",
+    "matchesSource": true
+  },
+  {
+    "path": "docs/design/stock-vibe-functional-design-v1/02-strategy-lab-v2.png",
+    "sha256": "42ae052a9b77873be39dc6122c939c65a9b7ebc12ed8c3e2d9600ae3db6512a0",
+    "matchesSource": true
+  },
+  {
+    "path": "docs/design/stock-vibe-functional-design-v1/03-shadow-account.png",
+    "sha256": "9e013b577c6264e82884ad4e81626c55f32cec7426cb9ff08bbf52ba5f65f51e",
+    "matchesSource": true
+  }
+]

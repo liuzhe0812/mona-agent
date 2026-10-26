@@ -1,0 +1,15 @@
+serverAddr = "mona-ai.cn"
+serverPort = 443
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+transport.protocol = "wss"
+transport.tls.enable = true
+transport.tls.trustedCaFile = "/etc/ssl/certs/ca-certificates.crt"
+transport.tls.serverName = "mona-ai.cn"
+
+[[proxies]]
+name = "notebook-relay"
+type = "stcp"
+secretKey = "{{ .Envs.NOTEBOOK_RELAY_STCP_SECRET }}"
+localIP = "127.0.0.1"
+localPort = 8800

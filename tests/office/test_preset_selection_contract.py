@@ -10,112 +10,52 @@ from mona.office.schemas import (
     CapabilitiesResult,
     OfficeCommandResultMessage,
     OfficeInspectRequest,
+    SlidesOperation,
 )
 
 
-def test_candidate_rejection_diagnostics_survive_wire_contract() -> None:
-    result = CapabilitiesResult.model_validate({
-        "mode": "capabilities", "documentType": "slides", "operations": [],
-        "presets": [], "contentRef": "preset-content:example",
-        "presetDiagnostics": [{"id": "auto-content", "reasons": ["内容过量，请拆成两页"]}],
+def test_capabilities_only_expose_native_operations_not_legacy_design_queries() -> None:
+    query = CapabilitiesQuery.model_validate({
+        "mode": "capabilities", "operations": ["slide_add_text", "slide_add_chart"],
     })
-    assert result.model_dump(by_alias=True)["presetDiagnostics"] == [
-        {"id": "auto-content", "reasons": ["内容过量，请拆成两页"]},
-    ]
+    assert query.operations == ["slide_add_text", "slide_add_chart"]
+    for field in (
+        "presetContent", "presetRole", "presetRelation", "usedPresetIds", "presetLimit",
+        "presetContentRef", "presetFamily", "presetTheme", "presetScenario", "templateId",
+    ):
+        with pytest.raises(ValidationError):
+            CapabilitiesQuery.model_validate({"mode": "capabilities", field: "legacy"})
+    for field in ("designs", "presets", "presetScenarios", "templates", "templateScenarios"):
+        with pytest.raises(ValidationError):
+            CapabilitiesResult.model_validate({
+                "mode": "capabilities", "documentType": "slides", "operations": [], field: [],
+            })
 
 
-def test_scenario_catalog_and_filter_survive_wire_contract() -> None:
-    request = CapabilitiesQuery.model_validate({
-        "mode": "capabilities", "presetScenario": "education-training",
-        "presetContent": {"title": "实践练习", "scenario": "education-training"},
+def test_visual_contract_keeps_explicit_native_preview_and_rejects_dashi_fields() -> None:
+    request = OfficeInspectRequest.model_validate({
+        "sessionId": "office_slides", "query": {
+            "mode": "visual", "presetId": "light-transition-statement",
+            "presetContent": {"title": "季度复盘"},
+        },
     })
-    assert request.preset_scenario == "education-training"
-    assert request.model_dump(by_alias=True)["presetContent"]["scenario"] == "education-training"
-    result = CapabilitiesResult.model_validate({
-        "mode": "capabilities", "documentType": "slides", "operations": [],
-        "presetScenarios": [{"id": "education-training", "label": "教学培训", "templateIds": ["education-practice"]}],
-        "presets": [{"id": "education-practice", "scenarios": ["education-training"]}],
-    })
-    wire = result.model_dump(by_alias=True)
-    assert wire["presetScenarios"][0]["id"] == "education-training"
-    assert wire["presets"][0]["scenarios"] == ["education-training"]
+    assert request.model_dump(by_alias=True)["query"]["presetContent"] == {"title": "季度复盘"}
+    for field in ("templateId", "templateFields", "templateAssets", "presetContentRef"):
+        with pytest.raises(ValidationError):
+            OfficeInspectRequest.model_validate({
+                "sessionId": "office_slides", "query": {"mode": "visual", field: "legacy"},
+            })
 
 
-def test_preset_selection_query_reference_round_trips_with_aliases() -> None:
-    request = OfficeInspectRequest.model_validate(
-        {
-            "sessionId": "office_slides",
-            "query": {
-                "mode": "capabilities",
-                "presetRole": "hero",
-                "presetRelation": "sequence",
-                "usedPresetIds": ["dark-product-hero"],
-                "presetLimit": 5,
-                "presetContentRef": "preset-content-1",
-            },
-        }
-    )
-
-    query = request.query
-    assert isinstance(query, CapabilitiesQuery)
-    assert query.preset_role == "hero"
-    assert query.preset_relation == "sequence"
-    assert query.used_preset_ids == ["dark-product-hero"]
-    assert query.preset_limit == 5
-    assert query.preset_content_ref == "preset-content-1"
-    assert request.model_dump(by_alias=True, mode="json")["query"] == {
-        "mode": "capabilities",
-        "documentType": None,
-        "elementType": None,
-        "operations": [],
-        "presetContent": None,
-        "presetRole": "hero",
-        "presetRelation": "sequence",
-        "usedPresetIds": ["dark-product-hero"],
-        "presetLimit": 5,
-        "presetContentRef": "preset-content-1",
-        "presetFamily": None,
-        "presetTheme": None,
-        "presetScenario": None,
-    }
-
-    visual = OfficeInspectRequest.model_validate(
-        {
-            "sessionId": "office_slides",
-            "query": {
-                "mode": "visual",
-                "presetContent": {"title": "季度复盘"},
-                "presetContentRef": "preset-content-1",
-            },
-        }
-    )
-    visual_payload = visual.model_dump(by_alias=True, mode="json")["query"]
-    assert visual_payload["presetContent"] == {"title": "季度复盘"}
-    assert visual_payload["presetContentRef"] == "preset-content-1"
-
-
-def test_preset_selection_query_bounds_and_unknown_fields_remain_strict() -> None:
-    assert CapabilitiesQuery(mode="capabilities").preset_limit == 3
-
+def test_removed_native_template_operation_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        CapabilitiesQuery.model_validate({"mode": "capabilities", "presetLimit": 0})
-    with pytest.raises(ValidationError):
-        CapabilitiesQuery.model_validate({"mode": "capabilities", "presetLimit": 6})
-    with pytest.raises(ValidationError):
-        CapabilitiesQuery.model_validate(
-            {"mode": "capabilities", "presetRelation": "branch"}
-        )
-    with pytest.raises(ValidationError):
-        CapabilitiesQuery.model_validate(
-            {
-                "mode": "capabilities",
-                "usedPresetIds": [f"preset-{index}" for index in range(101)],
-            }
-        )
-    with pytest.raises(ValidationError):
-        CapabilitiesQuery.model_validate(
-            {"mode": "capabilities", "unknownSelectionField": True}
-        )
+        SlidesOperation.model_validate({
+            "op": "slide_add_template",
+            "payload": {"slideId": "s_1", "templateId": "theme01_page001"},
+        })
+    assert SlidesOperation.model_validate({
+        "op": "slide_add_text", "payload": {"slideId": "s_1", "text": "原生文字"},
+    }).op == "slide_add_text"
 
 
 def test_command_result_message_round_trips_preset_page_metadata() -> None:

@@ -107,17 +107,6 @@ from mona.api.server import (
     handle_schedule_toggle,
     handle_schedule_update,
     handle_shutdown,
-    handle_stock_kline,
-    handle_stock_quote,
-    handle_stock_research_context,
-    handle_stock_research_preflight,
-    handle_stock_search,
-    handle_stock_watchlist_add,
-    handle_stock_watchlist_focus,
-    handle_stock_watchlist_import,
-    handle_stock_watchlist_list,
-    handle_stock_watchlist_remove,
-    handle_stock_watchlist_reorder,
     handle_todo_briefing,
     handle_todo_create,
     handle_todo_from_email,
@@ -217,38 +206,7 @@ from mona.materials.knowledge import (
     shutdown_agent_knowledge_tasks,
 )
 from mona.office.api import office_error_middleware, register_office_routes
-from mona.services.stock.api import (
-    cleanup_stock_intraday,
-    handle_stock_decision_conditions,
-    handle_stock_diagnosis_cancel,
-    handle_stock_diagnosis_create,
-    handle_stock_diagnosis_delete,
-    handle_stock_diagnosis_fail,
-    handle_stock_diagnosis_get,
-    handle_stock_diagnosis_list,
-    handle_stock_diagnosis_outcome,
-    handle_stock_diagnosis_retry,
-    handle_stock_intraday,
-    handle_stock_intraday_stream,
-    handle_stock_material_bind,
-    handle_stock_material_confirm,
-    handle_stock_material_preview,
-    handle_stock_materials,
-    handle_stock_outcomes,
-    handle_stock_outcomes_refresh,
-    handle_stock_portfolio_context,
-    handle_stock_risk_profile,
-    handle_stock_risk_profile_delete,
-    handle_stock_screen_compare,
-    handle_stock_screen_history,
-    handle_stock_screen_opportunity_source,
-    handle_stock_screen_outcomes,
-    handle_stock_screen_outcomes_refresh,
-    handle_stock_screen_results,
-    handle_stock_screen_strategies,
-    handle_stock_screen_strategy_delete,
-    handle_stock_screen_templates,
-)
+from mona.services.stock_vibe.api import register_stock_vibe_routes
 
 
 async def handle_services_health(request: web.Request) -> web.Response:
@@ -260,7 +218,7 @@ async def handle_services_health(request: web.Request) -> web.Response:
             "status": "ok",
             "service": "mona-services",
             "version": __version__,
-            "capabilities": ["stock-v1", "office-editor-v1"],
+            "capabilities": ["stock-vibe-v1", "office-editor-v1"],
         }
     )
 
@@ -282,7 +240,10 @@ def create_services_app(
             file tools see, otherwise uploads and generation diverge.
     """
     app = web.Application(
-        client_max_size=20 * 1024 * 1024,
+        # 邮件附件以 base64 放在 JSON 里，请求体约为原文件的 4/3。
+        # 单封附件上限 50MB（与常见邮箱一致）→ 需要 ~67MB 请求体，
+        # 20MB 的老值会让十几 MB 的附件直接 413。
+        client_max_size=80 * 1024 * 1024,
         middlewares=[
             _cors_middleware,
             materials_auth_middleware,
@@ -300,6 +261,7 @@ def create_services_app(
     app["workspace"] = workspace
     from mona.schedule.sync_api import register_planning_sync_routes
     register_planning_sync_routes(app)
+    register_stock_vibe_routes(app)
 
     app.router.add_get("/health", handle_services_health)
     app.router.add_post("/shutdown", handle_shutdown)
@@ -423,69 +385,6 @@ def create_services_app(
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)
     app.router.add_delete("/api/hoard-by-url", handle_hoard_delete_by_url)
-
-    # Stock module data API (design §10.1/P5): market data plus explicit,
-    # local outcome tracking reads/refreshes under the configured workspace.
-    app.router.add_get("/api/stock/watchlist", handle_stock_watchlist_list)
-    app.router.add_post("/api/stock/watchlist", handle_stock_watchlist_add)
-    app.router.add_delete("/api/stock/watchlist", handle_stock_watchlist_remove)
-    app.router.add_post("/api/stock/watchlist/import", handle_stock_watchlist_import)
-    app.router.add_post("/api/stock/watchlist/focus", handle_stock_watchlist_focus)
-    app.router.add_post("/api/stock/watchlist/order", handle_stock_watchlist_reorder)
-    app.router.add_get("/api/stock/search", handle_stock_search)
-    app.router.add_get("/api/stock/quote", handle_stock_quote)
-    app.router.add_get("/api/stock/kline", handle_stock_kline)
-    app.router.add_get("/api/stock/intraday", handle_stock_intraday)
-    app.router.add_get("/api/stock/intraday/stream", handle_stock_intraday_stream)
-    app.router.add_post("/api/stock/diagnosis", handle_stock_diagnosis_create)
-    app.router.add_get("/api/stock/diagnosis", handle_stock_diagnosis_list)
-    app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_get)
-    app.router.add_get(
-        "/api/stock/diagnosis/{diagnosis_id}/outcome",
-        handle_stock_diagnosis_outcome,
-    )
-    app.router.add_delete(
-        "/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_delete
-    )
-    app.router.add_post(
-        "/api/stock/diagnosis/{diagnosis_id}/cancel", handle_stock_diagnosis_cancel
-    )
-    app.router.add_post(
-        "/api/stock/diagnosis/{diagnosis_id}/fail", handle_stock_diagnosis_fail
-    )
-    app.router.add_post(
-        "/api/stock/diagnosis/{diagnosis_id}/retry", handle_stock_diagnosis_retry
-    )
-    app.router.add_get("/api/stock/decision-conditions", handle_stock_decision_conditions)
-    app.router.add_get("/api/stock/materials", handle_stock_materials)
-    app.router.add_get("/api/stock/materials/preview", handle_stock_material_preview)
-    app.router.add_post("/api/stock/materials/bind", handle_stock_material_bind)
-    app.router.add_post("/api/stock/materials/confirm", handle_stock_material_confirm)
-    app.router.add_get("/api/stock/outcomes", handle_stock_outcomes)
-    app.router.add_post("/api/stock/outcomes/refresh", handle_stock_outcomes_refresh)
-    app.router.add_get("/api/stock/risk-profile", handle_stock_risk_profile)
-    app.router.add_put("/api/stock/risk-profile", handle_stock_risk_profile)
-    app.router.add_delete("/api/stock/risk-profile", handle_stock_risk_profile_delete)
-    app.router.add_get("/api/stock/portfolio-context", handle_stock_portfolio_context)
-    app.router.add_put("/api/stock/portfolio-context", handle_stock_portfolio_context)
-    app.router.add_delete("/api/stock/portfolio-context", handle_stock_portfolio_context)
-    app.router.add_get("/api/stock/screen/outcomes", handle_stock_screen_outcomes)
-    app.router.add_post(
-        "/api/stock/screen/outcomes/refresh", handle_stock_screen_outcomes_refresh
-    )
-    app.router.add_get("/api/stock/research-context", handle_stock_research_context)
-    app.router.add_post("/api/stock/research/preflight", handle_stock_research_preflight)
-    app.router.add_get("/api/stock/screen/templates", handle_stock_screen_templates)
-    app.router.add_get("/api/stock/screen/strategies", handle_stock_screen_strategies)
-    app.router.add_post("/api/stock/screen/strategies", handle_stock_screen_strategies)
-    app.router.add_delete("/api/stock/screen/strategies", handle_stock_screen_strategy_delete)
-    app.router.add_get("/api/stock/screen/results", handle_stock_screen_results)
-    app.router.add_get(
-        "/api/stock/screen/opportunity/source",
-        handle_stock_screen_opportunity_source,
-    )
-    app.router.add_get("/api/stock/screen/history", handle_stock_screen_history)
-    app.router.add_post("/api/stock/screen/compare", handle_stock_screen_compare)
 
     # Profile (user distillation) routes
     app.router.add_get("/api/profile", handle_profile_get)
@@ -699,7 +598,6 @@ def create_services_app(
         _idle_manager.stop_all()
         await shutdown_agent_knowledge_tasks()
         await asyncio.to_thread(imap_pool_manager.close_all)
-        await cleanup_stock_intraday()
 
     app.on_startup.append(recover_agent_knowledge_tasks)
     app.on_cleanup.append(_on_cleanup)

@@ -1,0 +1,42 @@
+.mona-composer-peek {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  pointer-events: none;
+  user-select: none;
+}
+.mona-composer-peek-head {
+  fill: hsl(var(--brand-ink));
+}
+.mona-composer-peek-eyes {
+  fill: hsl(var(--brand-paper));
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mona-composer-look 10.4s ease-in-out infinite;
+}
+@keyframes mona-composer-look {
+  0%, 18%, 32%, 42%, 56%, 68%, 70%, 100% { transform: translateX(0) scaleY(1); }
+  23%, 29% { transform: translateX(-2px) scaleY(1); }
+  47%, 53% { transform: translateX(2px) scaleY(1); }
+  69% { transform: translateX(0) scaleY(0.08); }
+}
+.mona-composer-peek[data-paused="true"] .mona-composer-peek-eyes {
+  animation: none;
+  transform: none;
+}
+.dark .mona-composer-peek {
+  mask-image: linear-gradient(to bottom, black 84%, transparent);
+}
+.dark .mona-composer-peek-head {
+  fill: hsl(var(--brand-ink) / 0.55);
+  stroke: hsl(var(--brand-red) / 0.78);
+  stroke-width: 0.7px;
+  filter: drop-shadow(0 0 3px hsl(var(--brand-red) / 0.26));
+}
+.dark .mona-composer-peek-eyes {
+  fill: hsl(var(--foreground) / 0.85);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mona-composer-peek-eyes { animation: none; transform: none; }
+}

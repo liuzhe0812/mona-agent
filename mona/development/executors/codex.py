@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mona.development.contracts import Binding, Capabilities, ExecutorId, PermissionMode
+from mona.development.design_resources import (
+    DESIGN_DESCRIPTION,
+    DESIGN_POLICY_TAG,
+    DESIGN_TOOL,
+    DesignResourceCall,
+)
 from mona.development.executors.account_usage import AccountUsage, account_identity, with_usage
 from mona.development.executors.base import (
     DispatchReceipt,
@@ -37,6 +43,7 @@ from mona.development.executors.diagnostics import failed_probe
 from mona.development.executors.host_tools import (
     COLLABORATION_POLICY_TAG,
     DELEGATION_INSTRUCTIONS,
+    DESIGN_ENVELOPE,
     HOST_DESCRIPTION,
     HOST_TOOL,
     SUBAGENT_INSTRUCTIONS,
@@ -408,6 +415,8 @@ class CodexExecutor:
             host_tools = (self._tool_handler is not None and not start.readonly
                           and not start.session.parent_session_id
                           and (binding is None or binding.capabilities.host_subagents))
+            design_tools = (not work_mode and self._tool_handler is not None
+                            and (binding is None or DESIGN_POLICY_TAG in (binding.context_fingerprint or "")))
             if work_mode:
                 params["baseInstructions"] = start.work_prompt
                 params["environments"] = []
@@ -417,10 +426,13 @@ class CodexExecutor:
                 params["developerInstructions"] += "\n" + SUBAGENT_INSTRUCTIONS
             # Dynamic tools persist at thread/start; resume cannot add them.
             # Legacy contexts gain them only through a safe idle replacement.
-            if binding is None and host_tools:
-                params["dynamicTools"] = [{"type": "function", "name": WORK_TOOL if work_mode else HOST_TOOL,
+            if binding is None and (host_tools or design_tools):
+                params["dynamicTools"] = ([{"type": "function", "name": WORK_TOOL if work_mode else HOST_TOOL,
                     "description": WORK_DESCRIPTION if work_mode else HOST_DESCRIPTION,
-                    "inputSchema": WorkToolCall.model_json_schema() if work_mode else HostToolCall.model_json_schema()}]
+                    "inputSchema": WorkToolCall.model_json_schema() if work_mode else HostToolCall.model_json_schema()}] if host_tools else [])
+                if design_tools:
+                    params["dynamicTools"].append({"type": "function", "name": DESIGN_TOOL,
+                        "description": DESIGN_DESCRIPTION, "inputSchema": DesignResourceCall.model_json_schema()})
             if start.model:
                 params["model"] = start.model
             if start.session.model_provider:
@@ -468,6 +480,8 @@ class CodexExecutor:
                 )
                 active.state = "active"
                 active.context_fingerprint = start.context.rules_fingerprint + ":" + start.context.skills_fingerprint
+                if design_tools:
+                    active.context_fingerprint += DESIGN_POLICY_TAG
                 if binding is None or (binding.context_fingerprint or "").endswith(COLLABORATION_POLICY_TAG):
                     active.context_fingerprint += COLLABORATION_POLICY_TAG
                 active.protocol_version = self._version
@@ -662,7 +676,8 @@ class CodexExecutor:
         for item in items:
             event = normalize_codex_event("item/completed", {"threadId": binding.native_session_id,
                                          "turnId": native_turn_id, "item": item},
-                                         host_tools=runtime.binding.capabilities.host_subagents)
+                                         host_tools=runtime.binding.capabilities.host_subagents,
+                                         design_tools=DESIGN_POLICY_TAG in (runtime.binding.context_fingerprint or ""))
             if event is not None:
                 if event.type == "policy.violation":
                     raise RpcError("native_policy_violation", "原轮次包含未授权能力，需人工核对。")
@@ -764,7 +779,8 @@ class CodexExecutor:
 
     def _deliver(self, runtime: _Thread, method: str, params: dict[str, Any]) -> None:
         event = normalize_codex_event(method, params, host_tools=runtime.binding.capabilities.host_subagents,
-                                      work_tools=runtime.start.work_prompt is not None)
+                                      work_tools=runtime.start.work_prompt is not None,
+                                      design_tools=DESIGN_POLICY_TAG in (runtime.binding.context_fingerprint or ""))
         if event is None:
             return
         turn_id = event.native_turn_id
@@ -799,12 +815,16 @@ class CodexExecutor:
                       and runtime.status in {"running", "waiting_user"})
         if method == "item/tool/call":
             value = tool_unavailable()
-            if (is_current and runtime is not None and runtime.binding.capabilities.host_subagents
+            design_call = (runtime is not None and params.get("tool") == DESIGN_TOOL
+                           and DESIGN_POLICY_TAG in (runtime.binding.context_fingerprint or ""))
+            allowed = design_call or (runtime is not None and runtime.binding.capabilities.host_subagents
+                and params.get("tool") == (WORK_TOOL if runtime.start.work_prompt is not None else HOST_TOOL))
+            if (is_current and runtime is not None and allowed
                     and self._tool_handler is not None
-                    and params.get("tool") == (WORK_TOOL if runtime.start.work_prompt is not None else HOST_TOOL)
                     and params.get("namespace") is None and isinstance(params.get("arguments"), dict)
                     and isinstance(params.get("callId"), str) and 0 < len(params["callId"]) <= 512):
-                value = await call_in_turn(self._tool_handler, runtime.binding, turn_id, params["arguments"],
+                arguments = {DESIGN_ENVELOPE: params["arguments"]} if design_call else params["arguments"]
+                value = await call_in_turn(self._tool_handler, runtime.binding, turn_id, arguments,
                     lambda: runtime.turn_id == turn_id and runtime.status in {"running", "waiting_user"}
                     and not runtime.desynchronized and self._client is not None and not self._client.closed,
                     timeout_s=None if runtime.start.work_prompt is not None else 90)

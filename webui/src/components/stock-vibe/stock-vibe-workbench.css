@@ -1,0 +1,480 @@
+.stock-vibe-page[data-workbench] {
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.stock-vibe-page[data-workbench] > :not(main) { flex-shrink: 0; }
+.stock-vibe-page[data-workbench] > main { overflow: hidden; }
+
+.stock-vibe-page button.underline { text-decoration: none; }
+.stock-vibe-page button.underline:hover:not(:disabled) { background-color: hsl(var(--muted)); }
+
+.stock-vibe-workbench-viewport {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.stock-vibe-quote-summary {
+  container: stock-quote / inline-size;
+}
+
+/* 标的行、价格行、指标带自上而下堆叠，每行内部左右分置，避免仪表盘式宫格。 */
+.stock-vibe-quote-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stock-vibe-quote-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+/* 标的名与模拟买卖同组：买卖贴在标的旁边，周期切换仍然靠右。 */
+.stock-vibe-quote-title {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+}
+
+.stock-vibe-quote-price-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem 1.25rem;
+}
+
+.stock-vibe-quote-price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.stock-vibe-quote-side {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.stock-vibe-quote-stats {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid hsl(var(--border) / 0.5);
+}
+
+.stock-vibe-quote-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.stock-vibe-quote-stat dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+@container stock-quote (max-width: 34rem) {
+  .stock-vibe-quote-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@container stock-quote (max-width: 24rem) {
+  .stock-vibe-quote-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stock-vibe-quote-side { align-items: flex-start; margin-left: 0; }
+}
+
+/* 三栏不画分隔线：中间白色主平面承载行情，两侧降为着色轨，权重由表面色差决定。 */
+.stock-vibe-workbench.stock-vibe-workbench-layout {
+  display: grid;
+  height: 100%;
+  min-width: 51rem;
+  min-height: 0;
+  grid-template-columns: clamp(14rem, 18.5%, 17rem) minmax(22rem, 1fr) clamp(16rem, 22.5%, 20.5rem);
+  align-items: stretch;
+  gap: 0.875rem;
+}
+
+.stock-vibe-workbench .stock-vibe-watchlist {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border-radius: var(--radius-lg);
+  background-color: hsl(var(--interaction-surface));
+}
+
+.stock-vibe-workbench .stock-vibe-watchlist > [role="tabpanel"] { flex: 1; overflow: hidden; }
+.stock-vibe-workbench .stock-vibe-watchlist > :not([role="tabpanel"]),
+.stock-vibe-workbench .stock-vibe-watchlist [role="tabpanel"] > :not(ul) { flex-shrink: 0; }
+
+.stock-vibe-workbench .stock-vibe-watch-items {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row:hover,
+.stock-vibe-workbench .stock-vibe-watch-row:focus-within {
+  background-color: hsl(var(--foreground) / 0.04);
+}
+
+/* 选中行抬成白色面，左侧 2px 品牌红短线标出当前标的。 */
+.stock-vibe-workbench .stock-vibe-watch-row[data-selected="true"] {
+  border-radius: var(--radius-md);
+  background-color: hsl(var(--card));
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row[data-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 1.25rem;
+  transform: translateY(-50%);
+  border-radius: 1px;
+  background-color: hsl(var(--ring));
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row[draggable="true"],
+.stock-vibe-workbench .stock-vibe-watch-row[draggable="true"] .stock-vibe-watch-select {
+  cursor: grab;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row[data-drop]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  background-color: hsl(var(--action));
+  pointer-events: none;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-row[data-drop="before"]::after { top: 0; }
+.stock-vibe-workbench .stock-vibe-watch-row[data-drop="after"]::after { bottom: 0; }
+
+.stock-vibe-workbench .stock-vibe-watch-select {
+  display: grid;
+  height: auto;
+  min-height: 3.25rem;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-radius: 0;
+  background-color: transparent;
+  text-align: left;
+}
+
+.stock-vibe-workbench .stock-vibe-research-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.875rem;
+  border-radius: var(--radius-lg);
+  background-color: hsl(var(--interaction-surface));
+}
+
+/* 主平面：唯一带极浅描边的白色面，行情与图表都落在这里。 */
+.stock-vibe-market-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.25rem 1.375rem;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: var(--radius-lg);
+  background-color: hsl(var(--card));
+}
+
+.stock-vibe-market-pane > :not(.stock-vibe-chart):not(.stock-vibe-chart-empty),
+.stock-vibe-research-pane > * { flex-shrink: 0; }
+
+.stock-vibe-market-pane .stock-vibe-chart {
+  display: flex;
+  flex: 1;
+  min-height: 16rem;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stock-vibe-chart > :not(.stock-vibe-chart-surface) { flex-shrink: 0; }
+.stock-vibe-chart-surface { position: relative; }
+.stock-vibe-market-pane .stock-vibe-chart-surface { flex: 1; min-height: 13rem; }
+.stock-vibe-market-pane .stock-vibe-chart-plot { display: block; width: 100%; height: 100%; }
+.stock-vibe-market-pane .stock-vibe-chart-empty { flex: 1; min-height: 12rem; }
+
+/* 周期切换是同一控件内的分段选择：只改颜色和字重，不加底色和第二层描边。 */
+.stock-vibe-workbench .stock-vibe-interval-tab {
+  border: 0;
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-weight: 400;
+}
+
+.stock-vibe-workbench .stock-vibe-interval-tab:hover:not(:disabled) {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-interval-tab[aria-pressed="true"] {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+/* 次级研究入口是文字动作：不加底色、不加描边，靠文字色区分可点。 */
+.stock-vibe-workbench .stock-vibe-analysis-action {
+  height: auto;
+  padding: 0.125rem 0;
+  border-color: transparent;
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+
+.stock-vibe-workbench .stock-vibe-analysis-action:hover:not(:disabled) {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+
+/* 模块内不再自造实心蓝：主操作统一走全站 action 语义。 */
+.stock-vibe-workbench .stock-vibe-primary {
+  border-color: hsl(var(--action));
+  background-color: hsl(var(--action));
+  color: hsl(var(--action-foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-primary:hover:not(:disabled) {
+  background-color: hsl(var(--action-hover));
+}
+
+.stock-vibe-workbench .stock-vibe-followup {
+  border-color: hsl(var(--action));
+  background-color: hsl(var(--action));
+  color: hsl(var(--action-foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-followup:hover:not(:disabled) {
+  background-color: hsl(var(--action-hover));
+}
+
+.stock-vibe-workbench .stock-vibe-analysis-action:focus-visible,
+.stock-vibe-workbench .stock-vibe-primary:focus-visible,
+.stock-vibe-workbench .stock-vibe-followup:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.stock-vibe-workbench .stock-vibe-analysis-action:disabled,
+.stock-vibe-workbench .stock-vibe-primary:disabled,
+.stock-vibe-workbench .stock-vibe-followup:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.stock-vibe-workbench .stock-vibe-research-summary {
+  border: 0;
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-up {
+  color: hsl(var(--stock-up));
+}
+
+.stock-vibe-workbench .stock-vibe-down {
+  color: hsl(var(--stock-down));
+}
+
+.stock-vibe-workbench .stock-vibe-paper-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.stock-vibe-paper-panel > :not(ul) { flex-shrink: 0; }
+
+/* 分钟K 是周期切换里的下拉，跟文字页签同一语法，不另加边框。 */
+.stock-vibe-workbench .stock-vibe-interval-select {
+  height: auto;
+  padding: 0.125rem 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-interval-select:hover {
+  color: hsl(var(--foreground));
+}
+
+/*
+ * 追问是一条会话式输入：输入框与发送按钮合成一颗胶囊，
+ * 吸在主平面底部，图表变高时也不会被顶出视口。
+ */
+.stock-vibe-ask {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.875rem;
+  border-radius: var(--radius-md);
+  background-color: hsl(var(--interaction-surface));
+}
+
+.stock-vibe-ask:focus-within {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.stock-vibe-ask input {
+  flex: 1;
+  min-width: 0;
+  height: 1.875rem;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.stock-vibe-ask input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.stock-vibe-ask-send {
+  height: 1.75rem;
+  flex-shrink: 0;
+  padding: 0 0.75rem;
+}
+
+/* 自选 / 模拟持仓 是同一列表的两种视图，选中只改字重与文字色。 */
+.stock-vibe-workbench .stock-vibe-watch-tab {
+  height: auto;
+  padding: 0.125rem 0;
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-weight: 400;
+}
+
+.stock-vibe-workbench .stock-vibe-watch-tab:hover:not(:disabled) {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+
+.stock-vibe-workbench .stock-vibe-watch-tab[data-active="true"] {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+/*
+ * 深色下抬高关系反转：亮面才是抬起的表面。
+ * 主平面取更亮的轨面色，左右轨退回卡片色，选中行再亮一级。
+ */
+.dark .stock-vibe-workbench .stock-vibe-watchlist,
+.dark .stock-vibe-workbench .stock-vibe-research-pane {
+  background-color: hsl(var(--card));
+}
+
+.dark .stock-vibe-market-pane {
+  background-color: hsl(var(--interaction-surface));
+}
+
+.dark .stock-vibe-workbench .stock-vibe-watch-row[data-selected="true"],
+.dark .stock-vibe-workbench .stock-vibe-research-summary {
+  background-color: hsl(var(--interaction-surface));
+}
+
+/*
+ * 分时读数以悬停卡片呈现（与原型一致），不再在图上方的横带里重复一遍。
+ * 卡片是浮层，允许阴影；其余图表元素仍是平铺的线与面。
+ */
+.stock-vibe-chart-tip {
+  position: absolute;
+  z-index: 2;
+  width: 11.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid hsl(var(--border) / 0.6);
+  border-radius: var(--radius-md);
+  background-color: hsl(var(--popover));
+  pointer-events: none;
+}
+
+.stock-vibe-chart-tip-time {
+  margin-bottom: 0.375rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.stock-vibe-chart-tip dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  margin: 0;
+}
+
+.stock-vibe-chart-tip dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.stock-vibe-chart-tip dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.stock-vibe-chart-tip dd {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  font-variant-numeric: tabular-nums;
+}

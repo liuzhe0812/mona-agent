@@ -32,7 +32,7 @@ class CronPayload:
     # For "workflow_run": the collaboration room whose active workflow runs.
     # Only the room id is stored — execution reads the then-active revision.
     room_id: str | None = None
-    # For "workflow_run" with a packaged template (stock-module design §4.3):
+    # For "workflow_run" with a packaged template:
     # a ``package://<package_id>/<path>`` URI. When set, execution loads the
     # packaged template directly and never reads the room's active revision.
     template_ref: str | None = None

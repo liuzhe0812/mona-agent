@@ -1,4 +1,4 @@
-"""One explicit host capability; not access to user MCP configuration or arbitrary tools."""
+"""Explicit project host capabilities; never user MCP configuration or arbitrary tools."""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +13,8 @@ from mona.development.contracts import Binding, Identifier
 HOST_TOOL = "development_collaboration"
 HOST_SERVER = "mona_development"
 SDK_HOST_TOOL = f"mcp__{HOST_SERVER}__{HOST_TOOL}"
+DESIGN_ENVELOPE = "designResource"
+SDK_DESIGN_TOOL = f"mcp__{HOST_SERVER}__development_design_resource"
 WORK_TOOL = "mona_tool"
 WORK_SERVER = "mona_work"
 SDK_WORK_TOOL = f"mcp__{WORK_SERVER}__{WORK_TOOL}"

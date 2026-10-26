@@ -72,7 +72,13 @@ export function VideoNarrationSettingsDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => onSave({ ...draft })}
+            onClick={() => onSave({
+              narrationEnabled: draft.narrationEnabled,
+              ttsProvider: draft.ttsProvider,
+              ttsVoice: draft.ttsVoice,
+              ttsRate: draft.ttsRate,
+              subtitleMode: draft.subtitleMode,
+            })}
             disabled={saving}
           >
             {saving ? "保存中…" : "保存设置"}

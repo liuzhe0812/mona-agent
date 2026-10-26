@@ -25,12 +25,20 @@ def map_finish_reason(status: str | None) -> str:
     return FINISH_REASON_MAP.get(status or "completed", "stop")
 
 
+def _cached_input_tokens(details: Any) -> int:
+    if isinstance(details, dict):
+        value = details.get("cached_tokens")
+    else:
+        value = getattr(details, "cached_tokens", 0)
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else 0
+
+
 async def iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], None]:
     """Yield parsed JSON events from a Responses API SSE stream."""
     buffer: list[str] = []
 
     def _flush() -> dict[str, Any] | None:
-        data_lines = [l[5:].strip() for l in buffer if l.startswith("data:")]
+        data_lines = [line[5:].strip() for line in buffer if line.startswith("data:")]
         buffer.clear()
         if not data_lines:
             return None
@@ -208,6 +216,9 @@ def parse_response_output(response: Any) -> LLMResponse:
             "completion_tokens": int(usage_raw.get("output_tokens") or 0),
             "total_tokens": int(usage_raw.get("total_tokens") or 0),
         }
+        cached_tokens = _cached_input_tokens(usage_raw.get("input_tokens_details"))
+        if cached_tokens:
+            usage["cached_tokens"] = cached_tokens
 
     status = response.get("status")
     finish_reason = map_finish_reason(status)
@@ -311,6 +322,11 @@ async def consume_sdk_stream(
                         "completion_tokens": int(getattr(usage_obj, "output_tokens", 0) or 0),
                         "total_tokens": int(getattr(usage_obj, "total_tokens", 0) or 0),
                     }
+                    cached_tokens = _cached_input_tokens(
+                        getattr(usage_obj, "input_tokens_details", None)
+                    )
+                    if cached_tokens:
+                        usage["cached_tokens"] = cached_tokens
                 for out_item in getattr(resp, "output", None) or []:
                     if getattr(out_item, "type", None) == "reasoning":
                         for s in getattr(out_item, "summary", None) or []:

@@ -13,6 +13,10 @@ from mona.development.executors.codex_policy import _ENV_KEYS
 from mona.development.executors.diagnostics import native_version
 from mona.development.executors.discovery import discover_executors
 from mona.development.executors.rpc import RpcError
+from mona.development.executors.workbuddy_application import (
+    detect_workbuddy_desktop_app,
+    is_managed_executable,
+)
 from mona.development.store import ConflictError, DevelopmentError, NotFoundError
 from mona.runtime.executors import EXECUTOR_RUNTIMES, managed_executor_path
 from mona.runtime.manager import RuntimeManagerError, parse_runtime_pack_ref
@@ -83,7 +87,7 @@ async def resource_status(config: DevelopmentConfig, executor: str, *, refresh: 
     ready = probe.state == "detected"
     managed = bool(active) or repair or component_root.exists()
     repair = repair or (managed and managed_path is None)
-    return {"components": [{"executor": executor, "source": probe.source or "not_detected",
+    component_status = {"executor": executor, "source": probe.source or "not_detected",
         "executable": probe.executable, "systemAvailable": system, "installed": ready,
         "systemExecutable": system_path, "systemVersion": system_version, "systemReason": system_probe.reason,
         "managedExecutable": str(managed_path) if managed_path else None, "managedVersion": managed_version,
@@ -92,7 +96,11 @@ async def resource_status(config: DevelopmentConfig, executor: str, *, refresh: 
         "repairRequired": repair or probe.error_code == "managed_runtime_invalid", "explicitPath": explicit,
         "packRef": f"{entry.id}@{entry.version}" if entry else None, "version": latest_version,
         "installedVersion": system_version if system else managed_version, "downloadBytes": entry.size if entry else 0,
-        "reason": reason, "catalogError": error, "job": _job(job) if job else None}],
+        "reason": reason, "catalogError": error, "job": _job(job) if job else None}
+    if executor == "codebuddy":
+        component_status["desktopAppDetected"] = await asyncio.to_thread(detect_workbuddy_desktop_app)
+    component_status["usingManaged"] = is_managed_executable(probe.executable, component_root)
+    return {"components": [component_status],
         "catalogAvailable": entry is not None or system}
 
 

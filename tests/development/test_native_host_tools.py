@@ -444,7 +444,7 @@ async def test_missing_sdk_host_api_is_reported_before_client_creation(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_existing_codex_binding_only_gains_host_tools_after_explicit_reconnect(tmp_path, monkeypatch):
+async def test_existing_codex_binding_safely_gains_design_tools_without_replaying_tasks(tmp_path, monkeypatch):
     from test_native_collaboration_flow import wire_inputs
     runtime, project, root, client, model_calls = await setup(tmp_path, monkeypatch)
     parent = runtime.store.create_session(project.id, ExecutorId.CODEX)
@@ -456,22 +456,19 @@ async def test_existing_codex_binding_only_gains_host_tools_after_explicit_recon
         assert not original.capabilities.host_subagents
         assert runtime.snapshot(parent.id)["nativeBinding"]["hostSubagents"] is False
         enable_bridge(runtime)
-        await runtime.submit(parent.id, "keep_existing", "instant")
-        await settle(runtime)
-        assert runtime.store.get_binding(original.id).state == "active"
-        assert not runtime.store.get_binding(original.id).capabilities.host_subagents
-        assert len(runtime.store.list_runs(parent.id)) == 2
         before_inputs = wire_inputs(root, original)
         session = runtime.store.get_session(parent.id)
-        await runtime.native.reconnect(parent.id, session.revision, original.id)
-        replacement = next(b for b in runtime.store.list_bindings(parent.id) if b.state == "active")
+        replacement = await runtime.native.ensure(session)
         assert replacement.id != original.id and replacement.replaces_binding_id == original.id
+        assert replacement.replacement_reason == "design_resources_updated"
+        assert runtime.store.get_binding(original.id).state == "stale"
         assert replacement.capabilities.host_subagents
         assert runtime.snapshot(parent.id)["nativeBinding"]["hostSubagents"] is True
-        assert len(runtime.store.list_runs(parent.id)) == 2 and wire_inputs(root, original) == before_inputs
-        assert not wire_inputs(root, replacement)  # A reconnect does not submit a model task.
-        await runtime.native.reconnect(parent.id, session.revision, original.id)
-        assert next(b.id for b in runtime.store.list_bindings(parent.id) if b.state == "active") == replacement.id
+        assert len(runtime.store.list_runs(parent.id)) == 1 and wire_inputs(root, original) == before_inputs
+        assert not wire_inputs(root, replacement)
+        await runtime.submit(parent.id, "keep_existing", "instant")
+        await settle(runtime)
+        assert len(runtime.store.list_runs(parent.id)) == 2
         runtime.store.save_subagents(project.id, 0, [{"id": "reviewer", "name": "Reviewer", "instructions": "Read only",
             "executor": "claude", "readonly": True}])
         await runtime.submit(parent.id, "after_reconnect", "delegate_host")

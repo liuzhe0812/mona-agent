@@ -9,10 +9,9 @@ import json
 import os
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from packaging.utils import canonicalize_name, parse_wheel_filename
 
@@ -25,7 +24,6 @@ YTDLP_VERSION = "2026.07.04"
 ASR_SENSEVOICE_VERSION = "0.2.6+q8"
 PANDOC_VERSION = "3.10.1"
 CUA_DRIVER_VERSION = "0.23.2"
-WESTOCK_VERSION = "1.0.5"
 
 
 def prepare_python_base(python_home: Path, components_root: Path) -> Path:
@@ -257,48 +255,6 @@ def prepare_cua_driver(archive: Path, components_root: Path) -> Path:
     return target
 
 
-def prepare_westock(package_tgz: Path, components_root: Path) -> Path:
-    _require_file(package_tgz, "WeStock package")
-    target = components_root / "westock-data" / WESTOCK_VERSION
-    _replace_directory(target)
-    with tarfile.open(package_tgz, "r:gz") as bundle:
-        _safe_extract_package(bundle, target)
-    package_json = target / "package.json"
-    _require_file(package_json, "WeStock package.json")
-    try:
-        metadata = json.loads(package_json.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("WeStock package.json is invalid") from exc
-    if not isinstance(metadata, dict):
-        raise RuntimeError("WeStock package.json must be an object")
-    if metadata.get("name") != "westock-data-skillhub":
-        raise RuntimeError("WeStock package name is invalid")
-    if metadata.get("version") != WESTOCK_VERSION:
-        raise RuntimeError(
-            f"expected WeStock {WESTOCK_VERSION}, got {metadata.get('version')}"
-        )
-    main = str(metadata.get("main") or "index.js")
-    main_path = PurePosixPath(main)
-    if (
-        main_path.is_absolute()
-        or ".." in main_path.parts
-        or "\\" in main
-        or not main_path.parts
-        or not (target.joinpath(*main_path.parts)).is_file()
-    ):
-        raise RuntimeError("WeStock package main entrypoint is invalid")
-    _write_runtime_manifest(
-        target,
-        component_id="westock-data",
-        version=WESTOCK_VERSION,
-        kind="stock-data-runtime",
-        entrypoints={"main": main_path.as_posix()},
-        dependencies=[f"node-base@{NODE_VERSION}"],
-    )
-    _write_distribution(target)
-    return target
-
-
 def prepare_python_academic(
     components_root: Path,
     requirements: Path,
@@ -401,39 +357,6 @@ def _safe_extract(bundle: zipfile.ZipFile, destination: Path) -> None:
     bundle.extractall(destination)
 
 
-def _safe_extract_package(bundle: tarfile.TarFile, destination: Path) -> None:
-    members = bundle.getmembers()
-    for member in members:
-        if "\\" in member.name:
-            raise RuntimeError(f"unsafe archive path: {member.name}")
-        path = PurePosixPath(member.name)
-        if path.is_absolute() or ".." in path.parts:
-            raise RuntimeError(f"unsafe archive path: {member.name}")
-        if not path.parts or path.parts[0] != "package":
-            continue
-        if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
-            raise RuntimeError(f"unsupported package archive member: {member.name}")
-
-    extracted = 0
-    for member in members:
-        path = PurePosixPath(member.name)
-        if len(path.parts) <= 1 or path.parts[0] != "package":
-            continue
-        target = destination.joinpath(*path.parts[1:])
-        if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
-            continue
-        source = bundle.extractfile(member)
-        if source is None:
-            raise RuntimeError(f"package archive member cannot be read: {member.name}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("wb") as output:
-            shutil.copyfileobj(source, output)
-        extracted += 1
-    if extracted == 0:
-        raise RuntimeError("WeStock package archive is empty")
-
-
 def _require_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise RuntimeError(f"{label} not found: {path}")
@@ -533,8 +456,6 @@ def main() -> None:
     pandoc.add_argument("--archive", type=Path, required=True)
     cua_driver = subparsers.add_parser("cua-driver")
     cua_driver.add_argument("--archive", type=Path, required=True)
-    westock = subparsers.add_parser("westock")
-    westock.add_argument("--package-tgz", "--tgz", "--archive", dest="package_tgz", type=Path, required=True)
     academic = subparsers.add_parser("python-academic")
     academic.add_argument(
         "--requirements",
@@ -566,8 +487,6 @@ def main() -> None:
         prepare_pandoc(args.archive, args.components_root)
     elif args.command == "cua-driver":
         prepare_cua_driver(args.archive, args.components_root)
-    elif args.command == "westock":
-        prepare_westock(args.package_tgz, args.components_root)
     else:
         prepare_python_academic(
             args.components_root,

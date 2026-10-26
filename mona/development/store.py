@@ -439,7 +439,7 @@ class DevelopmentStore:
             handoff = PendingHandoff.model_validate(handoff.model_dump())
             if handoff.state != "pending" or handoff.input_id is not None:
                 raise ConflictError("新的交接必须尚未派发。")
-        if bool(replaces_binding_id) != bool(replacement_reason) or replacement_reason not in {None, "history_missing", "user_requested", "collaboration_updated"}:
+        if bool(replaces_binding_id) != bool(replacement_reason) or replacement_reason not in {None, "history_missing", "user_requested", "collaboration_updated", "design_resources_updated"}:
             raise ConflictError("续接来源或原因无效。")
         with self._connection(write=True) as db:
             session = self._get(db, DevelopmentSession, binding.session_id)

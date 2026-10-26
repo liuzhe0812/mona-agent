@@ -15,7 +15,7 @@ import os
 import shlex
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
@@ -407,7 +407,9 @@ class SkillReferenceReadTool(Tool):
             "Read a reference file bundled with a skill. "
             "Reference files live in <skill_dir>/references/*.md. "
             "Use this to load design guidelines, style guides, or other reference docs "
-            "that ship with a skill."
+            "that ship with a skill. Mona Design also supports assets/, demos/ and scripts/ "
+            "paths for read-only style images and source code; images return actual image content. "
+            "Huashu text, including references, is paged with offset/limit and nextOffset."
         )
 
     @property
@@ -421,8 +423,10 @@ class SkillReferenceReadTool(Tool):
                 description="Skill name (directory name).",
             ),
             ref_path=StringSchema(
-                description="Reference file path relative to <skill_dir>/references/ (e.g. 'design_principles.md').",
+                description="Path relative to references/. Mona Design also accepts assets/, demos/ or scripts/ paths relative to its package root.",
             ),
+            offset=IntegerSchema(0, description="Character offset for Huashu reference or source paging.", minimum=0),
+            limit=IntegerSchema(16000, description="Page length for Huashu reference or source text; nextOffset identifies any remainder.", minimum=1, maximum=24000),
             required=["skill", "ref_path"],
         )
 
@@ -430,6 +434,8 @@ class SkillReferenceReadTool(Tool):
         self,
         skill: str | None = None,
         ref_path: str | None = None,
+        offset: int = 0,
+        limit: int = 16000,
         **kwargs: Any,
     ) -> str | list[dict[str, Any]]:
         if not skill or not ref_path:
@@ -441,6 +447,23 @@ class SkillReferenceReadTool(Tool):
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         ref_path = ref_path.replace("\\", "/")
+        if skill == "mona-design":
+            from mona.development.design_resources import read_design_resource
+
+            if Path(ref_path).is_absolute() or PureWindowsPath(ref_path).drive:
+                return "Error: Mona Design resources require a package-relative path."
+            resource_path = ref_path
+            if not resource_path.startswith(("assets/", "demos/", "scripts/", "references/")):
+                resource_path = "references/" + resource_path
+            try:
+                content = read_design_resource(resource_path, offset=offset, limit=limit, root=skill_dir)
+                if self._track_usage:
+                    from mona.agent import skill_usage
+
+                    skill_usage.bump_access(skill, agent_id=self._agent_id)
+                return content
+            except (OSError, ValueError) as exc:
+                return f"Error: could not read Mona Design resource '{ref_path}': {exc}"
         if ref_path.startswith("references/"):
             ref_path = ref_path[len("references/"):]
         root = skill_dir.resolve()

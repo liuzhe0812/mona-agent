@@ -4,9 +4,7 @@ import {
   PRESET_THEMES,
   expandPreset,
   findPreset,
-  presetCatalog,
   presetWarnings,
-  selectPresets,
   type PresetContent,
 } from './slides-presets'
 import {
@@ -37,8 +35,8 @@ const darkChartContent: PresetContent = {
 }
 
 describe('预设页面契约', () => {
-  it('暴露简短目录，不要求调用方加载整个页面库', () => {
-    const catalog = presetCatalog()
+  it('显式绘制结构有稳定 ID 和容量信息', () => {
+    const catalog = PRESETS
     expect(new Set(catalog.map((item) => item.id)).size).toBe(catalog.length)
     expect(catalog.some((item) => item.family === 'chart-insight')).toBe(true)
     for (const entry of catalog) {
@@ -102,21 +100,18 @@ describe('预设页面契约', () => {
   })
 
   it('主题层级与边距保持参考主题的换算结果', () => {
-    // 参考 dashi theme02（画布 1920×1080）：pad 108/88、gap 32、title 58、hero titleScale 72、
-    // subtitle 40、body 28、caption 24、metric 112；换算到 1280×720 后取整。
     const dark = PRESET_THEMES['dark-product']
     expect(dark.sizes).toEqual({ metric: 56, hero: 36, title: 29, subtitle: 20, body: 14, caption: 12 })
     expect(dark.pad).toEqual({ x: 72, y: 59 })
     expect(dark.gap).toBe(21)
 
-    // 参考 dashi theme07（画布 1920×1080）：pad 96、gap 24、title 72、subtitle 40、body 28、caption 22、metric 112。
     const light = PRESET_THEMES['light-editorial']
     expect(light.sizes).toEqual({ metric: 56, hero: 36, title: 36, subtitle: 20, body: 14, caption: 11 })
     expect(light.pad).toEqual({ x: 64, y: 64 })
     expect(light.gap).toBe(16)
 
     for (const theme of [dark, light]) {
-      expect(theme.reference).toContain('dashi')
+      expect(theme.reference).toContain('原生')
       // 只用系统自带字体；缺字体时探针确认会被优雅替换而不破版
       expect(theme.fontFamily).toBe('Microsoft YaHei')
     }
@@ -232,8 +227,5 @@ describe('预设页面契约', () => {
     })).toThrow(/nodes 至少需要/)
     expect(()=>expandPreset({slideId:'s1',presetId:'dark-chart-insight',content:{...darkChartContent,unknown:'不可忽略'} as PresetContent})).toThrow(/不支持内容字段/)
     expect(()=>expandPreset({slideId:'s1',presetId:'dark-chart-insight',content:darkChartContent,page:{width:1280,height:960}})).toThrow(/16:9/)
-    const matches=selectPresets(darkChartContent,'chart-insight')
-    expect(matches.map((p)=>p.id)).toContain('dark-chart-insight')
-    expect(matches.length).toBeLessThanOrEqual(3)
   })
 })

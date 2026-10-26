@@ -10,6 +10,7 @@ import { CreditsView } from "./CreditsView";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -246,13 +247,15 @@ export function LoginDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={isSubscribeView || isManageView || isCreditsView ? "sm:max-w-lg" : "sm:max-w-sm"}>
+      <DialogContent className={isSubscribeView
+        ? "relative flex max-h-[85vh] flex-col sm:max-w-xl"
+        : isManageView || isCreditsView ? "sm:max-w-lg" : "sm:max-w-sm"}>
         <DialogHeader>
           <DialogTitle>
             {isCreditsView
               ? "Mona 余额"
               : isSubscribeView
-              ? "购买订阅"
+              ? "Mona Pro"
               : isManageView
                 ? "订阅管理"
                 : showAccountInfo
@@ -267,16 +270,19 @@ export function LoginDialog({
                       ? "重置密码"
                       : "修改密码"}
           </DialogTitle>
+          {isSubscribeView && <DialogDescription>多设备登录与个人云空间</DialogDescription>}
         </DialogHeader>
 
         {isSubscribeView && (
-          <SubscribeView
-            userEmail={licenseInfo?.account || licenseInfo?.email || email}
-            onBackToLogin={() => setView(loggedIn ? "login" : "login")}
-            embed
-            loading={subscribeLoading}
-            onManageSubscription={() => setView("manage")}
-          />
+          <div className="scrollbar-thin min-h-0 overflow-y-auto">
+            <SubscribeView
+              userEmail={licenseInfo?.account || licenseInfo?.email || email}
+              onBackToLogin={() => setView(loggedIn ? "login" : "login")}
+              embed
+              loading={subscribeLoading}
+              onManageSubscription={() => setView("manage")}
+            />
+          </div>
         )}
 
         {isManageView && (
@@ -298,19 +304,13 @@ export function LoginDialog({
               <span>{licenseInfo?.email}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">授权状态</span>
-              <span>{licenseInfo?.status === "valid" ? "有效" : licenseInfo?.status === "expired" ? "已过期" : licenseInfo?.status === "device_mismatch" ? "设备不匹配" : "无"}</span>
+              <span className="text-muted-foreground">订阅状态</span>
+              <span>{licenseInfo?.status === "valid" && licenseInfo.plan === "pro" ? "Mona Pro" : "免费版"}</span>
             </div>
-            {licenseInfo?.expires_at && (
+            {licenseInfo?.status === "valid" && licenseInfo.plan === "pro" && licenseInfo.expires_at && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">到期时间</span>
+                <span className="text-muted-foreground">订阅到期</span>
                 <span>{licenseInfo.expires_at}</span>
-              </div>
-            )}
-            {licenseInfo?.trial && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">类型</span>
-                <span>试用</span>
               </div>
             )}
             <Button

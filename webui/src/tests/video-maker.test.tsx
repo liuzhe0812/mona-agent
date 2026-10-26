@@ -151,17 +151,15 @@ const stylePreviewPaths = (id: string) => ({
 });
 
 const videoStyleTemplateFixture: VideoStyleTemplate[] = [
-  { id: "minimal-business", name: "简洁浅色", description: "浅色背景与清晰层级。" },
-  { id: "tech-dark", name: "专业深色", description: "深色背景与冷色重点。" },
-  { id: "editorial-magazine", name: "编辑排版", description: "对比鲜明的文字层级。" },
-  { id: "knowledge-cards", name: "清晰教学", description: "清晰分组的信息样式。" },
-  { id: "dashi-notebook", name: "手绘笔记", description: "米白纸面与手写线稿。", preview: stylePreviewPaths("dashi-notebook") },
-  { id: "dashi-flow", name: "扁平流程图", description: "奶油底色与琥珀流程图。", preview: stylePreviewPaths("dashi-flow") },
-  { id: "dashi-cartoon", name: "立体卡通", description: "深色背景与立体插画。", preview: stylePreviewPaths("dashi-cartoon") },
-  { id: "dashi-collage", name: "超现实拼贴", description: "米灰纸底与概念拼贴。", preview: stylePreviewPaths("dashi-collage") },
-  { id: "dashi-paper", name: "复古剪纸", description: "奶油纸与剪纸画面。", preview: stylePreviewPaths("dashi-paper") },
-  { id: "dashi-editorial", name: "复古报刊", description: "报纸版式与藏蓝色调。", preview: stylePreviewPaths("dashi-editorial") },
-  { id: "dashi-tech", name: "黑底科技", description: "深色背景与暖金线条。", preview: stylePreviewPaths("dashi-tech") },
+  { id: "huashu-3d", name: "立体展示", description: "浅色影棚、立体物体和连续镜头，适合产品形象与细节展示。", preview: stylePreviewPaths("huashu-3d") },
+  { id: "huashu-collage", name: "资料拼贴", description: "纸张底、图片剪贴和线索标注，适合新闻、案例与证据讲述。", preview: stylePreviewPaths("huashu-collage") },
+  { id: "huashu-finance", name: "清晰图表", description: "白底图表、紧凑标注和单一重点色，适合数据趋势与对比。", preview: stylePreviewPaths("huashu-finance") },
+  { id: "huashu-keynote", name: "光影发布", description: "深色光影、清晰大字和半透明卡片，适合产品介绍与功能展示。", preview: stylePreviewPaths("huashu-keynote") },
+  { id: "huashu-math", name: "黑板推演", description: "纯黑背景，以颜色区分概念，适合公式、曲线与机制推导。", preview: stylePreviewPaths("huashu-math") },
+  { id: "huashu-science", name: "扁平科普", description: "深色天空、明亮色块和层级插画，适合由整体深入局部的知识讲解。", preview: stylePreviewPaths("huashu-science") },
+  { id: "huashu-type", name: "动态文字", description: "高对比色块与大字排版，适合短观点、重点强调与快节奏表达。", preview: stylePreviewPaths("huashu-type") },
+  { id: "huashu-ui-space", name: "空间界面", description: "浅色空间、悬浮界面与透视运动，适合软件操作和产品演示。", preview: stylePreviewPaths("huashu-ui-space") },
+  { id: "huashu-whiteboard", name: "白板手绘", description: "白底墨线、手写文字和橙色圈注，适合逐步解释概念与过程。", preview: stylePreviewPaths("huashu-whiteboard") },
 ];
 
 vi.mock("@/lib/tauri", () => ({
@@ -1577,17 +1575,25 @@ describe("VideoMakerView director workspace", () => {
     client.newChat.mockResolvedValue("video-chat");
     render(wrap(<VideoMakerView />, client));
     fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍产品" } });
+    for (const style of videoStyleTemplateFixture) {
+      const card = await screen.findByRole("button", { name: `选择${style.name}` });
+      const poster = await screen.findByRole("img", { name: `${style.name}风格样片` });
+      expect(poster).toHaveAttribute("src", `http://localhost:17174${style.preview!.poster}`);
+      fireEvent.mouseEnter(card.parentElement!);
+      await waitFor(() => expect(screen.getByRole("img", { name: `${style.name}风格样片` }))
+        .toHaveAttribute("src", `http://localhost:17174${style.preview!.motion}`));
+      fireEvent.mouseLeave(card.parentElement!);
+      await waitFor(() => expect(screen.getByRole("img", { name: `${style.name}风格样片` }))
+        .toHaveAttribute("src", `http://localhost:17174${style.preview!.poster}`));
+    }
     fireEvent.click(screen.getByRole("button", { name: "更多设置" }));
     fireEvent.change(screen.getByLabelText("视频名称"), { target: { value: "产品介绍" } });
     fireEvent.click(screen.getByRole("button", { name: "竖屏" }));
-    const basicPalette = await screen.findByRole("button", { name: "基础配色" });
-    expect(screen.queryByRole("button", { name: "选择编辑排版" })).not.toBeInTheDocument();
-    fireEvent.click(basicPalette);
-    fireEvent.click(await screen.findByRole("button", { name: "选择简洁浅色" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择光影发布" }));
     expect(screen.getByRole("checkbox", { name: "配音" })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
     await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
-    expect(mocks.createVideoProject).toHaveBeenCalledWith("tok", "产品介绍", "1080x1920", expect.objectContaining({ templateId: "minimal-business", narrationEnabled: true, ttsProvider: "edge", subtitleMode: "burned" }));
+    expect(mocks.createVideoProject).toHaveBeenCalledWith("tok", "产品介绍", "1080x1920", expect.objectContaining({ templateId: "huashu-keynote", narrationEnabled: true, ttsProvider: "edge", subtitleMode: "burned" }));
   });
 
   it("reuses a saved style without making users choose a series", async () => {
@@ -1606,19 +1612,19 @@ describe("VideoMakerView director workspace", () => {
     expect(mocks.createVideoProject.mock.calls[0][3]).not.toHaveProperty("seriesId");
   });
 
-  it("passes a dynamically loaded Dashi style into video creation", async () => {
+  it("passes a dynamically loaded Huashu style into video creation", async () => {
     const client = makeClient();
     client.newChat.mockResolvedValue("video-chat");
     mocks.fetchVideoStyleTemplates.mockResolvedValue({
       templates: [{
-        id: "dashi-flow", name: "扁平流程图", description: "奶油底色与琥珀流程图。",
-        preview: stylePreviewPaths("dashi-flow"),
+        id: "huashu-whiteboard", name: "白板手绘", description: "白底墨线、手写文字和橙色圈注，适合逐步解释概念与过程。",
+        preview: stylePreviewPaths("huashu-whiteboard"),
       }],
     });
     render(wrap(<VideoMakerView />, client));
     fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "解释一个三步流程" } });
     expect(await screen.findByRole("button", { name: /由 Mona 推荐/ })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(await screen.findByRole("button", { name: "选择扁平流程图" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择白板手绘" }));
     fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
 
     await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
@@ -1626,83 +1632,83 @@ describe("VideoMakerView director workspace", () => {
       "tok",
       "解释一个三步流程",
       "1920x1080",
-      expect.objectContaining({ templateId: "dashi-flow" }),
+      expect.objectContaining({ templateId: "huashu-whiteboard" }),
     );
   });
 
   it("waits for the Services base, then swaps the style poster and motion on hover", async () => {
-    const template = videoStyleTemplateFixture.find((style) => style.id === "dashi-flow")!;
+    const template = videoStyleTemplateFixture.find((style) => style.id === "huashu-whiteboard")!;
     let resolveServicesBase!: (base: string) => void;
     mocks.getServicesHttpBase.mockReturnValueOnce(new Promise((resolve) => {
       resolveServicesBase = resolve;
     }));
     render(<VideoStyleGallery templates={[template]} selectedId="auto" onSelect={vi.fn()} />);
 
-    const card = await screen.findByRole("button", { name: "选择扁平流程图" });
+    const card = await screen.findByRole("button", { name: "选择白板手绘" });
     await waitFor(() => expect(mocks.getServicesHttpBase).toHaveBeenCalled());
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
 
     await act(async () => { resolveServicesBase("http://localhost:17174"); });
-    const poster = await screen.findByRole("img", { name: "扁平流程图风格样片" });
+    const poster = await screen.findByRole("img", { name: "白板手绘风格样片" });
     expect(poster).toHaveAttribute("src", `http://localhost:17174${template.preview!.poster}`);
 
     fireEvent.mouseEnter(card.parentElement!);
-    await waitFor(() => expect(screen.getByRole("img", { name: "扁平流程图风格样片" }))
+    await waitFor(() => expect(screen.getByRole("img", { name: "白板手绘风格样片" }))
       .toHaveAttribute("src", `http://localhost:17174${template.preview!.motion}`));
     fireEvent.mouseLeave(card.parentElement!);
-    await waitFor(() => expect(screen.getByRole("img", { name: "扁平流程图风格样片" }))
+    await waitFor(() => expect(screen.getByRole("img", { name: "白板手绘风格样片" }))
       .toHaveAttribute("src", `http://localhost:17174${template.preview!.poster}`));
   });
 
   it("falls back to the poster after motion fails and keeps the style selectable", async () => {
-    const template = videoStyleTemplateFixture.find((style) => style.id === "dashi-flow")!;
+    const template = videoStyleTemplateFixture.find((style) => style.id === "huashu-whiteboard")!;
     const onSelect = vi.fn();
     render(<VideoStyleGallery templates={[template]} selectedId="auto" onSelect={onSelect} />);
-    const card = await screen.findByRole("button", { name: "选择扁平流程图" });
-    const poster = await screen.findByRole("img", { name: "扁平流程图风格样片" });
+    const card = await screen.findByRole("button", { name: "选择白板手绘" });
+    const poster = await screen.findByRole("img", { name: "白板手绘风格样片" });
     expect(poster).toHaveAttribute("src", `http://localhost:17174${template.preview!.poster}`);
 
     fireEvent.mouseEnter(card.parentElement!);
     const motion = await waitFor(() => {
-      const image = screen.getByRole("img", { name: "扁平流程图风格样片" });
+      const image = screen.getByRole("img", { name: "白板手绘风格样片" });
       expect(image).toHaveAttribute("src", `http://localhost:17174${template.preview!.motion}`);
       return image;
     });
     fireEvent.error(motion);
-    await waitFor(() => expect(screen.getByRole("img", { name: "扁平流程图风格样片" }))
+    await waitFor(() => expect(screen.getByRole("img", { name: "白板手绘风格样片" }))
       .toHaveAttribute("src", `http://localhost:17174${template.preview!.poster}`));
 
     expect(card).toBeEnabled();
     fireEvent.click(card);
-    expect(onSelect).toHaveBeenCalledWith("dashi-flow");
+    expect(onSelect).toHaveBeenCalledWith("huashu-whiteboard");
   });
 
-  it("applies an enlarged Dashi preview and sends the selected style ID", async () => {
+  it("applies an enlarged Huashu preview and sends the selected style ID", async () => {
     const client = makeClient();
     client.newChat.mockResolvedValue("video-chat");
     render(wrap(<VideoMakerView />, client));
     fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "解释一个三步流程" } });
 
-    fireEvent.click(await screen.findByRole("button", { name: "放大预览扁平流程图" }));
-    const dialog = await screen.findByRole("dialog", { name: "扁平流程图" });
-    expect(await within(dialog).findByRole("img", { name: "扁平流程图动态样片" }))
-      .toHaveAttribute("src", `http://localhost:17174${stylePreviewPaths("dashi-flow").motion}`);
+    fireEvent.click(await screen.findByRole("button", { name: "放大预览白板手绘" }));
+    const dialog = await screen.findByRole("dialog", { name: "白板手绘" });
+    expect(await within(dialog).findByRole("img", { name: "白板手绘动态样片" }))
+      .toHaveAttribute("src", `http://localhost:17174${stylePreviewPaths("huashu-whiteboard").motion}`);
     fireEvent.click(within(dialog).getByRole("button", { name: "使用这个风格" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "扁平流程图" })).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "选择扁平流程图" })).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "白板手绘" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "选择白板手绘" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
     await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
-    expect(mocks.createVideoProject.mock.calls[0][3]).toMatchObject({ templateId: "dashi-flow" });
+    expect(mocks.createVideoProject.mock.calls[0][3]).toMatchObject({ templateId: "huashu-whiteboard" });
   });
 
-  it("disables Dashi selection, enlargement, and automatic style while creating", async () => {
-    const template = videoStyleTemplateFixture.find((style) => style.id === "dashi-flow")!;
+  it("disables Huashu selection, enlargement, and automatic style while creating", async () => {
+    const template = videoStyleTemplateFixture.find((style) => style.id === "huashu-whiteboard")!;
     const onSelect = vi.fn();
-    render(<VideoStyleGallery templates={[template]} selectedId="dashi-flow" disabled onSelect={onSelect} />);
+    render(<VideoStyleGallery templates={[template]} selectedId="huashu-whiteboard" disabled onSelect={onSelect} />);
 
-    expect(await screen.findByRole("button", { name: "选择扁平流程图" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "放大预览扁平流程图" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "选择白板手绘" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "放大预览白板手绘" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /由 Mona 推荐/ })).toBeDisabled();
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -1892,7 +1898,11 @@ describe("VideoMakerView director workspace", () => {
   });
 
   it("saves voice settings in the director without starting a generation turn", async () => {
-    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null } });
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: {
+      name: "项目", resolution: "1080x1920", authoringMode: "huashu-motion",
+      narrationEnabled: true, ttsProvider: "edge", ttsVoice: "zh-CN-XiaoxiaoNeural", ttsRate: "+0%", subtitleMode: "burned",
+      requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null, scenes: [scene(1)],
+    } });
     mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
     mocks.updateVideoProjectSettings.mockResolvedValue({ ok: true, meta: { narrationEnabled: false } });
     const onSendVideoTurn = vi.fn();
@@ -1902,7 +1912,30 @@ describe("VideoMakerView director workspace", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "启用旁白配音" }));
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(mocks.updateVideoProjectSettings).toHaveBeenCalledOnce());
+    expect(mocks.updateVideoProjectSettings).toHaveBeenCalledWith("tok", "项目", {
+      narrationEnabled: false, ttsProvider: "edge", ttsVoice: "zh-CN-XiaoxiaoNeural", ttsRate: "+0%", subtitleMode: "burned",
+    });
     expect(mocks.confirmVideoProjectPlan).not.toHaveBeenCalled();
+    expect(onSendVideoTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps narration changes and explains a blocked save without replaying it", async () => {
+    const { ApiError } = await import("@/lib/api");
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: {
+      narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null,
+    } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
+    mocks.updateVideoProjectSettings.mockRejectedValue(new ApiError(409, "视频正在导出，请完成或取消导出后再修改设置"));
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    await screen.findByLabelText("画面如何变化");
+    fireEvent.click(screen.getByRole("button", { name: "声音与字幕" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用旁白配音" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("视频正在导出，请完成或取消导出后再修改设置");
+    expect(screen.getByRole("checkbox", { name: "启用旁白配音" })).not.toBeChecked();
+    expect(screen.getByRole("dialog", { name: "旁白与字幕设置" })).toBeInTheDocument();
+    expect(mocks.updateVideoProjectSettings).toHaveBeenCalledOnce();
     expect(onSendVideoTurn).not.toHaveBeenCalled();
   });
 

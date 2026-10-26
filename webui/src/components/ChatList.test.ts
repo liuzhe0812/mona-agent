@@ -16,6 +16,22 @@ describe("overlayScrollbarGeometry", () => {
 });
 
 describe("ChatList context menu", () => {
+  it("shows direct message previews without repeating the Agent name", () => {
+    render(createElement(ChatList, {
+      sessions: [
+        { key: "websocket:legacy", channel: "websocket", chatId: "legacy", createdAt: null, updatedAt: null, title: "下载工具", preview: "搞定了！文件已下载" },
+        { key: "websocket:empty", channel: "websocket", chatId: "empty", createdAt: null, updatedAt: null, title: "待继续", preview: "" },
+      ],
+      activeKey: "websocket:legacy",
+      pinnedKeys: ["websocket:legacy"],
+      onSelect: vi.fn(), onRequestDelete: vi.fn(), onTogglePin: vi.fn(), onRequestRename: vi.fn(), onToggleArchive: vi.fn(),
+    }));
+
+    expect(within(screen.getByTitle("下载工具")).getByText("搞定了！文件已下载", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/Mona/)).not.toBeInTheDocument();
+    expect(screen.getByTitle("待继续")).toHaveTextContent(/^待继续$/);
+  });
+
   it("identifies a video project while retaining its original conversation key", () => {
     const onSelect = vi.fn();
     render(createElement(ChatList, {
@@ -183,6 +199,8 @@ describe("ChatList context menu", () => {
     const beta = screen.getByTitle("风险控制");
     expect(alpha).toBeInTheDocument();
     expect(beta).toBeInTheDocument();
+    expect(within(alpha).getByText("组合信号分析", { exact: true })).toBeInTheDocument();
+    expect(within(beta).getByText("回撤与仓位检查", { exact: true })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "A-share-analyst" })).not.toBeInTheDocument();
   });
 });

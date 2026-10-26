@@ -12,8 +12,9 @@
   前端无需感知令牌。
 
 校验 ``/api/materials/*``、``/api/profile/*``、``/api/office/*``、``/api/video/series/*``
-以及会触发外部数据抓取和上下文写入的 ``POST /api/stock/research/preflight``。Office WebSocket 使用一次性 ticket，
-不重复要求浏览器无法附加的自定义请求头。
+``/api/stock-vibe`` 及其子路径。Office WebSocket 使用一次性 ticket，
+不重复要求浏览器无法附加的自定义请求头。股票事件流仅精确的
+``/api/stock-vibe/events`` 使用由已鉴权请求签发的短期单次票据。
 """
 
 from __future__ import annotations
@@ -39,11 +40,10 @@ _PROTECTED_PREFIXES = (
     "/api/video/agent",
 )
 _PROTECTED_EXACT_PATHS = {
-    "/api/stock/research/preflight",
     "/api/video/voice-preview",
     "/api/video/project/audio-preview",
 }
-_TOKEN_EXEMPT_PATHS = {"/api/office/ws"}
+_TOKEN_EXEMPT_PATHS = {"/api/office/ws", "/api/stock-vibe/events"}
 
 
 def _token_file_path() -> Path:
@@ -96,6 +96,8 @@ def _requires_services_token(path: str) -> bool:
         return False
     return (
         any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES)
+        or path == "/api/stock-vibe"
+        or path.startswith("/api/stock-vibe/")
         or path == "/api/video/series"
         or path.startswith("/api/video/series/")
         or path in _PROTECTED_EXACT_PATHS

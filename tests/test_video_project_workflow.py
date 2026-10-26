@@ -115,7 +115,7 @@ async def test_create_project_starts_in_storyboard_phase(
     assert meta["phase"] == "storyboard"
     assert meta["outputStale"] is False
     assert meta["structuredCompiler"] is False
-    assert meta["authoringMode"] == "remotion"
+    assert meta["authoringMode"] == "huashu-motion"
     assert meta["requirePlanApproval"] is True
     assert meta["planRevision"] == 0
     assert meta["approvedPlanRevision"] is None
@@ -1851,7 +1851,7 @@ async def test_render_task_forwards_progress_to_status_file(
 # --- storyboard dual-source consistency (P0-1) ------------------------------
 
 
-@pytest.mark.parametrize("template_id", ["minimal-business", "tech-dark", "editorial-magazine", "knowledge-cards"])
+@pytest.mark.parametrize("template_id", ["huashu-keynote", "huashu-ui-space", "huashu-collage", "huashu-whiteboard"])
 async def test_single_video_uses_selected_template(monkeypatch, tmp_path, template_id) -> None:
     _patch_projects_dir(monkeypatch, tmp_path)
     response = await server.handle_video_project_create(_post_request({"name": "chosen", "templateId": template_id}))
@@ -1867,7 +1867,7 @@ async def test_single_video_reuses_style_without_becoming_an_episode(monkeypatch
 
     _patch_projects_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "get_workspace_path", lambda: tmp_path)
-    series = create_series(tmp_path, "custom", "个人模板", template_id="minimal-business")
+    series = create_series(tmp_path, "custom", "个人模板", template_id="huashu-keynote")
     locked = lock_style(tmp_path, series["id"], expected_revision=0)
     response = await server.handle_video_project_create(_post_request({"name": "single", "styleSeriesId": series["id"], "styleVersion": locked["version"], "aspectVariant": "16:9", "narrationEnabled": True, "ttsProvider": "custom"}))
     assert response.status == 200
@@ -1878,7 +1878,7 @@ async def test_single_video_reuses_style_without_becoming_an_episode(monkeypatch
     assert "episodeNumber" not in meta
     assert meta["ttsVoice"] == ""
     assert meta["structuredCompiler"] is False
-    assert meta["authoringMode"] == "remotion"
+    assert meta["authoringMode"] == "huashu-motion"
     assert (project / "style" / "design-system.json").is_file()
 
 
@@ -2064,6 +2064,36 @@ async def test_narration_settings_rejects_invalid_fields(monkeypatch, tmp_path, 
     assert (project_dir / "meta.json").read_bytes() == original
 
 
+async def test_narration_save_over_http_excludes_project_metadata(monkeypatch, tmp_path) -> None:
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    meta = {**_read_meta(project_dir), "name": "proj", "resolution": "1080x1920",
+            "narrationEnabled": True, "ttsProvider": "edge", "ttsVoice": "old-voice",
+            "ttsRate": "+0%", "subtitleMode": "burned", "requirePlanApproval": True,
+            "planRevision": 3, "approvedPlanRevision": 3}
+    _write_meta(project_dir, meta)
+    original = (project_dir / "meta.json").read_bytes()
+    app = web.Application()
+    app.router.add_put("/api/video/project/settings", server.handle_video_project_settings)
+    async with TestClient(TestServer(app)) as client:
+        rejected = await client.put("/api/video/project/settings", json={**meta, "ttsVoice": "zh-CN-XiaoxiaoNeural"})
+        assert rejected.status == 400
+        assert "导演台" in (await rejected.json())["error"]
+        assert (project_dir / "meta.json").read_bytes() == original
+        settings = {key: meta[key] for key in ("narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode")}
+        settings["ttsVoice"] = "zh-CN-XiaoxiaoNeural"
+        saved = await client.put("/api/video/project/settings", json={"name": "proj", **settings})
+        assert saved.status == 200
+        assert (await saved.json())["ok"] is True
+    current = _read_meta(project_dir)
+    assert current["ttsVoice"] == "zh-CN-XiaoxiaoNeural"
+    assert current["resolution"] == "1080x1920"
+    assert current["planRevision"] == current["approvedPlanRevision"] == 3
+
+
 async def test_export_does_not_clear_staleness_after_concurrent_edit(monkeypatch, tmp_path) -> None:
     _patch_projects_dir(monkeypatch, tmp_path)
     project_dir = _setup_confirmed_project(tmp_path)
@@ -2210,7 +2240,7 @@ async def test_storyboard_get_legacy_project_reparses_once(
     assert _body(second)["scenes"][0]["title"] == "新开场"
 
 
-async def test_authored_scene_reorder_and_remove_keep_correct_sources_and_no_extra_render_files(
+async def test_authored_film_reorder_and_remove_require_new_time_slices(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from mona.api.video_director import OWNER_HEADER, handle_video_agent
@@ -2220,9 +2250,6 @@ async def test_authored_scene_reorder_and_remove_keep_correct_sources_and_no_ext
     response = await server.handle_video_project_create(_post_request({"name": "ordered"}))
     assert response.status == 200
     project = tmp_path / "video_projects" / "ordered"
-    legacy = _read_meta(project)
-    legacy.update({"requirePlanApproval": False, "authoringMode": "agent"})
-    _write_meta(project, legacy)
     (project / ".chat_id").write_text("director-chat", encoding="utf-8")
 
     async def action(payload: dict):
@@ -2230,31 +2257,46 @@ async def test_authored_scene_reorder_and_remove_keep_correct_sources_and_no_ext
         request.headers = {SERVICES_TOKEN_HEADER: get_services_token(), OWNER_HEADER: "director-chat"}
         return await handle_video_agent(request)
 
-    for index, label in enumerate(("FIRST", "SECOND", "THIRD"), start=1):
-        (project / "drafts" / f"scene_{index:02d}.html").write_text(f'<svg><text>{label}</text></svg>', encoding="utf-8")
-        response = await action({"action": "sync", "scene_index": index, "scene": {"title": label, "duration": 3}})
-        assert response.status == 200
+    from test_video_director import _film
+
+    planned = await action({"action": "plan", "scenes": [
+        {"title": label, "duration": 3, "visual": f"Show {label}", "animation": "Carry the object into the next segment", "narration": "", "assets": []}
+        for label in ("FIRST", "SECOND", "THIRD")
+    ]})
+    assert planned.status == 200
+    assert (await server.handle_video_project_confirm(_post_request({"name": "ordered", "expectedPlanRevision": 1}))).status == 200
+    source = _film('<div>FIRST</div><div>SECOND</div><div>THIRD</div>')
+    (project / "drafts" / "film.html").write_text(source, encoding="utf-8")
+    response = await action({"action": "sync", "source_file": "drafts/film.html", "plan_revision": 1})
+    assert response.status == 200
+    (project / "audio").mkdir(exist_ok=True)
+    for index in (1, 2, 3):
         (project / "audio" / f"scene_{index:02d}.mp3").write_bytes(b"old voice cache")
+    meta = _read_meta(project)
+    for scene in meta["scenes"]:
+        scene.update({"audioInputHash": "old-position", "audioMtime": 1})
+    _write_meta(project, meta)
     (project / "renders" / "output.mp4").write_bytes(b"old finished file")
 
     response = await action({"action": "reorder", "order": [3, 1, 2]})
     assert response.status == 200
     meta = _read_meta(project)
     assert [scene["title"] for scene in meta["scenes"]] == ["THIRD", "FIRST", "SECOND"]
-    assert not list((project / "audio").glob("scene_*.mp3"))
+    assert "composition" not in meta
+    assert (project / "scene_sources" / "film.html").read_text(encoding="utf-8") == source
     for scene in meta["scenes"]:
-        assert scene["title"] in (project / scene["sourcePath"]).read_text(encoding="utf-8")
-        assert scene["title"] in (project / scene["htmlPath"]).read_text(encoding="utf-8")
-        assert server._video_scene_ready(project, scene)
+        assert scene["htmlStatus"] == "pending"
+        assert "audioInputHash" not in scene and "audioMtime" not in scene
+        assert not server._video_scene_ready(project, scene)
     assert meta["outputStale"] is True
 
     response = await action({"action": "remove", "scene_index": 2})
     assert response.status == 200
     meta = _read_meta(project)
     assert [scene["title"] for scene in meta["scenes"]] == ["THIRD", "SECOND"]
-    assert not (project / "scenes" / "scene_03.html").exists()
-    assert not (project / "scene_sources" / "scene_03.html").exists()
-    assert all(server._video_scene_ready(project, scene) for scene in meta["scenes"])
+    assert "composition" not in meta
+    assert all(not server._video_scene_ready(project, scene) for scene in meta["scenes"])
+    assert (project / "scene_sources" / "film.html").read_text(encoding="utf-8") == source
     assert meta["phase"] == "storyboard"
     assert meta["requirePlanApproval"] is True
 

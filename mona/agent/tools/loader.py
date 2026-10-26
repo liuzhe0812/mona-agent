@@ -16,6 +16,8 @@ _SKIP_MODULES = frozenset({
     "base", "schema", "registry", "context", "loader",
     "file_state", "sandbox", "mcp", "__init__", "runtime_state",
     "ssh", "tauri_ipc", "path_utils",
+    "stock_diagnosis_submit", "stock_query", "stock_research",
+    "stock_selection", "stock_submit",
 })
 
 # Tools reserved for the reserved Mona agent. A package agent must never get

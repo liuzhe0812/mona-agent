@@ -22,6 +22,7 @@ from mona.development.contracts import (
     RunStatus,
 )
 from mona.development.decisions import DecisionBroker
+from mona.development.design_resources import DESIGN_POLICY_TAG
 from mona.development.executors.base import Executor, SessionStart
 from mona.development.executors.codex import CodexExecutor
 from mona.development.executors.codex_policy import prepare_codex_profile
@@ -40,7 +41,7 @@ from mona.development.store import ConflictError, DevelopmentError, DevelopmentS
 from mona.providers.context_window import resolve_model_context_window
 from mona.session.manager import SessionManager
 
-_NAMES = {ExecutorId.CODEX: "Codex", ExecutorId.CLAUDE: "Claude Code", ExecutorId.CODEBUDDY: "CodeBuddy"}
+_NAMES = {ExecutorId.CODEX: "Codex", ExecutorId.CLAUDE: "Claude Code", ExecutorId.CODEBUDDY: "WorkBuddy"}
 
 
 def _native_operation(method):
@@ -357,6 +358,12 @@ class NativeExecutorManager:
                 evidence=evidence, plan=self.store.latest_plan(session.id),
                 max_chars=48_000 if forked else 16_000, full_conversation=forked)
         loaded = self.loaded.get(binding.id) if binding else None
+        if (binding and session.executor == ExecutorId.CODEX and not active_run
+                and isinstance(host, CodexExecutor) and host._tool_handler is not None
+                and DESIGN_POLICY_TAG not in (binding.context_fingerprint or "")):
+            if loaded and await host.get_status(binding) not in {"idle", "not_loaded"}:
+                raise ConflictError("原任务状态尚未确认，请先处理原任务。")
+            return await self._replace(session, binding, host, start, "design_resources_updated")
         if (binding and session.executor == ExecutorId.CODEX and not active_run
                 and self.tool_handler is not None and not session.readonly and not session.parent_session_id
                 and any(preset.enabled for preset in project.subagents)

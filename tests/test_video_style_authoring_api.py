@@ -101,7 +101,7 @@ def _create_saved_sample_version(root, series):
     (authoring / "rules.md").write_text("Saved style rules", encoding="utf-8")
     Image.new("RGB", (2, 2), (1, 2, 3)).save(authoring / "previews" / "poster.png", format="PNG")
     Image.new("RGB", (2, 2), (4, 5, 6)).save(authoring / "previews" / "motion.gif", format="GIF")
-    style = get_builtin_template("tech-dark")
+    style = get_builtin_template("huashu-ui-space")
     style.update({
         "seriesId": series["id"],
         "version": 1,
@@ -127,7 +127,7 @@ def _request(body: dict, series_id: str) -> MagicMock:
 
 async def _create_refresh_sample(root, monkeypatch):
     monkeypatch.setattr(video_series, "_root", lambda: root)
-    series = create_series(root, "refresh-style", "Refresh Style", template_id="tech-dark")
+    series = create_series(root, "refresh-style", "Refresh Style", template_id="huashu-ui-space")
     project = root / "video_projects" / "refresh-project"
     (project / "style").mkdir(parents=True)
     _write_json(project / "meta.json", {"name": "refresh-project", "resolution": "640x360"})
@@ -178,7 +178,7 @@ async def test_sample_binding_and_preview_use_the_bound_project(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "sample-style", "Sample Style", template_id="tech-dark")
+    series = create_series(tmp_path, "sample-style", "Sample Style", template_id="huashu-ui-space")
     project = tmp_path / "video_projects" / "sample-project"
     (project / "style").mkdir(parents=True)
     _write_json(project / "meta.json", {"name": "sample-project", "resolution": "640x360"})
@@ -253,7 +253,7 @@ async def test_seed_version_restores_saved_sample_into_existing_project(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "seed-style", "Seed Style", template_id="tech-dark")
+    series = create_series(tmp_path, "seed-style", "Seed Style", template_id="huashu-ui-space")
     saved_scene = _create_saved_sample_version(tmp_path, series)
     project = tmp_path / "video_projects" / "seed-project"
     (project / "style").mkdir(parents=True)
@@ -326,9 +326,9 @@ async def test_seed_version_skips_legacy_snapshot_and_rejects_binding_conflict(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    legacy = create_series(tmp_path, "legacy-seed", "Legacy Seed", template_id="tech-dark")
+    legacy = create_series(tmp_path, "legacy-seed", "Legacy Seed", template_id="huashu-ui-space")
     legacy_version = series_directory(tmp_path) / legacy["id"] / "styles" / "v1"
-    style = get_builtin_template("tech-dark")
+    style = get_builtin_template("huashu-ui-space")
     style.update({"seriesId": legacy["id"], "version": 1})
     _write_json(legacy_version / "design-system.json", style)
     legacy_project = tmp_path / "video_projects" / "legacy-project"
@@ -345,7 +345,7 @@ async def test_seed_version_skips_legacy_snapshot_and_rejects_binding_conflict(
     assert (await skipped.json())["seeded"] is False
     assert old_source.read_text(encoding="utf-8") == "keep legacy source"
 
-    conflicting = create_series(tmp_path, "conflict-seed", "Conflict Seed", template_id="tech-dark")
+    conflicting = create_series(tmp_path, "conflict-seed", "Conflict Seed", template_id="huashu-ui-space")
     _create_saved_sample_version(tmp_path, conflicting)
     conflict_project = tmp_path / "video_projects" / "conflict-project"
     conflict_project.mkdir(parents=True)
@@ -366,7 +366,7 @@ async def test_seed_version_skips_legacy_snapshot_and_rejects_binding_conflict(
     assert marker.read_text(encoding="utf-8") == "keep conflict source"
     assert read_style_draft(tmp_path, conflicting["id"])["revision"] == 0
 
-    tampered = create_series(tmp_path, "tampered-seed", "Tampered Seed", template_id="tech-dark")
+    tampered = create_series(tmp_path, "tampered-seed", "Tampered Seed", template_id="huashu-ui-space")
     _create_saved_sample_version(tmp_path, tampered)
     source_path = (
         series_directory(tmp_path) / tampered["id"] / "styles" / "v1"
@@ -498,7 +498,7 @@ async def test_saved_sample_media_urls_are_scoped_to_authoring_snapshots(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "saved-style", "Saved Style", template_id="tech-dark")
+    series = create_series(tmp_path, "saved-style", "Saved Style", template_id="huashu-ui-space")
     version = series_directory(tmp_path) / series["id"] / "styles" / "v1"
     authoring = version / "authoring" / "previews"
     authoring.mkdir(parents=True)
@@ -579,7 +579,7 @@ async def test_reference_preview_get_requires_token_and_serves_uploaded_image(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "reference-preview", "Reference Preview", template_id="tech-dark")
+    series = create_series(tmp_path, "reference-preview", "Reference Preview", template_id="huashu-ui-space")
     reference = tmp_path / "uploads" / "chat-1" / "reference.png"
     reference.parent.mkdir(parents=True)
     Image.new("RGB", (4, 3), (12, 34, 56)).save(reference, format="PNG")
@@ -606,7 +606,7 @@ async def test_reference_preview_rejects_paths_outside_uploads(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "reference-path", "Reference Path", template_id="tech-dark")
+    series = create_series(tmp_path, "reference-path", "Reference Path", template_id="huashu-ui-space")
     outside = tmp_path / "private.png"
     Image.new("RGB", (2, 2), (1, 2, 3)).save(outside, format="PNG")
     uploads = tmp_path / "uploads" / "chat-1"
@@ -639,7 +639,7 @@ async def test_reference_preview_rejects_invalid_image_bytes(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    series = create_series(tmp_path, "reference-image", "Reference Image", template_id="tech-dark")
+    series = create_series(tmp_path, "reference-image", "Reference Image", template_id="huashu-ui-space")
     reference = tmp_path / "uploads" / "chat-1" / "reference.png"
     reference.parent.mkdir(parents=True)
     reference.write_bytes(b"not an image")
@@ -662,11 +662,11 @@ async def test_copy_creates_independent_v1_style_and_sample_snapshot(
     services_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
-    source = create_series(tmp_path, "copy-source", "Source Style", template_id="tech-dark")
+    source = create_series(tmp_path, "copy-source", "Source Style", template_id="huashu-ui-space")
     source_version = series_directory(tmp_path) / source["id"] / "styles" / "v1"
     source_assets = source_version / "assets"
     source_assets.mkdir(parents=True)
-    style = get_builtin_template("tech-dark")
+    style = get_builtin_template("huashu-ui-space")
     style.update({"seriesId": source["id"], "version": 1, "lockedAt": "source-lock"})
     style["backgrounds"]["default"]["assetId"] = "copy-bg"
     style["chatId"] = "old-chat"
@@ -729,7 +729,7 @@ def test_series_summary_adds_preview_only_for_sampled_style_versions(
 ) -> None:
     monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
     monkeypatch.setattr(video_series, "_referencing_projects", lambda _series_id: [])
-    series = create_series(tmp_path, "summary-style", "Summary Style", template_id="tech-dark")
+    series = create_series(tmp_path, "summary-style", "Summary Style", template_id="huashu-ui-space")
     version = series_directory(tmp_path) / series["id"] / "styles" / "v1"
     version.mkdir(parents=True)
     _write_json(version / "design-system.json", {
@@ -754,7 +754,7 @@ def test_series_summary_adds_preview_only_for_sampled_style_versions(
         "motion": f"/api/video/series/{series['id']}/styles/1/preview?kind=motion",
     }
 
-    legacy = create_series(tmp_path, "legacy-style", "Legacy Style", template_id="tech-dark")
+    legacy = create_series(tmp_path, "legacy-style", "Legacy Style", template_id="huashu-ui-space")
     legacy_version = series_directory(tmp_path) / legacy["id"] / "styles" / "v1"
     legacy_version.mkdir(parents=True)
     _write_json(legacy_version / "design-system.json", {

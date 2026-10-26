@@ -1,6 +1,5 @@
 import catalog from './presets/catalog.json'
 import extended from './presets/extended.json'
-import roleCatalog from './presets/roles.json'
 import legacySemantics from './presets/legacy-semantics.json'
 import scenarioCatalog from './presets/scenarios.json'
 import scenarioPages from './presets/scenario-pages.json'
@@ -184,7 +183,6 @@ export interface ExpandedPreset {
 
 // Geometry and theme definitions have a single, data-only source.
 export const PRESET_THEMES = catalog.themes as Record<PresetThemeId, PresetTheme>
-export const PRESET_ROLES = roleCatalog
 export const PRESET_SCENARIOS = scenarioCatalog.scenarios as PresetScenario[]
 export const PRESETS: PresetDefinition[] = [
   ...catalog.presets.map((preset) => ({ ...preset, ...((legacySemantics as Record<string, object>)[preset.id] ?? {}) })),
@@ -196,14 +194,8 @@ const ICONS = { target: targetIcon, layers: layersIcon, workflow: workflowIcon, 
 
 export function findPresetScenario(id: string): PresetScenario {
   const scenario = PRESET_SCENARIOS.find((item) => item.id === id)
-  if (!scenario) throw new Error(`未知 PPT 场景：${id}。请从 presetScenarios 目录选择。`)
+  if (!scenario) throw new Error(`未知 PPT 场景：${id}。`)
   return scenario
-}
-
-export function presetScenarioCatalog() {
-  return PRESET_SCENARIOS.map(({ id, label, description, defaultTheme, templateIds }) => ({
-    id, label, description, defaultTheme, templateCount: templateIds.length,
-  }))
 }
 
 export function resolvePresetTheme(content: PresetContent, fallback: PresetThemeId = 'light-editorial'): PresetTheme {
@@ -220,70 +212,8 @@ export function resolvePresetTheme(content: PresetContent, fallback: PresetTheme
   return {...base,accent:content.accentColor,chart:{...base.chart,seriesColors:[content.accentColor,...base.chart.seriesColors.slice(1)]}}
 }
 
-/** Capacity and declared relationships are hard constraints; roles and rhythm are preferences. */
-export function rankPresets(input: PresetContent, options: {
-  family?: string; theme?: string; scenario?: string; role?: string; relation?: PresetRelation; usedPresetIds?: string[]; limit?: number
-} = {}): Array<{ preset: PresetDefinition; score: number; reasons: string[] }> {
-  const content = preparePresetContent(input)
-  resolvePresetTheme(content)
-  const theme = options.theme ?? content.theme
-  const scenarioId = options.scenario ?? content.scenario
-  const scenario = scenarioId === undefined ? undefined : findPresetScenario(scenarioId)
-  const role = options.role ?? content.role
-  const relation = options.relation ?? content.relation
-  if (content.nodes?.length && !relation) return []
-  const history = (options.usedPresetIds ?? []).map((id) => findPreset(id)).filter((item): item is PresetDefinition => !!item)
-  return PRESETS.filter((preset) => (!options.family || preset.family === options.family)
-    && (!scenario || scenario.templateIds.includes(preset.id))
-    && (!theme || preset.theme === theme) && (!relation || preset.relation === relation)
-    && presetWarnings(preset, content).length === 0)
-    .map((preset) => {
-      const reasons = ['容量与必需对象匹配']
-      let score = 100
-      if (scenario) { score += 20; reasons.push(`${scenario.label}场景适用`) }
-      if (role && preset.roles?.includes(role)) { score += 40; reasons.push('页面用途匹配') }
-      if (content.items?.length) score += Math.round(20 * content.items.length / Math.max(1, preset.capacity.itemsMax))
-      if (content.nodes?.length) score += Math.round(15 * content.nodes.length / Math.max(1, preset.capacity.nodesMax))
-      if (content.images?.length) score += Math.round(15 * content.images.length / Math.max(1, preset.capacity.imagesMax ?? 1))
-      score -= Math.min(12, history.filter((item) => item.id === preset.id).length * 4)
-      const previous = history.at(-1)
-      if (previous?.composition && previous.composition === preset.composition) score -= 6
-      else if (history.length) reasons.push('与前页构图有变化')
-      return { preset, score, reasons }
-    })
-    .sort((a, b) => b.score - a.score || a.preset.id.localeCompare(b.preset.id))
-    .slice(0, Math.max(1, Math.min(5, options.limit ?? 3)))
-}
-
-export function presetDiagnostics(content: PresetContent, family?: string, theme?: string): Array<{id:string;reasons:string[]}> {
-  if (content.nodes?.length && !content.relation) return [{ id: 'content', reasons: ['节点选版需要声明真实 relation（如 parallel、sequence）；也可直接使用原生操作自由构图。'] }]
-  return PRESETS.filter((preset) => (!family || preset.family === family) && (!theme || preset.theme === theme))
-    .filter((preset) => !content.scenario || preset.scenarios?.includes(content.scenario))
-    .map((preset) => ({id:preset.id,reasons:presetWarnings(preset,content)}))
-    .filter((entry) => entry.reasons.length).sort((a,b) => a.reasons.length-b.reasons.length).slice(0,3)
-}
-
-export function selectPresets(content: PresetContent, family?: string, theme?: string): PresetDefinition[] {
-  return rankPresets(content, {family, theme}).map((entry) => entry.preset)
-}
-
 export function findPreset(presetId: string): PresetDefinition | undefined {
   return PRESETS.find((preset) => preset.id === presetId)
-}
-
-/** 能力目录：模型只需要看到简短索引，不加载整个页面库。 */
-export function presetCatalog(): Array<{
-  id: string
-  family: string
-  theme: PresetThemeId
-  relation?: PresetRelation
-  roles?: string[]
-  scenarios?: string[]
-  capacity: PresetCapacity
-}> {
-  return PRESETS.map(({ id, family, theme, relation, roles, scenarios, capacity }) => ({
-    id, family, theme, relation, roles, scenarios, capacity,
-  }))
 }
 
 function fail(message: string): never {
@@ -453,17 +383,10 @@ export function presetWarnings(preset: PresetDefinition, content: PresetContent)
 
 /** 展开预设为现有 Office 原生操作；容量或内容不满足时在产生任何操作之前失败。 */
 export function expandPreset(input: PresetInput): ExpandedPreset {
-  if (input.presetId === 'auto' || input.presetId === 'auto-content') {
+  if (input.presetId === 'auto-content') {
     const content = preparePresetContent(input.content)
     if (content.nodes?.length && !content.relation) fail('请声明节点的真实 relation（如 parallel、sequence 或 hierarchy），不按数量猜关系。')
     const theme = resolvePresetTheme(content)
-    const candidate = input.presetId === 'auto' ? rankPresets(content,{theme:theme.id,limit:1})[0]?.preset : undefined
-    if (candidate) return expandPreset({...input,presetId:candidate.id,content})
-    if (input.presetId === 'auto') {
-      const reasons = presetDiagnostics(content, undefined, theme.id).slice(0, 3)
-        .map((entry) => `${entry.id}: ${entry.reasons.join('；')}`).join('\n')
-      fail(`没有适配本页的预设。预设不是必需步骤；保留内容，使用 slide_compose 或原生文字、图表、形状自行构图。不要反复改写内容以套模板。${reasons ? `\n${reasons}` : ''}`)
-    }
     const expanded = expandContentPage({...input,content},theme)
     const missing = missingRequiredFacts(content,expanded.operations.map((operation)=>String(operation.payload.text ?? '')).join('\n'))
     if (missing.length) fail(`必含事实没有可见落点：${missing.join(', ')}；请将这些事实安排到独立页面。`)

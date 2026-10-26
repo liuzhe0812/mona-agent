@@ -262,6 +262,34 @@ async def test_canvas_apply_reactivates_saved_canvas_and_retries_with_hash_prote
 
 
 @pytest.mark.asyncio
+async def test_canvas_forwards_mindmap_patch_and_kind_without_using_flowchart_schema(monkeypatch, tmp_path):
+    calls = []
+
+    async def fake_invoke(command, request):
+        calls.append((command, dict(request)))
+        if command == "canvas_activate_sidebar":
+            return {"activated": True}
+        return {"ok": True, "status": "ready", "kind": "mindmap", "canvasId": "mindmap-1"}
+
+    monkeypatch.setattr("mona.agent.tools.canvas.tauri_invoke_async", fake_invoke)
+    tool = CanvasTool(workspace=tmp_path)
+    tool.set_context(RequestContext(
+        channel="websocket", chat_id="chat-1", metadata={"canvas_id": "mindmap-1"},
+    ))
+    patch = {
+        "baseHash": "h1", "baseDocumentHash": "h1",
+        "ops": [{"name": "addChild", "path": [], "topic": "Branch"}],
+    }
+    assert tool.validate_params({"action": "apply", "patch": patch}) == []
+
+    result = json.loads(await tool.execute(action="apply", patch=patch))
+
+    assert result["kind"] == "mindmap"
+    assert calls[-1][1]["canvasId"] == "mindmap-1"
+    assert calls[-1][1]["patch"] == patch
+
+
+@pytest.mark.asyncio
 async def test_canvas_apply_requires_patch(tmp_path):
     tool = CanvasTool(workspace=tmp_path)
     assert await tool.execute(action="apply") == "Error: 'patch' or 'patch_path' is required for apply"

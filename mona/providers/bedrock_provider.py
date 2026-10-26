@@ -437,16 +437,15 @@ class BedrockProvider(LLMProvider):
     def _usage(usage: dict[str, Any] | None) -> dict[str, int]:
         if not usage:
             return {}
-        prompt = int(usage.get("inputTokens") or 0)
+        cache_read = int(usage.get("cacheReadInputTokens") or 0)
+        cache_write = int(usage.get("cacheWriteInputTokens") or 0)
+        prompt = int(usage.get("inputTokens") or 0) + cache_read + cache_write
         completion = int(usage.get("outputTokens") or 0)
-        total = int(usage.get("totalTokens") or prompt + completion)
         result = {
             "prompt_tokens": prompt,
             "completion_tokens": completion,
-            "total_tokens": total,
+            "total_tokens": prompt + completion,
         }
-        cache_read = int(usage.get("cacheReadInputTokens") or 0)
-        cache_write = int(usage.get("cacheWriteInputTokens") or 0)
         if cache_read:
             result["cached_tokens"] = cache_read
             result["cache_read_input_tokens"] = cache_read

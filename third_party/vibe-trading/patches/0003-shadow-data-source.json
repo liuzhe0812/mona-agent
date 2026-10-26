@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Expose the native Shadow source selection and report actual local-loader scan coverage without changing the existing signal rules or backtest engine.",
+  "files": [
+    {
+      "path": "agent/src/tools/shadow_account_tool.py",
+      "sha256": "b62b19ec5e840973dc6645661c27f0194cd4a5a11ed58f66fa9e6a5ff1036c58",
+      "replacements": [
+        {
+          "before": "    save_profile,\n)\nfrom src.shadow_account.backtester import load_cached_result\nfrom src.shadow_account.scanner import scan_today_signals\n\nlogger = logging.getLogger(__name__)\n\n",
+          "after": "    save_profile,\n)\nfrom src.shadow_account.backtester import load_cached_result\nfrom src.shadow_account.scanner import (\n    scan_today_signals,\n    scan_today_signals_with_evidence,\n)\n\nlogger = logging.getLogger(__name__)\n\n",
+          "count": 1
+        },
+        {
+          "before": "        \"type\": \"object\",\n        \"properties\": {\n            \"shadow_id\": {\"type\": \"string\", \"description\": \"Shadow ID returned by extract_shadow_strategy.\"},\n            \"window_start\": {\n                \"type\": \"string\",\n                \"description\": \"Backtest window start (ISO date). Default: today - 1y.\",\n",
+          "after": "        \"type\": \"object\",\n        \"properties\": {\n            \"shadow_id\": {\"type\": \"string\", \"description\": \"Shadow ID returned by extract_shadow_strategy.\"},\n            \"source\": {\n                \"type\": \"string\",\n                \"description\": \"Backtest data source (auto or an explicit native loader such as local).\",\n                \"default\": \"auto\",\n            },\n            \"per_market_count\": {\n                \"type\": \"integer\",\n                \"description\": \"Number of native basket symbols per selected market.\",\n                \"default\": 5,\n            },\n            \"window_start\": {\n                \"type\": \"string\",\n                \"description\": \"Backtest window start (ISO date). Default: today - 1y.\",\n",
+          "count": 1
+        },
+        {
+          "before": "        window_end = kwargs.get(\"window_end\") or today.isoformat()\n        window_start = kwargs.get(\"window_start\") or (today - timedelta(days=365)).isoformat()\n        markets = tuple(kwargs.get(\"markets\") or (\"china_a\", \"hk\", \"us\", \"crypto\"))\n\n        try:\n            journal_path = _validate_optional_journal_path(kwargs.get(\"journal_path\"))\n",
+          "after": "        window_end = kwargs.get(\"window_end\") or today.isoformat()\n        window_start = kwargs.get(\"window_start\") or (today - timedelta(days=365)).isoformat()\n        markets = tuple(kwargs.get(\"markets\") or (\"china_a\", \"hk\", \"us\", \"crypto\"))\n        source = str(kwargs.get(\"source\") or \"auto\").strip().lower()\n        try:\n            per_market_count = _int_arg(\n                kwargs.get(\"per_market_count\"), \"per_market_count\", 5,\n            )\n        except ValueError as exc:\n            return _err(str(exc))\n        if per_market_count < 1:\n            return _err(\"per_market_count must be at least 1\")\n\n        try:\n            journal_path = _validate_optional_journal_path(kwargs.get(\"journal_path\"))\n",
+          "count": 1
+        },
+        {
+          "before": "                window_start=window_start,\n                window_end=window_end,\n                markets=markets,\n                journal_path=journal_path,\n            )\n        except ValueError as exc:\n",
+          "after": "                window_start=window_start,\n                window_end=window_end,\n                markets=markets,\n                per_market_count=per_market_count,\n                source=source,\n                journal_path=journal_path,\n            )\n        except ValueError as exc:\n",
+          "count": 1
+        },
+        {
+          "before": "            shadow_id=result.shadow_id,\n            window=[window_start, window_end],\n            markets=list(markets),\n            per_market=result.per_market,\n            combined=result.combined,\n            shadow_total_pnl=result.shadow_total_pnl,\n",
+          "after": "            shadow_id=result.shadow_id,\n            window=[window_start, window_end],\n            markets=list(markets),\n            source=source,\n            per_market_count=per_market_count,\n            per_market=result.per_market,\n            combined=result.combined,\n            shadow_total_pnl=result.shadow_total_pnl,\n",
+          "count": 1
+        },
+        {
+          "before": "                \"description\": \"ISO YYYY-MM-DD target date. Default: today.\",\n            },\n            \"per_market\": {\"type\": \"integer\", \"default\": 3},\n        },\n        \"required\": [\"shadow_id\"],\n    }\n",
+          "after": "                \"description\": \"ISO YYYY-MM-DD target date. Default: today.\",\n            },\n            \"per_market\": {\"type\": \"integer\", \"default\": 3},\n            \"source\": {\n                \"type\": \"string\",\n                \"description\": \"Data source (auto uses the native market loader order; local requires Data Bridge files).\",\n                \"default\": \"auto\",\n            },\n        },\n        \"required\": [\"shadow_id\"],\n    }\n",
+          "count": 1
+        },
+        {
+          "before": "            return _err(str(exc))\n\n        target = kwargs.get(\"date\") or None\n        signals = scan_today_signals(profile, target_date=target, per_market=per_market)\n        return _ok(\n            shadow_id=profile.shadow_id,\n            target_date=target or \"today\",\n            matches=signals,\n            disclaimer=\"Research use only - not investment advice.\",\n        )\n",
+          "after": "            return _err(str(exc))\n\n        target = kwargs.get(\"date\") or None\n        source = str(kwargs.get(\"source\") or \"auto\").strip().lower()\n        scan = scan_today_signals_with_evidence(\n            profile,\n            target_date=target,\n            per_market=per_market,\n            source=source,\n        )\n        return _ok(\n            status=scan[\"status\"],\n            shadow_id=profile.shadow_id,\n            target_date=scan[\"target_date\"],\n            source_requested=source,\n            data_status=scan[\"data_status\"],\n            baskets=scan[\"baskets\"],\n            scanned_symbols=scan[\"scanned_symbols\"],\n            available_symbols=scan[\"available_symbols\"],\n            missing_symbols=scan[\"missing_symbols\"],\n            unscanned_symbols=scan[\"unscanned_symbols\"],\n            data_sources=scan[\"data_sources\"],\n            coverage=scan[\"coverage\"],\n            errors=scan[\"errors\"],\n            matches=scan[\"matches\"],\n            disclaimer=\"Research use only - not investment advice.\",\n        )\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/scanner.py",
+      "sha256": "74c12272779da0a538afc838890b74b99cd03121a56ae1e0bd72db4b525e008d",
+      "replacements": [
+        {
+          "before": "\nfrom __future__ import annotations\n\nfrom datetime import date, datetime\nfrom typing import Any, Callable\n\nimport pandas as pd\n",
+          "after": "\nfrom __future__ import annotations\n\nfrom datetime import date, datetime, timedelta\nfrom typing import Any, Callable\n\nimport pandas as pd\n",
+          "count": 1
+        },
+        {
+          "before": "from src.shadow_account.models import ShadowProfile, ShadowRule\n\nPriceFetcher = Callable[..., pd.DataFrame | None]\n\n\n\n",
+          "after": "from src.shadow_account.models import ShadowProfile, ShadowRule\n\nPriceFetcher = Callable[..., pd.DataFrame | None]\n\n_MARKET_LOADER_KEYS = {\n    \"china_a\": \"a_share\",\n    \"hk\": \"hk_equity\",\n    \"us\": \"us_equity\",\n    \"crypto\": \"crypto\",\n}\n\n\n\n",
+          "count": 1
+        },
+        {
+          "before": "            })\n            market_count += 1\n    return matches\n\n\ndef _get_price_frame(\n",
+          "after": "            })\n            market_count += 1\n    return matches\n\n\ndef scan_today_signals_with_evidence(\n    profile: ShadowProfile,\n    *,\n    target_date: str | date | None = None,\n    per_market: int = 3,\n    source: str = \"auto\",\n) -> dict[str, Any]:\n    \"\"\"Fetch bars through the native loader and return scan plus data coverage.\n\n    ``scan_today_signals`` remains the list-only API for existing callers. The\n    native Shadow tool uses this entry point so an empty match list is paired\n    with explicit source, basket, coverage, and loader-failure evidence.\n    \"\"\"\n    if target_date is None:\n        target = date.today()\n    elif isinstance(target_date, date):\n        target = target_date\n    else:\n        target = datetime.strptime(str(target_date), \"%Y-%m-%d\").date()\n\n    source = str(source or \"auto\").strip().lower() or \"auto\"\n    baskets: dict[str, list[str]] = {}\n    for rule in profile.rules:\n        market = str(rule.entry_condition.get(\"market\", \"other\"))\n        if market in SUPPORTED_MARKETS:\n            baskets.setdefault(market, _LIQUID_BASKETS.get(market, [])[:])\n    requested_symbols = list(dict.fromkeys(\n        symbol for symbols in baskets.values() for symbol in symbols\n    ))\n\n    from backtest.loaders.registry import (\n        get_loader_cls_with_fallback,\n        resolve_loader,\n    )\n\n    loaders: dict[str, Any] = {}\n    loader_errors: dict[str, tuple[str, str]] = {}\n    frames: dict[str, pd.DataFrame | None] = {}\n    attempted: set[str] = set()\n    available: set[str] = set()\n    missing: set[str] = set()\n    errors: dict[str, dict[str, str]] = {}\n    data_sources: dict[str, str] = {}\n    coverage: dict[str, dict[str, Any]] = {}\n\n    def fetch(symbol: str, market: str, requested_date: date) -> pd.DataFrame | None:\n        attempted.add(symbol)\n        if symbol in frames:\n            return frames[symbol]\n\n        market_key = _MARKET_LOADER_KEYS.get(market)\n        if market_key is None:\n            missing.add(symbol)\n            frames[symbol] = None\n            return None\n        try:\n            if market not in loaders and market not in loader_errors:\n                if source == \"auto\":\n                    loaders[market] = resolve_loader(market_key)\n                else:\n                    loaders[market] = get_loader_cls_with_fallback(source)()\n            loader = loaders.get(market)\n            if loader is None:\n                error_type, message = loader_errors.get(\n                    market, (\"NoAvailableSourceError\", \"no loader available\"),\n                )\n                errors[symbol] = {\n                    \"source\": source,\n                    \"type\": error_type,\n                    \"message\": message[:500],\n                }\n                frames[symbol] = None\n                return None\n            data_sources[symbol] = str(getattr(loader, \"name\", source) or source)\n            start = (requested_date - timedelta(days=90)).isoformat()\n            fetched = loader.fetch(\n                [symbol], start, requested_date.isoformat(), interval=\"1D\",\n            )\n            frame = fetched.get(symbol)\n            usable = _normalize_bars(frame, requested_date)\n            if usable is None:\n                missing.add(symbol)\n                frames[symbol] = frame\n                return frame\n\n            available.add(symbol)\n            coverage[symbol] = {\n                \"bar_count\": len(usable),\n                \"first_bar\": pd.Timestamp(usable.index.min()).date().isoformat(),\n                \"last_bar\": pd.Timestamp(usable.index.max()).date().isoformat(),\n            }\n            frames[symbol] = frame\n            return frame\n        except Exception as exc:\n            message = str(exc).strip() or type(exc).__name__\n            loader_errors.setdefault(market, (type(exc).__name__, message))\n            errors[symbol] = {\n                \"source\": source,\n                \"type\": type(exc).__name__,\n                \"message\": message[:500],\n            }\n            frames[symbol] = None\n            return None\n\n    matches = scan_today_signals(\n        profile,\n        target_date=target,\n        per_market=per_market,\n        fetcher=fetch,\n    )\n    unscanned = set(requested_symbols) - attempted\n    if not available:\n        status = \"error\" if errors else \"no_data\"\n    elif errors or missing or unscanned:\n        status = \"partial\"\n    else:\n        status = \"ok\"\n    return {\n        \"status\": status,\n        \"data_status\": status,\n        \"target_date\": target.isoformat(),\n        \"source_requested\": source,\n        \"baskets\": baskets,\n        \"requested_symbols\": requested_symbols,\n        \"scanned_symbols\": sorted(attempted),\n        \"available_symbols\": sorted(available),\n        \"missing_symbols\": sorted(missing),\n        \"unscanned_symbols\": sorted(unscanned),\n        \"data_sources\": data_sources,\n        \"coverage\": coverage,\n        \"errors\": errors,\n        \"matches\": matches,\n    }\n\n\ndef _get_price_frame(\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {}
+}

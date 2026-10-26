@@ -386,20 +386,21 @@ class RuntimeInstaller:
             for ref in refs:
                 await ensure(ref)
 
-            python_refs: list[str] = []
-            has_wheel_pack = False
+            python_bases: list[str] = []
+            python_groups: dict[str, list[str]] = {}
             for ref in completed_order:
                 component_id, version = parse_runtime_pack_ref(ref)
                 active = self.store.active(component_id)
                 if active is None or active[0].version != version:
                     raise RuntimeCatalogError(f"runtime activation was lost: {ref}")
                 manifest = active[0]
-                if "python" in manifest.entrypoints or manifest.python_requirements is not None:
-                    python_refs.append(ref)
+                if "python" in manifest.entrypoints:
+                    python_bases.append(ref)
                 if manifest.python_requirements is not None:
-                    has_wheel_pack = True
-            if has_wheel_pack:
-                await self.python_environment_builder.ensure(python_refs)
+                    python_groups.setdefault(manifest.python_environment, []).append(ref)
+            for environment, wheel_refs in python_groups.items():
+                builder = self.python_environment_builder.for_environment(environment)
+                await builder.ensure([*python_bases, *wheel_refs])
             for component_id in selected_versions:
                 if component_id in {"codex-cli", "claude-code-cli", "codebuddy-cli"}:
                     continue  # Running native hosts may still need the old program's helpers.

@@ -74,6 +74,9 @@ async def _make_client() -> TestClient:
     app.router.add_get("/api/office/ws", ok_handler)
     app.router.add_get("/api/video/series/example/style/reference", ok_handler)
     app.router.add_get("/api/video/series-other/style/reference", ok_handler)
+    app.router.add_route("*", "/api/stock-vibe", ok_handler)
+    app.router.add_route("*", "/api/stock-vibe/{tail:.*}", ok_handler)
+    app.router.add_get("/api/stock-vibe-other", ok_handler)
     return TestClient(TestServer(app))
 
 
@@ -116,6 +119,18 @@ async def test_stock_preflight_requires_and_accepts_valid_token(auth_env):
                 headers={"X-Mona-Token": token},
         )
         ).status == 200
+
+
+async def test_stock_vibe_routes_require_token_on_exact_prefix(auth_env):
+    auth, _ = auth_env
+    token = auth.get_services_token()
+    async with await _make_client() as client:
+        for path in ("/api/stock-vibe", "/api/stock-vibe/requests/request-1"):
+            assert (await client.get(path)).status == 401
+            assert (
+                await client.get(path, headers={"X-Mona-Token": token})
+            ).status == 200
+        assert (await client.get("/api/stock-vibe-other")).status == 200
 
 
 async def test_profile_routes_require_and_accept_valid_token(auth_env):

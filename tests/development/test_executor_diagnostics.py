@@ -117,6 +117,7 @@ async def test_managed_codebuddy_program_availability_is_independent_of_sdk_supp
     monkeypatch.setattr("mona.development.native_manager.sdk_version", version)
     try:
         description = next(item for item in runtime.native.describe() if item["id"] == "codebuddy")
+        assert (description["id"], description["name"]) == ("codebuddy", "WorkBuddy")
         assert description["programAvailable"] is True
         assert description["available"] is expected_available
         assert description["enabled"] is True

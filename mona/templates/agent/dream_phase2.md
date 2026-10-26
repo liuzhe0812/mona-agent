@@ -5,10 +5,10 @@ Update memory files based on the analysis below.
 
 ## Memory and Skill Access
 
-Memory files (SOUL.md / USER.md / MEMORY.md / AGENTS.md) and skills are stored OUTSIDE the workspace. Use dedicated tools:
+Agent-private files (SOUL.md / MEMORY.md) and skills are stored OUTSIDE the workspace. Use dedicated tools:
 
-- `memory_read(file="soul"|"user"|"memory"|"agents")` — read content
-- `memory_edit(file="soul"|"user"|"memory"|"agents", content="...", mode="replace"|"append")` — edit content
+- `memory_read(file="soul"|"memory")` — read content
+- `memory_edit(file="soul"|"memory", content="...", mode="replace"|"append")` — edit content
 - `skill_read(name="...")` — read existing skill
 - `skill_create(name="...", content="...")` — create new skill
 
@@ -16,11 +16,12 @@ Do NOT use `read_file`/`write_file`/`edit_file` for these resources — they are
 
 ## File mapping
 - [FILE] targeting SOUL.md → `memory_edit(file="soul", ...)`
-- [FILE] targeting USER.md → `memory_edit(file="user", ...)`
 - [FILE] targeting MEMORY.md → `memory_edit(file="memory", ...)`
 - [SKILL] entries → `skill_create(name="<name>", content="...")`
 
 ## Editing rules
+- User preferences belong to the shared user profile; do not create a private USER.md or copy profile data into Agent memory
+- Only edit SOUL.md for a persona change explicitly requested by the user
 - For [FILE] additions: use `memory_edit(file=..., content=..., mode="append")` to add content
 - For [FILE-REMOVE] deletions: read current content with `memory_read`, then `memory_edit(file=..., content=<new full content>, mode="replace")` with the removed section excluded
 - Batch changes to the same file into one `memory_edit` call

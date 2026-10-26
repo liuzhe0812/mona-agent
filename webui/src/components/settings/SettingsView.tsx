@@ -26,7 +26,6 @@ import {
   ExternalLink,
   FolderOpen,
   Gem,
-  Copy,
   Grid3X3,
   GripVertical,
   Hexagon,
@@ -52,7 +51,7 @@ import {
   Star,
   Triangle,
   Trash2,
-  WalletCards,
+  UserRound,
   Waves,
   Zap,
   type LucideIcon,
@@ -70,7 +69,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useLicense } from "@/hooks/useLicense";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -119,21 +117,13 @@ import {
   updateDesktopSettings,
   checkForUpdates,
   performUpdate,
-  getAgentSearchScope,
-  setAgentSearchScope,
-  loadDesktopNotesState,
   SEND_MESSAGE_SHORTCUT_EVENT,
   type UpdateCheckResult,
   type UpdateProgress,
   type DesktopAppSettings,
-  type SidebarShortcuts,
   type SidebarModuleConfig,
-  type AgentSearchScope,
   type SendMessageShortcut,
 } from "@/lib/tauri";
-import { listAccounts, getFolders } from "@/components/email/lib/emailApi";
-import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
-import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
@@ -149,15 +139,14 @@ import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
 import { ChatProvidersSettings } from "@/components/settings/ChatProvidersSettings";
 import { AccountSettings } from "@/components/settings/AccountSettings";
-import { CreditsView } from "@/components/CreditsView";
 import { UsageSettings } from "@/components/settings/UsageSettings";
 import { ManagedRuntimeSettings } from "@/components/settings/ManagedRuntimeSettings";
-import { SubsectionLabel } from "@/components/ui/page-header";
+import { PageHeader, SubsectionLabel } from "@/components/ui/page-header";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { Switch } from "@/components/ui/switch";
 
 type SettingsSectionKey =
-  | "billing"
+  | "account"
   | "usage"
   | "appearance"
   | "models_providers"
@@ -175,7 +164,6 @@ interface AgentSettingsDraft {
   provider: string;
   modelPreset: string;
   timezone: string;
-  toolHintMaxLength: number;
   workspace: string;
 }
 
@@ -276,9 +264,13 @@ export function SettingsView({
   const [, setHighlightProvider] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
-    initialSection === "account" || initialSection === "web" || initialSection === "runtime" || initialSection === "desktop"
-      ? "general"
-      : (initialSection as SettingsSectionKey | undefined) ?? "general",
+    initialSection === "billing"
+      ? "account"
+      : initialSection === "web"
+        ? "resources"
+        : initialSection === "runtime" || initialSection === "desktop"
+          ? "general"
+          : (initialSection as SettingsSectionKey | undefined) ?? "general",
   );
   const [pendingRestartSections, setPendingRestartSections] = useState<PendingRestartSections>(
     EMPTY_PENDING_RESTART_SECTIONS,
@@ -287,8 +279,6 @@ export function SettingsView({
     provider: "anysearch",
     apiKey: "",
     baseUrl: "",
-    maxResults: 5,
-    timeout: 30,
   });
   const [imageGenerationForm, setImageGenerationForm] = useState<ImageGenerationSettingsUpdate>({
     enabled: false,
@@ -323,7 +313,6 @@ export function SettingsView({
     provider: "",
     modelPreset: "default",
     timezone: "UTC",
-    toolHintMaxLength: 40,
     workspace: "",
   });
 
@@ -335,15 +324,12 @@ export function SettingsView({
       provider: editableDefaultProvider(payload),
       modelPreset: modelPresetValue(payload),
       timezone: payload.agent.timezone,
-      toolHintMaxLength: payload.agent.tool_hint_max_length,
       workspace: payload.runtime.workspace_path,
     });
     setWebSearchForm((prev) => ({
       provider: payload.web_search.provider,
       apiKey: prev.provider === payload.web_search.provider ? prev.apiKey ?? "" : "",
       baseUrl: payload.web_search.base_url ?? "",
-      maxResults: payload.web_search.max_results,
-      timeout: payload.web_search.timeout,
     }));
     setImageGenerationForm({
       enabled: payload.image_generation.enabled,
@@ -410,15 +396,6 @@ export function SettingsView({
     };
   }, [applyPayload, token]);
 
-  const runtimeDirty = useMemo(() => {
-    if (!settings) return false;
-    return (
-      form.timezone !== settings.agent.timezone ||
-      form.toolHintMaxLength !== settings.agent.tool_hint_max_length ||
-      form.workspace !== settings.runtime.workspace_path
-    );
-  }, [form, settings]);
-
   const imageGenerationDirty = useMemo(() => {
     if (!settings) return false;
     const formDirty =
@@ -466,28 +443,21 @@ export function SettingsView({
     return formDirty || ttsApiKeyDraft.trim().length > 0;
   }, [ttsForm, settings, ttsApiKeyDraft]);
 
-  const saveRuntimeSettings = async () => {
-    if (!settings || !runtimeDirty || saving) return;
+  const saveRuntimeSettings = async (update: { timezone?: string; workspace?: string }) => {
+    if (!settings || saving) return;
     setSaving(true);
     try {
-      const payload = await updateSettings(token, {
-        timezone: form.timezone,
-        toolHintMaxLength: form.toolHintMaxLength,
-        workspace: form.workspace,
-      });
+      const payload = await updateSettings(token, update);
       setSettings(payload);
       setForm((prev) => ({
         ...prev,
         timezone: payload.agent.timezone,
-        toolHintMaxLength: payload.agent.tool_hint_max_length,
         workspace: payload.runtime.workspace_path,
       }));
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
       setError(null);
-    } catch (err) {
-      setError((err as Error).message);
     } finally {
       setSaving(false);
     }
@@ -600,8 +570,6 @@ export function SettingsView({
     try {
       const update: WebSearchSettingsUpdate = {
         provider: webSearchForm.provider,
-        maxResults: webSearchForm.maxResults,
-        timeout: webSearchForm.timeout,
       };
       if (provider.credential === "api_key" && apiKey) update.apiKey = apiKey;
       if (provider.credential === "base_url") update.baseUrl = baseUrl;
@@ -611,8 +579,6 @@ export function SettingsView({
         provider: payload.web_search.provider,
         apiKey: "",
         baseUrl: payload.web_search.base_url ?? prev.baseUrl ?? "",
-        maxResults: payload.web_search.max_results,
-        timeout: payload.web_search.timeout,
       }));
       setWebSearchKeyVisible(false);
       setWebSearchKeyEditing(false);
@@ -630,8 +596,6 @@ export function SettingsView({
       provider: settings.web_search.provider,
       apiKey: "",
       baseUrl: settings.web_search.base_url ?? "",
-      maxResults: settings.web_search.max_results,
-      timeout: settings.web_search.timeout,
     });
     setWebSearchKeyVisible(false);
     setWebSearchKeyEditing(false);
@@ -639,27 +603,31 @@ export function SettingsView({
 
   const handleWebSearchProviderChange = useCallback((provider: string) => {
     if (!settings) return;
-    setWebSearchForm((prev) => ({
+    setWebSearchForm({
       provider,
       apiKey: "",
       baseUrl: provider === settings.web_search.provider ? settings.web_search.base_url ?? "" : "",
-      maxResults: prev.maxResults ?? settings.web_search.max_results,
-      timeout: prev.timeout ?? settings.web_search.timeout,
-    }));
+    });
     setWebSearchKeyVisible(false);
     setWebSearchKeyEditing(false);
   }, [settings]);
 
   const renderSection = () => {
-    if (activeSection === "general") {
+    if (activeSection === "account") {
       return (
-        <div className="space-y-10">
+        <div className="space-y-7">
+          <PageHeader title={t("settings.nav.account")} />
           <AccountSettings
             onOpenLogin={onOpenLogin}
             onManageSubscription={onOpenSubscribe}
-            onOpenBilling={() => setActiveSection("billing")}
             onChangePassword={onChangePassword}
           />
+        </div>
+      );
+    }
+    if (activeSection === "general") {
+      return (
+        <div className="space-y-10">
           {loading && !settings ? (
             <div className="flex h-32 items-center justify-center text-body text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -667,6 +635,30 @@ export function SettingsView({
             </div>
           ) : null}
           {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
+          {settings ? (
+            <>
+              <RuntimeSettings
+                form={form}
+                saving={saving}
+                onSave={saveRuntimeSettings}
+                onRestart={onRestart}
+                isRestarting={isRestarting}
+                requiresRestartPending={pendingRestartSections.runtime}
+              />
+              {isTauri() ? <DesktopSettings /> : null}
+            </>
+          ) : null}
+        </div>
+      );
+    }
+    if (activeSection === "usage") {
+      return <UsageSettings />;
+    }
+    if (activeSection === "resources") {
+      return (
+        <div className="space-y-10">
+          {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
+          <ManagedRuntimeSettings token={token} />
           {settings ? (
             <>
               <WebSettings
@@ -698,44 +690,17 @@ export function SettingsView({
                 onRestart={onRestart}
                 isRestarting={isRestarting}
               />
-              <RuntimeSettings
-                form={form}
-                setForm={setForm}
-                dirty={runtimeDirty}
-                saving={saving}
-                onSave={saveRuntimeSettings}
-                onRestart={onRestart}
-                isRestarting={isRestarting}
-                requiresRestartPending={pendingRestartSections.runtime}
+              <ComputerUseSettings
+                settings={settings}
+                token={token}
+                onSettingsChanged={(payload) => {
+                  applyPayload(payload);
+                  if (payload.requires_restart) {
+                    setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
+                  }
+                }}
               />
-              {isTauri() ? <DesktopSettings /> : null}
-              {isTauri() ? <AgentScopeSettings /> : null}
             </>
-          ) : null}
-        </div>
-      );
-    }
-    if (activeSection === "billing") {
-      return <CreditsView />;
-    }
-    if (activeSection === "usage") {
-      return <UsageSettings />;
-    }
-    if (activeSection === "resources") {
-      return (
-        <div className="space-y-10">
-          <ManagedRuntimeSettings token={token} />
-          {settings ? (
-            <ComputerUseSettings
-              settings={settings}
-              token={token}
-              onSettingsChanged={(payload) => {
-                applyPayload(payload);
-                if (payload.requires_restart) {
-                  setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
-                }
-              }}
-            />
           ) : null}
         </div>
       );
@@ -756,7 +721,7 @@ export function SettingsView({
             token={token}
             onSettingsChanged={applyPayload}
             onChatModelNameChange={onModelNameChange}
-            onOpenBilling={() => setActiveSection("billing")}
+            onOpenBilling={() => setActiveSection("account")}
             onOpenUsage={() => setActiveSection("usage")}
             onSetHighlightProvider={setHighlightProvider}
             // image tab props
@@ -853,7 +818,7 @@ export function SettingsView({
     }
   };
 
-  const isIndependentSection = ["general", "billing", "usage", "resources"].includes(activeSection);
+  const isIndependentSection = ["account", "general", "usage", "resources"].includes(activeSection);
   const isModelSettings = activeSection === "models_providers";
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
@@ -863,7 +828,7 @@ export function SettingsView({
         onBackToChat={onBackToChat}
       />
 
-      <main className={cn("min-w-0 flex-1", isModelSettings ? "overflow-hidden" : "overflow-y-auto")}>
+      <main className={cn("min-w-0 flex-1", isModelSettings ? "overflow-hidden" : "scrollbar-thin scrollbar-track-transparent overflow-y-auto")}>
         <div className={cn("mx-auto w-full max-w-[920px] px-5 sm:px-8", isModelSettings ? "flex h-full min-h-0 flex-col py-6 lg:py-8" : "py-8 lg:py-12")}>
           {isIndependentSection ? (
             renderSection()
@@ -891,9 +856,9 @@ export function SettingsView({
 }
 
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string; desktopOnly?: boolean }> = [
+  { key: "account", icon: UserRound, fallback: "账户" },
   { key: "general", icon: Settings2, fallback: "通用" },
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
-  { key: "billing", icon: WalletCards, fallback: "余额与充值" },
   { key: "usage", icon: BarChart3, fallback: "用量统计" },
   { key: "resources", icon: Download, fallback: "高级功能" },
   { key: "appearance", icon: Palette, fallback: "Appearance" },
@@ -1434,7 +1399,9 @@ function BrowserJevSettings({
       <SettingsGroup>
         <SettingsRow
           title="使用决策模型加速操作"
-          description="开启后，常规点击和填表可连续执行；关闭或未配置时保持当前主模型操作方式。"
+          description={settings.browser.jev_ready
+            ? "开启后，常规点击和填表可连续执行；关闭时使用当前主模型操作。"
+            : "请先在模型设置中配置决策模型，再开启浏览器加速。"}
         >
           <Switch
             checked={settings.browser.use_jev}
@@ -1443,11 +1410,6 @@ function BrowserJevSettings({
             aria-label="使用决策模型加速浏览器操作"
           />
         </SettingsRow>
-        {!settings.browser.jev_ready ? (
-          <SettingsRow title="状态">
-            <span className="text-caption text-muted-foreground">请先在模型设置中配置决策模型</span>
-          </SettingsRow>
-        ) : null}
       </SettingsGroup>
       {error ? <p className="mt-2 px-1 text-caption text-destructive">{error}</p> : null}
       {settings.browser.use_jev && settings.requires_restart && onRestart ? (
@@ -1676,7 +1638,7 @@ function AiModelsSettings({
             <DialogTitle>{mediaSettings === "image" ? "图像模型配置" : mediaSettings === "video" ? "视频模型配置" : mediaSettings === "jev" ? "决策模型配置" : "语音合成配置"}</DialogTitle>
             <DialogDescription>
               {mediaSettings === "jev"
-                ? "各模块共用此连接。配置后，在通用设置的浏览器选项中开启浏览器加速。"
+                ? "各模块共用此连接。配置后，在高级功能的浏览器选项中开启浏览器加速。"
                 : "配置专用生成模型及默认参数；保存后由对应生成工具读取，不会进入聊天模型选择器。"}
             </DialogDescription>
           </DialogHeader>
@@ -3274,9 +3236,7 @@ function WebSettings({
   const dirty =
     form.provider !== settings.web_search.provider ||
     apiKey.length > 0 ||
-    baseUrl !== (settings.web_search.base_url ?? "") ||
-    form.maxResults !== settings.web_search.max_results ||
-    form.timeout !== settings.web_search.timeout;
+    baseUrl !== (settings.web_search.base_url ?? "");
   const missingCredential =
     selectedProvider?.credential === "api_key"
       ? !apiKey && !hasExistingSecret
@@ -3375,29 +3335,6 @@ function WebSettings({
               />
             </SettingsRow>
           ) : null}
-          <SettingsRow
-            title={tx("settings.rows.maxResults", "Max results")}
-            description={tx("settings.help.maxResults", "Results returned by each web_search call.")}
-          >
-            <NumberInput
-              value={form.maxResults ?? settings.web_search.max_results}
-              min={1}
-              max={10}
-              onChange={(maxResults) => onChangeForm((prev) => ({ ...prev, maxResults }))}
-            />
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.rows.timeout", "Timeout")}
-            description={tx("settings.help.timeout", "Seconds before a search provider request times out.")}
-          >
-            <NumberInput
-              value={form.timeout ?? settings.web_search.timeout}
-              min={1}
-              max={120}
-              onChange={(timeout) => onChangeForm((prev) => ({ ...prev, timeout }))}
-              suffix="s"
-            />
-          </SettingsRow>
           <RestartSettingsFooter
             dirty={dirty}
             saving={saving}
@@ -4142,35 +4079,17 @@ function ToggleSwitch({
   "aria-label"?: string;
 }) {
   return (
-    <Button
-      type="button"
-      role="switch"
-      variant="ghost"
-      aria-checked={checked}
+    <Switch
+      checked={checked}
       aria-label={ariaLabel}
       disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative h-6 w-11 shrink-0 cursor-pointer justify-start rounded-full border-2 border-transparent p-0 transition-colors",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        "disabled:cursor-not-allowed",
-        checked ? "bg-info hover:bg-info" : "bg-muted hover:bg-muted",
-      )}
-    >
-      <span
-        className={cn(
-          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition",
-          checked ? "translate-x-5" : "translate-x-0",
-        )}
-      />
-    </Button>
+      onCheckedChange={onChange}
+    />
   );
 }
 
 function RuntimeSettings({
   form,
-  setForm,
-  dirty,
   saving,
   onSave,
   onRestart,
@@ -4178,40 +4097,83 @@ function RuntimeSettings({
   requiresRestartPending,
 }: {
   form: AgentSettingsDraft;
-  setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
-  dirty: boolean;
   saving: boolean;
-  onSave: () => void;
+  onSave: (update: { timezone?: string; workspace?: string }) => Promise<void>;
   onRestart?: () => void;
   isRestarting?: boolean;
   requiresRestartPending: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [error, setError] = useState<string | null>(null);
+  const timezones = useMemo(() => {
+    const zones = new Set([
+      form.timezone,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+      "UTC",
+      ...(typeof Intl.supportedValuesOf === "function"
+        ? Intl.supportedValuesOf("timeZone")
+        : ["Asia/Shanghai", "Asia/Tokyo", "Europe/London", "America/New_York"]),
+    ]);
+    return Array.from(zones).map((zone) => {
+      let label = zone;
+      try {
+        const parts = new Intl.DateTimeFormat(i18n.language, { timeZone: zone, timeZoneName: "long" }).formatToParts();
+        const name = parts.find((part) => part.type === "timeZoneName")?.value;
+        if (name) label = name + "（" + zone + "）";
+      } catch {
+        // Keep a legacy timezone selectable so it can be corrected.
+      }
+      return { value: zone, label };
+    });
+  }, [form.timezone, i18n.language]);
+
+  const save = async (update: { timezone?: string; workspace?: string }) => {
+    try {
+      await onSave(update);
+    } catch {
+      setError(tx("settings.status.autoSaveFailed", "未能确认保存结果，当前显示上次确认的设置。请重试。"));
+    }
+  };
+
+  const chooseWorkspace = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected === "string" && selected !== form.workspace) {
+        await save({ workspace: selected });
+      }
+    } catch {
+      setError(tx("settings.status.workspacePickerFailed", "未能打开目录选择器，请重试。"));
+    }
+  };
+
   return (
     <div className="space-y-7">
       <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.runtimeParameters", "Runtime parameters")}</SubsectionLabel>
+        <SubsectionLabel className="mb-2 px-1">{t("settings.sections.dateAndTime")}</SubsectionLabel>
         <SettingsGroup>
-          <SettingsRow title={tx("settings.rows.timezone", "Timezone")} description={tx("settings.help.timezone", "IANA timezone used by runtime context and schedules.")}>
-            <Input
+          <SettingsRow title={t("settings.rows.timezone")} description={t("settings.help.timezone")}>
+            <Select
+              aria-label={t("settings.rows.timezone")}
               value={form.timezone}
-              onChange={(event) => setForm((prev) => ({ ...prev, timezone: event.target.value }))}
-              className="h-8 w-[220px] rounded-full text-ui"
+              options={timezones}
+              disabled={saving || isRestarting}
+              onValueChange={(timezone) => {
+                if (timezone !== form.timezone) void save({ timezone });
+              }}
+              className="h-9 w-[min(300px,60vw)]"
             />
           </SettingsRow>
-          <SettingsRow title={tx("settings.rows.toolHintMaxLength", "Tool hint length")} description={tx("settings.help.toolHintMaxLength", "Maximum characters shown in tool progress hints.")}>
-            <NumberInput
-              value={form.toolHintMaxLength}
-              min={20}
-              max={500}
-              onChange={(toolHintMaxLength) => setForm((prev) => ({ ...prev, toolHintMaxLength }))}
-            />
-          </SettingsRow>
+        </SettingsGroup>
+      </section>
+      <section>
+        <SubsectionLabel className="mb-2 px-1">{t("settings.sections.filesAndStorage")}</SubsectionLabel>
+        <SettingsGroup>
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-1.5">
-                {tx("settings.rows.workspacePath", "Workspace path")}
+                {t("settings.rows.workspacePath")}
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -4224,49 +4186,48 @@ function RuntimeSettings({
                 </TooltipProvider>
               </span>
             }
+            description={form.workspace}
           >
-            <div className="flex items-center gap-2">
-              <Input
-                value={form.workspace}
-                onChange={(event) => setForm((prev) => ({ ...prev, workspace: event.target.value }))}
-                className="h-8 w-[min(280px,60vw)] rounded-full text-ui"
-              />
-              {isTauri() ? (
-                <Button
-                  variant="outline"
-                  size="icon"
-                  type="button"
-                  className="h-8 w-8 shrink-0 rounded-full"
-                  aria-label={tx("settings.actions.chooseWorkspace", "Choose workspace")}
-                  onClick={async () => {
-                    try {
-                      const { open } = await import("@tauri-apps/plugin-dialog");
-                      const selected = await open({ directory: true, multiple: false });
-                      if (selected) {
-                        setForm((prev) => ({ ...prev, workspace: selected }));
-                      }
-                    } catch (e) {
-                      console.error("Failed to open directory picker:", e);
-                    }
-                  }}
-                >
-                  <FolderOpen className="h-4 w-4" />
-                </Button>
-              ) : null}
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              disabled={saving || isRestarting || !isTauri()}
+              aria-label={tx("settings.actions.chooseWorkspace", "Choose workspace")}
+              onClick={() => void chooseWorkspace()}
+            >
+              <FolderOpen className="mr-1.5 h-4 w-4" />
+              {t("settings.actions.change")}
+            </Button>
           </SettingsRow>
-          <RestartSettingsFooter
-            dirty={dirty}
-            saving={saving}
-            pendingRestart={requiresRestartPending}
-            dirtyMessage="保存后将在下一次图片生成时生效。"
-            pendingMessage="已保存，将在下一次图片生成时生效。"
-            onSave={onSave}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-          />
         </SettingsGroup>
       </section>
+      {saving ? (
+        <p role="status" className="flex items-center px-1 text-caption text-muted-foreground">
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />{t("settings.actions.saving")}
+        </p>
+      ) : requiresRestartPending ? (
+        <div className="flex items-center justify-between gap-3 px-1">
+          <p role="status" className="text-caption text-muted-foreground">{t("settings.status.savedRestartApply")}</p>
+          {onRestart ? (
+            <Button type="button" variant="ghost" size="sm" onClick={onRestart} disabled={isRestarting}>
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+              {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <Dialog open={error !== null} onOpenChange={(open) => { if (!open) setError(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("settings.status.updateFailed")}</DialogTitle>
+            <DialogDescription>{error}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setError(null)}>{t("settings.actions.dismiss")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -4274,13 +4235,6 @@ function RuntimeSettings({
 function AboutSettings() {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const { refreshLicense } = useLicense();
-  const [licenseStatus, setLicenseStatus] = useState<"checking" | "active" | "trial" | "expired" | "missing">("checking");
-  const [licenseExpiry, setLicenseExpiry] = useState<string | null>(null);
-  const [machineId, setMachineId] = useState<string>("");
-  const [copied, setCopied] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importMessage, setImportMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -4291,8 +4245,6 @@ function AboutSettings() {
   const [appVersion, setAppVersion] = useState<string>("");
 
   useEffect(() => {
-    checkLicense();
-    loadMachineId();
     loadAppVersion();
   }, []);
 
@@ -4361,100 +4313,6 @@ function AboutSettings() {
     }
   };
 
-  const loadMachineId = async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const id = await invoke<string>("get_machine_id");
-      setMachineId(id);
-    } catch {
-      setMachineId("");
-    }
-  };
-
-  const copyMachineId = async () => {
-    if (!machineId) return;
-    try {
-      await navigator.clipboard.writeText(machineId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("plugin:clipboard-manager|write_text", { text: machineId });
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch {}
-    }
-  };
-
-  const checkLicense = async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<{ status: string; expires_at: string | null; trial?: boolean }>("check_license");
-      if (result.status === "valid") {
-        if (result.trial) {
-          setLicenseStatus("trial");
-        } else {
-          setLicenseStatus("active");
-        }
-        setLicenseExpiry(result.expires_at);
-      } else if (result.status === "expired") {
-        setLicenseStatus("expired");
-        setLicenseExpiry(result.expires_at);
-      } else {
-        setLicenseStatus("missing");
-      }
-    } catch {
-      setLicenseStatus("missing");
-    }
-  };
-
-  const handleImportLicense = async () => {
-    setImporting(true);
-    setImportMessage(null);
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "License", extensions: ["jwt", "lic", "txt"] }],
-      });
-      if (!selected) {
-        setImporting(false);
-        return;
-      }
-      const filePath = typeof selected === "string" ? selected : Array.isArray(selected) ? selected[0] : null;
-      if (!filePath) {
-        setImporting(false);
-        return;
-      }
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<{ success: boolean; message: string }>("import_license", { path: filePath });
-      if (result.success) {
-        setImportMessage({ type: "success", text: result.message || tx("settings.about.licenseImported", "License imported successfully") });
-        await checkLicense();
-        await refreshLicense();
-      } else {
-        setImportMessage({ type: "error", text: result.message || tx("settings.about.licenseImportFailed", "Failed to import license") });
-      }
-    } catch (e) {
-      setImportMessage({ type: "error", text: String(e) });
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const statusTone = licenseStatus === "active" ? "success" as const : licenseStatus === "trial" ? "info" as const : licenseStatus === "expired" ? "warning" as const : "neutral" as const;
-  const statusLabel =
-    licenseStatus === "checking"
-      ? tx("settings.about.checking", "检测中...")
-      : licenseStatus === "active"
-        ? tx("settings.about.activated", "已激活")
-        : licenseStatus === "trial"
-          ? tx("settings.about.trial", "试用中")
-          : licenseStatus === "expired"
-            ? tx("settings.about.expired", "已过期")
-            : tx("settings.about.notActivated", "未激活");
-
   return (
     <div className="space-y-7">
       <section>
@@ -4465,29 +4323,6 @@ function AboutSettings() {
           </SettingsRow>
           <SettingsRow title={tx("settings.about.version", "版本号")}>
             <span className="text-ui text-muted-foreground">{appVersion || "..."}</span>
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.about.machineId", "机器码")}
-            description={tx("settings.about.machineIdDesc", "复制此机器码，到授权页面换取 License 文件")}
-          >
-            <div className="flex items-center gap-2">
-              <code className="max-w-[200px] truncate rounded bg-muted px-2 py-0.5 text-caption font-mono text-muted-foreground">
-                {machineId || "..."}
-              </code>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={copyMachineId}
-                disabled={!machineId}
-                className="h-7 rounded-full px-2"
-              >
-                {copied ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-600" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </Button>
-            </div>
           </SettingsRow>
         </SettingsGroup>
       </section>
@@ -4576,65 +4411,6 @@ function AboutSettings() {
           </SettingsGroup>
         </section>
       ) : null}
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.about.license", "授权")}</SubsectionLabel>
-        <SettingsGroup>
-          <SettingsRow
-            title={tx("settings.about.activationStatus", "激活状态")}
-            description={
-              licenseStatus === "active"
-                ? tx("settings.about.activatedDesc", "Mona Pro 的工作区 AI 与 AI 诊股已解锁")
-                : licenseStatus === "expired"
-                  ? tx("settings.about.expiredDesc", "授权已过期，Pro 功能已锁定")
-                  : tx("settings.about.notActivatedDesc", "文档工作台完全开放；激活后可使用工作区 AI 与 AI 诊股")
-            }
-          >
-            <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
-          </SettingsRow>
-          {licenseExpiry ? (
-            <ReadOnlyRow title={tx("settings.about.licenseExpiry", "授权到期时间")} value={new Date(licenseExpiry).toLocaleDateString()} />
-          ) : null}
-          <SettingsRow
-            title={tx("settings.about.importLicense", "导入授权文件")}
-            description={tx("settings.about.importLicenseDesc", "导入 .jwt 授权文件以激活 Pro 功能")}
-          >
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleImportLicense}
-              disabled={importing}
-              className="rounded-full"
-            >
-              {importing
-                ? tx("settings.about.importing", "导入中...")
-                : tx("settings.about.selectFile", "选择文件")}
-            </Button>
-          </SettingsRow>
-          {importMessage ? (
-            <div className={cn(
-              "px-4 py-2.5 text-ui sm:px-5",
-              importMessage.type === "success" && "text-emerald-700 dark:text-emerald-300",
-              importMessage.type === "error" && "text-destructive",
-            )}>
-              {importMessage.text}
-            </div>
-          ) : null}
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.about.proFeatures", "Pro 功能")}</SubsectionLabel>
-        <SettingsGroup>
-          <ReadOnlyRow title="DB AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="笔记 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="终端 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="邮件 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title={tx("settings.about.knowledgeBaseAI", "知识库 AI")} value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="文档" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="AI 诊股" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-        </SettingsGroup>
-      </section>
     </div>
   );
 }
@@ -4643,288 +4419,6 @@ function AboutSettings() {
 // Agent 搜索范围设置
 // ---------------------------------------------------------------------------
 
-interface NotebookListItem {
-  id: string;
-  name: string;
-}
-
-interface NotesStateLike {
-  notebooks: NotebookListItem[];
-}
-
-function AgentScopeSettings() {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-
-  const [scope, setScope] = useState<AgentSearchScope | null>(null);
-  const [notebooks, setNotebooks] = useState<NotebookListItem[]>([]);
-  const [vaultReady, setVaultReady] = useState<boolean>(false);
-  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
-  const [foldersByAccount, setFoldersByAccount] = useState<Record<string, EmailFolder[]>>({});
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [configuringScope, setConfiguringScope] = useState<"notes" | "email" | null>(null);
-
-  // 初次加载：读取配置 + 笔记本 + 邮件账号/文件夹
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const loadedScope = await getAgentSearchScope();
-        // 归一化 mode：空串视为 "all"
-        const notesMode = loadedScope.notes.mode || "all";
-        const emailMode = loadedScope.email.mode || "all";
-        // 若 scope 文件不存在（全空默认），默认 notes/email 均为 all
-        const isEmpty =
-          !loadedScope.notes.mode &&
-          loadedScope.notes.allowedNotebookIds.length === 0 &&
-          !loadedScope.email.mode &&
-          loadedScope.email.allowedFolders.length === 0;
-        const nextScope: AgentSearchScope = isEmpty
-          ? {
-              notes: { mode: "all", allowedNotebookIds: [] },
-              email: { mode: "all", allowedFolders: [] },
-            }
-          : {
-              notes: { mode: notesMode, allowedNotebookIds: loadedScope.notes.allowedNotebookIds ?? [] },
-              email: { mode: emailMode, allowedFolders: loadedScope.email.allowedFolders ?? [] },
-            };
-        if (cancelled) return;
-        setScope(nextScope);
-        if (isEmpty) {
-          // 立即持久化，避免下次再触发默认初始化
-          void setAgentSearchScope(nextScope).catch(() => {});
-        }
-      } catch {
-        if (!cancelled) {
-          setScope({
-            notes: { mode: "all", allowedNotebookIds: [] },
-            email: { mode: "all", allowedFolders: [] },
-          });
-        }
-      }
-
-      try {
-        const state = (await loadDesktopNotesState()) as NotesStateLike | null;
-        if (cancelled) return;
-        if (state && Array.isArray(state.notebooks)) {
-          setNotebooks(state.notebooks);
-          setVaultReady(true);
-        } else {
-          setVaultReady(false);
-        }
-      } catch {
-        if (!cancelled) setVaultReady(false);
-      }
-
-      try {
-        const accs = await listAccounts();
-        if (cancelled) return;
-        setAccounts(accs);
-        const foldersMap: Record<string, EmailFolder[]> = {};
-        await Promise.all(
-          accs.map(async (a) => {
-            try {
-              const folders = await getFolders(a.id);
-              foldersMap[a.id] = folders ?? [];
-            } catch {
-              foldersMap[a.id] = [];
-            }
-          }),
-        );
-        if (!cancelled) setFoldersByAccount(foldersMap);
-      } catch {
-        // 邮件模块可能未初始化
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const persist = async (nextScope: AgentSearchScope) => {
-    setScope(nextScope);
-    setSaving(true);
-    try {
-      await setAgentSearchScope(nextScope);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const setNotesMode = async (mode: string) => {
-    if (!scope) return;
-    await persist({ ...scope, notes: { mode, allowedNotebookIds: scope.notes.allowedNotebookIds } });
-  };
-
-  const toggleNotebook = async (notebookId: string) => {
-    if (!scope) return;
-    const allowed = new Set(scope.notes.allowedNotebookIds);
-    if (allowed.has(notebookId)) {
-      allowed.delete(notebookId);
-    } else {
-      allowed.add(notebookId);
-    }
-    await persist({
-      ...scope,
-      notes: { mode: "specific", allowedNotebookIds: Array.from(allowed) },
-    });
-  };
-
-  const toggleEmailFolder = async (folder: string) => {
-    if (!scope) return;
-    const allowed = new Set(scope.email.allowedFolders);
-    if (allowed.has(folder)) {
-      allowed.delete(folder);
-    } else {
-      allowed.add(folder);
-    }
-    await persist({
-      ...scope,
-      email: { mode: "specific", allowedFolders: Array.from(allowed) },
-    });
-  };
-
-  const setEmailMode = async (mode: string) => {
-    if (!scope) return;
-    await persist({ ...scope, email: { mode, allowedFolders: scope.email.allowedFolders } });
-  };
-
-  if (!loaded || !scope) {
-    return (
-      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        {tx("settings.status.loading", "Loading…")}
-      </div>
-    );
-  }
-
-  const notesMode = scope.notes.mode || "all";
-  const allowedSet = new Set(scope.notes.allowedNotebookIds);
-  const emailMode = scope.email.mode || "all";
-  const emailAllowed = new Set(scope.email.allowedFolders);
-
-  const notesModeOptions: { value: string; label: string; desc: string }[] = [
-    { value: "all", label: "全部允许", desc: "所有笔记（含根目录与全部文件夹）均可被 Agent 检索。" },
-    { value: "none", label: "全部不允许", desc: "Agent 无法检索任何笔记。" },
-    { value: "specific", label: "指定文件夹允许", desc: "仅勾选的文件夹（含根目录）参与检索，新增文件夹默认不参与。" },
-  ];
-
-  const emailModeOptions: { value: string; label: string; desc: string }[] = [
-    { value: "all", label: "全部允许", desc: "所有邮件文件夹均可被 Agent 检索。" },
-    { value: "none", label: "全部不允许", desc: "Agent 无法检索任何邮件。" },
-    { value: "specific", label: "指定文件夹允许", desc: "仅勾选的文件夹参与检索，新增文件夹默认不参与。" },
-  ];
-
-  return (
-    <div className="space-y-7">
-      <section>
-        <SubsectionLabel className="mb-2 px-1">Agent 搜索范围</SubsectionLabel>
-        <SettingsGroup>
-          {vaultReady ? (
-            <>
-              <SettingsRow
-                title="笔记搜索范围"
-                description={notesModeOptions.find((option) => option.value === notesMode)?.desc}
-              >
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={notesMode}
-                    options={notesModeOptions}
-                    onValueChange={(value) => void setNotesMode(value)}
-                    disabled={saving}
-                    aria-label="笔记搜索范围"
-                    className="h-8 w-[180px] rounded-full text-ui"
-                  />
-                  {notesMode === "specific" ? <Button type="button" variant="outline" size="sm" className="h-8 rounded-full" onClick={() => setConfiguringScope("notes")}>配置</Button> : null}
-                </div>
-              </SettingsRow>
-            </>
-          ) : (
-            <SettingsRow
-              title="未配置笔记仓库"
-              description="请先在笔记模块中设置仓库路径后再管理搜索范围。"
-            />
-          )}
-
-          {accounts.length === 0 ? (
-            <SettingsRow
-              title="未配置邮件账号"
-              description="请先在邮件模块中添加账号后再管理搜索范围。"
-            />
-          ) : (
-            <>
-              <SettingsRow
-                title="邮件搜索范围"
-                description={emailModeOptions.find((option) => option.value === emailMode)?.desc}
-              >
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={emailMode}
-                    options={emailModeOptions}
-                    onValueChange={(value) => void setEmailMode(value)}
-                    disabled={saving}
-                    aria-label="邮件搜索范围"
-                    className="h-8 w-[180px] rounded-full text-ui"
-                  />
-                  {emailMode === "specific" ? <Button type="button" variant="outline" size="sm" className="h-8 rounded-full" onClick={() => setConfiguringScope("email")}>配置</Button> : null}
-                </div>
-              </SettingsRow>
-            </>
-          )}
-        </SettingsGroup>
-      </section>
-
-      <Dialog open={configuringScope !== null} onOpenChange={(open) => !open && setConfiguringScope(null)}>
-        <DialogContent className="max-h-[75vh] max-w-lg overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{configuringScope === "notes" ? "配置允许检索的笔记文件夹" : "配置允许检索的邮件文件夹"}</DialogTitle>
-            <DialogDescription>仅勾选的文件夹会参与 Agent 搜索。</DialogDescription>
-          </DialogHeader>
-          {configuringScope === "notes" ? (
-            <div className="divide-y divide-border/60 rounded-xl border border-border/60">
-              <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-3 text-ui text-foreground/85 hover:bg-muted/35">
-                <Checkbox checked={allowedSet.has("")} onCheckedChange={() => void toggleNotebook("")} />
-                <span>根目录（未分类笔记）</span>
-              </label>
-              {notebooks.map((notebook) => (
-                <label key={notebook.id} className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-3 text-ui text-foreground/85 hover:bg-muted/35">
-                  <Checkbox checked={allowedSet.has(notebook.id)} onCheckedChange={() => void toggleNotebook(notebook.id)} />
-                  <span className="truncate">{notebook.name}</span>
-                </label>
-              ))}
-            </div>
-          ) : configuringScope === "email" ? (
-            <div className="space-y-3">
-              {accounts.map((account) => {
-                const folders = foldersByAccount[account.id] ?? [];
-                return (
-                  <div key={account.id} className="rounded-xl border border-border/60">
-                    <div className="border-b border-border/60 px-4 py-2.5 text-ui font-medium text-foreground">{account.displayName || account.fromAddress || account.imapUsername}</div>
-                    <div className="divide-y divide-border/50">
-                      {folders.length === 0 ? <div className="px-4 py-3 text-caption text-muted-foreground">暂无文件夹缓存</div> : folders.map((folder) => (
-                        <label key={folder.name} className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35">
-                          <Checkbox checked={emailAllowed.has(folder.name)} onCheckedChange={() => void toggleEmailFolder(folder.name)} />
-                          <span className="truncate">{getFolderDisplayName(folder.name)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-
-      {saving ? (
-        <div className="text-caption text-muted-foreground">正在保存…</div>
-      ) : null}
-    </div>
-  );
-}
 
 function ProviderPicker({
   providers,
@@ -5569,22 +5063,12 @@ function DesktopSettings() {
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.desktop.runInBackground", "后台运行")}
-            description={tx("settings.desktop.runInBackgroundHelp", "启用后，关闭窗口会将 Mona 隐藏到系统托盘而非退出。网关继续运行，仍可通过浏览器访问。")}
+            description={tx("settings.desktop.runInBackgroundHelp", "关闭窗口后保留在系统托盘，正在运行的任务继续执行。")}
           >
             <ToggleButton
               checked={settings.run_in_background}
               onChange={(run_in_background) => updateSetting({ run_in_background })}
               label={settings.run_in_background ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
-            />
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.desktop.autoStartGateway", "自动启动网关")}
-            description={tx("settings.desktop.autoStartGatewayHelp", "Mona 启动时自动启动网关。")}
-          >
-            <ToggleButton
-              checked={settings.auto_start_gateway}
-              onChange={(auto_start_gateway) => updateSetting({ auto_start_gateway })}
-              label={settings.auto_start_gateway ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
             />
           </SettingsRow>
         </SettingsGroup>
@@ -5594,24 +5078,6 @@ function DesktopSettings() {
     </div>
   );
 }
-
-const SIDEBAR_SHORTCUT_ITEMS: Array<{ key: keyof SidebarShortcuts; label: string }> = [
-  { key: "mona", label: "Mona" },
-  { key: "note", label: "笔记" },
-  { key: "ssh", label: "终端" },
-  { key: "email", label: "邮件" },
-  { key: "schedule", label: "日程" },
-  { key: "db", label: "数据库" },
-];
-
-const DEFAULT_SIDEBAR_SHORTCUTS: SidebarShortcuts = {
-  mona: "Alt+1",
-  note: "Alt+2",
-  ssh: "Alt+3",
-  email: "Alt+4",
-  schedule: "Alt+5",
-  db: "Alt+6",
-};
 
 export function ShortcutsSettings() {
   const { t } = useTranslation();
@@ -5624,10 +5090,6 @@ export function ShortcutsSettings() {
   const [quickAskSaved, setQuickAskSaved] = useState(false);
   const [quickAskError, setQuickAskError] = useState<string | null>(null);
   const [quickAskMode, setQuickAskMode] = useState("compact");
-  const [sidebarDrafts, setSidebarDrafts] = useState<SidebarShortcuts>(DEFAULT_SIDEBAR_SHORTCUTS);
-  const [sidebarSaving, setSidebarSaving] = useState(false);
-  const [sidebarSaved, setSidebarSaved] = useState(false);
-  const [sidebarError, setSidebarError] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -5635,7 +5097,6 @@ export function ShortcutsSettings() {
       setSettings({ ...s, send_message_shortcut: s.send_message_shortcut ?? "enter" });
       setQuickAskDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
       setQuickAskMode(s.quick_ask_mode || "compact");
-      setSidebarDrafts(s.sidebar_shortcuts || DEFAULT_SIDEBAR_SHORTCUTS);
     } catch (e) {
       console.error("Failed to load desktop settings:", e);
     }
@@ -5651,12 +5112,6 @@ export function ShortcutsSettings() {
 
   const quickAskModeDirty = settings
     ? quickAskMode !== settings.quick_ask_mode
-    : false;
-
-  const sidebarDirty = settings
-    ? Object.keys(DEFAULT_SIDEBAR_SHORTCUTS).some(
-        (key) => sidebarDrafts[key as keyof SidebarShortcuts] !== settings!.sidebar_shortcuts[key as keyof SidebarShortcuts],
-      )
     : false;
 
   const saveSendMessageShortcut = async (send_message_shortcut: SendMessageShortcut) => {
@@ -5703,27 +5158,6 @@ export function ShortcutsSettings() {
     }
   };
 
-  const saveSidebarShortcuts = async () => {
-    if (!settings || sidebarSaving || !sidebarDirty) return;
-    setSidebarSaving(true);
-    setSidebarError(null);
-    setSidebarSaved(false);
-    try {
-      const updated = await updateDesktopSettings({
-        ...settings,
-        sidebar_shortcuts: sidebarDrafts,
-      });
-      setSettings(updated);
-      setSidebarDrafts(updated.sidebar_shortcuts);
-      setSidebarSaved(true);
-      window.setTimeout(() => setSidebarSaved(false), 2400);
-    } catch (e) {
-      setSidebarError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSidebarSaving(false);
-    }
-  };
-
   const handleQuickAskKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Backspace" || event.key === "Delete") {
       event.preventDefault();
@@ -5738,25 +5172,6 @@ export function ShortcutsSettings() {
     setQuickAskDraft(shortcut);
     setQuickAskSaved(false);
     setQuickAskError(null);
-  };
-
-  const handleSidebarShortcutKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-    key: keyof SidebarShortcuts,
-  ) => {
-    if (event.key === "Backspace" || event.key === "Delete") {
-      event.preventDefault();
-      setSidebarDrafts((prev) => ({ ...prev, [key]: "" }));
-      setSidebarSaved(false);
-      setSidebarError(null);
-      return;
-    }
-    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
-    if (!shortcut) return;
-    event.preventDefault();
-    setSidebarDrafts((prev) => ({ ...prev, [key]: shortcut }));
-    setSidebarSaved(false);
-    setSidebarError(null);
   };
 
   if (!settings) {
@@ -5890,53 +5305,6 @@ export function ShortcutsSettings() {
         </SettingsGroup>
       </section>
 
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.shortcuts.sidebarNav", "侧边栏导航快捷键")}</SubsectionLabel>
-        <SettingsGroup>
-          {SIDEBAR_SHORTCUT_ITEMS.map(({ key, label }) => (
-            <SettingsRow
-              key={key}
-              title={`切换至${label}`}
-            >
-              <Input
-                value={sidebarDrafts[key]}
-                onChange={(event) => {
-                  setSidebarDrafts((prev) => ({ ...prev, [key]: event.target.value }));
-                  setSidebarSaved(false);
-                  setSidebarError(null);
-                }}
-                onKeyDown={(event) => handleSidebarShortcutKeyDown(event, key)}
-                placeholder={DEFAULT_SIDEBAR_SHORTCUTS[key]}
-                className="h-8 w-44 rounded-full text-right text-ui"
-              />
-            </SettingsRow>
-          ))}
-          <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="min-w-0 text-ui leading-5 text-muted-foreground">
-              {sidebarError ? (
-                <span className="text-destructive">{sidebarError}</span>
-              ) : sidebarSaved ? (
-                <span className="text-blue-600 dark:text-blue-300">
-                  {tx("settings.status.saved", "已保存")}
-                </span>
-              ) : null}
-            </div>
-            <div className="flex shrink-0 justify-end">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={saveSidebarShortcuts}
-                disabled={!sidebarDirty || sidebarSaving}
-                className="rounded-full"
-              >
-                {sidebarSaving
-                  ? tx("settings.actions.saving", "保存中...")
-                  : tx("settings.actions.save", "保存")}
-              </Button>
-            </div>
-          </div>
-        </SettingsGroup>
-      </section>
     </div>
   );
 }

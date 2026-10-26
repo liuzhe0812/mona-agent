@@ -12,11 +12,18 @@ from test_native_workbench import settle, wait_run
 
 from mona.config.schema import Config, _resolve_tool_config_refs
 from mona.development.api import development_auth
-from mona.development.contracts import ExecutorId, PermissionMode, RunStatus
-from mona.development.executors.base import DispatchReceipt
+from mona.development.context import ProjectContext
+from mona.development.contracts import (
+    Binding,
+    DevelopmentSession,
+    ExecutorId,
+    PermissionMode,
+    RunStatus,
+)
+from mona.development.executors.base import DispatchReceipt, NativeEvent, SessionStart
 from mona.development.executors.rpc import RpcError
-from mona.development.executors.sdk import SDKExecutor
-from mona.development.executors.sdk_policy import prepare_sdk_profile
+from mona.development.executors.sdk import SDKExecutor, _SDKSession
+from mona.development.executors.sdk_policy import SDKProfile, prepare_sdk_profile
 from mona.development.runtime import DevelopmentRuntime
 from mona.development.store import DevelopmentStore
 from mona.session.manager import SessionManager
@@ -43,6 +50,36 @@ async def setup(tmp_path, monkeypatch, executor):
     host = SDKExecutor(profile, approval_handler=permission, question_handler=question)
     runtime.native.hosts[(project.id, executor)] = host
     return runtime, project, root, host
+
+
+def _event_host(tmp_path: Path, *, work_mode: bool) -> tuple[SDKExecutor, Binding, _SDKSession]:
+    executor = ExecutorId.CODEBUDDY
+    project_root = tmp_path / "event-project"
+    project_root.mkdir(parents=True)
+    session = DevelopmentSession(project_id="event-project", executor=executor)
+    context = ProjectContext("work", project_root, (), (), (), "rules", "skills")
+    start = SessionStart(session, context, work_prompt="Use Mona tools." if work_mode else None)
+    profile = SDKProfile(executor, project_root / "codebuddy", tmp_path / "sdk-home", project_root, {})
+    host = SDKExecutor(profile)
+    binding = Binding(session_id=session.id, executor=executor, native_session_id="native-session",
+                      working_directory=str(project_root))
+    runtime = _SDKSession(binding=binding, start=start, status="running", turn_id="turn-1")
+    host._sessions[binding.id] = runtime
+    return host, binding, runtime
+
+
+async def _read_queued_events(host: SDKExecutor, binding: Binding, runtime: _SDKSession) -> list[NativeEvent]:
+    events = host.events(binding)
+    result = []
+    while not runtime.queue.empty():
+        result.append(await anext(events))
+    await events.aclose()
+    return result
+
+
+def _delta(event_type: str, turn_id: str, item_id: str, text: str, event_id: str) -> NativeEvent:
+    return NativeEvent(type=event_type, native_turn_id=turn_id, native_event_id=event_id,
+                       payload={"itemId": item_id, "delta": text})
 
 
 def trace(root):
@@ -175,3 +212,74 @@ async def test_transport_unknown_is_http_503_not_definite_client_rejection(monke
         data = await response.json()
         assert data["error"]["code"] == "transport_lost"
         assert "private text" not in str(data)
+
+
+@pytest.mark.parametrize("event_type", ["agent.message.delta", "reasoning.delta"])
+@pytest.mark.asyncio
+async def test_work_mode_long_text_deltas_preserve_content_and_terminal(tmp_path, event_type):
+    host, binding, runtime = _event_host(tmp_path, work_mode=True)
+    count = 5001
+    expected = "x" * count
+    for index in range(count):
+        runtime.emit(_delta(event_type, "turn-1", "item-1", "x", f"event-{index}"))
+    runtime.emit(NativeEvent(type="run.completed", native_turn_id="turn-1",
+                             native_event_id="terminal", payload={"status": "success"}))
+
+    events = await _read_queued_events(host, binding, runtime)
+    assert not any(event.type == "run.unknown" for event in events)
+    assert any(event.type == "run.completed" and event.native_turn_id == "turn-1" for event in events)
+    deltas = [event for event in events if event.type == event_type]
+    assert 1 <= len(deltas) < count
+    assert "".join(event.payload["delta"] for event in deltas) == expected
+    assert max(len(event.payload["delta"]) for event in deltas) <= 16_384
+
+
+@pytest.mark.asyncio
+async def test_work_mode_deltas_do_not_merge_across_tool_item_or_turn_boundaries(tmp_path):
+    host, binding, runtime = _event_host(tmp_path, work_mode=True)
+    runtime.emit(_delta("agent.message.delta", "turn-1", "item-a", "before-tool", "delta-1"))
+    runtime.emit(NativeEvent(type="tool.started", native_turn_id="turn-1", native_event_id="tool-1",
+                             payload={"itemId": "tool-1", "name": "mona_tool"}))
+    runtime.emit(_delta("agent.message.delta", "turn-1", "item-a", "after-tool", "delta-2"))
+    runtime.emit(_delta("agent.message.delta", "turn-1", "item-b", "other-item", "delta-3"))
+    runtime.emit(NativeEvent(type="run.completed", native_turn_id="turn-1",
+                             native_event_id="terminal-1", payload={"status": "success"}))
+    runtime.turn_id = "turn-2"
+    runtime.status = "running"
+    runtime.emit(_delta("agent.message.delta", "turn-2", "item-a", "next-turn", "delta-4"))
+    runtime.emit(NativeEvent(type="run.completed", native_turn_id="turn-2",
+                             native_event_id="terminal-2", payload={"status": "success"}))
+
+    events = await _read_queued_events(host, binding, runtime)
+    deltas = [event for event in events if event.type == "agent.message.delta"]
+    assert [(event.native_turn_id, event.payload["itemId"], event.payload["delta"]) for event in deltas] == [
+        ("turn-1", "item-a", "before-tool"),
+        ("turn-1", "item-a", "after-tool"),
+        ("turn-1", "item-b", "other-item"),
+        ("turn-2", "item-a", "next-turn"),
+    ]
+    assert [event.type for event in events].count("tool.started") == 1
+    assert [event.native_turn_id for event in events if event.type == "run.completed"] == ["turn-1", "turn-2"]
+
+
+@pytest.mark.asyncio
+async def test_consumed_work_delta_is_not_mutated_and_code_mode_keeps_native_event_ids(tmp_path):
+    host, binding, runtime = _event_host(tmp_path, work_mode=True)
+    stream = host.events(binding)
+    runtime.emit(_delta("agent.message.delta", "turn-1", "item-1", "consumed", "work-1"))
+    consumed = await anext(stream)
+    runtime.emit(_delta("agent.message.delta", "turn-1", "item-1", "pending", "work-2"))
+    pending = await anext(stream)
+    await stream.aclose()
+
+    assert consumed.payload["delta"] == "consumed"
+    assert consumed.native_event_id == "work-1"
+    assert pending.payload["delta"] == "pending"
+    assert pending.native_event_id == "work-2"
+
+    code_host, code_binding, code_runtime = _event_host(tmp_path / "code", work_mode=False)
+    code_runtime.emit(_delta("agent.message.delta", "turn-1", "item-1", "one", "code-1"))
+    code_runtime.emit(_delta("agent.message.delta", "turn-1", "item-1", "two", "code-2"))
+    code_events = await _read_queued_events(code_host, code_binding, code_runtime)
+    assert [event.native_event_id for event in code_events] == ["code-1", "code-2"]
+    assert [event.payload["delta"] for event in code_events] == ["one", "two"]

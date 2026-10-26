@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "host-integration",
+  "reason": "Bound hosted Mona A-share grounding to its explicit historical window and persist actual loader provenance.",
+  "files": [
+    {
+      "path": "agent/src/swarm/grounding.py",
+      "sha256": "ceff7bbd9befb1fca682b02cd7b277ef18e08dd2b68134b16df004bab819752c",
+      "replacements": [
+        {
+          "before": "from __future__ import annotations\n\nimport logging\nimport math\nimport os\nimport re\nfrom datetime import date, timedelta\nfrom typing import Iterable\n\nfrom src.config.accessor import get_env_config\n",
+          "after": "from __future__ import annotations\n\nimport json\nimport logging\nimport math\nimport re\nfrom datetime import date, timedelta\nfrom typing import Any, Iterable\n\nfrom src.config.accessor import get_env_config\n",
+          "count": 1
+        },
+        {
+          "before": "\n\ndef fetch_grounding_data(\n    symbols: Iterable[str],\n",
+          "after": "\n\ndef validate_hosted_asof_window(\n    user_vars: dict[str, str], *, today: date | None = None,\n) -> tuple[date, date]:\n    \"\"\"Validate the explicit historical window used by the hosted A-share preset.\"\"\"\n    start_raw = user_vars.get(\"start_date\")\n    end_raw = user_vars.get(\"end_date\")\n    if not isinstance(start_raw, str) or not isinstance(end_raw, str):\n        raise ValueError(\"mona_ashare_research requires explicit start_date and end_date\")\n    try:\n        start = date.fromisoformat(start_raw)\n        end = date.fromisoformat(end_raw)\n    except ValueError as exc:\n        raise ValueError(\"start_date and end_date must be valid YYYY-MM-DD dates\") from exc\n    if start.isoformat() != start_raw or end.isoformat() != end_raw:\n        raise ValueError(\"start_date and end_date must use canonical YYYY-MM-DD dates\")\n    if start > end:\n        raise ValueError(\"start_date must be on or before end_date\")\n    if end > (today or date.today()):\n        raise ValueError(\"end_date cannot be in the future for hosted Swarm grounding\")\n    return start, end\n\n\ndef fetch_grounding_snapshot(\n    symbols: Iterable[str],\n    *,\n    start_date: date,\n    end_date: date,\n    today: date | None = None,\n) -> tuple[dict[str, list[dict]], dict[str, dict[str, Any]]]:\n    \"\"\"Fetch a hosted historical snapshot with the market-data provenance intact.\n\n    The returned metadata separates requested dates/interval from actual row\n    coverage. It copies provider/source fields only when the data API returns\n    them; in particular it never treats ``source`` as a provider name.\n    \"\"\"\n    start, end = validate_hosted_asof_window(\n        {\"start_date\": start_date.isoformat(), \"end_date\": end_date.isoformat()},\n        today=today,\n    )\n    symbol_list = list(symbols)\n    if not symbol_list:\n        return {}, {}\n\n    from src.market_data import fetch_market_data_json\n\n    payload = json.loads(\n        fetch_market_data_json(\n            codes=symbol_list,\n            start_date=start.isoformat(),\n            end_date=end.isoformat(),\n            source=\"auto\",\n            interval=\"1D\",\n            max_rows=0,\n            include_provenance=True,\n        )\n    )\n    if not isinstance(payload, dict):\n        raise ValueError(\"market-data snapshot did not return a JSON object\")\n\n    provenance_by_symbol = payload.get(\"_provenance\", {})\n    fetched: dict[str, list[dict]] = {}\n    metadata: dict[str, dict[str, Any]] = {}\n    for symbol in symbol_list:\n        value = payload.get(symbol, [])\n        rows = value if isinstance(value, list) else []\n        dates: list[str] = []\n        for row in rows:\n            if not isinstance(row, dict):\n                raise ValueError(f\"market-data snapshot returned a malformed row for {symbol}\")\n            raw_date = str(row.get(\"trade_date\") or row.get(\"timestamp\") or \"\")[:10]\n            try:\n                row_date = date.fromisoformat(raw_date)\n            except ValueError as exc:\n                raise ValueError(f\"market-data snapshot returned an invalid date for {symbol}\") from exc\n            if row_date < start or row_date > end:\n                raise ValueError(f\"market-data snapshot returned a row outside the requested window for {symbol}\")\n            dates.append(raw_date)\n        if rows:\n            fetched[symbol] = rows\n        raw_provenance = provenance_by_symbol.get(symbol) if isinstance(provenance_by_symbol, dict) else None\n        provenance = raw_provenance if isinstance(raw_provenance, dict) else None\n        metadata[symbol] = {\n            \"status\": \"ok\" if rows else \"unavailable\",\n            \"request\": {\n                \"source\": \"auto\",\n                \"interval\": \"1D\",\n                \"start_date\": start.isoformat(),\n                \"end_date\": end.isoformat(),\n            },\n            \"coverage\": {\n                \"start_date\": min(dates) if dates else None,\n                \"end_date\": max(dates) if dates else None,\n                \"row_count\": len(rows),\n            },\n            \"provenance\": provenance,\n        }\n    return fetched, metadata\n\n\ndef fetch_grounding_data(\n    symbols: Iterable[str],\n",
+          "count": 1
+        },
+        {
+          "before": "\n\ndef format_grounding_block(grounding: dict[str, list[dict]]) -> str:\n    \"\"\"Render *grounding* as a markdown block ready to splice into a prompt.\n\n",
+          "after": "\n\ndef format_grounding_block(\n    grounding: dict[str, list[dict]],\n    metadata: dict[str, dict[str, Any]] | None = None,\n) -> str:\n    \"\"\"Render *grounding* as a markdown block ready to splice into a prompt.\n\n",
+          "count": 1
+        },
+        {
+          "before": "        if not rows:\n            continue\n        first_date = rows[0][\"trade_date\"][:10]\n        last_date = rows[-1][\"trade_date\"][:10]\n",
+          "after": "        if not rows:\n            continue\n        symbol_metadata = (metadata or {}).get(code, {})\n        request = symbol_metadata.get(\"request\", {})\n        coverage = symbol_metadata.get(\"coverage\", {})\n        provenance_value = symbol_metadata.get(\"provenance\")\n        provenance = provenance_value if isinstance(provenance_value, dict) else {}\n        first_date = rows[0][\"trade_date\"][:10]\n        last_date = rows[-1][\"trade_date\"][:10]\n",
+          "count": 1
+        },
+        {
+          "before": "            f\"### {code}  (window {first_date} → {last_date})\",\n            \"\",\n            \"| Date | Close | Volume |\",\n            \"| --- | ---: | ---: |\",\n        ]\n        for row in rows[-PROMPT_TABLE_TAIL:]:\n            vol = row[\"volume\"]\n",
+          "after": "            f\"### {code}  (window {first_date} → {last_date})\",\n            \"\",\n        ]\n        if symbol_metadata:\n            lines.extend(\n                [\n                    f\"**Requested window:** {request.get('start_date')} → {request.get('end_date')}  \"\n                    f\"**Interval:** {request.get('interval')}\",\n                    f\"**Actual source:** {provenance.get('source') or 'not reported'}  \"\n                    f\"**Fallback used:** {provenance.get('fallback_used', 'not reported')}\",\n                    f\"**Actual coverage:** {coverage.get('start_date')} → {coverage.get('end_date')}  \"\n                    f\"**Rows:** {coverage.get('row_count')}\",\n                    f\"**Adjustment:** {provenance.get('adjustment') or 'not reported'}  \"\n                    f\"**Volume unit:** {provenance.get('volume_unit') or 'not reported'}\",\n                    \"**Provider:** \" + str(provenance.get(\"provider\") or \"not supplied\"),\n                    \"\",\n                ]\n            )\n        lines.extend([\"| Date | Close | Volume |\", \"| --- | ---: | ---: |\"])\n        for row in rows[-PROMPT_TABLE_TAIL:]:\n            vol = row[\"volume\"]\n",
+          "count": 1
+        },
+        {
+          "before": "        return \"\"\n\n    header = (\n        \"## Ground Truth — Recent Market Data\\n\\n\"\n        \"**These are the authoritative current prices for this run.** Do NOT \"\n        \"cite prices, valuations, multiples, or returns from your training \"\n        \"data — markets have moved. If you need a price outside this window, \"\n        \"call `get_market_data` for the relevant range. When you state a \"\n        \"price, cite the date from this table.\"\n    )\n    return header + \"\\n\\n\" + \"\\n\\n\".join(sections)\n",
+          "after": "        return \"\"\n\n    if metadata:\n        header = (\n            \"## Ground Truth — Requested Window Market Data\\n\\n\"\n            \"This prefetch is bounded to the run's requested window and records \"\n            \"the actual source and coverage below. It does not replace an assigned \"\n            \"source-verification step. Do not cite a row beyond the requested end date.\"\n        )\n    else:\n        header = (\n            \"## Ground Truth — Recent Market Data\\n\\n\"\n            \"**These are the authoritative current prices for this run.** Do NOT \"\n            \"cite prices, valuations, multiples, or returns from your training \"\n            \"data — markets have moved. If you need a price outside this window, \"\n            \"call `get_market_data` for the relevant range. When you state a \"\n            \"price, cite the date from this table.\"\n        )\n    return header + \"\\n\\n\" + \"\\n\\n\".join(sections)\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/swarm/runtime.py",
+      "sha256": "714111bdbdbc0e0785b892d7ee929eed7a681f911fac33b84e3ce7918990a64d",
+      "replacements": [
+        {
+          "before": "\nimport logging\nimport random\nimport shutil\n",
+          "after": "\nimport logging\nimport os\nimport random\nimport shutil\n",
+          "count": 1
+        },
+        {
+          "before": "    Future,\n    ThreadPoolExecutor,\n    TimeoutError as FuturesTimeoutError,\n    as_completed,\n)\nfrom datetime import datetime, timezone\n",
+          "after": "    Future,\n    ThreadPoolExecutor,\n    as_completed,\n)\nfrom concurrent.futures import (\n    TimeoutError as FuturesTimeoutError,\n)\nfrom datetime import datetime, timezone\n",
+          "count": 1
+        },
+        {
+          "before": "    validate_dag,\n)\nfrom src.tools.mcp import invalidate_mcp_specs_cache\nfrom src.tools.redaction import redact_internal_paths\nfrom src.swarm.worker import agent_artifact_dir, clear_agent_artifacts, run_worker\n\nlogger = logging.getLogger(__name__)\n",
+          "after": "    validate_dag,\n)\nfrom src.swarm.worker import agent_artifact_dir, clear_agent_artifacts, run_worker\nfrom src.tools.mcp import invalidate_mcp_specs_cache\nfrom src.tools.redaction import redact_internal_paths\n\n_HOSTED_ASOF_PRESET = \"mona_ashare_research\"\n\n\ndef _uses_hosted_asof_grounding(preset_name: str) -> bool:\n    return os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" and preset_name == _HOSTED_ASOF_PRESET\n\nlogger = logging.getLogger(__name__)\n",
+          "count": 1
+        },
+        {
+          "before": "        run = build_run_from_preset(preset_name, user_vars)\n        validate_dag(run.tasks)\n\n        # Capture which provider/model the run was launched against so the\n",
+          "after": "        run = build_run_from_preset(preset_name, user_vars)\n        validate_dag(run.tasks)\n        if _uses_hosted_asof_grounding(preset_name):\n            # Reject future as-of windows synchronously, before the run is\n            # persisted or its background worker can receive newer prices.\n            grounding.validate_hosted_asof_window(run.user_vars)\n\n        # Capture which provider/model the run was launched against so the\n",
+          "count": 1
+        },
+        {
+          "before": "        # this run. The block is empty when no symbols were detected, in\n        # which case workers see no extra section.\n        grounding_block = grounding.format_grounding_block(run.grounding_data or {})\n\n        # Compute execution layers\n",
+          "after": "        # this run. The block is empty when no symbols were detected, in\n        # which case workers see no extra section.\n        grounding_block = grounding.format_grounding_block(\n            run.grounding_data or {}, run.grounding_metadata,\n        )\n\n        # Compute execution layers\n",
+          "count": 1
+        },
+        {
+          "before": "        if not symbols:\n            return\n\n        symbol_limit = grounding.max_grounding_symbols()\n",
+          "after": "        if not symbols:\n            return\n        hosted_asof = _uses_hosted_asof_grounding(run.preset_name)\n        window = (\n            grounding.validate_hosted_asof_window(run.user_vars)\n            if hosted_asof\n            else None\n        )\n\n        symbol_limit = grounding.max_grounding_symbols()\n",
+          "count": 1
+        },
+        {
+          "before": "        interval = get_env_config().swarm.swarm_heartbeat_interval_s\n\n        try:\n            with HeartbeatTimer(\n",
+          "after": "        interval = get_env_config().swarm.swarm_heartbeat_interval_s\n\n        metadata: dict[str, dict] | None = None\n        try:\n            with HeartbeatTimer(\n",
+          "count": 1
+        },
+        {
+          "before": "                emit=_on_grounding_heartbeat,\n            ):\n                fetched = grounding.fetch_grounding_data(symbols)\n        except Exception:\n            logger.warning(\n                \"grounding: pre-fetch failed for run %s symbols=%s\",\n",
+          "after": "                emit=_on_grounding_heartbeat,\n            ):\n                if window is not None:\n                    fetched, metadata = grounding.fetch_grounding_snapshot(\n                        symbols,\n                        start_date=window[0],\n                        end_date=window[1],\n                    )\n                else:\n                    fetched = grounding.fetch_grounding_data(symbols)\n        except Exception as exc:\n            logger.warning(\n                \"grounding: pre-fetch failed for run %s symbols=%s\",\n",
+          "count": 1
+        },
+        {
+          "before": "                exc_info=True,\n            )\n            return\n\n        if fetched:\n            run.grounding_data = fetched\n            self._store.update_run(run)\n\n",
+          "after": "                exc_info=True,\n            )\n            if hosted_asof and window is not None:\n                run.grounding_metadata = {\n                    symbol: {\n                        \"status\": \"error\",\n                        \"request\": {\n                            \"source\": \"auto\",\n                            \"interval\": \"1D\",\n                            \"start_date\": window[0].isoformat(),\n                            \"end_date\": window[1].isoformat(),\n                        },\n                        \"error_type\": type(exc).__name__,\n                        \"provenance\": None,\n                    }\n                    for symbol in symbols\n                }\n                self._store.update_run(run)\n            return\n\n        if fetched:\n            run.grounding_data = fetched\n        if metadata is not None:\n            run.grounding_metadata = metadata\n        if fetched or metadata is not None:\n            self._store.update_run(run)\n\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/swarm/models.py",
+      "sha256": "f9e20054cc962d33c18d4a4918856c6ce5c078f9582bf7fb4dfc20bb74801523",
+      "replacements": [
+        {
+          "before": "import re\nfrom enum import Enum\n\nfrom pydantic import BaseModel, Field\n\nfrom src.tools.redaction import redact_text\n\n\n_PUBLIC_METADATA_MAX_LENGTH = 128\n",
+          "after": "import re\nfrom enum import Enum\nfrom typing import Any\n\nfrom pydantic import BaseModel, Field\n\nfrom src.tools.redaction import redact_text\n\n_PUBLIC_METADATA_MAX_LENGTH = 128\n",
+          "count": 1
+        },
+        {
+          "before": "            by the loader. ``None`` when no symbols were detected or every\n            fetch failed.\n    \"\"\"\n\n",
+          "after": "            by the loader. ``None`` when no symbols were detected or every\n            fetch failed.\n        grounding_metadata: Optional per-symbol request window, actual\n            coverage, and source provenance for hosted historical grounding.\n            Legacy runs and ordinary Swarm runs keep this field as ``None``.\n    \"\"\"\n\n",
+          "count": 1
+        },
+        {
+          "before": "    use_responses_api: bool | None = None\n    grounding_data: dict[str, list[dict]] | None = None\n\n\n",
+          "after": "    use_responses_api: bool | None = None\n    grounding_data: dict[str, list[dict]] | None = None\n    grounding_metadata: dict[str, dict[str, Any]] | None = None\n\n\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/api/swarm_routes.py",
+      "sha256": "024cc502b35afa30ce45beb8edc2162e387b9ebe90016d29b10cc7fce2fb3e62",
+      "replacements": [
+        {
+          "before": "        return _swarm_runtime\n    from src.config import load_swarm_agent_config\n    from src.swarm.store import SwarmStore, swarm_runs_root\n    from src.swarm.runtime import SwarmRuntime\n\n    store = SwarmStore(base_dir=swarm_runs_root())\n",
+          "after": "        return _swarm_runtime\n    from src.config import load_swarm_agent_config\n    from src.swarm.runtime import SwarmRuntime\n    from src.swarm.store import SwarmStore, swarm_runs_root\n\n    store = SwarmStore(base_dir=swarm_runs_root())\n",
+          "count": 1
+        },
+        {
+          "before": "            \"is_stale\": runtime._store.is_run_stale(run),\n            \"user_vars\": run.user_vars,\n            \"agents\": [a.model_dump() for a in run.agents],\n            \"tasks\": [\n",
+          "after": "            \"is_stale\": runtime._store.is_run_stale(run),\n            \"user_vars\": run.user_vars,\n            \"grounding_metadata\": run.grounding_metadata,\n            \"agents\": [a.model_dump() for a in run.agents],\n            \"tasks\": [\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "additions": {}
+}

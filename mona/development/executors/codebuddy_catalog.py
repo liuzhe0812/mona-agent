@@ -12,6 +12,7 @@ from mona.development.contracts import ExecutorId
 from mona.development.executors.base import ExecutorModel, ExecutorProbe
 from mona.development.executors.rpc import JsonRpcProcess, RemoteRpcError, RpcError
 from mona.development.executors.sdk_policy import SDKProfile
+from mona.development.executors.workbuddy_application import workbuddy_cli_launcher
 
 
 def parse_models(reply: object) -> tuple[list[ExecutorModel], str | None]:
@@ -50,7 +51,9 @@ async def inspect_codebuddy_catalog(profile: SDKProfile) -> ExecutorProbe:
         raise RpcError("catalog_tools_disabled", "账号和模型检查不允许执行工具或发起授权。")
     try:
         async with asyncio.timeout(45):
-            connection = await JsonRpcProcess.spawn((str(profile.executable), "--acp",
+            launcher = workbuddy_cli_launcher(profile.executable)
+            command = (str(launcher), str(profile.executable)) if launcher else (str(profile.executable),)
+            connection = await JsonRpcProcess.spawn((*command, "--acp",
                 "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                 "--tools", "", "--settings", '{"disableAllHooks":true,"autoMemoryEnabled":false}'),
                 cwd=profile.project_root, env=profile.environment, jsonrpc_version=True,
@@ -63,9 +66,10 @@ async def inspect_codebuddy_catalog(profile: SDKProfile) -> ExecutorProbe:
                 raise ValueError("incompatible_catalog_protocol")
             result.protocol_verified, result.stage = True, "authentication"
             account = await connection.request("_codebuddy.ai/getUserInfo", {})
-            if not isinstance(account, dict) or "userInfo" not in account:
+            if not isinstance(account, dict) or account and "userInfo" not in account:
                 raise ValueError("invalid_account_state")
-            user = account["userInfo"]
+            # Desktop CLI omits userInfo (undefined in JS) when signed out.
+            user = account.get("userInfo")
             if user is None or user == {}:
                 result.authentication = "required"
             elif isinstance(user, dict) and isinstance(user.get("userId"), str) and user["userId"].strip():
@@ -89,15 +93,15 @@ async def inspect_codebuddy_catalog(profile: SDKProfile) -> ExecutorProbe:
         if connection:
             await connection.close()
     if result.authentication == "required":
-        result.reason = "CodeBuddy 账号尚未登录或已失效，请完成官方授权。"
-        result.next_action = "连接 CodeBuddy"
+        result.reason = "WorkBuddy 账号尚未登录或已失效，请完成官方授权。"
+        result.next_action = "连接 WorkBuddy"
     elif result.model_catalog_state == "ready":
-        result.reason = "CodeBuddy 账号状态已确认，真实模型目录已同步。"
+        result.reason = "WorkBuddy 账号状态已确认，真实模型目录已同步。"
     elif result.model_catalog_state == "empty":
-        result.reason = "CodeBuddy 账号状态已确认，但当前账号未返回可用模型。"
+        result.reason = "WorkBuddy 账号状态已确认，但当前账号未返回可用模型。"
         result.next_action = "重新同步模型"
     else:
-        result.reason = ("CodeBuddy 账号状态已确认，但模型目录同步失败。" if result.authentication == "ready"
-                         else "尚未确认 CodeBuddy 账号状态和模型目录。")
+        result.reason = ("WorkBuddy 账号状态已确认，但模型目录同步失败。" if result.authentication == "ready"
+                         else "尚未确认 WorkBuddy 账号状态和模型目录。")
         result.next_action = "重新同步账号与模型"
     return result

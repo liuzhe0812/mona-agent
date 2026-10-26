@@ -8,10 +8,18 @@ from mona.agent.tools.capabilities import (
     tool_enabled_by_capability,
 )
 
-# Stable error identifier returned when a subscription-gated tool is invoked
-# without an active subscription or trial. The model and UI can match on this
-# prefix to surface an upgrade prompt instead of a generic failure.
-MEMBERSHIP_REQUIRED_ERROR = "membership_required"
+# Refuse stale registrations even when an installed package still names a retired tool.
+_RETIRED_STOCK_TOOL_MODULES = frozenset({
+    "mona.agent.tools.stock_query",
+    "mona.agent.tools.stock_research",
+    "mona.agent.tools.stock_selection",
+    "mona.agent.tools.stock_submit",
+    "mona.agent.tools.stock_diagnosis_submit",
+})
+
+
+def _is_retired_stock_tool(tool: Tool) -> bool:
+    return type(tool).__module__ in _RETIRED_STOCK_TOOL_MODULES
 
 
 class ToolRegistry:
@@ -28,8 +36,6 @@ class ToolRegistry:
         # later config edit can re-enable a permitted tool without rebuilding
         # plugin/MCP state.
         self._allowed_tool_names: set[str] | None = None
-        # Fail closed until the AgentLoop refreshes the trusted license state.
-        self._has_subscription_access: bool = False
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -48,19 +54,6 @@ class ToolRegistry:
     def has(self, name: str) -> bool:
         """Check if a tool is registered."""
         return name in self._tools
-
-    def set_subscription_access(self, has_access: bool) -> None:
-        """Update the subscription access flag.
-
-        When set to False, tools marked ``subscription_required`` are hidden
-        from the model (excluded from ``get_definitions``) and rejected at
-        execution time (``prepare_call`` returns a ``membership_required``
-        error). When set to True, all registered tools are available.
-        """
-        changed = self._has_subscription_access != has_access
-        self._has_subscription_access = has_access
-        if changed:
-            self._cached_definitions = None
 
     def set_allowed_tool_names(self, names: set[str] | None) -> None:
         """Narrow model-visible and executable tools without unregistering them."""
@@ -86,25 +79,6 @@ class ToolRegistry:
             self._allowed_tool_names is None
             or tool.name in self._allowed_tool_names
         )
-
-    @property
-    def requires_subscription_check(self) -> bool:
-        """Only explicit paid extensions need a local entitlement lookup."""
-        return any(self._is_allowed(tool) and getattr(tool, "subscription_required", False)
-                   for tool in self._tools.values())
-
-    @property
-    def has_subscription_access(self) -> bool:
-        return self._has_subscription_access
-
-    def is_subscription_blocked(self, name: str) -> bool:
-        """Check if a tool is currently blocked by subscription gating."""
-        if self._has_subscription_access:
-            return False
-        tool = self._tools.get(name)
-        if tool is None:
-            return False
-        return getattr(tool, "subscription_required", False)
 
     @staticmethod
     def _schema_name(schema: dict[str, Any]) -> str:
@@ -145,10 +119,9 @@ class ToolRegistry:
 
         Built-in tools are sorted first as a stable prefix, then MCP tools are
         sorted and appended.  The result is cached until the next
-        register/unregister call or subscription access change.
+        register/unregister call or permission change.
 
-        Subscription-gated tools are excluded when the user has no active
-        subscription or trial. The cached list contains only stable permission
+        The cached list contains only stable permission
         and schema decisions; request-scoped availability is filtered on every
         call so concurrent sessions cannot reuse each other's tool view.
         """
@@ -160,11 +133,6 @@ class ToolRegistry:
             if not self._is_allowed(tool):
                 continue
             if not getattr(tool, "model_visible", True):
-                continue
-            if (
-                not self._has_subscription_access
-                and getattr(tool, "subscription_required", False)
-            ):
                 continue
             definitions.append(tool.to_schema())
 
@@ -205,16 +173,6 @@ class ToolRegistry:
                 f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
             )
 
-        # Defense-in-depth: even if the model somehow emits a call to a
-        # subscription-gated tool (e.g. from historical context or a replayed
-        # tool call), reject it here with a stable error identifier.
-        if self.is_subscription_blocked(name):
-            return tool, params, (
-                f"{MEMBERSHIP_REQUIRED_ERROR}: Tool '{name}' requires an active "
-                "subscription or trial. The user's subscription has expired or is "
-                "not active. Do not claim this paid extension completed its work."
-            )
-
         # Defense-in-depth: a tool hidden via ``is_available=False`` (e.g.
         # terminal tools when no terminal session is active) may still be
         # called from historical context. Reject with a clear, actionable
@@ -252,6 +210,8 @@ class ToolRegistry:
 
         try:
             assert tool is not None  # guarded by prepare_call()
+            if _is_retired_stock_tool(tool):
+                return "Error: 旧股票模块已移除，请使用 stock_vibe_task。" + hint
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 return result + hint

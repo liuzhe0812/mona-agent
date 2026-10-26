@@ -1,0 +1,1736 @@
+{
+  "snapshot": {
+    "source": "third_party/vibe-trading/vibe-trading-source.zip",
+    "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+    "archive_sha256": "1f3eeca190f1ce935ad71d3bb294f5e8bb1cbaa3f63fbb5304ff2e11a0fda83d",
+    "declared_package_version": "0.1.16",
+    "source_file_count": 2544,
+    "source_crosscheck": "The parent agent independently confirmed all 2544 source-file hashes and sizes match D:\\liuzhe\\Desktop\\code\\Vibe-Trading.",
+    "inspection": "Read-only source inspection. No dependency installation, service startup, broker access, or credential reads."
+  },
+  "reading_notes": [
+    "Entrypoints are classified as HTTP API, Agent tool, CLI slash command, or library primitive. A module's existence is not treated as proof that it is wired into a user workflow.",
+    "Statuses such as source-supported describe code only; no live market, brokerage, or account behavior was exercised in this audit.",
+    "Evidence paths are relative to the locked upstream source root inside the archive. Line numbers refer to that exact snapshot."
+  ],
+  "capabilities": [
+    {
+      "id": "session_research",
+      "category": "research and agent execution",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "POST /sessions",
+            "GET /sessions",
+            "GET /sessions/{id}",
+            "POST /sessions/{id}/messages",
+            "GET /sessions/{id}/messages",
+            "POST /sessions/{id}/cancel",
+            "GET /sessions/{id}/events",
+            "PATCH /sessions/{id}",
+            "DELETE /sessions/{id}"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/sessions_routes.py",
+              "lines": "386-451,656-815,816-887"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "178-200"
+            }
+          ]
+        },
+        {
+          "kind": "runtime",
+          "description": "Each user message creates an Attempt and runs the AgentLoop with the session transcript, tool registry, and selected skills.",
+          "evidence": [
+            {
+              "file": "agent/src/session/service.py",
+              "lines": "249-309,357-433"
+            },
+            {
+              "file": "agent/src/agent/loop.py",
+              "lines": "335-434"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Session",
+          "storage": "Filesystem tree: sessions/{session_id}/session.json, messages.jsonl, attempts/{attempt_id}/attempt.json, and partial response checkpoints.",
+          "relations": "Session.last_attempt_id links the latest Attempt; Message.linked_attempt_id and attempt parent IDs preserve turn grouping; terminal messages carry run_id and tool trail metadata when available.",
+          "evidence": [
+            {
+              "file": "agent/src/session/store.py",
+              "lines": "17-59,63-80,153-166,213-228,293-322"
+            },
+            {
+              "file": "agent/src/session/models.py",
+              "lines": "122-139,246-280"
+            }
+          ]
+        },
+        {
+          "name": "Attempt",
+          "storage": "Per-attempt JSON; state includes pending/running/waiting_user/completed/failed/cancelled/interrupted.",
+          "relations": "An attempt belongs to one session and can point to a backtest run directory.",
+          "evidence": [
+            {
+              "file": "agent/src/session/models.py",
+              "lines": "122-139,246-280"
+            },
+            {
+              "file": "agent/src/session/service.py",
+              "lines": "295-309,371-417"
+            }
+          ]
+        }
+      ],
+      "flow": "A general research conversation can discover data through registered Agent tools, save files or reports, and end in a transcript with status, tool calls, and artifact links. SSE streams messages, attempts, and terminal events. On restart, unresolved attempts are reconciled as interrupted; the last user message is not automatically resent.",
+      "limits": [
+        "This is a general Agent runtime, not a stock-only workflow. Data source and tool availability depend on provider configuration, installed optional packages, and per-session tool registry.",
+        "POST /sessions/{id}/messages returns an accepted message/attempt ID before the analysis completes; callers must follow events or read the attempt."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/session/service.py",
+          "lines": "120-155,278-309,357-433"
+        },
+        {
+          "file": "agent/src/api/sessions_routes.py",
+          "lines": "761-887"
+        }
+      ],
+      "maturity": "connected general session workflow"
+    },
+    {
+      "id": "multi_agent_swarm",
+      "category": "team research",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /swarm/presets",
+            "POST /swarm/runs",
+            "GET /swarm/runs",
+            "GET /swarm/runs/{id}",
+            "GET /swarm/runs/{id}/events",
+            "POST /swarm/runs/{id}/cancel",
+            "POST /swarm/runs/{id}/retry?resume=true|false"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/swarm_routes.py",
+              "lines": "45-165,169-271"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "246-250"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "swarm tool can list presets/runs and start, cancel, retry, or resume runs."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/swarm_tool.py",
+              "lines": "1-230"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "SwarmRun, task DAG, events, artifacts, and agent inboxes",
+          "storage": "One run directory containing run.json, append-only events.jsonl, tasks/, inboxes/, artifacts/.",
+          "relations": "Tasks belong to a run, task dependencies encode a DAG, artifacts/inbox messages attach to task/worker execution. Resuming creates a new run and reuses only successful upstream task outputs.",
+          "evidence": [
+            {
+              "file": "agent/src/swarm/store.py",
+              "lines": "1-10,65-78,160-178,220-270"
+            },
+            {
+              "file": "agent/src/swarm/task_store.py",
+              "lines": "1-5,17-35,48-114"
+            },
+            {
+              "file": "agent/src/swarm/runtime.py",
+              "lines": "288-362"
+            }
+          ]
+        }
+      ],
+      "flow": "A preset materializes a multi-agent DAG; a background runtime executes workers, persists per-task outputs, and streams progress. Run and task states are durable. The API retries or resumes failed/cancelled work into a new run.",
+      "limits": [
+        "A preset is a generic team definition; its existence does not prove market data coverage or quality for a specific symbol/window.",
+        "An API run start does not carry a universal request_id. Hosted callers need their own durable request/receipt association if a POST outcome is uncertain."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/swarm/models.py",
+          "lines": "124-171,175-210"
+        },
+        {
+          "file": "agent/src/api/swarm_routes.py",
+          "lines": "91-107,213-271"
+        }
+      ],
+      "maturity": "connected persistent DAG workflow"
+    },
+    {
+      "id": "research_hypotheses",
+      "category": "research tracking",
+      "entrypoints": [
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "create_hypothesis",
+            "update_hypothesis",
+            "link_backtest",
+            "search_hypotheses"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/hypothesis_tool.py",
+              "lines": "20-193"
+            }
+          ]
+        },
+        {
+          "kind": "CLI",
+          "actions": [
+            "hypothesis list/show/invalidate and other registry commands"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/hypotheses/cli_handlers.py",
+              "lines": "144-300"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Hypothesis",
+          "storage": "Atomic JSON list, default ~/.vibe-trading/hypotheses.json; VIBE_TRADING_HYPOTHESES_PATH may override.",
+          "fields": [
+            "title",
+            "thesis",
+            "status",
+            "universe",
+            "signal_definition",
+            "data_sources",
+            "skills",
+            "run_cards",
+            "invalidation_notes",
+            "created_at",
+            "updated_at"
+          ],
+          "relations": "link_backtest stores a run-card path or run directory with optional metrics, validation summary, and notes in the hypothesis record.",
+          "evidence": [
+            {
+              "file": "agent/src/hypotheses/registry.py",
+              "lines": "20-42,82-113,145-212,282-327,329-389"
+            }
+          ]
+        }
+      ],
+      "flow": "The registry supports create/update/search and explicit linkage from a hypothesis to a backtest artifact. Status labels include exploring, testing, validated, rejected, and monitoring.",
+      "limits": [
+        "No dedicated hypotheses HTTP route is registered in api_server.py; the durable entry is through Agent tools and CLI.",
+        "Linkage is an explicit tool call using paths/summary data, not an automatic foreign-key chain from every session or run."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/hypothesis_tool.py",
+          "lines": "20-193"
+        },
+        {
+          "file": "agent/api_server.py",
+          "lines": "178-323"
+        }
+      ],
+      "maturity": "durable but manually linked research object"
+    },
+    {
+      "id": "alpha_zoo",
+      "category": "factor library and cross-sectional evaluation",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /alpha/readiness",
+            "GET /alpha/list",
+            "GET /alpha/{alpha_id}",
+            "POST /alpha/bench",
+            "GET /alpha/bench/{job_id}",
+            "GET /alpha/bench/{job_id}/stream",
+            "POST /alpha/compare",
+            "GET /alpha/compare/{job_id}",
+            "GET /alpha/compare/{job_id}/stream"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/alpha_routes.py",
+              "lines": "404-531,537-649,654-744"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "293-296"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "alpha_zoo list_alphas/get_alpha/health; alpha_bench and alpha_compare evaluate existing library entries."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/alpha_zoo_tool.py",
+              "lines": "68-155"
+            },
+            {
+              "file": "agent/src/tools/alpha_bench_tool.py",
+              "lines": "1257-1405"
+            },
+            {
+              "file": "agent/src/tools/alpha_compare_tool.py",
+              "lines": "1-100"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Bundled factor definitions and benchmark jobs",
+          "storage": "Factor code and metadata are read from the bundled factor registry. HTTP benchmark/compare job state is held in process-local job dictionaries; benchmark output can also be written as an HTML report.",
+          "relations": "Bench/compare jobs reference alpha IDs, universe, period, selection, and progress/result; they do not create a user strategy code artifact.",
+          "evidence": [
+            {
+              "file": "agent/src/factors/registry.py",
+              "lines": "1-140"
+            },
+            {
+              "file": "agent/src/api/alpha_routes.py",
+              "lines": "264-362,570-631,670-727"
+            },
+            {
+              "file": "agent/src/tools/alpha_bench_tool.py",
+              "lines": "1280-1400"
+            }
+          ]
+        }
+      ],
+      "flow": "Browse bundled factors, inspect source/metadata, benchmark factors, compare selected IDs, read result/progress. This is a factor-research loop, not an interactive strategy-code authoring or execution pipeline.",
+      "limits": [
+        "CSI300 readiness requires both Tushare token configuration and the Tushare dependency. S&P 500 is marked public-data ready; BTC-USDT is rejected for cross-sectional IC because it is one asset.",
+        "Alpha benchmark job state is in memory and can disappear on process restart. Actual data coverage depends on the selected universe provider and its period/history.",
+        "The API offers list/get/bench/compare, not a factor registration or source-code mutation endpoint."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/api/alpha_routes.py",
+          "lines": "404-417,553-563,570-631,659-727"
+        }
+      ],
+      "maturity": "connected evaluation for bundled factors; not user-authored strategy lifecycle"
+    },
+    {
+      "id": "strategy_store_and_governance",
+      "category": "strategy and factor assets",
+      "entrypoints": [
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "sdm_register",
+            "sdm_status",
+            "sdm_decay_scan"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/sdm_register_tool.py",
+              "lines": "40-48,88-119,198-278"
+            },
+            {
+              "file": "agent/src/tools/sdm_status_tool.py",
+              "lines": "77-139"
+            },
+            {
+              "file": "agent/src/tools/sdm_decay_scan_tool.py",
+              "lines": "31-145"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Artifact",
+          "storage": "SQLite strategy_store.db by default; override path is supported. Related tables hold bench_history, adaptation_bindings, and decay_snapshots.",
+          "fields": [
+            "factor/strategy type",
+            "name",
+            "universe",
+            "paper/source",
+            "formula or signal/entry/exit/sizing",
+            "signal engine path/run_dir",
+            "hypothesis_id",
+            "derived_from",
+            "status",
+            "developer/owner/validator/approver/model tier/use/limitations/validation status"
+          ],
+          "lifecycle": [
+            "created",
+            "benching",
+            "active",
+            "monitoring",
+            "decayed",
+            "disabled"
+          ],
+          "validation_status": [
+            "unvalidated",
+            "in_validation",
+            "validated",
+            "approved",
+            "rejected"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/strategy_store/models.py",
+              "lines": "9-134"
+            },
+            {
+              "file": "agent/src/strategy_store/sqlite_store.py",
+              "lines": "126-254,378-456,651-774"
+            }
+          ]
+        }
+      ],
+      "flow": "Register a factor/strategy record, attach its source/logic and optional hypothesis/governance fields, update lifecycle, record benchmark history, and scan for decay. Decay scans require at least three usable benchmark observations to classify an artifact.",
+      "limits": [
+        "Model governance metadata is optional for a bare artifact. If any governance fields are supplied, intended_use and limitations are required.",
+        "The four-eyes check reports a developer/approver match but explicitly does not block it. The only hard validation transition rule is that APPROVED cannot be reached directly from UNVALIDATED; every other transition is left to caller discretion.",
+        "The tools can register descriptions and file paths; they do not themselves generate strategy code or prove a broker-ready strategy."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/sdm_register_tool.py",
+          "lines": "120-187,237-278"
+        },
+        {
+          "file": "agent/src/strategy_store/models.py",
+          "lines": "195-262"
+        },
+        {
+          "file": "agent/src/tools/sdm_decay_scan_tool.py",
+          "lines": "100-145"
+        }
+      ],
+      "maturity": "durable asset lifecycle with partial, caller-driven model governance"
+    },
+    {
+      "id": "strategy_discovery_and_adaptation",
+      "category": "evidence-based strategy catalog",
+      "entrypoints": [
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "list_strategies",
+            "query_strategies",
+            "get_strategy_evidence",
+            "refresh_strategy_evidence",
+            "adapt_strategy"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/strategy_discovery_tool.py",
+              "lines": "127-185,188-311,312-363,583-730"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "POST /api/strategy-adaptations",
+            "POST /api/strategy-adaptations/evidence"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/strategy_adaptation_routes.py",
+              "lines": "1-38"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "217-220"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "strategy_regime_evidence",
+          "storage": "SQLite disposable evidence cache, default <runtime-root>/strategy_discovery.db or ~/.vibe-trading/strategy_discovery.db; environment/config override supported.",
+          "grain": "One row per strategy_id and market regime, with trades, position size, return/benchmark/excess, Sharpe, drawdown, date ranges, cost breakeven, evidence quality, warnings, provenance run directory, verification date, and regime definition.",
+          "evidence": [
+            {
+              "file": "agent/src/strategy_discovery/evidence_store.py",
+              "lines": "34-68,105-139,159-220"
+            },
+            {
+              "file": "agent/src/strategy_discovery/models.py",
+              "lines": "125-179"
+            }
+          ]
+        },
+        {
+          "name": "Adapted strategy artifact",
+          "storage": "Child StrategyStore artifact plus an atomic adaptation binding and a prepared run directory containing config.json and an empty code/ folder.",
+          "relations": "Child derives_from parent, starts CREATED/UNVALIDATED, has no inherited run/code attestation; parent evidence must belong to parent and pass freshness/quality gates.",
+          "evidence": [
+            {
+              "file": "agent/src/strategy_store/adaptation.py",
+              "lines": "40-92,95-149"
+            },
+            {
+              "file": "agent/src/strategy_discovery/adaptation_workflow.py",
+              "lines": "18-108"
+            }
+          ]
+        }
+      ],
+      "flow": "Catalog combines Alpha Zoo and SDM records, enriches them with per-regime evidence, queries can require evidence quality, trade count, cost feasibility, Sharpe and non-stale evidence. Evidence refresh consumes explicit run directories/manifest and rebuilds the cache. Adaptation creates a gated child scaffold; the response then instructs a separate skill/code-generation, backtest, and evidence-refresh sequence.",
+      "limits": [
+        "This is not a one-click research-to-verified-strategy workflow. Code generation, backtesting, and evidence refresh are separate actions.",
+        "Evidence is a disposable cache, not source of truth. Invalid run entries are skipped; path and state/artifact gates can prevent ingestion.",
+        "Adaptation is description-limited: the patch type allows name, universe, and position sizing; parent signal rules are not edited by this function."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/strategy_discovery/facade.py",
+          "lines": "368-456,606-665"
+        },
+        {
+          "file": "agent/src/tools/strategy_discovery_tool.py",
+          "lines": "583-653,656-730"
+        },
+        {
+          "file": "agent/src/strategy_discovery/adaptation_workflow.py",
+          "lines": "45-107"
+        }
+      ],
+      "maturity": "evidence workflow is connected; code and backtest remain explicit subsequent steps"
+    },
+    {
+      "id": "general_backtest_and_run_artifacts",
+      "category": "strategy execution research",
+      "entrypoints": [
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "backtest_tool runs a supplied run_dir containing config.json and code/signal_engine.py."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/backtest_tool.py",
+              "lines": "193-309,339-380"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /runs, GET /runs/{id}, /code, /preview, /factor, /pine, /positions/sectors; GET /runs/{id}/attribution."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/runs_routes.py",
+              "lines": "878-1058"
+            },
+            {
+              "file": "agent/src/api/attribution_routes.py",
+              "lines": "74-100"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "180-186"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "run directory",
+          "storage": "Runs under the configured Vibe runtime; contains config.json, generated code, state.json, run_card/metrics/positions/curve and other engine artifacts when produced.",
+          "relations": "Run IDs identify result views; strategy artifact run_dir and hypothesis run_cards may separately link to this directory. BacktestTool marks success/failure lifecycle state.",
+          "evidence": [
+            {
+              "file": "agent/src/tools/backtest_tool.py",
+              "lines": "193-309"
+            },
+            {
+              "file": "agent/src/api/runs_routes.py",
+              "lines": "878-1058"
+            },
+            {
+              "file": "agent/src/hypotheses/registry.py",
+              "lines": "282-327"
+            }
+          ]
+        }
+      ],
+      "flow": "Code is supplied or generated into a run directory; backtest validates the contract, runs the configured engine, records state and artifacts, and exposes results. Factor/strategy evidence ingestion is a separate tool step.",
+      "limits": [
+        "A working backtest depends on a valid signal_engine.py/config and a loader covering the requested instruments, interval, and date range.",
+        "The backtest engine can compute metrics; it does not establish out-of-sample validity, live tradability, or profitability by itself."
+      ],
+      "maturity": "connected run execution/result retrieval; code creation and higher-level validation are separate"
+    },
+    {
+      "id": "trade_journal_analysis",
+      "category": "broker file review",
+      "entrypoints": [
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "analyze_trade_journal(file_path, analysis_type, filter_expr)"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/trade_journal_tool.py",
+              "lines": "632-755"
+            },
+            {
+              "file": "agent/src/tools/trade_journal_parsers.py",
+              "lines": "102-202,401-450,701-733"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "POST /upload for supported document/data file upload; report download endpoints are separate."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/uploads_routes.py",
+              "lines": "96-145"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Normalized in-memory trade frame",
+          "storage": "The analyzer reads the user-selected CSV/Excel path and computes a result; this tool itself does not save a durable trading account or journal object.",
+          "relations": "Parser output supplies normalized trades to profile/behavior calculations or to the separate Shadow extraction tool.",
+          "evidence": [
+            {
+              "file": "agent/src/tools/trade_journal_tool.py",
+              "lines": "632-699"
+            },
+            {
+              "file": "agent/src/tools/trade_journal_parsers.py",
+              "lines": "102-125,173-202"
+            }
+          ]
+        }
+      ],
+      "flow": "Parses Tonghuashun, Eastmoney, Futu, and generic files; profile and behavior analyses are implemented. The strategy_features branch still returns a pending Phase 4c placeholder.",
+      "limits": [
+        "Eastmoney CSV/XLSX parsing is file analysis, not an Eastmoney online account connector.",
+        "Strategy extraction is a separate Shadow tool; it is not the output of analyze_trade_journal(analysis_type=strategy)."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/trade_journal_tool.py",
+          "lines": "632-699,716-755"
+        },
+        {
+          "file": "agent/src/tools/trade_journal_parsers.py",
+          "lines": "401-450"
+        }
+      ],
+      "maturity": "file-in/file-out analysis; strategy path in this tool remains a placeholder"
+    },
+    {
+      "id": "shadow_account",
+      "category": "rule extraction, replay, report, scan",
+      "entrypoints": [
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "extract_shadow_strategy",
+            "run_shadow_backtest",
+            "render_shadow_report",
+            "scan_shadow_signals"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/shadow_account_tool.py",
+              "lines": "80-158,162-243,248-329,334-378"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /shadow-reports/{shadow_id}?format=html|pdf; report is fetched by opaque shadow ID."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/uploads_routes.py",
+              "lines": "105-126"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "ShadowProfile",
+          "storage": "<runtime-root>/shadow_accounts/{shadow_id}.json; content includes source journal hash, market, date range, profitable/total round trips, profile text, preferred markets, and 3-5 structured rules.",
+          "relations": "Rules feed a generated signal engine and backtest config; backtest run outputs/cache live under shadow_runs/{shadow_id}/{currency}; report HTML/PDF under shadow_reports; the report can include scan results.",
+          "evidence": [
+            {
+              "file": "agent/src/shadow_account/storage.py",
+              "lines": "1-7,18-42,67-116"
+            },
+            {
+              "file": "agent/src/shadow_account/models.py",
+              "lines": "20-77,84-117"
+            },
+            {
+              "file": "agent/src/shadow_account/codegen.py",
+              "lines": "97-193"
+            }
+          ]
+        }
+      ],
+      "flow": "A trade file produces a durable ShadowProfile; the user can run historical replays, render HTML/PDF, and scan current liquid baskets against extracted rules. These are separate explicit tool calls, but the objects link through shadow_id and the report can run a missing backtest itself.",
+      "limits": [
+        "This is simulation/research only and does not place or relay orders.",
+        "Markets are grouped by settlement currency; each currency pool starts with full capital. The headline is one comparable currency pool and there is no FX aggregation across pools.",
+        "Today's scan examines bounded built-in baskets and price features, not a whole-market screener or continuous live scanner.",
+        "Market coverage and report PDF engine availability depend on loaders and optional render packages."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/shadow_account/backtester.py",
+          "lines": "164-305"
+        },
+        {
+          "file": "agent/src/shadow_account/scanner.py",
+          "lines": "22-74"
+        },
+        {
+          "file": "agent/src/shadow_account/reporter.py",
+          "lines": "59-105"
+        }
+      ],
+      "maturity": "connected four-step shadow workflow; not broker execution"
+    },
+    {
+      "id": "portfolio_snapshot_and_risk",
+      "category": "account, positions, risk, allocation",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /api/portfolio",
+            "POST /api/portfolio/refresh",
+            "GET refresh status/history/analysis-context/export",
+            "GET/PUT settings",
+            "POST ExtraETF import",
+            "POST rebalance"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/portfolio_routes.py",
+              "lines": "37-62,135-291"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "252-258"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "portfolio_summary reads an immutable snapshot; optional target_weights returns a value-only proposal. portfolio_risk_xray computes historical basket risk."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/portfolio_tool.py",
+              "lines": "12-86"
+            },
+            {
+              "file": "agent/src/tools/portfolio_risk_tool.py",
+              "lines": "35-86"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Portfolio snapshot",
+          "storage": "SQLite portfolio/portfolio.sqlite3; immutable snapshots plus FX quotes/cache. Settings and connections are separate runtime-root JSON stores.",
+          "relations": "Snapshot ties source account rows and positions to snapshot_id, FX rates/as-of, completeness, valuation totals, and normalized combined holdings; Agent analysis can pin an exact snapshot_id.",
+          "evidence": [
+            {
+              "file": "agent/src/portfolio/store.py",
+              "lines": "34-77,79-125"
+            },
+            {
+              "file": "agent/src/portfolio/config.py",
+              "lines": "250-315"
+            },
+            {
+              "file": "agent/src/tools/portfolio_tool.py",
+              "lines": "15-28,50-86"
+            }
+          ]
+        }
+      ],
+      "flow": "Refresh reads every enabled read-only source, values positions/cash, applies reference FX, records per-source failures, and saves an immutable complete or incomplete snapshot. Risk x-ray consumes a symbol/weight basket; rebalance consumes a pinned snapshot and target weights.",
+      "limits": [
+        "A failed enabled source is omitted from holdings but marks the snapshot incomplete; it is not silently treated as a complete portfolio.",
+        "PortfolioService only reads and never places/cancels orders.",
+        "Rebalance is proposal_only: requires complete snapshot, fresh FX, priced assets, long-only holdings, and target weights summing to one; returns value changes, no quantity/order/tax/fee/execution price.",
+        "Import paths support specific files such as ExtraETF holdings; they do not create online broker access."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/portfolio/service.py",
+          "lines": "126-131,231-287"
+        },
+        {
+          "file": "agent/src/portfolio/rebalance.py",
+          "lines": "13-78"
+        },
+        {
+          "file": "agent/src/api/portfolio_routes.py",
+          "lines": "265-291"
+        }
+      ],
+      "maturity": "connected read-only account aggregation and value-only allocation proposal"
+    },
+    {
+      "id": "broker_connections",
+      "category": "broker reads and account selection",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /api/connections, POST/PUT/DELETE connections, list/select account, set credentials, check connector."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/connection_routes.py",
+              "lines": "58-211"
+            },
+            {
+              "file": "agent/src/trading/connections.py",
+              "lines": "27-69,120-166,229-255"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "TradingConnection",
+          "storage": "Connections and selected portfolio sources are under runtime root; connector credential values are stored in OS vaults or connector-owned OAuth/local-session stores, while the API returns only credential status.",
+          "relations": "Connection pins profile/environment/transport and optionally one broker account reference; portfolio settings can enable a read-only eligible connection.",
+          "evidence": [
+            {
+              "file": "agent/src/trading/connections.py",
+              "lines": "95-147,150-167,210-255"
+            },
+            {
+              "file": "agent/src/api/connection_routes.py",
+              "lines": "138-198"
+            },
+            {
+              "file": "agent/src/trading/profiles.py",
+              "lines": "30-58,61-77"
+            }
+          ]
+        }
+      ],
+      "flow": "The user selects a declared connector profile, creates a connection, supplies its declared credential fields or authorizes its own OAuth/local session, selects an account where needed, then runs a read-only status check and can add portfolio-eligible profiles to the read snapshot.",
+      "limits": [
+        "Portfolio accepts only read-only profiles declaring both account.read and positions.read.",
+        "Built-in connectors include IBKR, Robinhood, Tiger, Longbridge, Alpaca, OKX, Binance, Futu, Dhan, Shoonya, Trading212, MT5, eToro, Zerodha, KIS, Upbit, Toss, Scalable, and m.Stock; local plugins can extend the read-only catalog.",
+        "No Eastmoney broker connector/profile is present. Eastmoney is an OHLCV market-data loader and a trade-file parser elsewhere in the source, not online ordinary-trading-account access."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/trading/profiles.py",
+          "lines": "8-53,61-77"
+        },
+        {
+          "file": "agent/src/trading/connections.py",
+          "lines": "27-52,467-500"
+        },
+        {
+          "file": "agent/backtest/loaders/eastmoney_loader.py",
+          "lines": "1-13,53-69"
+        },
+        {
+          "file": "agent/src/tools/trade_journal_parsers.py",
+          "lines": "401-450"
+        }
+      ],
+      "maturity": "read connector lifecycle implemented; actual account behavior requires the provider's own session, credential, and permissions"
+    },
+    {
+      "id": "paper_and_live_trading",
+      "category": "broker order execution",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "POST /mandate/commit",
+            "GET /live/accounts",
+            "POST /live/halt",
+            "POST /live/resume",
+            "GET /live/status",
+            "POST /live/authorize",
+            "POST /live/connectors/{profile_id}/verify",
+            "GET/PUT /live/runner/settings",
+            "POST /live/runner/start",
+            "POST /live/runner/stop"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/live_routes.py",
+              "lines": "996-1120,1287-1445"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "252-291"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tools/connector layer",
+          "actions": [
+            "TradingConnectorTool and remote live order tools call profile-capability-gated service functions for place/cancel/close/modify."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/trading_connector_tool.py",
+              "lines": "1-220"
+            },
+            {
+              "file": "agent/src/trading/service.py",
+              "lines": "664-792,926-1077"
+            },
+            {
+              "file": "agent/src/live/order_guard.py",
+              "lines": "101-180"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Mandate, consent record, halt flag, live audit chain, runner jobs/counters",
+          "storage": "<runtime-root>/live/{broker}/mandate.json, consent records, kill-switch marker, audit.jsonl and audit_chain.jsonl; runner job/budget state is broker-scoped.",
+          "relations": "A live order is linked to the active unexpired mandate and consent record; kill switch may block actions or apply configured cancel/flatten behavior. Live audit is separate from research-run traces.",
+          "evidence": [
+            {
+              "file": "agent/src/live/paths.py",
+              "lines": "1-12,20-41"
+            },
+            {
+              "file": "agent/src/live/mandate/commit.py",
+              "lines": "400-543"
+            },
+            {
+              "file": "agent/src/live/audit.py",
+              "lines": "1-58"
+            }
+          ]
+        }
+      ],
+      "flow": "Paper and live are separate connector profiles/environment declarations. Live mandate proposals are read-only; only surface-originated explicit consent_ack can commit a mandate. Commit writes a one-use consent-linked, expiring mandate after rechecking broker ceilings. Runner start requires an unexpired mandate and an untripped kill switch.",
+      "limits": [
+        "Paper profiles may expose orders.place without real funds; live order profiles declare orders.place.requires_mandate. Profile semantics are provider-specific: Alpaca separates paper/live hosts; Futu uses local OpenD and a live trade-password unlock; Longbridge paper/live identification is operator-declared and live order placement is not exposed in the cited profile.",
+        "This is a real-money capable subsystem; it depends on an explicitly supported broker, its SDK/OAuth/local terminal, account permissions, mandate, and limits.",
+        "No Eastmoney ordinary-account adapter exists, so a normal Eastmoney account cannot use this live/paper order workflow in this snapshot."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/trading/connectors/alpaca/profiles.py",
+          "lines": "15-70"
+        },
+        {
+          "file": "agent/src/trading/connectors/futu/profiles.py",
+          "lines": "28-93"
+        },
+        {
+          "file": "agent/src/trading/connectors/longbridge/profiles.py",
+          "lines": "12-55"
+        },
+        {
+          "file": "agent/src/live/mandate/commit.py",
+          "lines": "400-427,455-527"
+        },
+        {
+          "file": "agent/src/api/live_routes.py",
+          "lines": "1380-1431"
+        }
+      ],
+      "maturity": "implemented but requires supported broker environment and explicit approval; unrelated to read-only portfolio"
+    },
+    {
+      "id": "scheduled_research",
+      "category": "automation and approval",
+      "entrypoints": [
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "status",
+            "list_jobs",
+            "get_job",
+            "list_playbooks",
+            "propose_create",
+            "propose_cancel"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/scheduled_research_tool.py",
+              "lines": "15-136"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "POST/GET/PATCH/DELETE /scheduled-runs",
+            "GET /scheduled-runs/status",
+            "POST /scheduled-runs/proposals/{id}/commit|discard",
+            "GET /scheduled-runs/playbooks[/{slug}]",
+            "POST /scheduled-runs/playbooks/{slug}"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/scheduled_routes.py",
+              "lines": "470-665,842-1005"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "128-153,310-323"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "ScheduledResearchJob and per-firing delivery/verdict state",
+          "storage": "<runtime-root>/scheduled_research/scheduled_research_jobs.json; proposal JSON is separately persisted with expiry/status.",
+          "fields": [
+            "prompt or playbook",
+            "schedule/timezone/next_run/end_at",
+            "job status",
+            "last run/failure",
+            "delivery target/format/status/retries",
+            "latest verdict"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/scheduled_research/store.py",
+              "lines": "26-38,59-79,85-145"
+            },
+            {
+              "file": "agent/src/scheduled_research/models.py",
+              "lines": "184-232,341-430"
+            },
+            {
+              "file": "agent/src/scheduled_research/proposals.py",
+              "lines": "28-205"
+            }
+          ]
+        }
+      ],
+      "flow": "Agent tool proposals do not change jobs; a human must commit or discard. Commit checks proposal freshness and requires the scheduler executor enabled/running. The authenticated REST API also exposes direct create/update/delete paths; direct POST persists a pending job immediately, separate from the Agent proposal approval path. A scheduled firing enqueues an Agent session attempt; completion and report delivery are tracked separately.",
+      "limits": [
+        "Scheduler availability is an environment/configuration dependency; a stored PENDING job does not prove an active executor.",
+        "Delivery needs a configured origin/channel target; PDF email requires the configured password and optional renderer.",
+        "Job ID is not a general idempotency request ID."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/scheduled_research_tool.py",
+          "lines": "15-24,99-135"
+        },
+        {
+          "file": "agent/src/api/scheduled_routes.py",
+          "lines": "470-593,624-646"
+        },
+        {
+          "file": "agent/src/scheduled_research/models.py",
+          "lines": "184-232"
+        },
+        {
+          "file": "agent/src/api_server.py",
+          "lines": "128-143"
+        }
+      ],
+      "maturity": "complete scheduled-job lifecycle with human-confirmable Agent proposals and separately available direct API mutation"
+    },
+    {
+      "id": "research_goals",
+      "category": "objective, evidence, and completion audit",
+      "entrypoints": [
+        {
+          "kind": "HTTP under session",
+          "actions": [
+            "POST/GET/PATCH /sessions/{id}/goal",
+            "POST /sessions/{id}/goal/evidence",
+            "PATCH /sessions/{id}/goal/status"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/sessions_routes.py",
+              "lines": "457-650"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "start_research_goal",
+            "get_research_goal",
+            "add_goal_evidence",
+            "update_research_goal_status"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/goal_tool.py",
+              "lines": "105-217,218-310,311-420"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "Goal, criteria, claims, evidence, audit rows",
+          "storage": "SQLite goal ledger at runtime-root sessions.db by default; one current goal per session, with evidence linked by goal_id and optionally criterion_id, claim_id, run_id, and tool_call_id.",
+          "evidence": [
+            {
+              "file": "agent/src/goal/models.py",
+              "lines": "10-33,40-63,65-93,95-160"
+            },
+            {
+              "file": "agent/src/goal/store.py",
+              "lines": "35-46,127-246"
+            },
+            {
+              "file": "agent/src/api/sessions_routes.py",
+              "lines": "480-514,556-605,612-650"
+            }
+          ]
+        }
+      ],
+      "flow": "A session can define objective, criteria, risk tier, and budgets; add traceable evidence; then record criterion audit rows and status/recap. Goal progress can be injected into the Agent session context.",
+      "limits": [
+        "The goal layer is research accountability/progress tracking, not broker approval. API explicitly rejects LIVE_TRADING_OR_EXECUTION research goals.",
+        "Evidence may refer to artifacts and run directories; references are records, not automatic proof that an artifact is valid or a conclusion correct."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/api/sessions_routes.py",
+          "lines": "463-499,521-548,556-650"
+        },
+        {
+          "file": "agent/src/goal/context.py",
+          "lines": "18-94,161-180"
+        },
+        {
+          "file": "agent/src/goal/policy.py",
+          "lines": "38-57"
+        }
+      ],
+      "maturity": "durable goal/evidence/audit workflow attached to a conversation"
+    },
+    {
+      "id": "memory_and_method_governance",
+      "category": "cross-session recall and run provenance",
+      "entrypoints": [
+        {
+          "kind": "Agent tool",
+          "actions": [
+            "remember save/recall/forget/reinforce; memory types user/feedback/project/reference."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/remember_tool.py",
+              "lines": "13-79,80-160"
+            }
+          ]
+        },
+        {
+          "kind": "run instrumentation",
+          "actions": [
+            "AgentLoop writes run_manifest.json beside trace.jsonl; manifest hashes system prompt, tool names, and package versions."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/agent/loop.py",
+              "lines": "278-333,434"
+            },
+            {
+              "file": "agent/src/governance/manifest.py",
+              "lines": "219-269,356-430"
+            }
+          ]
+        },
+        {
+          "kind": "live audit",
+          "actions": [
+            "Immutable live action records go to audit.jsonl and a tamper-evident hash chain."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/live/audit.py",
+              "lines": "1-58,321-329"
+            },
+            {
+              "file": "agent/src/governance/ledger.py",
+              "lines": "124-153,309-327,368-471"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "PersistentMemoryEntry",
+          "storage": "Markdown-like memory files under ~/.vibe-trading/memory by default.",
+          "relations": "Entries are explicitly saved/recalled/reinforced; they are not automatically keyed to hypothesis_id, strategy_id, or backtest run."
+        },
+        {
+          "name": "RunManifest",
+          "storage": "run_manifest.json next to a run trace.",
+          "relations": "Content-addressed methodology provenance: system prompt hash, skill coverage note, tool set, package versions, optional small extra fields. It does not copy the system prompt."
+        },
+        {
+          "name": "Live audit record",
+          "storage": "Separate append-only live audit and chained audit file rooted under live state.",
+          "relations": "Can tie an order/action to mandate and consent record; separate from research memory."
+        }
+      ],
+      "flow": "There are three distinct records: user-curated cross-session notes, per-run methodology provenance, and compliance-grade live-action audit. The AgentLoop provenance file is actually wired even though the manifest module's older prose still describes future wiring.",
+      "limits": [
+        "No automatic strategy-method memory promotion is present; an Agent/user must explicitly save a note with remember.",
+        "The live governance ledger is not a general model approval service. Strategy artifact governance fields and validation statuses live in StrategyStore.",
+        "Several native stores use direct Path.home defaults (for example memory and hypotheses), while other stores use runtime-root helpers; do not assume one root setting retargets every subsystem."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/memory/persistent.py",
+          "lines": "1-26,127-145,200-250"
+        },
+        {
+          "file": "agent/src/tools/remember_tool.py",
+          "lines": "19-68,89-160"
+        },
+        {
+          "file": "agent/src/agent/loop.py",
+          "lines": "278-333,434"
+        },
+        {
+          "file": "agent/src/governance/manifest.py",
+          "lines": "1-66,219-269"
+        },
+        {
+          "file": "agent/src/live/audit.py",
+          "lines": "1-58"
+        }
+      ],
+      "maturity": "explicit memory and run/audit provenance implemented; not an automated performance-learning loop"
+    },
+    {
+      "id": "valuation_and_institutional_research",
+      "category": "model calculations, exports, and prompt playbooks",
+      "entrypoints": [
+        {
+          "kind": "library",
+          "actions": [
+            "run_dcf",
+            "run_comps",
+            "project_three_statement; build/diff artifacts; export XLSX and one-slide PPTX."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/quantlib/valuation/__init__.py",
+              "lines": "1-40"
+            },
+            {
+              "file": "agent/src/quantlib/valuation/dcf.py",
+              "lines": "1258-1344"
+            },
+            {
+              "file": "agent/src/quantlib/valuation/comps.py",
+              "lines": "1136-1245"
+            },
+            {
+              "file": "agent/src/quantlib/valuation/threestatement.py",
+              "lines": "666-764"
+            },
+            {
+              "file": "agent/src/quantlib/valuation/artifact.py",
+              "lines": "691-770,772-840,841-929,1165-1209,1294-1329,1407-1446,1556-1615"
+            }
+          ]
+        },
+        {
+          "kind": "CLI slash playbooks",
+          "actions": [
+            "/comps",
+            "/dcf",
+            "/attrib",
+            "/memo",
+            "/earnings",
+            "/screen"
+          ],
+          "evidence": [
+            {
+              "file": "agent/cli/commands/institutional/__init__.py",
+              "lines": "1-30"
+            },
+            {
+              "file": "agent/cli/commands/institutional/playbooks.py",
+              "lines": "104-159,193-240,285-340,378-406,460-466,549-555"
+            },
+            {
+              "file": "agent/cli/commands/institutional/runner.py",
+              "lines": "104-157,160-206"
+            },
+            {
+              "file": "agent/cli/commands/slash_router.py",
+              "lines": "64-95"
+            }
+          ]
+        },
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /runs/{run_id}/attribution reads stored backtest artifacts."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/attribution_routes.py",
+              "lines": "74-100"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [
+        {
+          "name": "ModelArtifact",
+          "storage": "Library returns an in-memory versioned object containing inputs, outputs, assumptions, gaps/warnings, model/schema version, generation time, and deterministic input hash. XLSX/PPTX exporters write only to the caller-supplied path.",
+          "relations": "Artifact diff compares versioned model outputs; there is no strategy_store foreign-key or API persistence route for these QuantLib valuation artifacts.",
+          "evidence": [
+            {
+              "file": "agent/src/quantlib/valuation/artifact.py",
+              "lines": "183-268,964-1005,1165-1209,1294-1329,1407-1446,1556-1615"
+            }
+          ]
+        }
+      ],
+      "flow": "The QuantLib modules are deterministic calculation primitives with strict caller-supplied inputs. The CLI slash commands render research instructions and queue them as Agent prompts; they are not wrappers around run_dcf/run_comps. The library's XLSX/PPTX exports are real but caller-driven.",
+      "limits": [
+        "DCF/comps/three-statement functions do not fetch market or financial data themselves and are not registered as dedicated FastAPI valuation endpoints.",
+        "CLI playbooks depend on available Agent tools and provider access; missing inputs must be reported as gaps. /memo is a prompt workflow, not a durable memo business object by itself.",
+        "Three-statement model has compute and workbook/deck export functions, but no dedicated slash command or HTTP route was found in the mounted API.",
+        "XLSX exporters need openpyxl and PPTX export needs python-pptx."
+      ],
+      "evidence": [
+        {
+          "file": "agent/api_server.py",
+          "lines": "178-323"
+        },
+        {
+          "file": "agent/cli/commands/institutional/runner.py",
+          "lines": "118-157,192-205"
+        },
+        {
+          "file": "agent/src/quantlib/valuation/dcf.py",
+          "lines": "1258-1344"
+        },
+        {
+          "file": "agent/src/quantlib/valuation/comps.py",
+          "lines": "1136-1245"
+        },
+        {
+          "file": "agent/src/quantlib/valuation/threestatement.py",
+          "lines": "666-764"
+        }
+      ],
+      "maturity": "calculation and export primitives are implemented; institutional CLI is prompt-driven, not a structured valuation API workflow"
+    },
+    {
+      "id": "options_analysis",
+      "category": "options research",
+      "entrypoints": [
+        {
+          "kind": "HTTP",
+          "actions": [
+            "GET /options/chain",
+            "POST /options/payoff"
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/api/options_routes.py",
+              "lines": "193-243"
+            },
+            {
+              "file": "agent/api_server.py",
+              "lines": "297-300"
+            }
+          ]
+        },
+        {
+          "kind": "Agent tools",
+          "actions": [
+            "get_options_chain, options_payoff, options_pricing."
+          ],
+          "evidence": [
+            {
+              "file": "agent/src/tools/options_chain_tool.py",
+              "lines": "38-69"
+            },
+            {
+              "file": "agent/src/tools/options_payoff_tool.py",
+              "lines": "21-110"
+            },
+            {
+              "file": "agent/src/tools/options_pricing_tool.py",
+              "lines": "77-135"
+            }
+          ]
+        }
+      ],
+      "persistent_objects": [],
+      "flow": "Chain retrieval supplies US-listed option contracts; payoff analysis accepts user-specified legs/scenarios and returns payoff/risk/Greeks; Black-Scholes pricing is a computation tool.",
+      "limits": [
+        "Options chain source is Yahoo Finance and supports US underlyings only. These are analysis endpoints, not order-entry endpoints.",
+        "No durable options portfolio or saved trade object is created by these routes."
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/options_chain_tool.py",
+          "lines": "38-47"
+        },
+        {
+          "file": "agent/src/api/options_routes.py",
+          "lines": "193-243"
+        }
+      ],
+      "maturity": "read-only chain and calculation tools"
+    }
+  ],
+  "object_operations": [
+    {
+      "object": "Hypothesis",
+      "operations": [
+        "create",
+        "update fields/status",
+        "search/list/show",
+        "invalidate to rejected",
+        "link_backtest with optional metrics/validation/notes"
+      ],
+      "evaluation_boundary": "The registry does not calculate or approve a hypothesis. Its status is caller-updated; a backtest link stores supplied evidence metadata.",
+      "archive_boundary": "No archive status/action. Rejected is the invalidation state.",
+      "evidence": [
+        {
+          "file": "agent/src/hypotheses/registry.py",
+          "lines": "158-212,214-280,282-327,329-389"
+        },
+        {
+          "file": "agent/src/hypotheses/cli_handlers.py",
+          "lines": "187-216,223-300"
+        },
+        {
+          "file": "agent/src/tools/hypothesis_tool.py",
+          "lines": "20-193"
+        }
+      ]
+    },
+    {
+      "object": "StrategyStore artifact",
+      "operations": [
+        "register factor/strategy",
+        "list/detail",
+        "bench via run config or recorded evidence",
+        "decay_check/decay_scan",
+        "enable/disable",
+        "prepare child adaptation",
+        "refresh per-regime evidence"
+      ],
+      "evaluation_boundary": "Decay scan evaluates persisted bench history and needs at least three usable observations. Evidence query evaluates separately ingested run artifacts. These are distinct measurement paths.",
+      "archive_boundary": "No archive action. Disable marks an artifact inactive; decayed/disabled parents are blocked from adaptation/default recommendations.",
+      "evidence": [
+        {
+          "file": "agent/src/tools/sdm_status_tool.py",
+          "lines": "77-160,183-226"
+        },
+        {
+          "file": "agent/src/tools/sdm_decay_scan_tool.py",
+          "lines": "31-145"
+        },
+        {
+          "file": "agent/src/strategy_store/adaptation.py",
+          "lines": "40-92,128-149"
+        },
+        {
+          "file": "agent/src/strategy_discovery/facade.py",
+          "lines": "417-456,606-665"
+        }
+      ]
+    },
+    {
+      "object": "Research Goal",
+      "operations": [
+        "start/replace",
+        "get",
+        "edit objective/summary",
+        "append evidence",
+        "update status with criterion audit rows/recap"
+      ],
+      "evaluation_boundary": "The store checks current goal identity and criterion audit/completion policy; it does not automatically determine whether a trading strategy is valid.",
+      "archive_boundary": "Goal states include superseded/cancelled; there is no standalone archive action. Deleting its session deletes its goals.",
+      "evidence": [
+        {
+          "file": "agent/src/api/sessions_routes.py",
+          "lines": "457-650,656-667"
+        },
+        {
+          "file": "agent/src/goal/models.py",
+          "lines": "10-24,40-160"
+        },
+        {
+          "file": "agent/src/goal/store.py",
+          "lines": "127-246"
+        }
+      ]
+    },
+    {
+      "object": "Persistent memory",
+      "operations": [
+        "save",
+        "recall/search",
+        "forget",
+        "reinforce by success/failure/user-confirm/user-reject"
+      ],
+      "evaluation_boundary": "Manual reinforcement updates memory quality/importance; it is not a computed strategy-performance evaluation and is not automatically linked to run evidence.",
+      "archive_boundary": "Optional lifecycle GC can archive low-importance memory files; automatic delete is disabled in this tier. User-facing tool offers forget, not a named archive action.",
+      "evidence": [
+        {
+          "file": "agent/src/tools/remember_tool.py",
+          "lines": "19-68,80-182"
+        },
+        {
+          "file": "agent/src/memory/lifecycle.py",
+          "lines": "71-112,180-246,283-307"
+        }
+      ]
+    },
+    {
+      "object": "Session",
+      "operations": [
+        "create/list/read",
+        "append messages",
+        "cancel active attempt",
+        "rename/auto-title",
+        "delete"
+      ],
+      "evaluation_boundary": "Attempt status and terminal transcript are the execution record.",
+      "archive_boundary": "SessionStatus contains archived, but the mounted session routes do not expose a session archive action; DELETE removes the session and its goals.",
+      "evidence": [
+        {
+          "file": "agent/src/session/models.py",
+          "lines": "122-139"
+        },
+        {
+          "file": "agent/src/api/sessions_routes.py",
+          "lines": "386-451,656-815"
+        }
+      ]
+    }
+  ],
+  "cross_workflow_assessment": [
+    {
+      "name": "research to hypothesis to strategy to backtest to evidence",
+      "finding": "Composable, not one-command. Session research and hypothesis tools can capture an idea and explicit run reference. SDM can register a strategy linked to hypothesis_id. Code generation is a skill/Agent action into a run_dir; BacktestTool executes it. Evidence refresh reads run artifacts into a separate disposable cache; strategy discovery queries cached per-regime evidence. The adaptation workflow explicitly returns next steps rather than executing them. remember is an independent user-curated memory tool.",
+      "missing_automatic_links": [
+        "session result to hypothesis",
+        "hypothesis to generated strategy code",
+        "run directory to strategy evidence (requires explicit refresh)",
+        "validated method to persistent memory"
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/tools/hypothesis_tool.py",
+          "lines": "129-160"
+        },
+        {
+          "file": "agent/src/tools/sdm_register_tool.py",
+          "lines": "88-119,211-233"
+        },
+        {
+          "file": "agent/src/strategy_discovery/adaptation_workflow.py",
+          "lines": "90-107"
+        },
+        {
+          "file": "agent/src/tools/backtest_tool.py",
+          "lines": "193-309"
+        },
+        {
+          "file": "agent/src/tools/strategy_discovery_tool.py",
+          "lines": "583-653,656-730"
+        },
+        {
+          "file": "agent/src/tools/remember_tool.py",
+          "lines": "19-68"
+        }
+      ]
+    },
+    {
+      "name": "trade file to rules to Shadow to report to scan",
+      "finding": "The components are connected by journal_path/shadow_id and can be sequenced end to end. The analyzer's strategy mode is still a placeholder, but extract_shadow_strategy independently parses the same supported file formats and persists rules. Backtest, report, and scan are four separate Agent tool actions; rendering a report can run the backtest when no cached result exists. All outputs remain shadow/research-only.",
+      "evidence": [
+        {
+          "file": "agent/src/tools/trade_journal_tool.py",
+          "lines": "632-699"
+        },
+        {
+          "file": "agent/src/tools/shadow_account_tool.py",
+          "lines": "80-158,162-243,248-378"
+        }
+      ]
+    },
+    {
+      "name": "account to risk to portfolio proposal",
+      "finding": "Read-only connector profiles feed immutable portfolio snapshots. portfolio_summary can pin a snapshot_id; portfolio_risk_xray uses a ticker/weight basket; rebalancing emits value-only proposal rows. There is no connector or route that converts the proposal into orders.",
+      "evidence": [
+        {
+          "file": "agent/src/portfolio/service.py",
+          "lines": "126-131,231-287"
+        },
+        {
+          "file": "agent/src/tools/portfolio_tool.py",
+          "lines": "15-28,50-86"
+        },
+        {
+          "file": "agent/src/portfolio/rebalance.py",
+          "lines": "13-78"
+        }
+      ]
+    },
+    {
+      "name": "schedule and approval",
+      "finding": "The Agent tool follows proposal plus human commit/discard; the direct authenticated scheduled-runs REST CRUD is a separate mutation surface and can persist jobs without the proposal step. Live trading has a stronger, separate surface-level explicit consent gate; neither mechanism is model-rank evidence.",
+      "evidence": [
+        {
+          "file": "agent/src/tools/scheduled_research_tool.py",
+          "lines": "15-24,124-135"
+        },
+        {
+          "file": "agent/src/api/scheduled_routes.py",
+          "lines": "470-593,624-646"
+        },
+        {
+          "file": "agent/src/live/mandate/commit.py",
+          "lines": "400-427,455-527"
+        }
+      ]
+    }
+  ],
+  "market_and_environment_constraints": [
+    {
+      "topic": "A-share market data",
+      "finding": "Backtest loader fallback order for a_share is Tencent, Eastmoney, BaoStock, AKShare, Tushare, Gildata, local. Tencent and Eastmoney are unauthenticated public OHLCV sources; Tushare needs token and package; Gildata needs a commercial token. This is market-data support only.",
+      "evidence": [
+        {
+          "file": "agent/backtest/loaders/registry.py",
+          "lines": "175-196"
+        },
+        {
+          "file": "agent/backtest/loaders/tencent_loader.py",
+          "lines": "1-8,60-75"
+        },
+        {
+          "file": "agent/backtest/loaders/eastmoney_loader.py",
+          "lines": "1-13,53-69"
+        },
+        {
+          "file": "agent/backtest/loaders/tushare.py",
+          "lines": "116-146"
+        },
+        {
+          "file": "agent/backtest/loaders/gildata_loader.py",
+          "lines": "35-41"
+        }
+      ]
+    },
+    {
+      "topic": "Eastmoney account boundary",
+      "finding": "The snapshot has Eastmoney market-data loading and an Eastmoney transaction-file parser, but no Eastmoney trading profile/connector in the built-in connector registry. A normal Eastmoney account is therefore not an online account, portfolio, or order connection in this snapshot.",
+      "evidence": [
+        {
+          "file": "agent/src/trading/profiles.py",
+          "lines": "8-53"
+        },
+        {
+          "file": "agent/backtest/loaders/eastmoney_loader.py",
+          "lines": "1-13"
+        },
+        {
+          "file": "agent/src/tools/trade_journal_parsers.py",
+          "lines": "401-450"
+        }
+      ]
+    },
+    {
+      "topic": "connector and portfolio maturity",
+      "finding": "Read-only profile eligibility is based on account.read plus positions.read. PortfolioCompatibility explicitly labels native/contract_tested/experimental; experimental profile declaration is not proof of correct valuation. Several connectors need SDKs, local daemons, OAuth, vendor keys, or market-specific permissions.",
+      "evidence": [
+        {
+          "file": "agent/src/trading/connections.py",
+          "lines": "27-52"
+        },
+        {
+          "file": "agent/src/portfolio/compatibility.py",
+          "lines": "1-8,20-22,33-120"
+        },
+        {
+          "file": "agent/src/trading/profiles.py",
+          "lines": "30-53"
+        }
+      ]
+    },
+    {
+      "topic": "A-share cross-sectional factor research",
+      "finding": "The alpha readiness route checks token and installed Tushare dependency for CSI300; S&P 500 is labeled public_data; BTC-USDT is a single-asset universe and cannot run cross-sectional IC benchmark.",
+      "evidence": [
+        {
+          "file": "agent/src/api/alpha_routes.py",
+          "lines": "404-417,553-563"
+        }
+      ]
+    }
+  ],
+  "source_scope_caveats": [
+    "No API requests, CLI sessions, backtests, web calls, broker logins, installs, or user credentials were accessed.",
+    "The code has distinct path conventions: session, portfolio, scheduled, Shadow, and live subsystems use runtime-root paths, while hypotheses, persistent memory, and the strategy store can default directly to Path.home(). Do not assume one path override retargets all stores.",
+    "The upstream manifest module contains an older docstring saying loop wiring is future work, but agent/loop.py actually calls _write_run_manifest and writes run_manifest.json. The implementation call site was used as evidence."
+  ]
+}

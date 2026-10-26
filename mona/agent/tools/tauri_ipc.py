@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -30,15 +29,8 @@ _TOKEN_HEADER = "x-mona-ipc-token"
 # Opener that bypasses all proxy settings. The IPC bridge is a localhost
 # HTTP server; system proxies (V2Ray/Clash on 127.0.0.1:10809) intercept
 # the request and fail to route it back, causing spurious connection errors
-# that trigger fail-closed subscription gating (all Pro tools hidden).
+# that prevent tools from reaching the native owner.
 _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-# TTL cache for the subscription access check so we don't hit the IPC bridge
-# on every single tool call within a short window. The AgentLoop refreshes
-# the ToolRegistry flag once per turn; this cache covers subagents and
-# mid-turn tool calls (e.g. hoard_search).
-_ACCESS_CACHE: tuple[bool, float] | None = None
-_ACCESS_TTL_SECONDS: float = 30.0
 
 # Ordinary bridge commands answer in milliseconds; this bound only exists so a
 # wedged app cannot hang a tool call forever. Commands whose backend work can
@@ -136,40 +128,3 @@ async def tauri_invoke_async(
 ) -> Any:
     """Call a Tauri IPC command without blocking the asyncio event loop."""
     return await asyncio.to_thread(tauri_invoke, cmd, args, timeout=timeout)
-
-
-def check_subscription_access() -> bool:
-    """Check whether the current user has subscription access.
-
-    Returns True when the local license state indicates an active paid
-    license, a valid server-cached result, or an unexpired local trial.
-    Returns False on any error (fail-closed) so that personal data is
-    never exposed without a verified license.
-
-    The result is cached for ``_ACCESS_TTL_SECONDS`` to avoid hammering
-    the IPC bridge on every tool call within a short window.
-    """
-    global _ACCESS_CACHE
-    now = time.monotonic()
-    if _ACCESS_CACHE is not None and now - _ACCESS_CACHE[1] < _ACCESS_TTL_SECONDS:
-        return _ACCESS_CACHE[0]
-
-    try:
-        result = tauri_invoke("license_has_access")
-        has_access = result is True
-    except Exception as e:
-        logger.debug("license_has_access IPC failed, failing closed: {}", e)
-        has_access = False
-
-    _ACCESS_CACHE = (has_access, now)
-    return has_access
-
-
-def invalidate_subscription_access_cache() -> None:
-    """Clear the subscription access cache.
-
-    Called by AgentLoop after it refreshes the ToolRegistry flag so that
-    subsequent tool-level checks (e.g. hoard_search) see the fresh value.
-    """
-    global _ACCESS_CACHE
-    _ACCESS_CACHE = None

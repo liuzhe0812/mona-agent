@@ -1,0 +1,38 @@
+{
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Reuse a complete validated industry directory for ten minutes and retry only transient scope metadata connection failures through the unchanged native Eastmoney client.",
+  "files": [
+    {
+      "path": "agent/src/api/mona_strategy_scope.py",
+      "sha256": "2253368f94a096bb57a9d8adfaa36ecbdc0eb5156cccd52ca0e67707fd852377",
+      "replacements": [
+        {
+          "before": "import re\n",
+          "after": "import re\nimport threading\nimport time\n",
+          "count": 1
+        },
+        {
+          "before": "_BOARD = re.compile(r\"^BK[0-9]{4,8}$\")\n",
+          "after": "_BOARD = re.compile(r\"^BK[0-9]{4,8}$\")\n_INDUSTRY_CACHE_TTL = 600\n_INDUSTRY_CACHE: tuple[float, str] | None = None\n_INDUSTRY_CACHE_LOCK = threading.Lock()\n",
+          "count": 1
+        },
+        {
+          "before": "def _complete_rows(fs: str) -> list[dict[str, Any]]:\n    from backtest.loaders.eastmoney_client import get_json\n",
+          "after": "def _scope_json(url: str, *, params: dict[str, Any]) -> Any:\n    from backtest.loaders.eastmoney_client import get_json\n    from requests.exceptions import ConnectionError as RequestConnectionError\n    from requests.exceptions import SSLError, Timeout\n\n    for attempt in range(3):\n        try:\n            return get_json(url, params=params)\n        except (RequestConnectionError, Timeout) as exc:\n            if isinstance(exc, SSLError) or attempt == 2:\n                raise\n            time.sleep(0.25 * 2**attempt)\n\n\ndef _complete_rows(fs: str) -> list[dict[str, Any]]:\n",
+          "count": 1
+        },
+        {
+          "before": "            payload = get_json(_CLIST_URL, params={",
+          "after": "            payload = _scope_json(_CLIST_URL, params={",
+          "count": 1
+        },
+        {
+          "before": "def industry_catalog() -> dict[str, Any]:\n    from src.tools.sector_tool import _RANKING_FS\n\n    rows = _complete_rows(_RANKING_FS)\n    items = []\n    for row in rows:\n        if not _BOARD.fullmatch(row[\"f12\"]) or not isinstance(row.get(\"f14\"), str) or not row[\"f14\"].strip():\n            raise ScopeUnavailableError(\"scope_industry_invalid\", \"行业目录返回不完整，请稍后重试。\")\n        items.append({\"code\": row[\"f12\"], \"name\": row[\"f14\"].strip()})\n    stamp = _stamp()\n    return {\"items\": items, \"source\": \"eastmoney\", \"as_of\": stamp[:10], \"fetched_at\": stamp,\n        \"taxonomy\": \"东方财富行业\"}\n\n",
+          "after": "def industry_catalog() -> dict[str, Any]:\n    from src.tools.sector_tool import _RANKING_FS\n\n    global _INDUSTRY_CACHE\n    with _INDUSTRY_CACHE_LOCK:\n        if _INDUSTRY_CACHE is not None and time.monotonic() - _INDUSTRY_CACHE[0] < _INDUSTRY_CACHE_TTL:\n            return json.loads(_INDUSTRY_CACHE[1])\n        rows = _complete_rows(_RANKING_FS)\n        items = []\n        for row in rows:\n            if not _BOARD.fullmatch(row[\"f12\"]) or not isinstance(row.get(\"f14\"), str) or not row[\"f14\"].strip():\n                raise ScopeUnavailableError(\"scope_industry_invalid\", \"行业目录返回不完整，请稍后重试。\")\n            items.append({\"code\": row[\"f12\"], \"name\": row[\"f14\"].strip()})\n        stamp = _stamp()\n        result = {\"items\": items, \"source\": \"eastmoney\", \"as_of\": stamp[:10], \"fetched_at\": stamp,\n            \"taxonomy\": \"东方财富行业\"}\n        serialized = json.dumps(result, ensure_ascii=False, allow_nan=False)\n        _INDUSTRY_CACHE = (time.monotonic(), serialized)\n        return json.loads(serialized)\n\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

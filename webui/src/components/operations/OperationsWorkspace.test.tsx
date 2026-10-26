@@ -37,14 +37,14 @@ beforeEach(async () => {
     selectedConnectionId: dbConnection.id, selectedDatabase: null, objectScope: null }, true);
   useTerminalStore.setState({ ...initialTerminal, savedConnections: [ssh] }, true);
   native.mockImplementation(async (command: string) => {
-    if (command === "terminal_load_connections") return [ssh];
+    if (command === "terminal_load_connection_state") return { connections: [ssh], revision: "revision-1" };
     if (command === "db_load_connections") return [dbConnection.config];
     if (["db_load_saved_queries", "db_get_table_summaries"].includes(command)) return [];
     if (command === "local_desktop_dir") return "D:\\Fixtures";
     if (command === "sftp_canonicalize") return "/home/fixture";
     if (["local_list_dir", "sftp_list"].includes(command)) return [];
     if (command === "get_file_type_icon") return null;
-    if (["ssh_connect_with_id", "ssh_disconnect", "terminal_save_connections"].includes(command)) return undefined;
+    if (["ssh_connect_with_id", "ssh_disconnect"].includes(command)) return undefined;
     throw new Error(`Unexpected native call: ${command}`);
   });
   const ipc = await import("../db/ipc");
@@ -294,7 +294,7 @@ describe("operations workspace reuses database and SSH views", () => {
   it("keeps host-key confirmation when opening SSH from the shared connection list", async () => {
     native.mockImplementation(async (command: string) => {
       if (command === "ssh_connect_with_id") throw new Error("Host key unknown: SHA256:fixture-key");
-      if (command === "terminal_load_connections") return [ssh];
+      if (command === "terminal_load_connection_state") return { connections: [ssh], revision: "revision-1" };
       if (command === "db_load_connections") return [dbConnection.config];
       return [];
     });

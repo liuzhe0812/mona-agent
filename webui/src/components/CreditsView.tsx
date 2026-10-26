@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Coins, Gift, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Coins, Gift, Loader2, RefreshCw } from "lucide-react";
 
 import { PaymentDialog } from "@/components/PaymentDialog";
 import {
@@ -77,6 +77,8 @@ const orderStatusLabels: Record<CreditOrderHistoryItem["status"], string> = {
   failed: "支付失败",
 };
 
+const rechargeButtonClassName = "border-info/25 bg-info/5 text-foreground hover:border-info/40 hover:bg-info/10 hover:text-foreground active:bg-info/15";
+
 function formatDate(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp)
@@ -124,7 +126,15 @@ function validateCustomAmount(value: string, config: CustomRechargeConfig): stri
   return null;
 }
 
-export function CreditsView({ onBack }: { onBack?: () => void }) {
+export function CreditsView({
+  onBack,
+  section,
+  onPaymentComplete,
+}: {
+  onBack?: () => void;
+  section?: "recharge" | "orders";
+  onPaymentComplete?: () => void;
+}) {
   const { licenseInfo } = useLicense();
   const dataOwnerKey = `${licenseInfo?.account ?? ""}:${licenseInfo?.email ?? ""}`;
   const [balance, setBalance] = useState<CreditBalance | null>(null);
@@ -133,8 +143,10 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
   const [customRecharge, setCustomRecharge] = useState<CustomRechargeConfig>(emptyCustomRecharge);
   const [promotion, setPromotion] = useState<RechargeProPromotion | null>(null);
   const [customAmount, setCustomAmount] = useState("");
+  const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [orders, setOrders] = useState<CreditOrderHistoryItem[]>([]);
   const [hasMoreOrders, setHasMoreOrders] = useState(false);
+  const [ordersError, setOrdersError] = useState("");
   const [balanceUnavailable, setBalanceUnavailable] = useState(false);
   const [productsUnavailable, setProductsUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -151,33 +163,38 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
   const load = useCallback(async (background = false) => {
     const requestedOwner = dataOwnerKey;
     if (!isTauri()) {
-      setError("请在 Mona 桌面客户端中使用余额服务");
+      const message = "请在 Mona 桌面客户端中使用余额服务";
+      if (section === "orders") setOrdersError(message);
+      else setError(message);
       setLoading(false);
       return;
     }
     background ? setRefreshing(true) : setLoading(true);
     setError("");
+    const needsBalance = section !== "orders";
+    const needsProducts = section !== "orders";
+    const needsOrders = section !== "recharge";
     const [balanceResult, productResult, orderResult] = await Promise.allSettled([
-      invoke<CreditBalance>("get_credit_balance"),
-      invoke<{
+      needsBalance ? invoke<CreditBalance>("get_credit_balance") : Promise.resolve(null),
+      needsProducts ? invoke<{
         recharge_enabled: boolean;
         custom_recharge?: Partial<CustomRechargeConfig> | null;
         promotion?: RechargeProPromotion | null;
         products: CreditProduct[];
-      }>("get_credit_products"),
-      invoke<{ orders: CreditOrderHistoryItem[]; has_more: boolean }>("get_credit_orders", {
+      }>("get_credit_products") : Promise.resolve(null),
+      needsOrders ? invoke<{ orders: CreditOrderHistoryItem[]; has_more: boolean }>("get_credit_orders", {
         limit: 10,
-      }),
+      }) : Promise.resolve(null),
     ]);
     if (dataOwnerRef.current !== requestedOwner) return;
 
-    if (balanceResult.status === "fulfilled") {
+    if (needsBalance && balanceResult.status === "fulfilled" && balanceResult.value) {
       setBalance(balanceResult.value);
       setBalanceUnavailable(false);
-    } else {
+    } else if (needsBalance) {
       setBalanceUnavailable(true);
     }
-    if (productResult.status === "fulfilled") {
+    if (needsProducts && productResult.status === "fulfilled" && productResult.value) {
       setProducts(productResult.value.products);
       setRechargeEnabled(productResult.value.recharge_enabled);
       setPromotion(productResult.value.promotion ?? null);
@@ -187,23 +204,27 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
         max_amount: String(productResult.value.custom_recharge?.max_amount ?? ""),
       });
       setProductsUnavailable(false);
-    } else {
+    } else if (needsProducts) {
       setRechargeEnabled(false);
       setPromotion(null);
       setCustomRecharge(emptyCustomRecharge);
       setProductsUnavailable(true);
     }
-    if (orderResult.status === "fulfilled") {
+    if (needsOrders && orderResult.status === "fulfilled" && orderResult.value) {
       setOrders(orderResult.value.orders);
       setHasMoreOrders(orderResult.value.has_more);
+      setOrdersError("");
+    } else if (needsOrders && orderResult.status === "rejected") {
+      setOrdersError(errorMessage(orderResult.reason));
     }
-    const criticalFailure = [balanceResult, productResult].find(
-      (result) => result.status === "rejected",
-    );
-    if (criticalFailure?.status === "rejected") setError(errorMessage(criticalFailure.reason));
+    if (needsBalance && balanceResult.status === "rejected") {
+      setError(errorMessage(balanceResult.reason));
+    } else if (needsProducts && productResult.status === "rejected") {
+      setError(errorMessage(productResult.reason));
+    }
     setLoading(false);
     setRefreshing(false);
-  }, [dataOwnerKey]);
+  }, [dataOwnerKey, section]);
 
   useEffect(() => {
     setBalance(null);
@@ -212,8 +233,10 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
     setCustomRecharge(emptyCustomRecharge);
     setPromotion(null);
     setCustomAmount("");
+    setSelectedProductCode(null);
     setOrders([]);
     setHasMoreOrders(false);
+    setOrdersError("");
     setOrder(null);
     setOrdering(null);
     setPendingRecharge(null);
@@ -311,6 +334,12 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
   const customAmountError = customAmount
     ? validateCustomAmount(customAmount, customRecharge)
     : null;
+  const selectedProduct = products.find((product) => product.code === selectedProductCode);
+  const rechargeSelection: PendingRecharge | null = selectedProduct
+    ? { kind: "product", productCode: selectedProduct.code, amount: selectedProduct.price, balanceAmount: selectedProduct.balance_amount }
+    : customRecharge.enabled && customAmount.trim() && !customAmountError
+      ? { kind: "custom", amount: customAmount.trim(), balanceAmount: customAmount.trim() }
+      : null;
   const pendingAmountMicros = pendingRecharge ? decimalToMicros(pendingRecharge.amount) : null;
   const promotionThresholdMicros = promotion ? decimalToMicros(promotion.min_amount) : null;
   const pendingPromotionDays =
@@ -328,7 +357,7 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-48 items-center justify-center" aria-label="正在加载余额">
+      <div className="flex min-h-48 items-center justify-center" aria-label={section === "orders" ? "正在读取充值订单" : "正在加载余额"}>
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
@@ -336,53 +365,59 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className={cn("space-y-5", onBack && "max-h-[72vh] overflow-y-auto pr-1")}>
-      <header className={cn("flex items-start gap-3", onBack && "sticky top-0 z-10 bg-background pb-2")}>
-        {onBack ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onBack}
-            className="h-8 w-8"
-            aria-label="返回账户"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <h1 className={onBack ? "text-sm font-medium" : "text-title-lg"}>余额与充值</h1>
-          {!onBack ? (
-            <p className="mt-1 text-body text-muted-foreground">查看模型余额和充值订单。</p>
+      {section !== "recharge" ? (
+        <header className={cn("flex items-start gap-3", section === "orders" && "justify-end", onBack && "sticky top-0 z-10 bg-background pb-2")}>
+          {section !== "orders" ? (
+            <>
+              {onBack ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onBack}
+                  className="h-8 w-8"
+                  aria-label="返回账户"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              ) : null}
+              <div className="min-w-0 flex-1">
+                <h1 className={onBack ? "text-sm font-medium" : "text-title-lg"}>余额与充值</h1>
+                {!onBack ? (
+                  <p className="mt-1 text-body text-muted-foreground">查看模型余额和充值订单。</p>
+                ) : null}
+              </div>
+            </>
           ) : null}
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void load(true)}
-          disabled={refreshing}
-          className="rounded-full"
-        >
-          {refreshing ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          刷新
-        </Button>
-      </header>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void load(true)}
+            disabled={refreshing}
+            className="rounded-full"
+          >
+            {refreshing ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            刷新
+          </Button>
+        </header>
+      ) : null}
 
-      <section aria-labelledby="credit-balance-title">
+      {section === undefined ? <section aria-labelledby="credit-balance-title">
         <h2 id="credit-balance-title" className="text-heading">
           可用余额
         </h2>
-        <div className="mt-2 rounded-2xl border border-border/70 bg-card p-5 shadow-sm sm:p-6" aria-live="polite">
+        <div className="mt-2 rounded-2xl border border-info/20 bg-info/5 p-5 shadow-sm sm:p-6" aria-live="polite">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Coins className="h-4 w-4" />
+                <Coins className="h-4 w-4 text-info" />
                 模型余额
               </div>
               {balance ? (
-                <div className="mt-2 text-4xl font-semibold tracking-tight tabular-nums">
+                <div className="mt-2 text-4xl font-semibold tracking-tight tabular-nums text-[hsl(var(--data-1))]">
                   <span className="mr-1 text-xl font-medium">¥</span>{formatBalanceAmount(balance.available_amount)}
                 </div>
               ) : (
@@ -399,7 +434,7 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
             <Button
               variant="outline"
               size="sm"
-              className="min-w-24 rounded-full"
+              className={cn("min-w-24 rounded-full", rechargeButtonClassName)}
               onClick={() => productsRef.current?.scrollIntoView({ behavior: "smooth" })}
             >
               充值余额
@@ -407,20 +442,33 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
           </div>
           {balance && balance.reserved_amount !== "0" ? (
             <p className="mt-4 border-t border-border/60 pt-4 text-caption text-muted-foreground">
-              生成中预留 ¥{formatBalanceAmount(balance.reserved_amount)}，结算后自动退回未使用部分
+              预留或冻结金额 ¥{formatBalanceAmount(balance.reserved_amount)}，可能包含模型处理中、待核实或退款确认中的金额；模型实际扣费以核算结果为准
             </p>
           ) : null}
         </div>
-      </section>
+      </section> : null}
 
-      <section ref={productsRef} aria-labelledby="credit-products-title">
-        <h2 id="credit-products-title" className="text-heading">
-          充值余额
-        </h2>
-        <p className="mt-1 text-caption text-muted-foreground">选择固定面额，或输入金额，通过支付宝完成支付后自动到账。</p>
+      {section === "recharge" ? (
+        <div className="flex items-center justify-between gap-3 text-caption text-muted-foreground" aria-live="polite">
+          <span>当前可用余额</span>
+          <span className="text-body font-medium tabular-nums text-foreground">
+            {balance ? `¥${formatBalanceAmount(balance.available_amount)}` : balanceUnavailable ? "余额暂不可用" : "尚无余额数据"}
+          </span>
+        </div>
+      ) : null}
+
+      {section !== "orders" ? <section ref={productsRef}
+        aria-label={section === "recharge" ? "充值金额" : undefined}
+        aria-labelledby={section === "recharge" ? undefined : "credit-products-title"}>
+        {section !== "recharge" ? <>
+          <h2 id="credit-products-title" className="text-heading">
+            充值余额
+          </h2>
+          <p className="mt-1 text-caption text-muted-foreground">选择固定面额，或输入金额，通过支付宝完成支付后自动到账。</p>
+        </> : null}
         {promotion ? (
-          <div className="mt-3 flex gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4">
-            <Gift className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+          <div className="mt-3 flex gap-3 rounded-2xl border border-warning/20 bg-warning/10 p-4">
+            <Gift className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
             <div className="min-w-0">
               <p className="text-sm font-medium">充值赠 Pro</p>
               <p className="mt-1 text-sm text-foreground/80">{promotion.description}</p>
@@ -442,14 +490,36 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
         <div
           role="group"
           aria-label="预置充值额度"
-          className="mt-2 grid gap-2 sm:grid-cols-3"
+          className={cn("mt-2 grid gap-2 sm:grid-cols-3", section === "recharge" && "grid-cols-2 gap-3")}
         >
           {products.length === 0 ? (
-            <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground sm:col-span-3">
+            <p className="col-span-full rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
               {productsUnavailable ? "充值商品暂不可用" : "暂无可购买的充值商品"}
             </p>
           ) : (
-            products.map((product) => (
+            products.map((product) => section === "recharge" ? (
+              <Button
+                key={product.code}
+                variant="outline"
+                title={product.name}
+                aria-pressed={selectedProductCode === product.code}
+                className={cn(
+                  "relative h-auto min-h-20 min-w-0 flex-col gap-1 rounded-xl px-3 py-4",
+                  selectedProductCode === product.code && "border-foreground bg-muted/50 ring-1 ring-foreground hover:bg-muted/50",
+                )}
+                disabled={ordering !== null || !rechargeEnabled}
+                onClick={() => {
+                  setSelectedProductCode(product.code);
+                  setCustomAmount("");
+                }}
+              >
+                {selectedProductCode === product.code && <Check className="absolute right-2 top-2 h-3.5 w-3.5" aria-hidden />}
+                <span className="text-title-sm font-semibold tabular-nums">¥{product.price}</span>
+                {decimalToMicros(product.balance_amount) !== decimalToMicros(product.price) && (
+                  <span className="text-caption font-normal text-muted-foreground">到账 ¥{formatBalanceAmount(product.balance_amount)}</span>
+                )}
+              </Button>
+            ) : (
               <div
                 key={product.code}
                 className="flex items-center gap-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm"
@@ -461,8 +531,9 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
                   </div>
                 </div>
                 <Button
+                  variant="outline"
                   size="sm"
-                  className="ml-auto min-w-20 rounded-full"
+                  className={cn("ml-auto min-w-20 rounded-full", rechargeButtonClassName)}
                   disabled={ordering !== null || !rechargeEnabled}
                   onClick={() => setPendingRecharge({
                     kind: "product",
@@ -482,33 +553,40 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
           )}
         </div>
         {customRecharge.enabled ? (
-          <div className="mt-2 rounded-2xl border border-border/70 bg-card p-4 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className={section === "recharge" ? "mt-5" : "mt-2 rounded-2xl border border-border/70 bg-card p-4 shadow-sm"}>
+            <div className={section === "recharge" ? "space-y-2" : "flex flex-wrap items-start justify-between gap-3"}>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">自定义金额</div>
-                <p className="mt-1 text-xs text-muted-foreground">
+                <label htmlFor="credit-custom-amount" className="text-ui font-medium">自定义金额</label>
+                <p id="credit-custom-range" className="mt-1 text-caption text-muted-foreground">
                   可充值 ¥{formatMoneyAmount(customRecharge.min_amount)} 至 ¥
                   {formatMoneyAmount(customRecharge.max_amount)}，最多两位小数
                 </p>
               </div>
-              <div className="flex w-full min-w-0 flex-col gap-1 sm:w-auto sm:items-end">
+              <div className={cn("flex w-full min-w-0 flex-col gap-1", section !== "recharge" && "sm:w-auto sm:items-end")}>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">¥</span>
                   <Input
+                    id="credit-custom-amount"
                     aria-label="自定义充值金额"
+                    aria-describedby={customAmountError ? "credit-custom-range credit-custom-error" : "credit-custom-range"}
+                    aria-invalid={!!customAmountError}
                     value={customAmount}
                     onChange={(event) => {
                       const value = event.target.value;
-                      if (/^\d*(?:\.\d{0,2})?$/.test(value)) setCustomAmount(value);
+                      if (/^\d*(?:\.\d{0,2})?$/.test(value)) {
+                        setCustomAmount(value);
+                        setSelectedProductCode(null);
+                      }
                     }}
                     inputMode="decimal"
                     placeholder="输入金额"
                     disabled={ordering !== null || !rechargeEnabled}
-                    className="max-w-48"
+                    className={section === "recharge" ? "h-10 flex-1 rounded-lg" : "max-w-48"}
                   />
-                  <Button
+                  {section !== "recharge" && <Button
+                    variant="outline"
                     size="sm"
-                    className="min-w-20 shrink-0 rounded-full"
+                    className={cn("min-w-20 shrink-0 rounded-full", rechargeButtonClassName)}
                     disabled={
                       ordering !== null ||
                       !rechargeEnabled ||
@@ -518,28 +596,37 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
                     onClick={requestCustomRecharge}
                   >
                     {ordering === "custom" ? <Loader2 className="h-4 w-4 animate-spin" /> : "充值"}
-                  </Button>
+                  </Button>}
                 </div>
                 {customAmountError ? (
-                  <p className="text-xs text-destructive">{customAmountError}</p>
+                  <p id="credit-custom-error" className="text-caption text-destructive">{customAmountError}</p>
                 ) : null}
               </div>
             </div>
           </div>
         ) : null}
-      </section>
+      </section> : null}
 
-      {orders.length > 0 ? (
+      {section !== "recharge" && (orders.length > 0 || section === "orders" || !!ordersError) ? (
         <section aria-labelledby="credit-orders-title">
           <div className="flex items-center justify-between gap-3">
             <h2 id="credit-orders-title" className="text-heading">
               最近充值订单
             </h2>
-            <span className="rounded-full bg-muted px-2 py-1 text-[10px] text-muted-foreground">
-              {orders.length} 笔
-            </span>
+            {orders.length > 0 ? (
+              <span className="rounded-full bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                {orders.length} 笔
+              </span>
+            ) : null}
           </div>
-          <div className="mt-2 overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+          {ordersError ? (
+            <p role="alert" className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              {ordersError}
+            </p>
+          ) : null}
+          {orders.length === 0 ? (
+            !ordersError ? <p className="mt-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground" role="status">暂无充值订单</p> : null
+          ) : <div className="mt-2 overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
             {orders.map((item) => (
               <div
                 key={item.order_id}
@@ -561,7 +648,10 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
                     </p>
                   ) : null}
                 </div>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+                <span className={cn("rounded-full px-2.5 py-1 text-micro font-medium text-foreground",
+                  item.status === "failed" ? "bg-destructive/10"
+                    : item.status === "paid" && item.fulfillment_status === "succeeded" ? "bg-success/10" : "bg-warning/15",
+                )}>
                   {item.status === "paid" && item.fulfillment_status === "succeeded"
                     ? "已到账"
                     : orderStatusLabels[item.status]}
@@ -570,7 +660,7 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 rounded-full"
+                    className={cn("h-8 rounded-full", rechargeButtonClassName)}
                     onClick={() => resumeOrder(item)}
                   >
                     继续支付
@@ -583,15 +673,35 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
                 仅显示最近 10 笔订单
               </p>
             ) : null}
-          </div>
+          </div>}
         </section>
       ) : null}
 
       {error ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {error}
+          {section === "recharge" ? <Button variant="ghost" size="sm" disabled={refreshing} onClick={() => void load(true)}>
+            重试
+          </Button> : null}
         </div>
       ) : null}
+
+      {section === "recharge" && <div className="flex items-center justify-between gap-4 border-t border-border/60 pt-4">
+        <div className="min-w-0" aria-live="polite">
+          <p className="text-caption text-muted-foreground">到账金额</p>
+          <p className="mt-0.5 text-title-sm font-semibold tabular-nums">
+            {rechargeSelection ? `¥${formatBalanceAmount(rechargeSelection.balanceAmount)}` : "—"}
+          </p>
+        </div>
+        <Button
+          className="rounded-lg px-6"
+          disabled={ordering !== null || !rechargeEnabled || !rechargeSelection}
+          onClick={() => setPendingRecharge(rechargeSelection)}
+        >
+          {ordering ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          {ordering ? "正在创建订单…" : "去支付"}
+        </Button>
+      </div>}
 
       <AlertDialog
         open={pendingRecharge !== null}
@@ -609,7 +719,7 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmRecharge}>确认充值</AlertDialogAction>
+            <AlertDialogAction className={cn("border", rechargeButtonClassName)} onClick={confirmRecharge}>确认充值</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -627,6 +737,7 @@ export function CreditsView({ onBack }: { onBack?: () => void }) {
           onSuccess={() => {
             setOrder(null);
             void load(true);
+            onPaymentComplete?.();
           }}
           onCancel={() => {
             setOrder(null);

@@ -55,7 +55,7 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
     if (!initialized.current) {
       initialized.current = true;
       void useDbStore.getState().loadSavedConnections();
-      void useTerminalStore.getState().loadSavedConnections();
+      void useTerminalStore.getState().loadSavedConnections().catch(() => console.warn("Saved host list could not be loaded."));
     }
   }, []);
   useEffect(() => {

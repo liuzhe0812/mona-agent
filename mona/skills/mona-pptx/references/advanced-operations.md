@@ -2,7 +2,7 @@
 
 仅在任务确实需要可编辑表格、原生数据图表、SmartArt 形状组或段落格式时阅读本文件。这里的操作放在 `office.apply.operations` 的 `slide_apply_txn` 中，`payload.ops` 每批 1–50 个注册表操作；字段来自当前 GenOffice 注册表和引擎测试。
 
-普通新建页面使用 `slide_add_preset` 自动完成图表与主题。下文“创建后再设置样式”针对直接图表操作和局部修改，不是预设页面的额外步骤。
+页面设计只从共享 `mona-design` 的 `native-pptx.md` 进入；本文件只说明操作参数、单位与对象编辑能力。示例的文字、字号、颜色和坐标仅用于展示字段，不是推荐样式，真实值来自当前文稿或选定设计。
 
 ## 坐标和 ID
 
@@ -86,8 +86,7 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
                     "text": "季度",
                     "bold": true,
                     "fontSize": 14,
-                    "fontFamily": "Microsoft YaHei",
-                    "color": "#172033"
+                    "color": "#000000"
                   }
                 ]
               }
@@ -229,14 +228,14 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
 
 `addChart` 不支持 `colorScheme` 系列色；主题化图表按“先 `slide_add_chart` 拿到稳定 ID → 再 `slide_set_chart_style` 应用 `seriesColors` 与文字颜色”的顺序完成。
 
-图表添加后优先使用回执中的稳定图表 ID，缺少时再 `inspect slides`；用 `inspect visual` 检查轴、单位、标签、裁切和阅读顺序。数据趋势适合图表，精确查值适合表格；原生图表仍需要视觉复核。
+图表添加后优先使用回执中的稳定图表 ID，缺少时再 `inspect slides`；用 `inspect visual` 检查轴、单位、标签与裁切。图表类型和视觉表达按共享 Mona Design 资料确定。
 
 ## 4. 修改原生图表样式
 
 图表样式使用 `slide_set_chart_style` 的 `style` 字段：
 
 - 文字颜色：`textColor`、`titleColor`、`axisLabelColor`、`axisTitleColor`、`legendColor`、`dataLabelColor`；颜色必须是 `#RRGGBB` 或 6 位 HEX。`textColor` 先统一设置全部图表文字，局部字段再覆盖对应角色。
-- 系列填充色：`seriesColors`，按系列顺序覆盖默认调色板。深色或品牌主题必须显式设置，否则默认调色板在深色背景上不受控；单系列也可以用它把重点分类改成强调色。
+- 系列填充色：`seriesColors`，按系列顺序覆盖默认调色板。不传时沿用引擎默认值；传入当前文稿或选定设计的实际颜色。
 
 创建阶段支持 `legendPos`、`gridlines`、`dataLabels`、`catAxisTitle`、`valAxisTitle`、`gapWidthPct`，不写系列色。图表创建并返回稳定 ID 后再用 `slide_set_chart_style` 应用主题。当前也支持 `gridColor`（网格线 HEX）、`axisLineColor`（轴线 HEX）和 `axisLabelFontSize`（正数，单位 pt）；这些属性保存在原生图表中。不能假设同一批次能引用未来 ID。
 
@@ -259,7 +258,7 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
         "style": {
           "textColor": "#FFFFFF",
           "axisLabelColor": "D9D9D9",
-          "seriesColors": ["#72DFC1", "#6C7CFF"]
+          "seriesColors": ["#666666", "#AAAAAA"]
         }
       }
     }
@@ -283,7 +282,7 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
         "patch": {
           "textColor": "#FFFFFF",
           "axisLabelColor": "#D9D9D9",
-          "colorScheme": ["#72DFC1", "#6C7CFF"]
+          "colorScheme": ["#666666", "#AAAAAA"]
         }
       }
     ]
@@ -371,13 +370,13 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
       {
         "op": "setStroke",
         "target": { "slide": "<stable-slide-id>", "el": "<stable-element-id>" },
-        "stroke": { "color": "#27324A", "widthEmu": 12700 }
+        "stroke": { "color": "#000000", "widthEmu": 12700 }
       },
       {
         "op": "setEffects",
         "target": { "slide": "<stable-slide-id>", "el": "<stable-element-id>" },
         "effects": {
-          "shadow": { "color": "#72DFC155", "blurRad": 254000, "dist": 0, "dirDeg": 0, "inner": true }
+          "shadow": { "color": "#00000055", "blurRad": 254000, "dist": 0, "dirDeg": 0, "inner": true }
         }
       }
     ]
@@ -385,6 +384,6 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
 }
 ```
 
-圆角、描边和阴影都改变元素外观，改完仍要走同一套 `inspect review` + 视觉复核；它们是版式装饰，不承担内容表达，不要用它们替代图表、关系图或真实配图。
+圆角、描边和阴影都改变元素外观，改完仍要走同一套 `inspect review` + 视觉复核；是否使用及如何组合按共享 Mona Design 资料判断。
 
 高级操作提交后统一遵循：使用回执或按需 `inspect` 取得稳定 ID → `inspect review` 确定待观察页 → 用当前版本视觉复核 → 必要时小批次微调。不要把注册表字段扩展成自定义 JavaScript，也不要把 SVG/PNG 图表当成原生数据图表。

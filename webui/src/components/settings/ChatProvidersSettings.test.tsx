@@ -10,7 +10,7 @@ vi.mock("@/lib/api", () => ({
 
 import { ChatProvidersSettings } from "./ChatProvidersSettings";
 import { fetchProviderModels, fetchSettings, updateProviderSettings } from "@/lib/api";
-import { developmentApi } from "@/lib/development-api";
+import { developmentApi, type EngineResource, type ExecutorSettings, type NativeProbe } from "@/lib/development-api";
 import { useModelPreferences } from "@/components/models/model-sources";
 import type { SettingsPayload } from "@/lib/types";
 
@@ -23,7 +23,9 @@ function openModelMenu(name: string) {
 }
 
 function openManagementMenu() {
-  fireEvent.pointerDown(screen.getByRole("button", { name: "管理" }), {
+  const trigger = screen.getByRole("button", { name: "筛选模型" });
+  expect(trigger.querySelector("svg.lucide-filter")).not.toBeNull();
+  fireEvent.pointerDown(trigger, {
     button: 0,
     ctrlKey: false,
     pointerType: "mouse",
@@ -35,6 +37,20 @@ function providerButtons() {
     .map((row) => row.querySelector<HTMLButtonElement>('button:not([aria-label="调整顺序"])'))
     .filter((button): button is HTMLButtonElement => button !== null);
 }
+
+function installedNativeResource(executor: string): EngineResource {
+  return {
+    executor, source: "managed_runtime", executable: `test/${executor}`, systemAvailable: false,
+    installed: true, managedInstalled: true, canPrepare: false, canUpdate: false,
+    repairRequired: false, explicitPath: false, packRef: `${executor}-pack`, version: "1.0.0",
+    installedVersion: "1.0.0", downloadBytes: 0, reason: "", job: null,
+  };
+}
+
+const nativeExecutorSettings: ExecutorSettings = {
+  revision: "test-revision", values: { codexPath: null, claudePath: null },
+  credentialPresent: {}, enabledEngines: [],
+};
 
 const settings = {
   agent: { provider: "deepseek", model: "deepseek-v4-flash" },
@@ -131,7 +147,7 @@ describe("ChatProvidersSettings", () => {
 
     const sources = providerButtons();
     expect(sources[0]).toHaveTextContent("Mona AI");
-    expect(sources[0].querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png");
+    expect(sources[0].querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png?v=a829e97b8751");
     expect(sources[1].querySelector("img")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "刷新模型" }));
@@ -559,7 +575,7 @@ describe("ChatProvidersSettings", () => {
 
   });
 
-  it("shows detected ChatGPT models with per-model visibility switches", async () => {
+  it("shows detected ChatGPT models with per-model visibility checkboxes", async () => {
     const official = {
       ...settings,
       chat_providers: [settings.chat_providers![0], {
@@ -577,15 +593,15 @@ describe("ChatProvidersSettings", () => {
     render(<ChatProvidersSettings settings={official} token="test-token" onSettingsChanged={vi.fn()} onModelNameChange={vi.fn()} />);
 
     fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: /OpenAI/ }));
-    const toggle = await screen.findByRole("switch", { name: "Codex GPT-6 Astra 在选择器中显示" });
+    const toggle = await screen.findByRole("checkbox", { name: "Codex GPT-6 Astra 在选择器中显示" });
     expect(screen.queryByText("272K")).not.toBeInTheDocument();
-    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toBeChecked();
     fireEvent.click(toggle);
     fireEvent.click(await screen.findByRole("button", { name: "未显示 1" }));
-    const hiddenToggle = screen.getByRole("switch", { name: "Codex GPT-6 Astra 在选择器中显示" });
-    expect(hiddenToggle).toHaveAttribute("aria-checked", "false");
+    const hiddenToggle = screen.getByRole("checkbox", { name: "Codex GPT-6 Astra 在选择器中显示" });
+    expect(hiddenToggle).not.toBeChecked();
     fireEvent.click(hiddenToggle);
-    expect(await screen.findByRole("switch", { name: "Codex GPT-6 Astra 在选择器中显示" })).toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByRole("checkbox", { name: "Codex GPT-6 Astra 在选择器中显示" })).toBeChecked();
   });
 
   it("keeps API models on Mona and does not expose a per-model engine choice", () => {
@@ -607,34 +623,48 @@ describe("ChatProvidersSettings", () => {
     expect(screen.queryByRole("dialog", { name: /引擎管理/ })).not.toBeInTheDocument();
   });
 
-  it("connects the built-in Anthropic source through the local Claude Code account", async () => {
+  it("authenticates the built-in Anthropic source inline through the local Claude Code account", async () => {
     const official = { ...settings, chat_providers: [settings.chat_providers![0], {
       name: "anthropic", label: "Anthropic", configured: true, api_key_required: true,
       api_base: "https://api.anthropic.com", default_api_base: "https://api.anthropic.com",
       models: [{ id: "legacy-api-model", name: "Legacy API Model", enabled: true, type: "chat" }],
     }] } as SettingsPayload;
-    const claude = { id: "claude", name: "Claude Code", available: true, executable: "test/claude", reason: "", models: [],
-      probe: { state: "detected" as const, reason: "", authentication: "unknown" as const } };
-    vi.spyOn(developmentApi, "providerExecutors").mockResolvedValue({ executors: [claude] });
-    vi.spyOn(developmentApi, "probe").mockResolvedValue({ state: "detected", reason: "", authentication: "unknown" });
-    vi.spyOn(developmentApi, "loginStatus").mockResolvedValue({ loginId: null, state: "idle", authUrl: "", reason: "" });
-    const login = vi.spyOn(developmentApi, "login").mockResolvedValue({ loginId: "claude-account", state: "succeeded", authUrl: "", reason: "已完成" });
+    let authenticated = false;
+    const unauthenticatedProbe: NativeProbe = { state: "detected", reason: "", authentication: "unknown" };
+    const authenticatedProbe: NativeProbe = { state: "ready", reason: "已认证", authentication: "ready" };
+    const claude = { id: "claude", name: "Claude Code", available: true, programAvailable: true,
+      executable: "test/claude", reason: "", models: [], probe: unauthenticatedProbe };
+    vi.spyOn(developmentApi, "providerExecutors").mockImplementation(async () => ({ executors: [
+      { ...claude, models: authenticated ? [{ id: "claude-sonnet", label: "Claude Sonnet" }] : [],
+        probe: authenticated ? authenticatedProbe : unauthenticatedProbe },
+    ] }));
+    vi.spyOn(developmentApi, "probe").mockImplementation(async () => authenticated ? authenticatedProbe : unauthenticatedProbe);
+    vi.spyOn(developmentApi, "engineResources").mockResolvedValue({
+      components: [installedNativeResource("claude")], catalogAvailable: true,
+    });
+    vi.spyOn(developmentApi, "executorSettings").mockResolvedValue(nativeExecutorSettings);
+    const loginStatus = vi.spyOn(developmentApi, "loginStatus").mockResolvedValue({ loginId: null, state: "idle", authUrl: "", reason: "" });
+    const login = vi.spyOn(developmentApi, "login").mockImplementation(async () => {
+      authenticated = true;
+      loginStatus.mockResolvedValue({ loginId: "claude-account", state: "succeeded", authUrl: "", reason: "已完成" });
+      return { loginId: "claude-account", state: "succeeded", authUrl: "", reason: "已完成" };
+    });
     vi.mocked(fetchProviderModels).mockClear();
     render(<ChatProvidersSettings settings={official} token="test-token" onSettingsChanged={vi.fn()} onModelNameChange={vi.fn()} />);
     const source = within(screen.getByRole("complementary")).getByRole("button", { name: /Anthropic/ });
     fireEvent.click(source);
-    const dialog = await screen.findByRole("dialog", { name: "连接 · Anthropic" });
-    expect(source).not.toHaveAttribute("aria-current", "true");
-    expect(within(dialog).getByText("使用本机 Claude Code 账号连接。")).toBeInTheDocument();
-    const connect = within(dialog).getByRole("button", { name: "使用 Claude Code 登录" });
+    expect(source).toHaveAttribute("aria-current", "true");
+    expect(screen.queryByRole("dialog", { name: "连接 · Anthropic" })).not.toBeInTheDocument();
+    const connect = await screen.findByRole("button", { name: "认证 Claude" });
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
     await waitFor(() => expect(login).toHaveBeenCalledWith(undefined, "claude"));
+    expect(await screen.findByRole("heading", { name: "Claude Code 已准备就绪" })).toBeInTheDocument();
+    expect(screen.getByText("已认证")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Claude Code Claude Sonnet 在选择器中显示" })).toBeInTheDocument();
     expect(fetchProviderModels).not.toHaveBeenCalled();
     expect(screen.queryByText("Legacy API Model")).not.toBeInTheDocument();
     expect(screen.queryByText("API Key 接入")).not.toBeInTheDocument();
-    expect(screen.queryByText("已连接")).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "连接 · Anthropic" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

@@ -14,7 +14,6 @@ Windows x64 首版固定：
 - `asr-sensevoice@0.2.6+q8`：SenseVoice runtime、模型和 VAD，依赖 FFmpeg。
 - `pandoc@3.10.1`：Pandoc Windows x64 发行版。
 - `cua-driver@0.23.2`：Computer Use Driver Windows x64 发行版。
-- `westock-data@1.0.5`：WeStock npm 包内容，依赖 Node.js 基座。
 
 构建机先准备官方 Python 安装目录与 Node ZIP，再执行：
 
@@ -36,10 +35,9 @@ python scripts/prepare_official_runtimes.py asr-sensevoice `
   --vad D:\runtime-inputs\fsmn-vad.gguf
 python scripts/prepare_official_runtimes.py pandoc --archive D:\runtime-inputs\pandoc-3.10.1-windows-x86_64.zip
 python scripts/prepare_official_runtimes.py cua-driver --archive D:\runtime-inputs\cua-driver-rs-0.23.2-windows-x86_64-binary.zip
-python scripts/prepare_official_runtimes.py westock --package-tgz D:\runtime-inputs\westock-data-skillhub-1.0.5.tgz
 ```
 
-这些子命令只读取本地输入，不访问网络，也不写入生产凭据。每个组件会生成固定版本目录、`runtime-manifest.json` 和 Windows x64 的 `distribution.json`；npm 包只提取 tarball 中的 `package/` 内容。
+这些子命令只读取本地输入，不访问网络，也不写入生产凭据。每个组件会生成固定版本目录、`runtime-manifest.json` 和 Windows x64 的 `distribution.json`。
 
 `runtime-library/sources.json` 将华为云/npmmirror 放在官方上游之前，但同时固定
 官方同字节文件的大小和 SHA-256；镜像内容不一致会在进入组件源之前被拒绝。

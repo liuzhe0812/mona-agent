@@ -2,6 +2,7 @@ import { Fragment, useMemo } from "react";
 import { FileText, Network, Radar, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SectionHeader } from "@/components/ui/page-header";
 import type { ProfileArtifact, ProfileCharts, ProfileData, RichProfile } from "@/lib/profile-api";
 
 import {
@@ -43,38 +44,38 @@ export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTa
   const matrix = readMatrix(charts?.domain_task_matrix);
 
   return (
-    <div className="flex w-full flex-col text-foreground lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1.15fr)_minmax(0,0.85fr)_auto]">
-      <div className="grid grid-cols-2 border-b border-border/70 py-3 sm:grid-cols-4">
+    <div className="flex w-full flex-col gap-3 text-foreground lg:grid lg:h-full lg:min-h-[600px] lg:grid-rows-[auto_minmax(280px,1.25fr)_minmax(220px,1fr)]">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryStat label="关注领域" value={focusCount} />
         <SummaryStat label="关联主题" value={topicCount} />
         <SummaryStat label="协作类型" value={conversationTypes.length} />
         <SummaryStat label="支撑会话" value={supportSessions} />
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 border-b border-border/70 lg:grid-cols-[0.95fr_1.7fr]">
-        <section className="flex min-h-0 flex-col overflow-hidden border-b border-border/70 py-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:pr-6">
+      <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)]">
+        <section className="profile-panel">
           <ChartHeading icon={<Radar className="h-4 w-4" />} title="关注领域" subtitle="相关记录数" />
           {radar.length > 2 ? <RadarPlot values={radar} /> : <ChartEmpty text="暂无足够领域记录" />}
         </section>
-        <section className="flex min-h-0 flex-col overflow-hidden py-4 lg:pl-6">
+        <section className="profile-panel">
           <ChartHeading icon={<Network className="h-4 w-4" />} title="主题关联" subtitle="同一记录中的共同出现" />
           {graph?.nodes?.length ? <TopicGraph graph={graph} /> : <ChartEmpty text="暂无主题关联图" />}
-          <div className="mt-1 flex flex-wrap gap-4 text-micro text-muted-foreground">
+          <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1 text-micro text-muted-foreground">
             {graphLegend(graph).map((item) => <Legend key={item.label} color={item.color} label={item.label} />)}
           </div>
         </section>
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 border-b border-border/70 py-4 lg:grid-cols-[0.9fr_1fr_1.3fr]">
-        <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 pb-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:pr-6">
+      <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.3fr)]">
+        <section className="profile-panel">
           <ChartHeading icon={<Users className="h-4 w-4" />} title="常见协作类型" subtitle="已识别记录" />
           {conversationTypes.length ? <CollaborationDonut items={conversationTypes} /> : <ChartEmpty text="暂无协作类型记录" />}
         </section>
-        <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 py-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:px-6 lg:py-0">
+        <section className="profile-panel">
           <ChartHeading icon={<FileText className="h-4 w-4" />} title="常见交付物" subtitle={`${artifactGroups.reduce((sum, item) => sum + item.count, 0)} / ${generatedArtifacts || 0} 份已识别`} />
           {artifactGroups.length ? <ArtifactBars groups={artifactGroups} artifacts={artifacts} onOpenArtifact={onOpenArtifact} /> : <ChartEmpty text="暂无可验证的交付物" />}
         </section>
-        <section className="flex min-h-0 flex-col overflow-hidden pt-4 lg:pl-6 lg:pt-0">
+        <section className="profile-panel">
           <ChartHeading icon={<Network className="h-4 w-4" />} title="领域 × 协作方式" />
           {matrix.values.length ? <Matrix data={matrix} /> : <ChartEmpty text="暂无领域与协作方式交叉记录" />}
         </section>
@@ -84,15 +85,15 @@ export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTa
 }
 
 function SummaryStat({ label, value }: { label: string; value: number }) {
-  return <div className="flex items-baseline justify-center gap-2 border-r border-border/70 px-2 last:border-r-0"><span className="text-caption text-muted-foreground">{label}</span><strong className="text-title-sm font-medium leading-none tabular-nums">{value}</strong></div>;
+  return <div className="flex flex-col items-center justify-center gap-1 rounded-lg bg-muted/60 px-4 py-3"><strong className="text-display-sm font-semibold tracking-tight tabular-nums">{value}</strong><span className="text-caption text-muted-foreground">{label}</span></div>;
 }
 
 function ChartHeading({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle?: string }) {
-  return <div className="mb-2 flex items-baseline gap-2"><h2 className="flex items-center gap-1.5 text-body font-semibold">{icon}{title}</h2>{subtitle ? <span className="text-micro text-muted-foreground">{subtitle}</span> : null}</div>;
+  return <SectionHeader className="mb-3 shrink-0" title={<span className="flex items-center gap-2 font-semibold">{icon}{title}</span>} description={subtitle} />;
 }
 
 function ChartEmpty({ text }: { text: string }) {
-  return <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-muted-foreground">{text}</div>;
+  return <div className="flex min-h-32 flex-1 items-center justify-center text-caption text-muted-foreground">{text}</div>;
 }
 
 function Legend({ color, label }: { color: string; label: string }) {
@@ -110,7 +111,7 @@ function RadarPlot({ values }: { values: Array<{ axis: string; value: number }> 
     return { ...item, x: center + Math.cos(angle) * distance, y: center + Math.sin(angle) * distance, labelX: center + Math.cos(angle) * (radius + 22), labelY: center + Math.sin(angle) * (radius + 22), angle };
   });
   const polygon = points.map((point) => `${point.x},${point.y}`).join(" ");
-  return <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block min-h-0 flex-1 w-full max-w-[380px] text-border" aria-label="关注领域雷达图">
+  return <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block min-h-[240px] flex-1 w-full max-w-[380px] lg:min-h-0 text-border" aria-label="关注领域雷达图">
     {[0.33, 0.66, 1].map((level) => <g key={level}>
       <polygon points={points.map((_, index, all) => { const angle = -Math.PI / 2 + (index / all.length) * Math.PI * 2; return `${center + Math.cos(angle) * radius * level},${center + Math.sin(angle) * radius * level}`; }).join(" ")} fill="none" stroke="currentColor" strokeWidth="1" />
       <text x={center + 4} y={center - radius * level + 10} className="fill-muted-foreground" fontSize="9">{Math.round(max * level)}</text>
@@ -139,7 +140,7 @@ function TopicGraph({ graph }: { graph: NonNullable<ProfileCharts["topic_graph"]
     });
     return output;
   }, [nodes]);
-  return <svg viewBox="0 0 720 280" className="min-h-0 flex-1 w-full text-border" aria-label="主题关联图">
+  return <svg viewBox="0 0 720 280" className="min-h-[220px] flex-1 w-full text-border lg:min-h-0" aria-label="主题关联图">
     {graph.links.slice(0, 30).map((link, index) => { const from = positions.get(link.source); const to = positions.get(link.target); return from && to ? <line key={`${link.source}-${link.target}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="currentColor" strokeWidth="1" /> : null; })}
     {nodes.map((node) => { const position = positions.get(node.id); if (!position) return null; const color = profileChartColor(node.group); const size = Math.max(5, Math.min(18, node.count / 2)); return <g key={node.id}><circle cx={position.x} cy={position.y} r={size} fill={color} opacity="0.95" /><text x={position.x} y={position.y + size + 13} textAnchor="middle" className="fill-muted-foreground" fontSize="11">{node.label}</text></g>; })}
   </svg>;
@@ -149,7 +150,7 @@ function CollaborationDonut({ items }: { items: { label: string; count: number }
   const total = items.reduce((sum, item) => sum + item.count, 0);
   let start = 0;
   const gradient = items.map((item) => { const end = total ? start + (item.count / total) * 100 : 0; const part = `${profileChartColor(item.label)} ${start}% ${end}%`; start = end; return part; }).join(", ");
-  return <div className="flex items-center justify-center gap-5 py-3"><div className="relative h-36 w-36 shrink-0 rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-background"><span className="text-title-sm font-medium leading-none">{total}</span><span className="text-micro text-muted-foreground">次协作</span></div></div><div className="space-y-2 text-caption">{items.slice(0, 5).map((item) => <div key={item.label} className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: profileChartColor(item.label) }} /><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>)}</div></div>;
+  return <div className="flex flex-1 items-center justify-center gap-3 py-3"><div className="relative h-28 w-28 shrink-0 rounded-full xl:h-36 xl:w-36" style={{ background: `conic-gradient(${gradient})` }}><div className="absolute inset-6 flex flex-col xl:inset-8 items-center justify-center rounded-full bg-background"><span className="text-title font-semibold leading-none tabular-nums">{total}</span><span className="text-micro text-muted-foreground">次协作</span></div></div><div className="space-y-2 text-caption">{items.slice(0, 5).map((item) => <div key={item.label} className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: profileChartColor(item.label) }} /><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>)}</div></div>;
 }
 
 function groupArtifacts(artifacts: ProfileArtifact[]) {
@@ -165,12 +166,12 @@ function groupArtifacts(artifacts: ProfileArtifact[]) {
 function ArtifactBars({ groups, artifacts, onOpenArtifact }: { groups: { label: string; count: number }[]; artifacts: ProfileArtifact[]; onOpenArtifact?: (artifact: ProfileArtifact) => void }) {
   const max = Math.max(...groups.map((group) => group.count), 1);
   return (
-    <div className="min-h-0 overflow-y-auto scrollbar-hover space-y-4 py-2">
+    <div className="my-auto min-h-0 overflow-y-auto scrollbar-hover space-y-4 py-3">
       {groups.map((group) => {
         const target = artifacts.find((artifact) => artifactCategory(artifact) === group.label);
         const content = <>
           <span>{group.label}</span>
-          <span className="h-2 bg-muted"><span className="block h-full" style={{ width: `${(group.count / max) * 100}%`, background: profileChartColor(group.label) }} /></span>
+          <span className="h-2.5 overflow-hidden rounded-xs bg-muted"><span className="block h-full rounded-xs" style={{ width: `${(group.count / max) * 100}%`, background: profileChartColor(group.label) }} /></span>
           <span className="text-right tabular-nums">{group.count}</span>
         </>;
         return target && onOpenArtifact ? (
@@ -229,5 +230,5 @@ function graphLegend(graph?: { nodes?: { label: string; group: string; count?: n
 
 function Matrix({ data }: { data: { rows: string[]; columns: string[]; values: number[][] } }) {
   const max = Math.max(...data.values.flat(), 1);
-  return <div className="min-h-0 flex-1 overflow-auto scrollbar-hover text-micro"><div className="grid min-w-[360px]" style={{ gridTemplateColumns: `minmax(78px, 1fr) repeat(${data.columns.length}, minmax(48px, 1fr))` }}><span />{data.columns.map((column) => <span key={column} className="pb-2 text-center text-muted-foreground">{column}</span>)}{data.rows.map((row, rowIndex) => <Fragment key={row}><span className="py-2 pr-2 text-muted-foreground">{row}</span>{data.columns.map((column, columnIndex) => { const value = data.values[rowIndex]?.[columnIndex] ?? 0; return <span key={`${row}-${column}`} className="m-px flex items-center justify-center py-2" style={profileHeatmapStyle(value, max)}>{value}</span>; })}</Fragment>)}</div></div>;
+  return <div className="min-h-0 flex-1 overflow-auto scrollbar-hover text-micro"><div className="grid min-w-[360px]" style={{ gridTemplateColumns: `minmax(78px, 1fr) repeat(${data.columns.length}, minmax(48px, 1fr))` }}><span />{data.columns.map((column) => <span key={column} className="pb-2 text-center text-muted-foreground">{column}</span>)}{data.rows.map((row, rowIndex) => <Fragment key={row}><span className="py-2 pr-2 text-muted-foreground">{row}</span>{data.columns.map((column, columnIndex) => { const value = data.values[rowIndex]?.[columnIndex] ?? 0; return <span key={`${row}-${column}`} className="m-px flex items-center justify-center rounded-xs py-2 tabular-nums" style={profileHeatmapStyle(value, max)}>{value}</span>; })}</Fragment>)}</div></div>;
 }

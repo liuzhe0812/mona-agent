@@ -1,96 +1,58 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
+
+import { MONA_BRAND_AVATAR } from "@/lib/brand-assets";
 
 const STARTUP_DELAY_MS = 400;
-const EXIT_DURATION_MS = 860;
+const EXIT_DURATION_MS = 320;
 
 interface StartupSceneProps {
   exiting?: boolean;
   onExitComplete?: () => void;
 }
 
-interface StartupSceneStyle extends CSSProperties {
-  "--mona-startup-exit-x"?: string;
-  "--mona-startup-exit-y"?: string;
-  "--mona-startup-exit-scale"?: string;
-}
-
 export function StartupScene({ exiting = false, onExitComplete }: StartupSceneProps) {
   const [revealed, setRevealed] = useState(false);
-  const [exitStyle, setExitStyle] = useState<StartupSceneStyle>();
-  const solidRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
-    const timer = window.setTimeout(
-      () => setRevealed(true),
-      exiting ? 0 : STARTUP_DELAY_MS,
-    );
+    if (exiting) return;
+    const timer = window.setTimeout(() => setRevealed(true), STARTUP_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [exiting]);
 
   useEffect(() => {
-    if (!exiting) return;
-    const timer = window.setTimeout(() => onExitComplete?.(), EXIT_DURATION_MS);
+    if (!exiting || !onExitComplete) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(
+      onExitComplete,
+      revealed && !reducedMotion ? EXIT_DURATION_MS : 0,
+    );
     return () => window.clearTimeout(timer);
-  }, [exiting, onExitComplete]);
-
-  useLayoutEffect(() => {
-    if (!exiting || !revealed) return;
-    const source = solidRef.current?.getBoundingClientRect();
-    const target = document.querySelector<HTMLElement>("[data-testid='mona-human-portrait']")?.getBoundingClientRect();
-    if (!source || !target || source.width === 0 || source.height === 0) {
-      setExitStyle({ "--mona-startup-exit-scale": "0.86" });
-      return;
-    }
-    const scale = Math.min(target.width / source.width, target.height / source.height);
-    setExitStyle({
-      "--mona-startup-exit-x": `${target.left + target.width / 2 - source.left - source.width / 2}px`,
-      "--mona-startup-exit-y": `${target.top + target.height / 2 - source.top - source.height / 2}px`,
-      "--mona-startup-exit-scale": `${scale}`,
-    });
-  }, [exiting, revealed]);
+  }, [exiting, onExitComplete, revealed]);
 
   if (!revealed) return null;
 
   return (
     <section
-      className={`mona-startup-scene absolute inset-0 z-40 flex flex-col items-center justify-center overflow-hidden ${exiting ? "is-exiting" : ""}`}
+      className={`mona-startup-scene absolute inset-0 z-40 flex items-center justify-center overflow-hidden ${exiting ? "is-exiting" : ""}`}
       data-testid="startup-scene"
       role="status"
       aria-live="polite"
-      aria-label="Mona 正在醒来"
-      style={exitStyle}
+      aria-label={exiting ? "Mona 已就绪" : "正在启动 Mona"}
     >
-      <div className="mona-startup-halo" aria-hidden="true" />
-      <div className="mona-startup-stage" aria-hidden="true">
-        <div className="mona-startup-human-stack">
-          <img
-            className="mona-startup-human mona-startup-human-ghost-dark"
-            data-testid="startup-human-ghost-dark"
-            src="/brand/mona_startup_human_ghost_dark.png"
-            alt=""
-          />
-          <img
-            className="mona-startup-human mona-startup-human-ghost-light"
-            data-testid="startup-human-ghost-light"
-            src="/brand/mona_startup_human_ghost_light.png"
-            alt=""
-          />
-          <img
-            ref={solidRef}
-            className="mona-startup-human mona-startup-human-solid"
-            data-testid="startup-human-solid"
-            src="/brand/mona_startup_human_solid.png"
-            alt=""
-          />
+      <div className="mona-startup-lockup">
+        <div className="mona-startup-emblem" aria-hidden="true">
+          <svg className="mona-startup-orbit" viewBox="0 0 144 144" fill="none">
+            <circle className="mona-startup-orbit-track" cx="72" cy="72" r="62" />
+            <circle className="mona-startup-orbit-signal" cx="72" cy="72" r="62" />
+          </svg>
+          <img className="mona-startup-mark" src={MONA_BRAND_AVATAR} alt="" draggable={false} />
         </div>
-        <img
-          className="mona-startup-cat"
-          data-testid="startup-cat-sleeping"
-          src="/brand/mona_startup_cat_sleeping.png"
-          alt=""
-        />
+        <p className="mona-startup-wordmark">Mona</p>
+        <p className="mona-startup-status text-ui">
+          <span className="mona-startup-status-dot" aria-hidden="true" />
+          {exiting ? "工作台已就绪" : "正在接通你的工作台"}
+        </p>
       </div>
-      <p className="mona-startup-awakening">Mona 唤醒中</p>
     </section>
   );
 }

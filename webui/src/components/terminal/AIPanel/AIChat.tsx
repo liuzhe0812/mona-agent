@@ -10,6 +10,7 @@ import { useTerminalStore, loadPersistedAiChatId, terminalAiChatKey } from "../s
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MessageQuote, UIMessage } from "@/lib/types";
 import type { SessionType } from "../types/terminal";
 
@@ -27,6 +28,7 @@ interface ReportInfo {
 
 export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Props) {
   const [creatingChat, setCreatingChat] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const [quote, setQuote] = useState<MessageQuote | null>(null);
   const { client } = useClient();
@@ -62,15 +64,26 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
     const restored = sessionId ? loadPersistedAiChatId(sessionId) : null;
     if (restored) {
       setAiChatId(sessionId, restored);
+      setCreatingChat(false);
+      setChatError(null);
       return;
     }
     let cancelled = false;
+    setCreatingChat(true);
+    setChatError(null);
     client
       .newChat(5_000, false)
       .then((id) => {
-        if (!cancelled) setAiChatId(sessionId, id);
+        if (cancelled) return;
+        setAiChatId(sessionId, id);
+        setCreatingChat(false);
+        setChatError(null);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (cancelled) return;
+        setCreatingChat(false);
+        setChatError("AI 会话创建失败，请检查连接后重试。");
+      });
     return () => {
       cancelled = true;
     };
@@ -156,6 +169,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
    *  while streaming, otherwise sends immediately (or provisions a new chat). */
   const handleSubmit = useCallback(
     (content: string, images?: SendImage[], options?: SendOptions) => {
+      setChatError(null);
       const { content: enriched, images: payload, options: terminalOpts } =
         buildTerminalSend(content, images);
       // Merge any extra options ThreadComposer may have added (e.g. quote).
@@ -180,11 +194,13 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
       client.newChat(5_000, false).then((nextChatId) => {
         setAiChatId(sessionId, nextChatId);
         setCreatingChat(false);
+        setChatError(null);
       }).catch(() => {
         pendingPromptRef.current = null;
         pendingSendOptsRef.current = null;
         pendingImagesRef.current = undefined;
         setCreatingChat(false);
+        setChatError("AI 会话创建失败，问题未发送，请重新发送。");
       });
     },
     [buildTerminalSend, isStreaming, chatId, sessionId, client, send, setAiChatId, pendingQueue],
@@ -211,19 +227,21 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   }, []);
 
   const execModeSelector = canExec ? (
-    <div className="flex items-center gap-1">
-      <Shield className="h-3 w-3 text-muted-foreground" />
+    <TooltipProvider delayDuration={300}><Tooltip><TooltipTrigger asChild>
+    <div className="composer-execution-mode relative flex items-center gap-1">
+      <Shield className="composer-execution-icon h-3 w-3 shrink-0 text-muted-foreground" />
       <Select
         value={execMode}
         onValueChange={(v) => setExecMode(v as "auto" | "approval")}
-        aria-label="执行模式"
+        aria-label={`执行模式：${execMode === "auto" ? "自动模式" : "审批模式"}`}
         options={[
           { value: "auto", label: "自动模式" },
           { value: "approval", label: "审批模式" },
         ]}
-        className="h-6 min-w-0 border-transparent bg-transparent px-1 text-micro text-muted-foreground shadow-none"
+        className="composer-icon-control h-6 min-w-0 border-transparent bg-transparent px-1 text-micro text-muted-foreground shadow-none"
       />
     </div>
+    </TooltipTrigger><TooltipContent side="top">{execMode === "auto" ? "自动模式" : "审批模式"}</TooltipContent></Tooltip></TooltipProvider>
   ) : undefined;
 
   return (
@@ -250,6 +268,11 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
           </Button>
         ))}
       </div>
+      {chatError && (
+        <div role="alert" className="mx-3 mb-2 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-caption text-destructive">
+          {chatError}
+        </div>
+      )}
       <div className="shrink-0 px-2 pb-2">
         <ThreadComposer
           chatId={chatId}

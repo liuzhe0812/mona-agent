@@ -1,0 +1,11 @@
+datetime,symbol,name,side,quantity,price,amount,fee
+2025-06-09 10:30:00,600519.SH,Synthetic A-share,buy,100,11.26,1126.00,5.00
+2025-06-10 10:30:00,600519.SH,Synthetic A-share,sell,100,11.49,1149.00,5.00
+2025-06-11 10:30:00,600519.SH,Synthetic A-share,buy,100,11.72,1172.00,5.00
+2025-06-12 10:30:00,600519.SH,Synthetic A-share,sell,100,11.95,1195.00,5.00
+2025-06-13 10:30:00,600519.SH,Synthetic A-share,buy,100,12.19,1219.00,5.00
+2025-06-16 10:30:00,600519.SH,Synthetic A-share,sell,100,12.43,1243.00,5.00
+2025-06-17 10:30:00,600519.SH,Synthetic A-share,buy,100,12.68,1268.00,5.00
+2025-06-18 10:30:00,600519.SH,Synthetic A-share,sell,100,12.93,1293.00,5.00
+2025-06-19 10:30:00,600519.SH,Synthetic A-share,buy,100,13.19,1319.00,5.00
+2025-06-20 10:30:00,600519.SH,Synthetic A-share,sell,100,13.45,1345.00,5.00

@@ -12,11 +12,11 @@
 {"action":"apply","session_id":"<原会话ID>","expected_version":{"editorEpoch":"<当前epoch>","modelRevision":0},"operations":[{"op":"slide_replace_colors","payload":{"replacements":[{"from":"#25856B","to":"#E56B20"}],"slideIds":["<实际页面ID>"]}}]}
 ```
 
-上例颜色仅演示字段。先确认真实旧色；用户未给精确橙色时可选择适合背景的橙色，不改事实、布局或图片。可省略 slideIds 修改整稿（最多50页，更多按页分批）。elementIds 是当前顶层对象 ID；组 ID 覆盖组内非图片对象。excludeElementIds 保护特定对象，fields 可限定 text/fill/stroke/chart。映射同时执行，不连锁替换；from/to 相同或无匹配时不改变 revision。
+上例颜色仅演示字段。先确认真实旧色；用户只给风格或颜色名称、需要设计判断时，按共享 `mona-design` 的 `native-pptx.md` 选择实际值，不改事实、布局或图片。可省略 slideIds 修改整稿（最多50页，更多按页分批）。elementIds 是当前顶层对象 ID；组 ID 覆盖组内非图片对象。excludeElementIds 保护特定对象，fields 可限定 text/fill/stroke/chart。映射同时执行，不连锁替换；from/to 相同或无匹配时不改变 revision。
 
 文字、数字、图表数据、透明度、渐变位置、路径和对象 ID 保持不变。colorChanges 给出实际匹配次数；没有匹配不是改色完成。此操作不改图片像素、主题/母版继承色或未展开 SmartArt；palette.note 和 inheritedReferences 提示边界。不要用重新制作绕过不支持的情况，可用已有精确对象样式工具，或如实说明剩余未修改部分。
 
-整页组件只负责生成初始对象。修改后已有文稿是唯一权威；不通过删除页面后重新 slide_add_design 来改色。
+修改后已有文稿是唯一权威；不删除和重建页面来改色。
 
 ## 出错与交付
 

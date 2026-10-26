@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "sha256:190f869e930ccf0ee0224701892da7f28478e66e1300700c48d0e9f5583a0753",
+  "category": "confirmed-defect",
+  "description": "Fail hosted Shadow backtests when no usable source metrics exist, preserve unavailable account results as null, and render missing market or account evidence without zero-valued claims. Explicit local source requests never fall back to a network loader.",
+  "files": [
+    {
+      "path": "agent/backtest/runner.py",
+      "sha256": "aece2d6345e8d35fdbc615b7ebef1c409f040e06b4cd91fdc29c432e96469805",
+      "replacements": [
+        {
+          "before": "    except NoAvailableSourceError:\n",
+          "after": "    except NoAvailableSourceError:\n        if is_no_network_fallback_source(source):\n            raise\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/tools/shadow_account_tool.py",
+      "sha256": "2b1e7e485464d790af633b9f58a031c7003e854b048ca0366e8deb372cf7a6bf",
+      "replacements": [
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "from src.tools.path_utils import safe_user_path\n",
+          "after": "from src.tools.path_utils import safe_user_path\nfrom src.tools.redaction import redact_internal_paths, redact_text\n",
+          "count": 1
+        },
+        {
+          "before": "from src.shadow_account.backtester import load_cached_result\n",
+          "after": "from src.shadow_account.backtester import _usable_metrics, load_cached_result\n",
+          "count": 1
+        },
+        {
+          "before": "        return _ok(\n            shadow_id=result.shadow_id,\n",
+          "after": "        if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" and not _usable_metrics(result.combined):\n            combined = dict(result.combined)\n            original_error = combined.get(\"error\")\n            safe_error = redact_text(redact_internal_paths(original_error)) if original_error else None\n            if safe_error:\n                combined[\"error\"] = safe_error\n            return _err(\n                \"Shadow backtest unavailable: no usable metrics.\",\n                reason=\"no_usable_metrics\",\n                original_error=safe_error,\n                shadow_id=result.shadow_id,\n                window=[window_start, window_end],\n                markets=list(markets),\n                source=source,\n                per_market_count=per_market_count,\n                combined=combined,\n                per_market=result.per_market,\n                equity_points=len(result.equity_curves.get(\"combined\", [])),\n                shadow_total_pnl=result.shadow_total_pnl,\n                real_total_pnl=result.real_total_pnl,\n                delta_pnl=result.delta_pnl,\n                attribution=asdict(result.attribution),\n            )\n\n        return _ok(\n            shadow_id=result.shadow_id,\n",
+          "count": 1
+        },
+        {
+          "before": "                        missed_signals_pnl=0.0, noise_trades_pnl=0.0, early_exit_pnl=0.0,\n                        late_exit_pnl=0.0, overtrading_pnl=0.0, counterfactual_trades=(),\n",
+          "after": "                        missed_signals_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n                        noise_trades_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n                        early_exit_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n                        late_exit_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n                        overtrading_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n                        counterfactual_trades=(),\n",
+          "count": 1
+        },
+        {
+          "before": "                    real_total_pnl=0.0,\n",
+          "after": "                    real_total_pnl=None if os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\" else 0.0,\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/models.py",
+      "sha256": "d2c82942220469cf08d8834764d5ca90dfdf42809ecb473b021b543a3fe71178",
+      "replacements": [
+        {
+          "before": "    missed_signals_pnl: float\n    noise_trades_pnl: float\n    early_exit_pnl: float\n    late_exit_pnl: float\n    overtrading_pnl: float\n",
+          "after": "    missed_signals_pnl: float | None\n    noise_trades_pnl: float | None\n    early_exit_pnl: float | None\n    late_exit_pnl: float | None\n    overtrading_pnl: float | None\n",
+          "count": 1
+        },
+        {
+          "before": "    real_total_pnl: float\n",
+          "after": "    real_total_pnl: float | None\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/backtester.py",
+      "sha256": "091fab0eb7e6fa72ccbd8c61241449d67aa9c2042dfd5b940c90f37f6a4266c2",
+      "replacements": [
+        {
+          "before": "import logging\n",
+          "after": "import logging\nimport os\n",
+          "count": 1
+        },
+        {
+          "before": "        delta_pnl=round(shadow_pnl - real_pnl, 2) if shadow_pnl is not None else None,\n",
+          "after": "        delta_pnl=(round(shadow_pnl - real_pnl, 2)\n                   if shadow_pnl is not None and real_pnl is not None else None),\n",
+          "count": 1
+        },
+        {
+          "before": "    attr = data.get(\"attribution\") or {}\n",
+          "after": "    attr = data.get(\"attribution\") or {}\n    def cached_float(value: Any) -> float | None:\n        return None if value is None else float(value)\n\n",
+          "count": 1
+        },
+        {
+          "before": "            missed_signals_pnl=float(attr.get(\"missed_signals_pnl\", 0.0)),\n            noise_trades_pnl=float(attr.get(\"noise_trades_pnl\", 0.0)),\n            early_exit_pnl=float(attr.get(\"early_exit_pnl\", 0.0)),\n            late_exit_pnl=float(attr.get(\"late_exit_pnl\", 0.0)),\n            overtrading_pnl=float(attr.get(\"overtrading_pnl\", 0.0)),\n",
+          "after": "            missed_signals_pnl=cached_float(attr.get(\"missed_signals_pnl\", 0.0)),\n            noise_trades_pnl=cached_float(attr.get(\"noise_trades_pnl\", 0.0)),\n            early_exit_pnl=cached_float(attr.get(\"early_exit_pnl\", 0.0)),\n            late_exit_pnl=cached_float(attr.get(\"late_exit_pnl\", 0.0)),\n            overtrading_pnl=cached_float(attr.get(\"overtrading_pnl\", 0.0)),\n",
+          "count": 1
+        },
+        {
+          "before": "        real_total_pnl=float(data.get(\"real_total_pnl\", 0.0)),\n",
+          "after": "        real_total_pnl=cached_float(data.get(\"real_total_pnl\", 0.0)),\n",
+          "count": 1
+        },
+        {
+          "before": ") -> tuple[AttributionBreakdown, float | None, float]:\n    \"\"\"Compute attribution if the journal is available, else return zeros.\"\"\"\n",
+          "after": ") -> tuple[AttributionBreakdown, float | None, float | None]:\n    \"\"\"Compute account attribution when a usable journal is available.\"\"\"\n    hosted = os.environ.get(\"VIBE_TRADING_HOSTED\") == \"1\"\n",
+          "count": 1
+        },
+        {
+          "before": "    shadow_pnl = _shadow_pnl_from_metrics(combined, initial_capital)\n",
+          "after": "    shadow_pnl = _shadow_pnl_from_metrics(combined, initial_capital)\n    def unavailable():\n        return _zero_attribution(unavailable=hosted), shadow_pnl, None if hosted else 0.0\n\n",
+          "count": 1
+        },
+        {
+          "before": "        return _zero_attribution(), None, 0.0\n",
+          "after": "        return unavailable()\n",
+          "count": 1
+        },
+        {
+          "before": "    if not journal_path:\n        return _zero_attribution(), shadow_pnl, 0.0\n",
+          "after": "    if not journal_path:\n        return unavailable()\n",
+          "count": 1
+        },
+        {
+          "before": "    if not path.exists():\n        return _zero_attribution(), shadow_pnl, 0.0\n",
+          "after": "    if not path.exists():\n        return unavailable()\n",
+          "count": 1
+        },
+        {
+          "before": "        logger.warning(\"Attribution skipped — journal parse failed: %s\", exc)\n        return _zero_attribution(), shadow_pnl, 0.0\n",
+          "after": "        logger.warning(\"Attribution skipped — journal parse failed: %s\", exc)\n        return unavailable()\n",
+          "count": 1
+        },
+        {
+          "before": "    if not roundtrips:\n        return _zero_attribution(), shadow_pnl, 0.0\n",
+          "after": "    if not roundtrips:\n        return unavailable()\n",
+          "count": 1
+        },
+        {
+          "before": "def _zero_attribution() -> AttributionBreakdown:\n",
+          "after": "def _zero_attribution(*, unavailable: bool = False) -> AttributionBreakdown:\n    value = None if unavailable else 0.0\n",
+          "count": 1
+        },
+        {
+          "before": "        missed_signals_pnl=0.0,\n        noise_trades_pnl=0.0,\n        early_exit_pnl=0.0,\n        late_exit_pnl=0.0,\n        overtrading_pnl=0.0,\n",
+          "after": "        missed_signals_pnl=value,\n        noise_trades_pnl=value,\n        early_exit_pnl=value,\n        late_exit_pnl=value,\n        overtrading_pnl=value,\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/reporter.py",
+      "sha256": "5f92052ba55937a6bf4ae683b768a4bcff5d37900f59f694e20a42af4ad7ad96",
+      "replacements": [
+        {
+          "before": "from src.shadow_account.storage import reports_dir\n",
+          "after": "from src.shadow_account.storage import reports_dir\nfrom src.tools.redaction import redact_internal_paths, redact_text\n",
+          "count": 1
+        },
+        {
+          "before": "    combined_numeric, combined_error = _split_metrics(result.combined or {})\n",
+          "after": "    combined_numeric, combined_error = _split_metrics(result.combined or {})\n    combined_error = redact_text(redact_internal_paths(combined_error))\n",
+          "count": 1
+        },
+        {
+          "before": "        for market, metrics in (result.per_market or {}).items()\n    }\n",
+          "after": "        for market, metrics in (result.per_market or {}).items()\n    }\n    attribution_available = (\n        result.shadow_total_pnl is not None\n        and result.real_total_pnl is not None\n        and result.delta_pnl is not None\n    )\n    if result.shadow_total_pnl is None:\n        attribution_unavailable_reason = \"No usable Shadow performance metrics; account comparison was not calculated.\"\n    elif result.real_total_pnl is None:\n        attribution_unavailable_reason = \"No usable journal/account input; real PnL and delta attribution were not calculated.\"\n    else:\n        attribution_unavailable_reason = None\n",
+          "count": 1
+        },
+        {
+          "before": "        \"delta_pnl\": result.delta_pnl,\n",
+          "after": "        \"delta_pnl\": result.delta_pnl,\n        \"attribution_available\": attribution_available,\n        \"attribution_unavailable_reason\": attribution_unavailable_reason,\n",
+          "count": 1
+        },
+        {
+          "before": "            renderer(path)\n",
+          "after": "            path.unlink(missing_ok=True)\n            renderer(path)\n",
+          "count": 1
+        },
+        {
+          "before": "    if not result.per_market:\n",
+          "after": "    markets = [\n        market for market, metrics in result.per_market.items()\n        if metrics and \"error\" not in metrics\n        and isinstance(metrics.get(\"sharpe\"), (int, float))\n        and not isinstance(metrics.get(\"sharpe\"), bool)\n    ]\n    if not markets:\n",
+          "count": 1
+        },
+        {
+          "before": "    markets = list(result.per_market.keys())\n    sharpes = [result.per_market[m].get(\"sharpe\", 0.0) for m in markets]\n",
+          "after": "    sharpes = [result.per_market[m][\"sharpe\"] for m in markets]\n",
+          "count": 1
+        },
+        {
+          "before": "    if result.shadow_total_pnl is None or result.delta_pnl is None:\n",
+          "after": "    if result.shadow_total_pnl is None or result.real_total_pnl is None or result.delta_pnl is None:\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/pdf_fallback.py",
+      "sha256": "27ceb1e3ac6d3e96b1005dfdf705ab390d18723d786e79da0dc8d58da16ca211",
+      "replacements": [
+        {
+          "before": "    story: list[Any] = []\n",
+          "after": "    def market_metric(metrics: dict[str, float], key: str, scale: float = 1.0) -> str:\n        value = metrics.get(key)\n        if value is None or isinstance(value, bool):\n            return \"N/A\"\n        return f\"{float(value) * scale:.2f}{'%' if scale != 1.0 else ''}\"\n\n    story: list[Any] = []\n",
+          "count": 1
+        },
+        {
+          "before": "    story.append(para(\"Delta PnL\", muted))\n",
+          "after": "    story.append(para(\"Shadow PnL\" if delta_pnl is None and shadow_pnl is not None else \"Delta PnL\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "        story.append(para(f\"Shadow {shadow_pnl:.2f} | Real {real_pnl:.2f}\", muted))\n",
+          "after": "        story.append(para(f\"Shadow {shadow_pnl:.2f} | Real {real_pnl:.2f}\", muted))\n    elif shadow_pnl is not None:\n        story.append(Paragraph(_colored(shadow_pnl, _signed(shadow_pnl)), big))\n        story.append(para(\"Real PnL and delta unavailable - no usable journal/account input.\", muted))\n",
+          "count": 1
+        },
+        {
+          "before": "            f\"{metrics.get('sharpe', 0.0):.2f}\",\n            f\"{metrics.get('annual_return', 0.0) * 100:.2f}%\",\n            f\"{metrics.get('max_drawdown', 0.0) * 100:.2f}%\",\n",
+          "after": "            market_metric(metrics, \"sharpe\"),\n            market_metric(metrics, \"annual_return\", 100.0),\n            market_metric(metrics, \"max_drawdown\", 100.0),\n",
+          "count": 1
+        },
+        {
+          "before": "    if shadow_pnl is not None:\n",
+          "after": "    if sections.get(\"attribution_available\"):\n",
+          "count": 1
+        },
+        {
+          "before": "        story.append(Paragraph(lede, body))\n",
+          "after": "        story.append(Paragraph(lede, body))\n        img = chart_image(\"attribution_waterfall\")\n        if img is not None:\n            story.append(img)\n\n        def attr_row(label: str, value: float) -> list[Any]:\n            return [label, Paragraph(_colored(value, _signed(value)), cell)]\n\n        story.append(\n            make_table(\n                [],\n                [\n                    attr_row(\"Noise trades\", attribution.noise_trades_pnl),\n                    attr_row(\"Early exit (winners)\", attribution.early_exit_pnl),\n                    attr_row(\"Late exit (losers)\", attribution.late_exit_pnl),\n                    attr_row(\"Overtrading\", attribution.overtrading_pnl),\n                    attr_row(\"Missed signals (residual)\", attribution.missed_signals_pnl),\n                ],\n                widths=[0.5, 0.5],\n            )\n        )\n        if attribution.excluded_currencies:\n            excluded = \", \".join(\n                f\"{count} in {currency}\"\n                for currency, count in attribution.excluded_currencies.items()\n            )\n            story.append(\n                para(\n                    \"Real PnL above covers the shadow pool's settlement currency only. \"\n                    \"There is no FX translation layer, so roundtrips settling elsewhere \"\n                    f\"are excluded rather than summed against it: {excluded}.\",\n                    muted,\n                )\n            )\n    elif shadow_pnl is not None:\n        story.append(para(\n            \"Shadow PnL is available, but real account PnL, delta and economic attribution \"\n            \"were not calculated because no usable journal/account input was provided.\", muted,\n        ))\n",
+          "count": 1
+        },
+        {
+          "before": "                \"The shadow backtest did not produce usable metrics, so Shadow PnL, \"\n                \"delta, and the attribution below are not computed for this run.\",\n                muted,\n            )\n        )\n    img = chart_image(\"attribution_waterfall\")\n    if img is not None:\n        story.append(img)\n\n    def attr_row(label: str, value: float) -> list[Any]:\n        return [label, Paragraph(_colored(value, _signed(value)), cell)]\n\n    story.append(\n        make_table(\n            [],\n            [\n                attr_row(\"Noise trades\", attribution.noise_trades_pnl),\n                attr_row(\"Early exit (winners)\", attribution.early_exit_pnl),\n                attr_row(\"Late exit (losers)\", attribution.late_exit_pnl),\n                attr_row(\"Overtrading\", attribution.overtrading_pnl),\n                attr_row(\"Missed signals (residual)\", attribution.missed_signals_pnl),\n            ],\n            widths=[0.5, 0.5],\n        )\n    )\n    if attribution.excluded_currencies:\n        excluded = \", \".join(\n            f\"{count} in {currency}\"\n            for currency, count in attribution.excluded_currencies.items()\n        )\n        story.append(\n            para(\n                \"Real PnL above covers the shadow pool's settlement currency only. \"\n                \"There is no FX translation layer, so roundtrips settling elsewhere \"\n                f\"are excluded rather than summed against it: {excluded}.\",\n",
+          "after": "                sections.get(\"attribution_unavailable_reason\")\n                or \"The Shadow backtest produced no usable metrics; comparison was not calculated.\",\n",
+          "count": 1
+        },
+        {
+          "before": "    if attribution.counterfactual_trades:\n",
+          "after": "    if not sections.get(\"attribution_available\"):\n        story.append(\n            para(\n                \"Counterfactual trades were not calculated because no usable journal/account input was provided.\",\n                muted,\n            )\n        )\n    elif attribution.counterfactual_trades:\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "agent/src/shadow_account/templates/shadow_report.html",
+      "sha256": "f46128666b47b05ea5eb8d3bbaa0a8ae07cc0303149c56ed4e5c4e6fe74e44f8",
+      "replacements": [
+        {
+          "before": "      <div class=\"delta-caption\">Shadow {{ '%.2f' | format(shadow_pnl) }} | Real {{ '%.2f' | format(real_pnl) }}</div>\n",
+          "after": "      <div class=\"delta-caption\">Shadow {{ '%.2f' | format(shadow_pnl) }} | Real {{ '%.2f' | format(real_pnl) }}</div>\n    </div>\n    {% elif shadow_pnl is not none %}\n    <div class=\"cover-delta\">\n      <div class=\"delta-label\">Shadow PnL</div>\n      <div class=\"delta-caption\">{{ '%.2f' | format(shadow_pnl) }} | {{ attribution_unavailable_reason }}</div>\n",
+          "count": 1
+        },
+        {
+          "before": "          <td class=\"mono\">{{ '%.2f' | format(metrics.get('sharpe', 0.0)) }}</td>\n          <td class=\"mono\">{{ '%.2f%%' | format(metrics.get('annual_return', 0.0) * 100) }}</td>\n          <td class=\"mono\">{{ '%.2f%%' | format(metrics.get('max_drawdown', 0.0) * 100) }}</td>\n",
+          "after": "          <td class=\"mono\">{% if metrics.get('sharpe') is not none %}{{ '%.2f' | format(metrics.get('sharpe')) }}{% else %}N/A{% endif %}</td>\n          <td class=\"mono\">{% if metrics.get('annual_return') is not none %}{{ '%.2f%%' | format(metrics.get('annual_return') * 100) }}{% else %}N/A{% endif %}</td>\n          <td class=\"mono\">{% if metrics.get('max_drawdown') is not none %}{{ '%.2f%%' | format(metrics.get('max_drawdown') * 100) }}{% else %}N/A{% endif %}</td>\n",
+          "count": 1
+        },
+        {
+          "before": "    {% if shadow_pnl is not none %}\n",
+          "after": "    {% if attribution_available %}\n",
+          "count": 1
+        },
+        {
+          "before": "    {% else %}\n    <p class=\"lede\">The shadow backtest did not produce usable metrics, so Shadow PnL, delta, and the attribution below are not computed for this run.</p>\n    {% endif %}\n",
+          "after": "",
+          "count": 1
+        },
+        {
+          "before": "      <p class=\"muted\">Real PnL above covers the shadow pool's settlement currency only. There is no FX translation layer, so roundtrips settling elsewhere are excluded rather than summed against it: {% for currency, count in attribution.excluded_currencies.items() %}{{ count }} in {{ currency }}{{ \", \" if not loop.last }}{% endfor %}.</p>\n    {% endif %}\n",
+          "after": "      <p class=\"muted\">Real PnL above covers the shadow pool's settlement currency only. There is no FX translation layer, so roundtrips settling elsewhere are excluded rather than summed against it: {% for currency, count in attribution.excluded_currencies.items() %}{{ count }} in {{ currency }}{{ \", \" if not loop.last }}{% endfor %}.</p>\n    {% endif %}\n    {% else %}\n    <p class=\"lede\">{% if shadow_pnl is not none %}Shadow PnL {{ '%.2f' | format(shadow_pnl) }}. {% endif %}{{ attribution_unavailable_reason }}</p>\n    {% endif %}\n",
+          "count": 1
+        },
+        {
+          "before": "    <h2>6. Counterfactual Top 5</h2>\n",
+          "after": "    <h2>6. Counterfactual Top 5</h2>\n    {% if attribution_available %}\n",
+          "count": 1
+        },
+        {
+          "before": "      <p class=\"muted\">No material counterfactual trades - every roundtrip falls inside the shadow rules.</p>\n",
+          "after": "      <p class=\"muted\">No material counterfactual trades - every roundtrip falls inside the shadow rules.</p>\n    {% endif %}\n    {% else %}\n      <p class=\"muted\">Counterfactual trades were not calculated because no usable journal/account input was provided.</p>\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

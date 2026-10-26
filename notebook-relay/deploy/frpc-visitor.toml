@@ -1,0 +1,13 @@
+serverAddr = "127.0.0.1"
+serverPort = 7000
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+transport.tls.enable = false
+
+[[visitors]]
+name = "notebook-relay-visitor"
+type = "stcp"
+serverName = "notebook-relay"
+secretKey = "{{ .Envs.NOTEBOOK_RELAY_STCP_SECRET }}"
+bindAddr = "127.0.0.1"
+bindPort = 18800

@@ -119,16 +119,6 @@
       "urls": [
         "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-windows-x86_64-binary.zip"
       ]
-    },
-    {
-      "id": "westock-data",
-      "version": "1.0.5",
-      "filename": "westock-data-skillhub-1.0.5.tgz",
-      "size": 1466401,
-      "sha256": "4da669a18b1ef78b212d9c76add703653b2edd2c3dd11ce9dc46ee811c95e7c7",
-      "urls": [
-        "https://registry.npmjs.org/westock-data-skillhub/-/westock-data-skillhub-1.0.5.tgz"
-      ]
     }
   ]
 }

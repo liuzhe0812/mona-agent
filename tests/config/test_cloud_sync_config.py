@@ -12,6 +12,7 @@ def test_full_config_load_and_save_preserve_cloud_scope(tmp_path, root_key):
     path = tmp_path / "config.json"
     scope = CloudSyncConfig(enabled=True, account_id="1", vault_id="a" * 32,
         sync_planning=True, sync_notes=True, notes_vault_token="b" * 64,
+        sync_operations=True, sync_operations_credentials=True,
         session_keys=["websocket:work-1"])
     path.write_text(json.dumps({root_key: scope.model_dump(by_alias=True), "services": {"port": 18074}}), encoding="utf-8")
     loaded = load_config(path)

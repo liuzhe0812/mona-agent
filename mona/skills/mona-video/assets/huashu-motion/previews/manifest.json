@@ -1,0 +1,156 @@
+{
+  "previews": [
+    {
+      "styleId": "huashu-keynote",
+      "template": "keynote-ui",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 10,
+      "frames": 100,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 12.6363,
+      "posterTimeSeconds": 3.9
+    },
+    {
+      "styleId": "huashu-whiteboard",
+      "template": "whiteboard",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 10,
+      "frames": 100,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 5.6439,
+      "posterTimeSeconds": 5.7
+    },
+    {
+      "styleId": "huashu-finance",
+      "template": "finance-chart",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 7,
+      "frames": 70,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 1.2181,
+      "posterTimeSeconds": 4.0
+    },
+    {
+      "styleId": "huashu-math",
+      "template": "math-3b1b",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 10,
+      "frames": 100,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 0.8844,
+      "posterTimeSeconds": 5.7
+    },
+    {
+      "styleId": "huashu-type",
+      "template": "kinetic-type",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 8,
+      "frames": 80,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 19.1962,
+      "posterTimeSeconds": 4.6
+    },
+    {
+      "styleId": "huashu-collage",
+      "template": "vox-collage",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 9,
+      "frames": 90,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 16.4558,
+      "posterTimeSeconds": 4.0
+    },
+    {
+      "styleId": "huashu-science",
+      "template": "kurzgesagt",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 10,
+      "frames": 100,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 14.4616,
+      "posterTimeSeconds": 3.8
+    },
+    {
+      "styleId": "huashu-3d",
+      "template": "object-3d",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 11.6,
+      "frames": 116,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 27.3623,
+      "posterTimeSeconds": 3.5,
+      "captureResolution": [
+        1920,
+        1080
+      ]
+    },
+    {
+      "styleId": "huashu-ui-space",
+      "template": "ui-space",
+      "sourceCommit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+      "renderer": "upstream cli/lib/capture.js openFilm (om-engine), installed Chrome",
+      "resolution": [
+        640,
+        360
+      ],
+      "durationSeconds": 11,
+      "frames": 110,
+      "fps": 10,
+      "pageErrors": [],
+      "meanFrameDifference": 33.5064,
+      "posterTimeSeconds": 3.3,
+      "captureResolution": [
+        1920,
+        1080
+      ]
+    }
+  ]
+}

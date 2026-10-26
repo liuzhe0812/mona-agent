@@ -1,5 +1,6 @@
 # 视频自定义风格创作方案
 
+> 2026-10-24 更新：创作资源与运行时已统一为 Huashu Motion。本文涉及 Dashi、旧 huashu-art-motion 或 Remotion 的实现说明仅保留为历史记录；当前边界以 docs/architecture/module-invariants.md 和 docs/plans/video-huashu-motion-replacement.md 为准。
 日期：2026-10-15。状态：本轮实现与相关验收完成，实际覆盖范围和限制见验收记录。
 
 本方案承接 [视频工作台整体方案](video-workbench-rebuild.md)，以 [Mona UI 设计规范](mona-ui-design-system.md)、[模块不变量](../architecture/module-invariants.md)和[工程边界](../architecture/engineering-boundaries.md)为约束。实施与验收范围以 [验收记录](../plans/video-custom-style-acceptance-20261015.md) 为准。

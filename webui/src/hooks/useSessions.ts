@@ -36,9 +36,8 @@ function sessionListErrorMessage(error: unknown): string {
   return String(error || "Unknown error");
 }
 
-/** Client-side fallback for system-managed hidden rooms (stock-module design
- *  §5.1): even if the server ever leaks a ``hidden`` conversation row, the
- *  sidebar must never render it. Applied to every server refresh. */
+/** Keep system-managed hidden conversations out of the sidebar even if the
+ *  server includes a hidden row in its response. */
 export function filterVisibleSessions(rows: ChatSummary[]): ChatSummary[] {
   return rows.filter((row) => row.conversation?.hidden !== true);
 }

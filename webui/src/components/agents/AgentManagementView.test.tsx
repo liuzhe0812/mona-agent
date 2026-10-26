@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { MONA_BRAND_AVATAR } from "@/lib/brand-assets";
 import { nativeProvidersChanged, useNativeProviderState } from "@/lib/native-provider-state";
 
 const detail = {
@@ -181,6 +182,18 @@ const clientMocks = vi.hoisted(() => ({
   })),
   updateAgentConfig: vi.fn(async (_agentId: string, _update: Record<string, unknown>, _revision: number) => undefined),
   updateAgentSkill: vi.fn(async () => undefined),
+  saveAgentInstruction: vi.fn(async (_agentId: string, _key: string, _content: string) => undefined),
+  restoreAgentInstruction: vi.fn(async (_agentId: string, _key: string) => undefined),
+}));
+
+const instructionMocks = vi.hoisted(() => ({
+  listAgentInstructions: vi.fn(async () => [
+    { key: "soul", filename: "SOUL.md", content: "", contentHash: "", hasPrevious: false },
+    { key: "agents", filename: "AGENTS.md", content: "", contentHash: "", hasPrevious: false },
+    { key: "user", filename: "USER.md", content: "", contentHash: "", hasPrevious: false },
+    { key: "memory", filename: "MEMORY.md", content: "", contentHash: "", hasPrevious: false },
+  ]),
+  listAgentInstructionHistory: vi.fn(async () => []),
 }));
 
 const developmentMocks = vi.hoisted(() => {
@@ -217,6 +230,10 @@ beforeEach(() => {
   Object.assign(detail.config, { revision: 1, modelPreset: null, modelBinding: null });
   useNativeProviderState.setState({ revision: 0 });
   clientMocks.updateAgentConfig.mockReset().mockResolvedValue(undefined);
+  clientMocks.saveAgentInstruction.mockClear();
+  clientMocks.restoreAgentInstruction.mockClear();
+  instructionMocks.listAgentInstructions.mockClear();
+  instructionMocks.listAgentInstructionHistory.mockClear();
   developmentMocks.providerExecutors.mockReset().mockResolvedValue({ executors: developmentMocks.executors });
 });
 
@@ -278,12 +295,7 @@ vi.mock("@/lib/api", () => ({
     : agentId === "agent.url-note" ? legacyUrlNoteDetail
       : agentId === "agent.frame-only" ? legacyFrameOnlyDetail
         : agentId === "agent.partial" ? partialDetail : detail),
-  listAgentInstructions: vi.fn(async () => [
-    { key: "soul", filename: "SOUL.md", content: "", contentHash: "" },
-    { key: "agents", filename: "AGENTS.md", content: "", contentHash: "" },
-    { key: "user", filename: "USER.md", content: "", contentHash: "" },
-    { key: "memory", filename: "MEMORY.md", content: "", contentHash: "" },
-  ]),
+  listAgentInstructions: instructionMocks.listAgentInstructions,
   listAgentSkills: vi.fn(async () => skills),
   getAgentSkill: vi.fn(async (_token: string, _agentId: string, name: string) => {
     const skill = skills.find((item) => item.name === name) ?? skills[0];
@@ -292,7 +304,7 @@ vi.mock("@/lib/api", () => ({
       content: `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n`,
     };
   }),
-  listAgentInstructionHistory: vi.fn(async () => []),
+  listAgentInstructionHistory: instructionMocks.listAgentInstructionHistory,
 }));
 vi.mock("@/lib/materials-api", () => ({
   listAgentKnowledgeDocuments: vi.fn(async () => []),
@@ -332,6 +344,8 @@ vi.mock("@/providers/ClientProvider", () => ({
       cancelAgentSkillSetup: clientMocks.cancelAgentSkillSetup,
       updateAgentConfig: clientMocks.updateAgentConfig,
       updateAgentSkill: clientMocks.updateAgentSkill,
+      saveAgentInstruction: clientMocks.saveAgentInstruction,
+      restoreAgentInstruction: clientMocks.restoreAgentInstruction,
     },
   }),
 }));
@@ -365,22 +379,78 @@ describe("AgentManagementView navigation surfaces", () => {
     expect(screen.queryByRole("tab", { name: /模型与运行|Model & Runtime/ })).not.toBeInTheDocument();
 
     await user.click(personalization);
-    const instruction = await screen.findByRole("button", { name: "个性" });
+    const instruction = await screen.findByRole("button", { name: "人设" });
     expect(instruction).toHaveClass("bg-transparent", "before:bg-[hsl(var(--brand-red))]");
     expect(instruction).not.toHaveClass("bg-accent");
+    expect(screen.getByRole("button", { name: "长期记忆" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "个性" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "规则" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用户偏好" })).not.toBeInTheDocument();
     expect(screen.queryByText(/SOUL\.md|AGENTS\.md|USER\.md|MEMORY\.md/)).not.toBeInTheDocument();
-    expect(screen.getByText("手动和 AI 修改都会自动记录版本，可随时恢复。")).toBeInTheDocument();
+    expect(screen.getByText("保存时自动保留上一版。")).toBeInTheDocument();
+    expect(screen.queryByText("版本历史")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "恢复上一版" })).not.toBeInTheDocument();
+    expect(instructionMocks.listAgentInstructionHistory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "技能" }));
     expect(screen.queryByText("添加专属 Skill")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "技能" })).toBeInTheDocument();
   });
 
+  it.each(["agent.demo", "mona"])("saves persona and memory for the selected Agent %s", async (agentId) => {
+    const user = userEvent.setup();
+    render(<AgentManagementView agentId={agentId} onBack={() => {}} onStartDirect={() => {}} />);
+
+    await user.click(await screen.findByRole("tab", { name: "个性化" }));
+    await user.type(screen.getByRole("textbox"), "用自然口语交流");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(clientMocks.saveAgentInstruction).toHaveBeenCalledWith(
+      agentId, "soul", "用自然口语交流",
+    ));
+
+    await user.click(await screen.findByRole("button", { name: "长期记忆" }));
+    await user.type(screen.getByRole("textbox"), "保留本次项目约定");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(clientMocks.saveAgentInstruction).toHaveBeenCalledWith(
+      agentId, "memory", "保留本次项目约定",
+    ));
+  });
+
+  it.each(["agent.demo", "mona"])("restores only the selected file for Agent %s", async (agentId) => {
+    const user = userEvent.setup();
+    const current = [
+      { key: "soul", filename: "SOUL.md", content: "当前人设", contentHash: "soul", hasPrevious: true },
+      { key: "memory", filename: "MEMORY.md", content: "当前记忆", contentHash: "memory", hasPrevious: true },
+    ];
+    const restoredSoul = { ...current[0], content: "上一版人设", hasPrevious: false };
+    instructionMocks.listAgentInstructions
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce([restoredSoul, current[1]])
+      .mockResolvedValueOnce([restoredSoul, { ...current[1], content: "上一版记忆", hasPrevious: false }]);
+    render(<AgentManagementView agentId={agentId} onBack={() => {}} onStartDirect={() => {}} />);
+
+    await user.click(await screen.findByRole("tab", { name: "个性化" }));
+    expect(screen.getByRole("textbox")).toHaveValue("当前人设");
+    await user.click(screen.getByRole("button", { name: "恢复上一版" }));
+    await waitFor(() => expect(clientMocks.restoreAgentInstruction).toHaveBeenNthCalledWith(1, agentId, "soul"));
+    await screen.findByDisplayValue("上一版人设");
+    expect(screen.queryByRole("button", { name: "恢复上一版" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "长期记忆" }));
+    expect(screen.getByRole("textbox")).toHaveValue("当前记忆");
+    await user.click(screen.getByRole("button", { name: "恢复上一版" }));
+    await waitFor(() => expect(clientMocks.restoreAgentInstruction).toHaveBeenNthCalledWith(2, agentId, "memory"));
+    await screen.findByDisplayValue("上一版记忆");
+    expect(screen.queryByRole("button", { name: "恢复上一版" })).not.toBeInTheDocument();
+    expect(screen.queryByText("版本历史")).not.toBeInTheDocument();
+    expect(instructionMocks.listAgentInstructionHistory).not.toHaveBeenCalled();
+  });
+
   it("uses the human Mona avatar when the API avatar is empty", async () => {
     render(<AgentManagementView agentId="mona" onBack={() => {}} onStartDirect={() => {}} />);
 
     await waitFor(() => expect(screen.getByText("Mona")).toBeInTheDocument());
-    expect(document.querySelectorAll('img[src="/brand/mona_avatar_human.png"]')).toHaveLength(2);
+    expect(document.querySelectorAll(`img[src="${MONA_BRAND_AVATAR}"]`)).toHaveLength(2);
     expect(document.querySelector('img[src="/brand/mona_avatar_white.png"]')).not.toBeInTheDocument();
   });
 
@@ -408,7 +478,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
     expect(await screen.findByRole("menuitem", { name: "Codex · GPT Codex" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Claude Code · Claude Sonnet" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("menuitem", { name: "CodeBuddy · CodeBuddy Model" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "WorkBuddy · CodeBuddy Model" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("menuitem", { name: "跟随全局默认模型" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "评审模型 · review-model" })).toBeInTheDocument();
   });

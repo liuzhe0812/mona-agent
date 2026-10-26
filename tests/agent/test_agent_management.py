@@ -321,10 +321,7 @@ def test_create_custom_agent_is_local_and_registry_loadable(
     assert "识别风险" not in prompt
     personality = agent_management.read_instruction(definition.id, "soul")
     assert personality["content"] == "识别风险并用通俗语言解释，不替代律师意见。"
-    assert any(
-        entry["message"] == "创建个性"
-        for entry in agent_management.instruction_history(definition.id, "soul")
-    )
+    assert not personality["hasPrevious"]
     registry = AgentRegistry(
         builtin_dir=tmp_path / "builtin",
         installed_dir=agents_dir,

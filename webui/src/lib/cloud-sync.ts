@@ -3,7 +3,7 @@ import { httpFetch } from "@/lib/tauri";
 
 export interface CloudCandidate { key: string; title: string }
 export interface CloudStatus {
-  available: boolean; enabled: boolean; phase: string;
+  available: boolean; enabled: boolean; upload_enabled: boolean; phase: string;
   blocked_keys?: string[];
   plan?: "free" | "pro";
   space?: { quota_bytes: number; used_bytes: number; reserved_bytes: number; object_count: number } | null;
@@ -15,6 +15,8 @@ export interface CloudStatus {
   sync_planning?: boolean;
   sync_notes?: boolean;
   sync_preferences?: boolean;
+  sync_operations?: boolean;
+  sync_operations_credentials?: boolean;
   conversations?: CloudConversation[];
 }
 export interface CloudDraft { draft_id: string; new_space: boolean; candidates: CloudCandidate[] }
@@ -215,17 +217,25 @@ export const cloudSyncApi = {
   cleanup: cleanupUploads,
   status: (signal?: AbortSignal) => request<CloudStatus>("status", "GET", undefined, signal),
   prepare: (recovery?: string) => request<CloudDraft>("prepare", "POST", { recovery: recovery || null }),
-  enable: (draft_id: string, session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean) => request<{ enabled: boolean }>("enable", "POST", { draft_id, session_keys, confirmed: true,
+  enable: (draft_id: string, session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean,
+    sync_operations?: boolean, sync_operations_credentials?: boolean) => request<{ enabled: boolean }>("enable", "POST", { draft_id, session_keys, confirmed: true,
     ...(sync_new_conversations === undefined ? {} : { sync_new_conversations }),
     ...(sync_planning === undefined ? {} : { sync_planning }),
     ...(sync_notes === undefined ? {} : { sync_notes }),
-    ...(sync_preferences === undefined ? {} : { sync_preferences }) }),
-  scope: (session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean) => request<{ selected_keys: string[]; sync_new_conversations: boolean; sync_planning: boolean; sync_preferences: boolean }>("scope", "POST", { session_keys,
+    ...(sync_preferences === undefined ? {} : { sync_preferences }),
+    ...(sync_operations === undefined ? {} : { sync_operations }),
+    ...(sync_operations_credentials === undefined ? {} : { sync_operations_credentials }) }),
+  scope: (session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean,
+    sync_operations?: boolean, sync_operations_credentials?: boolean) => request<{ selected_keys: string[]; sync_new_conversations: boolean;
+      sync_planning: boolean; sync_preferences: boolean; sync_operations: boolean; sync_operations_credentials: boolean }>("scope", "POST", { session_keys,
     ...(sync_new_conversations === undefined ? {} : { sync_new_conversations }),
     ...(sync_planning === undefined ? {} : { sync_planning }),
     ...(sync_notes === undefined ? {} : { sync_notes }),
-    ...(sync_preferences === undefined ? {} : { sync_preferences }) }),
+    ...(sync_preferences === undefined ? {} : { sync_preferences }),
+    ...(sync_operations === undefined ? {} : { sync_operations }),
+    ...(sync_operations_credentials === undefined ? {} : { sync_operations_credentials }) }),
   pause: () => request<{ enabled: boolean }>("pause", "POST", {}),
+  resume: () => request<{ enabled: boolean }>("resume", "POST"),
   sync: () => request<{ scheduled: boolean }>("sync", "POST", {}),
   history: readHistory,
   files: readFiles,

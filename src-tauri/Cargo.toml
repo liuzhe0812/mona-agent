@@ -1,6 +1,6 @@
 [package]
 name = "mona-desktop"
-version = "1.8.1"
+version = "1.8.2"
 description = "Mona Desktop Client"
 authors = ["Mona Team"]
 edition = "2021"
@@ -54,7 +54,6 @@ base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 zstd = "0.13"
-jsonwebtoken = "9"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 subtle = "2"

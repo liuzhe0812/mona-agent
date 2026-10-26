@@ -26,6 +26,7 @@ interface FileReferenceChipProps {
   tooltipPath?: string;
   absolutePath?: string;
   display?: "name" | "path";
+  variant?: "default" | "inline";
   active?: boolean;
   className?: string;
   textClassName?: string;
@@ -37,6 +38,7 @@ export function FileReferenceChip({
   tooltipPath,
   absolutePath,
   display = "name",
+  variant = "default",
   active = false,
   className,
   textClassName,
@@ -90,13 +92,14 @@ export function FileReferenceChip({
                   : undefined
               }
               className={cn(
-                "inline-flex max-w-full items-center gap-1 font-medium leading-[inherit]",
-                "text-sky-600 transition-colors hover:text-sky-700",
-                "dark:text-sky-300 dark:hover:text-sky-200",
+                "inline-flex max-w-full items-center gap-1 leading-[inherit] transition-colors",
+                variant === "inline"
+                  ? "font-normal text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  : "font-medium text-sky-600 hover:text-sky-700 dark:text-sky-300 dark:hover:text-sky-200",
                 canOpen && "cursor-pointer",
               )}
             >
-              <FileReferenceIcon kind={kind} />
+              {variant === "default" && <FileReferenceIcon kind={kind} />}
               <span
                 data-sheen-text={active ? displayText : undefined}
                 className={cn(
@@ -105,7 +108,7 @@ export function FileReferenceChip({
                   textClassName,
                 )}
               >
-                {display === "path" && directory ? (
+                {variant !== "inline" && display === "path" && directory ? (
                   <>
                     <span className="text-muted-foreground/65">{directory}</span>
                     <span className="font-semibold text-sky-700 dark:text-sky-200">{name}</span>

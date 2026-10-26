@@ -24,8 +24,8 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       className={cn(
         "relative inline-flex shrink-0 items-center rounded-full transition-colors",
         size === "sm" ? "h-5 w-8 after:absolute after:inset-x-0 after:top-1/2 after:h-8 after:-translate-y-1/2" : "h-6 w-10",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-        checked ? "bg-emerald-500" : "bg-muted",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        checked ? "bg-info" : "bg-input",
         disabled && "cursor-not-allowed opacity-50",
         className,
       )}

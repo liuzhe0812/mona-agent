@@ -1,11 +1,11 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 use crate::terminal::approval::{ApprovalVerdict, PendingCommand};
-use crate::terminal::config::{AuthConfig, ConnectionConfig, Protocol};
+use crate::terminal::config::{AuthConfig, ConnectionConfig, ConnectionState, Protocol};
 use crate::terminal::credential_store;
 use crate::terminal::error::TerminalError;
 use crate::terminal::session::{Session, SessionHandle, SessionStatus, SessionType};
@@ -20,6 +20,8 @@ use crate::terminal::TerminalState;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
+
+pub(crate) static CONNECTIONS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tauri::command]
 pub async fn ssh_connect(
@@ -235,9 +237,15 @@ async fn ssh_connect_with_id_inner(
     }
 
     let client =
-        SshClient::connect_skip_verify(&config.host, config.port, &config.username, &config.auth)
-            .await
-            .map_err(|e| {
+        SshClient::connect(
+            &config.host,
+            config.port,
+            &config.username,
+            &config.auth,
+            state.known_hosts.clone(),
+        )
+        .await
+        .map_err(|e| {
                 log::error!(
                     "[batch] SSH connect failed for session_id={}, host={}: {}",
                     session_id,
@@ -1172,7 +1180,7 @@ pub async fn sftp_cancel_transfer(
     }
 }
 
-fn connections_path() -> Result<PathBuf, String> {
+pub(crate) fn connections_path() -> Result<PathBuf, String> {
     let config_dir =
         dirs::config_dir().ok_or_else(|| "Cannot determine config directory".to_string())?;
     let dir = config_dir.join("mona");
@@ -1180,8 +1188,59 @@ fn connections_path() -> Result<PathBuf, String> {
     Ok(dir.join("terminal-connections.json"))
 }
 
+pub(crate) fn load_saved_connections_unlocked() -> Result<Vec<ConnectionConfig>, String> {
+    load_saved_connections_at(&connections_path()?)
+}
+
+pub(crate) fn load_saved_connections_at(path: &Path) -> Result<Vec<ConnectionConfig>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let data = std::fs::read_to_string(&path)
+        .map_err(|e| TerminalError::ConfigLoad(e.to_string()).to_string())?;
+    serde_json::from_str(&data).map_err(|e| TerminalError::ConfigLoad(e.to_string()).to_string())
+}
+
+pub(crate) fn write_saved_connections_unlocked(
+    connections: &[ConnectionConfig],
+) -> Result<(), String> {
+    write_saved_connections_at(&connections_path()?, connections)
+}
+
+pub(crate) fn write_saved_connections_at(
+    path: &Path,
+    connections: &[ConnectionConfig],
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| TerminalError::ConfigSave("Invalid connection config path".into()).to_string())?;
+    let json = serde_json::to_string_pretty(connections)
+        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
+    temporary
+        .write_all(json.as_bytes())
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
+    temporary
+        .persist(&path)
+        .map_err(|e| TerminalError::ConfigSave(e.error.to_string()).to_string())?;
+    Ok(())
+}
+
+fn connection_state(connections: Vec<ConnectionConfig>) -> Result<ConnectionState, String> {
+    let revision = crate::terminal::cloud_sync::connections_revision(&connections)?;
+    Ok(ConnectionState {
+        connections,
+        revision,
+    })
+}
+
 #[tauri::command]
 pub async fn terminal_save_connections(connections: Vec<ConnectionConfig>) -> Result<(), String> {
+    let _guard = CONNECTIONS_LOCK
+        .lock()
+        .map_err(|_| "终端连接配置正在保存，请重试。")?;
     let safe_connections: Vec<ConnectionConfig> = connections
         .iter()
         .map(|c| ConnectionConfig {
@@ -1189,28 +1248,87 @@ pub async fn terminal_save_connections(connections: Vec<ConnectionConfig>) -> Re
             ..c.clone()
         })
         .collect();
+    if safe_connections
+        .iter()
+        .any(|connection| !credential_store::auth_credentials_are_protected(&connection.auth))
+    {
+        return Err("无法安全保存终端凭据，请重新输入后再试。".into());
+    }
 
-    let path = connections_path()?;
-    let json = serde_json::to_string_pretty(&safe_connections)
-        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
-    let mut file = std::fs::File::create(&path)
-        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
-    file.write_all(json.as_bytes())
-        .map_err(|e| TerminalError::ConfigSave(e.to_string()).to_string())?;
-    Ok(())
+    write_saved_connections_unlocked(&safe_connections)
 }
 
 #[tauri::command]
 pub async fn terminal_load_connections() -> Result<Vec<ConnectionConfig>, String> {
-    let path = connections_path()?;
-    if !path.exists() {
-        return Ok(Vec::new());
+    let _guard = CONNECTIONS_LOCK
+        .lock()
+        .map_err(|_| "终端连接配置正在保存，请重试。")?;
+    load_saved_connections_unlocked()
+}
+
+#[tauri::command]
+pub async fn terminal_load_connection_state() -> Result<ConnectionState, String> {
+    let _guard = CONNECTIONS_LOCK
+        .lock()
+        .map_err(|_| "终端连接配置正在保存，请重试。")?;
+    connection_state(load_saved_connections_unlocked()?)
+}
+
+#[tauri::command]
+pub async fn terminal_upsert_connection(
+    connection: ConnectionConfig,
+    expected_revision: Option<String>,
+) -> Result<ConnectionState, String> {
+    let _guard = CONNECTIONS_LOCK
+        .lock()
+        .map_err(|_| "终端连接配置正在保存，请重试。")?;
+    let mut connections = load_saved_connections_unlocked()?;
+    let existing_index = connections.iter().position(|item| item.id == connection.id);
+    let current_revision = crate::terminal::cloud_sync::connections_revision(&connections)?;
+    match (&expected_revision, existing_index) {
+        (None, None) => {}
+        (Some(expected), Some(_)) if expected == &current_revision => {}
+        (None, Some(_)) => return Err("该连接已存在，请重新加载后再保存。".into()),
+        (Some(_), None) => return Err("该连接已删除，请重新加载连接列表。".into()),
+        _ => return Err("终端连接已变化，请重新加载后再保存。".into()),
     }
-    let data = std::fs::read_to_string(&path)
-        .map_err(|e| TerminalError::ConfigLoad(e.to_string()).to_string())?;
-    let connections: Vec<ConnectionConfig> = serde_json::from_str(&data)
-        .map_err(|e| TerminalError::ConfigLoad(e.to_string()).to_string())?;
-    Ok(connections)
+
+    let old = existing_index.map(|index| connections[index].clone());
+    let safe = crate::terminal::cloud_sync::store_upsert_credentials(connection, old.as_ref())?;
+    if let Some(index) = existing_index {
+        connections[index] = safe.clone();
+    } else {
+        connections.push(safe.clone());
+    }
+    if let Err(error) = write_saved_connections_unlocked(&connections) {
+        crate::terminal::cloud_sync::discard_uncommitted_credentials(old.as_ref(), &safe);
+        return Err(error);
+    }
+    crate::terminal::cloud_sync::cleanup_replaced_credentials(old.as_ref(), &safe);
+    connection_state(connections)
+}
+
+#[tauri::command]
+pub async fn terminal_delete_saved_connection(
+    connection_id: String,
+    expected_revision: String,
+) -> Result<ConnectionState, String> {
+    let _guard = CONNECTIONS_LOCK
+        .lock()
+        .map_err(|_| "终端连接配置正在保存，请重试。")?;
+    let mut connections = load_saved_connections_unlocked()?;
+    let current_revision = crate::terminal::cloud_sync::connections_revision(&connections)?;
+    if expected_revision != current_revision {
+        return Err("终端连接已变化，请重新加载后再删除。".into());
+    }
+    let index = connections
+        .iter()
+        .position(|item| item.id == connection_id)
+        .ok_or_else(|| "连接不存在或已删除。".to_string())?;
+    let removed = connections.remove(index);
+    write_saved_connections_unlocked(&connections)?;
+    crate::terminal::cloud_sync::delete_connection_credentials(&removed);
+    connection_state(connections)
 }
 
 #[derive(serde::Serialize, Clone)]
