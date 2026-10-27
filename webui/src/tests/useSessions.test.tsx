@@ -481,7 +481,7 @@ describe("useSessions", () => {
     expect(result.current.messages[2]!.content).toBe("summary");
   });
 
-  it("flags transcript ending with a trace row as pending", async () => {
+  it("keeps an ending trace as history without claiming the task is pending", async () => {
     vi.mocked(api.fetchWebuiThread).mockResolvedValue({
       schemaVersion: 3,
       messages: [
@@ -502,7 +502,7 @@ describe("useSessions", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(result.current.hasPendingToolCalls).toBe(true);
+    expect(result.current.hasPendingToolCalls).toBe(false);
   });
 
   it("does not flag transcript as pending when last row is not a trace", async () => {

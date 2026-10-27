@@ -84,6 +84,7 @@ interface MessageBubbleProps {
   /** Start a new task using this reply as its branch context. */
   onBranch?: (message: UIMessage, author: string) => void;
   onWidgetPrompt?: (text: string) => void;
+  showTurnActions?: boolean;
 }
 
 const LONG_REPLY_CHAR_THRESHOLD = 1_600;
@@ -196,6 +197,7 @@ export function MessageBubble({
   authorName,
   onBranch,
   onWidgetPrompt,
+  showTurnActions = true,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -377,6 +379,7 @@ export function MessageBubble({
   const showDirectActions =
     !isGroupChat
     && message.role === "assistant"
+    && showTurnActions
     && !message.isStreaming
     && !empty;
 

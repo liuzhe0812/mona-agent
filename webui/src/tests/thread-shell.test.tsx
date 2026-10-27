@@ -1357,6 +1357,30 @@ describe("ThreadShell", () => {
     );
   });
 
+  it("shows a rejected-send dialog once, keeps the user input, and allows another send without stopping", async () => {
+    const client = makeClient();
+    const chatId = "chat-rejected-send";
+    render(wrap(client, <ThreadShell session={session(chatId)} title="Chat" onToggleSidebar={() => {}} />));
+    await waitFor(() => expect(screen.getByLabelText("Message input")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "keep this input" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const taskId = client.sendMessage.mock.calls[0][3].taskId;
+    act(() => client._emitChat(chatId, {
+      event: "error", chat_id: chatId, task_id: taskId, message_rejected: true, detail: "invalid_agent_kind_context",
+    }));
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Message not sent");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("invalid_agent_kind_context");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByText("keep this input")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop generating" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "continue normally" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(2));
+    expect(client.sendMessage.mock.calls.map((call) => call[1])).toEqual(["keep this input", "continue normally"]);
+  });
+
   it("keeps the first landing message when new chat history is still empty", async () => {
     const client = makeClient();
     const onCreateChat = vi.fn().mockResolvedValue("chat-new");
@@ -1585,30 +1609,6 @@ describe("ThreadShell", () => {
     );
   });
 
-  it("uses the selected agent welcome instead of Mona's dashboard for a new direct chat", async () => {
-    const client = makeClient();
-    const onCreateDirectChat = vi.fn().mockResolvedValue("partner-chat");
-    invalidateAgents();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/agents")) {
-          return httpJson({ agents: [{ id: "com.mona.xiaohongshu", displayName: "小红书运营", enabled: true }] });
-        }
-        return { ok: false, status: 404, json: async () => ({}) };
-      }),
-    );
-
-    render(wrap(
-      client,
-      <ThreadShell
-        session={null}
-        title="新建对话"
-        onToggleSidebar={() => {}}
-        onNewChat={() => {}}
-        pendingDirectAgentId="com.mona.xiaohongshu"
-        onCreateDirectChat={onCreateDirectChat}
-      />,
   it.each(["local.custom.deleted", "com.example.deleted"])("keeps deleted agent %s history read-only", async (agentId) => {
     const client = makeClient();
     invalidateAgents();
@@ -1641,6 +1641,30 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("uses the selected agent welcome instead of Mona's dashboard for a new direct chat", async () => {
+    const client = makeClient();
+    const onCreateDirectChat = vi.fn().mockResolvedValue("partner-chat");
+    invalidateAgents();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/agents")) {
+          return httpJson({ agents: [{ id: "com.mona.xiaohongshu", displayName: "小红书运营", enabled: true }] });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(wrap(
+      client,
+      <ThreadShell
+        session={null}
+        title="新建对话"
+        onToggleSidebar={() => {}}
+        onNewChat={() => {}}
+        pendingDirectAgentId="com.mona.xiaohongshu"
+        onCreateDirectChat={onCreateDirectChat}
+      />,
     ));
 
     expect(await screen.findByTestId("partner-agent-welcome")).toHaveTextContent("小红书运营");

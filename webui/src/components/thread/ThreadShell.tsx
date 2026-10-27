@@ -21,6 +21,7 @@ import {
 } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
+import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { DiscussionDialog } from "@/components/discussion/DiscussionDialog";
@@ -473,6 +474,8 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
+    messageRejection,
+    dismissMessageRejection,
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const pendingQueue = usePendingQueue();
@@ -901,10 +904,10 @@ export function ThreadShell({
 
   const handleThreadSend = useCallback(
     async (content: string, _images?: SendImage[], _options?: SendOptions) => {
+      if (missingInstalledPartner) return;
       if (isStreaming) {
         const officeContext = activeOfficeContextRef.current;
         pendingQueue.enqueue(
-      if (missingInstalledPartner) return;
           content,
           _images,
           officeContext ? { ...(_options ?? {}), ...officeContext } : _options,
@@ -2252,6 +2255,7 @@ export function ThreadShell({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <MessageRejectionDialog rejection={messageRejection} onDismiss={dismissMessageRejection} />
     </>
   );
 }

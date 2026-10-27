@@ -1,24 +1,30 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DocChatPanel } from "./DocChatPanel";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { MessageQuote, UIMessage } from "@/lib/types";
 import { videoFocusQuote } from "./video/VideoWorkbenchHeader";
+import i18n from "@/i18n";
 
 const mocks = vi.hoisted(() => ({
   historyError: null as string | null,
   historyLoading: false,
+  historical: [] as UIMessage[],
+  isStreaming: false,
   onStreamingChange: vi.fn(),
   setMessages: vi.fn(),
   send: vi.fn(),
   inject: vi.fn(),
+  messageRejection: null as { runActive: boolean } | null,
+  dismissMessageRejection: vi.fn(),
 }));
 
-vi.mock("@/hooks/useSessions", () => ({
+vi.mock("@/hooks/useSessions", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/hooks/useSessions")>(),
   useSessionHistory: () => ({
-    messages: [],
+    messages: mocks.historical,
     loading: mocks.historyLoading,
     error: mocks.historyError,
     hasPendingToolCalls: false,
@@ -29,7 +35,7 @@ vi.mock("@/hooks/useSessions", () => ({
 vi.mock("@/hooks/useMonaStream", () => ({
   useMonaStream: () => ({
     messages: [],
-    isStreaming: false,
+    isStreaming: mocks.isStreaming,
     isAwaitingModelResponse: false,
     stopping: false,
     stop: vi.fn(),
@@ -38,6 +44,8 @@ vi.mock("@/hooks/useMonaStream", () => ({
     setMessages: mocks.setMessages,
     streamError: null,
     dismissStreamError: vi.fn(),
+    messageRejection: mocks.messageRejection,
+    dismissMessageRejection: mocks.dismissMessageRejection,
   }),
 }));
 
@@ -91,10 +99,14 @@ describe("DocChatPanel", () => {
   beforeEach(() => {
     mocks.historyError = null;
     mocks.historyLoading = false;
+    mocks.historical = [];
+    mocks.isStreaming = false;
     mocks.onStreamingChange.mockReset();
     mocks.setMessages.mockReset();
     mocks.send.mockReset();
     mocks.inject.mockReset();
+    mocks.messageRejection = null;
+    mocks.dismissMessageRejection.mockReset();
   });
 
   it("reports ready only after history loads and clears readiness during loading or errors", async () => {
@@ -137,6 +149,51 @@ describe("DocChatPanel", () => {
 
     await waitFor(() => expect(mocks.onStreamingChange).toHaveBeenCalledTimes(1));
     expect(mocks.onStreamingChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps sends disabled until the owner conversation identity has been resolved", () => {
+    const view = render(<DocChatPanel chatId="regular-owner" disabled />);
+    fireEvent.click(screen.getByRole("button", { name: "发送普通消息" }));
+    expect(mocks.send).not.toHaveBeenCalled();
+    view.rerender(<DocChatPanel chatId="regular-owner" />);
+    fireEvent.click(screen.getByRole("button", { name: "发送普通消息" }));
+    expect(mocks.send).toHaveBeenCalledOnce();
+    expect(mocks.send.mock.calls[0][2]).not.toHaveProperty("agentKind");
+  });
+
+  it("shows the shared rejection dialog in a document conversation", () => {
+    mocks.messageRejection = { runActive: false };
+    render(<DocChatPanel chatId="regular-owner" />);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent(i18n.t("errors.messageRejected.title"));
+    fireEvent.click(within(dialog).getByRole("button"));
+    expect(mocks.dismissMessageRejection).toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unaccepted message and attachments when history refreshes", () => {
+    const saved = { id: "saved", role: "assistant", content: "已保存的方案", createdAt: 1, historyPosition: 0 } as UIMessage;
+    const rejected = {
+      id: "local", role: "user", content: "继续制作", createdAt: 2,
+      sendState: "rejected", images: ["data:image/png;base64,test"],
+    } as UIMessage;
+    mocks.historical = [saved];
+    render(<DocChatPanel chatId="regular-owner" />);
+
+    const reconcile = mocks.setMessages.mock.calls.at(-1)?.[0] as (current: UIMessage[]) => UIMessage[];
+    expect(reconcile([saved, rejected])).toEqual([saved, rejected]);
+  });
+
+  it("does not replace a completed live reply with the previous history page", () => {
+    mocks.historical = [{ id: "saved", role: "assistant", content: "旧方案", createdAt: 1, historyPosition: 0 } as UIMessage];
+    mocks.isStreaming = true;
+    const view = render(<DocChatPanel chatId="regular-owner" />);
+    mocks.setMessages.mockClear();
+
+    mocks.isStreaming = false;
+    view.rerender(<DocChatPanel chatId="regular-owner" />);
+
+    expect(mocks.setMessages).not.toHaveBeenCalled();
   });
 
   it("passes document context through the shared composer send path", () => {

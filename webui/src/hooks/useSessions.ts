@@ -306,6 +306,7 @@ export function mergeHistoryMessages(
 
 function samePersistedMessage(left: UIMessage, right: UIMessage): boolean {
   if (left.id === right.id) return true;
+  if (left.sendState === "rejected" || right.sendState === "rejected") return false;
   if (left.historyPosition != null && right.historyPosition != null) {
     return left.historyPosition === right.historyPosition;
   }
@@ -323,6 +324,7 @@ function matchesCanonicalUserEcho(
 ): boolean {
   if (
     optimistic.historyPosition != null
+    || optimistic.sendState === "rejected"
     || canonical.historyPosition == null
     || optimistic.role !== "user"
     || canonical.role !== "user"
@@ -343,7 +345,8 @@ function isActiveLiveMessage(
   message: UIMessage,
   options: { isStreaming?: boolean; currentTaskId?: string | null },
 ): boolean {
-  return message.isStreaming
+  return message.sendState !== undefined
+    || message.isStreaming
     || message.reasoningStreaming
     || Boolean(options.isStreaming && options.currentTaskId && message.taskId === options.currentTaskId);
 }
@@ -500,7 +503,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   version: number;
   revision: string | null;
   updateKind: "latest" | "earlier" | "full" | null;
-  /** ``true`` when the replayed transcript ends with a trace row (turn still in flight). */
+  /** Legacy hint; history alone cannot establish whether a task is still running. */
   hasPendingToolCalls: boolean;
   hasMore: boolean;
   loadingEarlier: boolean;
@@ -609,7 +612,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
             loading: false,
             error: null,
             missing: body === null,
-            hasPendingToolCalls: ui.at(-1)?.kind === "trace",
+            hasPendingToolCalls: false,
             version: (sameKey ? base.version : 0) + 1,
             updateKind: "latest",
             pagination: nextPagination,
@@ -701,7 +704,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
           pagination: pagination
             ? { ...pagination, hasMore: pagination.hasMore && !prev.fullHistoryReady }
             : null,
-          hasPendingToolCalls: mergedMessages.at(-1)?.kind === "trace",
+          hasPendingToolCalls: false,
           version: prev.version + 1,
           updateKind: "earlier",
           fullHistoryReady: prev.fullHistoryReady || !pagination?.hasMore,
@@ -729,7 +732,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
                   : replaceHistoryRevision(prev.messages, latestMessages),
                 pagination: latest?.pagination ?? null,
                 missing: latest === null,
-                hasPendingToolCalls: latestMessages.at(-1)?.kind === "trace",
+                hasPendingToolCalls: false,
                 version: prev.version + 1,
                 updateKind: "latest",
                 fullHistoryReady: !latest?.pagination?.hasMore,
@@ -795,7 +798,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
             fullHistoryLoading: false,
             fullHistoryError: null,
             missing: body === null,
-            hasPendingToolCalls: complete.at(-1)?.kind === "trace",
+            hasPendingToolCalls: false,
             version: prev.version + 1,
             updateKind: "full",
           };

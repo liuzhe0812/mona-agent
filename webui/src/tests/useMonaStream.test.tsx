@@ -418,7 +418,7 @@ describe("useMonaStream", () => {
     });
   });
 
-  it("starts in streaming mode when history shows pending tool calls", () => {
+  it("does not infer a running task from a historical tool-call hint", () => {
     const fake = fakeClient();
     const initialMessages = [{
       id: "m1",
@@ -433,7 +433,7 @@ describe("useMonaStream", () => {
       },
     );
 
-    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.isStreaming).toBe(false);
   });
 
   it("collapses consecutive tool_hint frames into one trace row", () => {

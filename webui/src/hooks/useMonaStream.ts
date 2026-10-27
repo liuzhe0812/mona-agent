@@ -41,6 +41,14 @@ interface StreamBuffer {
   jobId?: string;
 }
 
+interface PendingMessage {
+  taskId: string;
+  messageId: string;
+  previousTaskId: string | null;
+  previousTaskPlan?: TaskPlanWsPayload;
+  awaitingAdmission: boolean;
+}
+
 interface ActiveAssistantCursor {
   id: string;
   index: number;
@@ -575,7 +583,7 @@ function boundedToolEvents(
 export function useMonaStream(
   chatId: string | null,
   initialMessages: UIMessage[] = [],
-  hasPendingToolCalls = false,
+  _hasPendingToolCalls = false,
   onTurnEnd?: () => void,
 ): {
   messages: UIMessage[];
@@ -603,19 +611,13 @@ export function useMonaStream(
   /** Clear the current ``streamError`` (e.g. after the user dismisses the
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
+  messageRejection: { runActive: boolean } | null;
+  dismissMessageRejection: () => void;
 } {
   const { client } = useClientOptional();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
-  /** If the last loaded message is a trace row (e.g. "Using 2 tools"),
-   * the model was still processing when the page loaded — keep the
-   * loading spinner alive so the user sees the model is active. */
-  const initialStreaming = initialMessages.length > 0
-    ? initialMessages[initialMessages.length - 1].kind === "trace"
-    : false;
   const initialRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
-  const [isStreaming, setIsStreaming] = useState(
-    initialStreaming || hasPendingToolCalls || initialRunStartedAt !== null,
-  );
+  const [isStreaming, setIsStreaming] = useState(initialRunStartedAt !== null);
   // A restored in-progress turn may already have emitted activity before this
   // view subscribed, so only locally sent turns enter the waiting phase.
   const [isAwaitingModelResponse, setIsAwaitingModelResponse] = useState(false);
@@ -630,6 +632,8 @@ export function useMonaStream(
   const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
+  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean } | null>(null);
+  const pendingMessageRef = useRef<PendingMessage | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
   /** Open streamed bubbles indexed by backend stream/job identity. */
@@ -655,16 +659,12 @@ export function useMonaStream(
   const streamEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    currentTaskIdRef.current = null;
-    setCurrentTaskId(null);
-  }, [chatId]);
-
-  useEffect(() => {
     if (!client) return undefined;
     return client.onError((err) => setStreamError(err));
   }, [client]);
 
   const dismissStreamError = useCallback(() => setStreamError(null), []);
+  const dismissMessageRejection = useCallback(() => setMessageRejection(null), []);
 
   const clearPendingStreamWork = useCallback(() => {
     if (streamFrameRef.current !== null) {
@@ -969,17 +969,25 @@ export function useMonaStream(
   useEffect(() => {
     setMessages(initialMessages);
     const restoredRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
-    setIsStreaming(
-      (initialMessages.length > 0
-        ? initialMessages[initialMessages.length - 1].kind === "trace"
-        : false) || hasPendingToolCalls || restoredRunStartedAt !== null,
-    );
+    const restoredTaskPlan = chatId && client ? client.getTaskPlan?.(chatId) : undefined;
+    const pending = initialMessages.slice().reverse().find((message) => message.sendState === "pending" && message.taskId);
+    pendingMessageRef.current = pending?.taskId ? {
+      taskId: pending.taskId,
+      messageId: pending.id,
+      previousTaskId: restoredTaskPlan?.task_id ?? null,
+      previousTaskPlan: restoredTaskPlan,
+      awaitingAdmission: false,
+    } : null;
+    currentTaskIdRef.current = pending?.taskId ?? null;
+    setCurrentTaskId(currentTaskIdRef.current);
+    setIsStreaming(restoredRunStartedAt !== null);
     setStreamError(null);
+    setMessageRejection(null);
     setIsAwaitingModelResponse(false);
     setIsCompacting(false);
     setRunStartedAt(restoredRunStartedAt);
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
-    setTaskPlan(chatId && client ? client.getTaskPlan?.(chatId) : undefined);
+    setTaskPlan(restoredTaskPlan);
     setLiveTokenUsage(undefined);
     stoppingRef.current = false;
     setStopping(false);
@@ -1001,18 +1009,47 @@ export function useMonaStream(
   }, [chatId, client, clearActivitySegment, clearPendingStreamWork]);
 
   useEffect(() => {
-    if (hasPendingToolCalls) setIsStreaming(true);
-  }, [hasPendingToolCalls]);
-
-  useEffect(() => {
     if (!chatId || !client) return;
 
     const handle = (ev: InboundEvent) => {
+      if (ev.event === "error") {
+        const pending = pendingMessageRef.current;
+        if (ev.message_rejected !== true || ev.chat_id !== chatId || !pending || ev.task_id !== pending.taskId) return;
+        pendingMessageRef.current = null;
+        setMessages((previous) => previous.map((message) => message.id === pending.messageId
+          ? { ...message, sendState: "rejected" }
+          : message));
+        const activeRunStartedAt = client.getRunStartedAt(chatId);
+        setIsAwaitingModelResponse(false);
+        setIsStreaming(activeRunStartedAt !== null);
+        setRunStartedAt(activeRunStartedAt);
+        if (currentTaskIdRef.current === pending.taskId) {
+          currentTaskIdRef.current = pending.previousTaskId;
+          setCurrentTaskId(pending.previousTaskId);
+          setTaskPlan(pending.previousTaskPlan);
+        }
+        if (activeRunStartedAt === null) {
+          setIsCompacting(false);
+          stoppingRef.current = false;
+          setStopping(false);
+          suppressStreamUntilTurnEndRef.current = false;
+        }
+        setMessageRejection({ runActive: activeRunStartedAt !== null });
+        return;
+      }
       if (ev.event === "context_usage") {
         if (ev.chat_id === chatId && !ev.job_id) setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
         return;
       }
       const identity = eventIdentity(ev);
+      const acceptPendingMessage = () => {
+        const pending = pendingMessageRef.current;
+        if (!pending) return;
+        pendingMessageRef.current = null;
+        setMessages((previous) => previous.map((message) => message.id === pending.messageId
+          ? { ...message, sendState: undefined }
+          : message));
+      };
       // Any incoming event while the debounce timer is alive means the model
       // is still working (e.g. tool result arrived, more text to stream).
       // Cancel the pending "stream ended" timer so we don't hide the spinner.
@@ -1099,6 +1136,9 @@ export function useMonaStream(
       }
 
       if (ev.event === "artifact_task_started") {
+        const pending = pendingMessageRef.current;
+        if (pending && ev.task_id !== pending.taskId) return;
+        if (pending && pending.previousTaskId !== pending.taskId) acceptPendingMessage();
         currentTaskIdRef.current = ev.task_id;
         setCurrentTaskId(ev.task_id);
         setTaskPlan(undefined);
@@ -1115,6 +1155,9 @@ export function useMonaStream(
             setRunStartedAt((current) => current ?? Date.now() / 1000);
           }
         } else {
+          // Attach may report the previous idle state before this message is admitted.
+          if ((pendingMessageRef.current?.awaitingAdmission && !stoppingRef.current) || client.getRunStartedAt(chatId) !== null) return;
+          if (stoppingRef.current) acceptPendingMessage();
           setIsStreaming(false);
           setIsAwaitingModelResponse(false);
           setIsCompacting(false);
@@ -1129,6 +1172,7 @@ export function useMonaStream(
       // Direct @Agent requests are acknowledged before their background jobs
       // finish, so they do not emit the normal turn_end frame.
       if (ev.event === "agent_mentions_routed") {
+        acceptPendingMessage();
         setIsStreaming(true);
         return;
       }
@@ -1136,6 +1180,7 @@ export function useMonaStream(
       if (ev.event === "discussion_updated") {
         const run = ev as Partial<WorkflowRun>;
         if (typeof run.id !== "string" || !run.workflow || !run.steps) return;
+        acceptPendingMessage();
         setMessages((prev) => {
           const id = `discussion:${run.id}`;
           const index = prev.findIndex((message) => message.id === id);
@@ -1170,6 +1215,7 @@ export function useMonaStream(
       // sending the normal turn_end frame. Keep this string-based for
       // compatibility with servers that add the event before the shared type.
       if ((ev as { event?: string }).event === "agent_mentions_completed") {
+        acceptPendingMessage();
         setIsStreaming(false);
         setIsAwaitingModelResponse(false);
         stoppingRef.current = false;
@@ -1179,6 +1225,9 @@ export function useMonaStream(
       }
 
       if (ev.event === "turn_end") {
+        const pending = pendingMessageRef.current;
+        if (pending && ev.task_id && ev.task_id !== pending.taskId) return;
+        acceptPendingMessage();
         setMessages((previous) => finishPendingWidgets(previous));
         setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
@@ -1545,8 +1594,7 @@ export function useMonaStream(
         });
         return;
       }
-      // ``attached`` / ``error`` frames aren't actionable here; the client
-      // shell handles them separately.
+      // ``attached`` frames are handled by the client shell.
     };
 
     const unsub = client.onChat(chatId, handle);
@@ -1588,6 +1636,7 @@ export function useMonaStream(
       if (!hasImages && !hasDocuments && !content.trim()) return;
 
       let taskId = options?.taskId;
+      const previousTaskId = currentTaskIdRef.current;
       let startsNewTask = false;
       if (!taskId && goalState?.active) {
         taskId = currentTaskIdRef.current ?? undefined;
@@ -1603,6 +1652,15 @@ export function useMonaStream(
         setCurrentTaskId(taskId);
         setTaskPlan(undefined);
       }
+      const messageId = crypto.randomUUID();
+      pendingMessageRef.current = {
+        taskId,
+        messageId,
+        previousTaskId,
+        previousTaskPlan: client.getTaskPlan?.(chatId),
+        awaitingAdmission: true,
+      };
+      setMessageRejection(null);
 
       flushPendingStreamEvents();
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
@@ -1621,10 +1679,11 @@ export function useMonaStream(
         return [
           ...pruneReasoningOnlyPlaceholders(prev),
           {
-            id: crypto.randomUUID(),
+            id: messageId,
             role: "user",
             content,
             taskId,
+            sendState: "pending",
             createdAt: Date.now(),
             ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
             ...(options?.quote ? { quote: options.quote } : {}),
@@ -1753,5 +1812,7 @@ export function useMonaStream(
     setMessages,
     streamError,
     dismissStreamError,
+    messageRejection,
+    dismissMessageRejection,
   };
 }

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Loader2 } from "lucide-react";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
-import { useSessionHistory } from "@/hooks/useSessions";
+import { reconcileHistoryMessages, useSessionHistory } from "@/hooks/useSessions";
 import type { MessageQuote, UIMessage } from "@/lib/types";
 
 interface DocChatPanelProps {
@@ -19,8 +20,8 @@ interface DocChatPanelProps {
   onStreamingChange?: (streaming: boolean) => void;
   onReadyChange?: (chatId: string | null) => void;
   hideStop?: boolean;
-}
   disabled?: boolean;
+}
 
 export function DocChatPanel({
   chatId,
@@ -30,8 +31,8 @@ export function DocChatPanel({
   onStreamingChange,
   onReadyChange,
   hideStop = false,
-}: DocChatPanelProps) {
   disabled = false,
+}: DocChatPanelProps) {
   const [quote, setQuote] = useState<MessageQuote | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const onStreamingChangeRef = useRef(onStreamingChange);
@@ -52,6 +53,7 @@ export function DocChatPanel({
   const {
     messages,
     isStreaming,
+    currentTaskId,
     isAwaitingModelResponse,
     stopping,
     stop,
@@ -60,6 +62,8 @@ export function DocChatPanel({
     setMessages,
     streamError,
     dismissStreamError,
+    messageRejection,
+    dismissMessageRejection,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
 
   useEffect(() => {
@@ -77,10 +81,9 @@ export function DocChatPanel({
 
   useEffect(() => {
     if (!chatId || loading) return;
-    setMessages((current) => {
-      if (historical.length === 0 && current.length > 0) return current;
-      return historical;
-    });
+    setMessages((current) => reconcileHistoryMessages(current, historical, { isStreaming, currentTaskId }));
+    // Reconcile only fresh history; ending a turn cannot make an older page authoritative.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, historical, historyVersion, loading, setMessages]);
 
   const messagesLen = messages.length;
@@ -178,6 +181,7 @@ export function DocChatPanel({
           isPendingFull={pendingQueue.messages.length >= 3}
         />
       </div>
+      <MessageRejectionDialog rejection={messageRejection} onDismiss={dismissMessageRejection} />
     </div>
   );
 }

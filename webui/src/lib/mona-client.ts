@@ -337,10 +337,11 @@ export class MonaClient {
       return;
     }
     if (ev.event !== "goal_status") return;
-    if (ev.status === "running" && typeof ev.started_at === "number") {
+    if (ev.status === "running") {
       const previous = this.runStartedAtByChatId.get(chatId);
-      this.runStartedAtByChatId.set(chatId, ev.started_at);
-      if (previous !== ev.started_at) this.emitRunStatus(chatId, ev.started_at);
+      const startedAt = typeof ev.started_at === "number" ? ev.started_at : previous ?? Date.now() / 1000;
+      this.runStartedAtByChatId.set(chatId, startedAt);
+      if (previous !== startedAt) this.emitRunStatus(chatId, startedAt);
     } else if (this.runStartedAtByChatId.has(chatId)) {
       this.runStartedAtByChatId.delete(chatId);
       this.emitRunStatus(chatId, null);
@@ -721,7 +722,6 @@ export class MonaClient {
     });
   }
 
-  private recordTaskPlanSnapshot(chatId: string, ev: InboundEvent): void {
   deleteAgent(agentId: string): Promise<void> {
     return this.sendAgentCommandRaw("agent_delete_result", (requestId) => ({
       type: "agent_delete",
@@ -730,6 +730,7 @@ export class MonaClient {
     })).then(() => undefined);
   }
 
+  private recordTaskPlanSnapshot(chatId: string, ev: InboundEvent): void {
     if (ev.event === "artifact_task_started") {
       this.artifactTaskIdByChatId.set(chatId, ev.task_id);
       this.taskPlanByChatId.delete(chatId);
@@ -1157,8 +1158,8 @@ export class MonaClient {
       parsed.event === "agent_config_update_result" ||
       parsed.event === "video_model_binding_result" ||
       parsed.event === "custom_agent_create_result" ||
-      parsed.event === "agent_instruction_save_result" ||
       parsed.event === "agent_delete_result" ||
+      parsed.event === "agent_instruction_save_result" ||
       parsed.event === "agent_instruction_restore_result" ||
       parsed.event === "agent_skill_action_result" ||
       parsed.event === "agent_skill_setup_start_result" ||
@@ -1343,7 +1344,7 @@ export class MonaClient {
 
   private dispatch(chatId: string, ev: InboundEvent): void {
     const handlers = this.chatHandlers.get(chatId);
-    if (handlers !== undefined && handlers.size > 0) {
+    if (handlers !== undefined && handlers.size > 0 && !this.pendingChatReplayScheduled.has(chatId)) {
       for (const h of handlers) {
         h(ev);
       }

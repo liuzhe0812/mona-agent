@@ -198,6 +198,10 @@ async def _next_ws_event(client: Any, expected_event: str, *, chat_id: str | Non
             if expected_event != "artifacts_changed" or changed_chat_id != chat_id:
                 continue
             return payload
+        if (expected_event != "goal_status" and payload.get("event") == "goal_status"
+                and payload.get("status") == "idle"):
+            assert _is_valid_chat_id(payload.get("chat_id"))
+            continue
         assert payload.get("event") == expected_event, payload
         return payload
 
@@ -1390,7 +1394,7 @@ async def test_maybe_push_active_goal_state_clears_legacy_unsourced_goal() -> No
 
 
 @pytest.mark.asyncio
-async def test_maybe_push_turn_run_wall_clock_skips_when_no_active_turn() -> None:
+async def test_maybe_push_turn_run_wall_clock_replays_idle_when_no_active_turn() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
     mock_ws = AsyncMock()
@@ -1399,7 +1403,10 @@ async def test_maybe_push_turn_run_wall_clock_skips_when_no_active_turn() -> Non
 
     wth._WEBSOCKET_TURN_WALL_STARTED_AT.clear()
     await channel._maybe_push_turn_run_wall_clock("chat-1")
-    mock_ws.send.assert_not_called()
+    mock_ws.send.assert_awaited_once()
+    assert json.loads(mock_ws.send.await_args.args[0]) == {
+        "event": "goal_status", "chat_id": "chat-1", "status": "idle",
+    }
 
 
 @pytest.mark.asyncio
@@ -1906,8 +1913,7 @@ async def test_end_to_end_server_pushes_streaming_deltas_to_client(
 
     try:
         async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=stream-tester") as client:
-            ready_raw = await client.recv()
-            ready = json.loads(ready_raw)
+            ready = await _read_ws_ready(client)
             chat_id = ready["chat_id"]
 
             async def next_stream_event() -> dict[str, Any]:
@@ -2374,6 +2380,7 @@ async def test_message_route_rejects_video_turn_on_nonempty_chat(
             "chat_id": "chat-ordinary",
             "content": "build storyboard",
             "agent_kind": "video",
+            "task_id": "task-rejected-video-request",
         },
     )
 
@@ -2385,6 +2392,16 @@ async def test_message_route_rejects_video_turn_on_nonempty_chat(
     error = next(item for item in sent if item.get("event") == "error")
     assert error["detail"] == "invalid_agent_kind_context"
     assert error["chat_id"] == "chat-ordinary"
+    assert error["message_rejected"] is True
+    assert error["task_id"] == "task-rejected-video-request"
+
+    await channel._dispatch_envelope(connection, "client", {
+        "type": "message", "chat_id": "chat-ordinary", "content": "继续原会话",
+        "task_id": "task-ordinary-retry",
+    })
+    channel._handle_message.assert_awaited_once()
+    assert "agent_kind" not in channel._handle_message.await_args.kwargs["metadata"]
+    assert sessions.read_session_file("websocket:chat-ordinary")["metadata"].get("agent_kind") is None
 
 
 @pytest.mark.asyncio

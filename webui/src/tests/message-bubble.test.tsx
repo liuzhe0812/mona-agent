@@ -75,7 +75,7 @@ describe("MessageBubble", () => {
   it("uses group-chat wording in the visible room labels", () => {
     expect(resources.en.common.chat.newRoom).toBe("New group chat");
     expect(resources.en.common.room.panel.title).toBe("Group chat");
-    expect(resources["zh-CN"].common.chat.newRoom).toBe("新建协作群");
+    expect(resources["zh-CN"].common.chat.newRoom).toBe("新建群聊");
     expect(resources["zh-CN"].common.room.panel.title).toBe("协作群");
   }, 15_000);
 

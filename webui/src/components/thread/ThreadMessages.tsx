@@ -465,6 +465,7 @@ export function ThreadMessages({
                 <MessageBubble
                   message={unit.message}
                   isGroupChat={isGroupChat}
+                  showTurnActions={!task?.isTurnStreaming && task?.finalAnswerIndex === index}
                   authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
                   onQuote={onQuote}
                   onBranch={onBranch}
@@ -502,6 +503,7 @@ function unitKey(unit: DisplayUnit, index: number): string {
 
 function marginAfterPrevUnit(prev: DisplayUnit, current: DisplayUnit): string {
   if (prev.type === "cluster") {
+    if (current.type === "cluster") return "mt-1";
     return current.type === "single" && current.message.role === "assistant" ? "mt-1" : "mt-4";
   }
   if (current.type === "cluster" && prev.message.role === "assistant") {

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildDisplayUnits,
@@ -526,6 +526,70 @@ describe("ThreadMessages", () => {
       <ThreadMessages messages={running} isStreaming runStartedAt={5} />,
     );
     expect(screen.getByText("Still working")).toBeInTheDocument();
+  });
+
+  it("shows actions only on the completed answer, including when the process is expanded", async () => {
+    const running: UIMessage[] = [
+      { id: "u1", role: "user", content: "Start the task", createdAt: 1 },
+      { id: "p1", role: "assistant", content: "First update", createdAt: 2 },
+      { id: "injected", role: "user", content: "Add this detail", isInjected: true, createdAt: 3 },
+      { id: "p2", role: "assistant", content: "Second update", createdAt: 4 },
+      { id: "t1", role: "tool", kind: "trace", content: "inspect()", traces: ["inspect()"], createdAt: 5 },
+      { id: "a1", role: "assistant", content: "Partial answer", isStreaming: true, createdAt: 6 },
+    ];
+    const completed: UIMessage[] = [
+      ...running.slice(0, -1),
+      { id: "a1", role: "assistant", content: "Final answer", createdAt: 6 },
+    ];
+    const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    try {
+      const { rerender } = render(<ThreadMessages messages={running} isStreaming runStartedAt={1} />);
+      expect(screen.getByText("First update")).toBeInTheDocument();
+      expect(screen.getByText("Second update")).toBeInTheDocument();
+      expect(screen.getByText("Add this detail")).toBeInTheDocument();
+      expect(screen.getByText("Partial answer")).toBeInTheDocument();
+      expect(screen.queryByTestId("direct-message-actions")).not.toBeInTheDocument();
+
+      rerender(<ThreadMessages messages={completed} isStreaming={false} />);
+      expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
+      fireEvent.click(screen.getByRole("button", { name: "Expand process" }));
+      for (const id of ["p1", "p2"]) {
+        expect(within(screen.getByTestId(`message-bubble-${id}`)).queryByTestId("direct-message-actions")).not.toBeInTheDocument();
+      }
+      const finalReply = screen.getByTestId("message-bubble-a1");
+      expect(within(finalReply).getByTestId("direct-message-actions")).toBeInTheDocument();
+      expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
+      fireEvent.click(within(finalReply).getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(copy).toHaveBeenCalledWith("Final answer"));
+    } finally {
+      copy.mockRestore();
+    }
+  });
+
+  it("keeps earlier completed actions while the next task has only progress or a streaming reply", () => {
+    const running: UIMessage[] = [
+      { id: "u1", role: "user", content: "First request", createdAt: 1 },
+      { id: "a1", role: "assistant", content: "First answer", createdAt: 2 },
+      { id: "u2", role: "user", content: "Second request", createdAt: 3 },
+      { id: "p2", role: "assistant", content: "Second update", createdAt: 4 },
+      { id: "t2", role: "tool", kind: "trace", content: "inspect()", traces: ["inspect()"], createdAt: 5 },
+    ];
+    const { rerender } = render(<ThreadMessages messages={running} isStreaming runStartedAt={1} />);
+    const firstReply = screen.getByTestId("message-bubble-a1");
+    expect(within(firstReply).getByTestId("direct-message-actions")).toBeInTheDocument();
+    expect(within(screen.getByTestId("message-bubble-p2")).queryByTestId("direct-message-actions")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
+
+    const partial: UIMessage = { id: "a2", role: "assistant", content: "Partial answer", isStreaming: true, createdAt: 6 };
+    rerender(<ThreadMessages messages={[...running, partial]} isStreaming runStartedAt={1} />);
+    expect(within(screen.getByTestId("message-bubble-a2")).queryByTestId("direct-message-actions")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
+
+    const answer: UIMessage = { ...partial, content: "Second answer", isStreaming: false };
+    rerender(<ThreadMessages messages={[...running, answer]} isStreaming={false} />);
+    expect(within(screen.getByTestId("message-bubble-a1")).getByTestId("direct-message-actions")).toBeInTheDocument();
+    expect(within(screen.getByTestId("message-bubble-a2")).getByTestId("direct-message-actions")).toBeInTheDocument();
+    expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(2);
   });
 
   it("keeps process controls independent across user tasks and preserves injected messages and deliveries", () => {

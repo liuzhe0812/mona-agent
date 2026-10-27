@@ -665,7 +665,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _maybe_push_turn_run_wall_clock(self, chat_id: str) -> None:
         """Replay running state for a main turn or room/direct-chat agent job."""
-        await self._send_combined_goal_status(chat_id, "running")
+        await self._send_combined_goal_status(chat_id, "running", replay_idle=True)
 
     def _on_subagent_session_activity(
         self,
@@ -695,6 +695,7 @@ class WebSocketChannel(BaseChannel):
         status: str,
         *,
         started_at: float | None = None,
+        replay_idle: bool = False,
     ) -> None:
         main_started = websocket_turn_wall_started_at(chat_id)
         session_key = f"websocket:{chat_id}"
@@ -715,6 +716,8 @@ class WebSocketChannel(BaseChannel):
         ]
         if status == "running":
             if not active_starts:
+                if replay_idle:
+                    await self.send_goal_status(chat_id, "running" if subagents_running > 0 else "idle")
                 return
             await self.send_goal_status(chat_id, "running", started_at=min(active_starts))
             return
@@ -1423,10 +1426,10 @@ class WebSocketChannel(BaseChannel):
                 return _http_json_response(
                     {
                         "agent": self._agent_summary(definition),
+                        "deletionPolicy": registry.deletion_policy(agent_id),
                         "definition": {
                             "id": definition.id,
                             "model": definition.model,
-                        "deletionPolicy": registry.deletion_policy(agent_id),
                             "toolAllowlist": definition.tool_allowlist,
                             "canDelegate": definition.can_delegate,
                             "skills": definition.skills,
@@ -3969,9 +3972,6 @@ class WebSocketChannel(BaseChannel):
                 detail=str(exc),
             )
 
-    async def _handle_agent_instruction_save_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
     async def _handle_agent_delete_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
@@ -4018,6 +4018,9 @@ class WebSocketChannel(BaseChannel):
                 detail=str(exc) if isinstance(exc, ValueError) else "删除 Agent 失败，请刷新列表后重试。",
             )
 
+    async def _handle_agent_instruction_save_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
         request_id = self._room_request_id(envelope)
         try:
             from mona.agent.agent_management import write_instruction
@@ -6109,9 +6112,6 @@ class WebSocketChannel(BaseChannel):
         await self._send_event(connection, "attached", **attached_fields)
         await self._hydrate_after_subscribe(new_chat_id)
 
-    async def _dispatch_envelope(
-        self,
-        connection: Any,
     async def _reject_chat_message(
         self, connection: Any, envelope: dict[str, Any], detail: str, **fields: Any,
     ) -> None:
@@ -6123,6 +6123,9 @@ class WebSocketChannel(BaseChannel):
             message_rejected=True, detail=detail, **fields,
         )
 
+    async def _dispatch_envelope(
+        self,
+        connection: Any,
         client_id: str,
         envelope: dict[str, Any],
     ) -> None:
@@ -6221,11 +6224,11 @@ class WebSocketChannel(BaseChannel):
         if t == "custom_agent_create":
             await self._handle_custom_agent_create_envelope(connection, envelope)
             return
-        if t == "agent_instruction_save":
-            await self._handle_agent_instruction_save_envelope(connection, envelope)
-            return
         if t == "agent_delete":
             await self._handle_agent_delete_envelope(connection, envelope)
+            return
+        if t == "agent_instruction_save":
+            await self._handle_agent_instruction_save_envelope(connection, envelope)
             return
         if t == "agent_instruction_restore":
             await self._handle_agent_instruction_restore_envelope(connection, envelope)
@@ -6292,26 +6295,23 @@ class WebSocketChannel(BaseChannel):
                 await self._send_event(connection, "error", detail="invalid chat_id")
                 return
             if not isinstance(content, str):
-                await self._send_event(
-                    connection, "error", chat_id=cid, detail="missing content"
-                )
+                await self._reject_chat_message(connection, envelope, "missing content")
                 return
             from mona.agent.document_loop import DOCUMENT_PROFILES
 
             message_agent_kind = envelope.get("agent_kind")
             if message_agent_kind is not None:
                 if not isinstance(message_agent_kind, str):
-                    await self._send_event(
-                        connection, "error", chat_id=cid, detail="invalid agent_kind"
-                    )
+                    await self._reject_chat_message(connection, envelope, "invalid agent_kind")
                     return
                 message_agent_kind = message_agent_kind.strip()
                 if message_agent_kind not in DOCUMENT_PROFILES:
-                    await self._send_event(
-                        connection, "error", chat_id=cid, detail="invalid agent_kind"
-                    )
+                    await self._reject_chat_message(connection, envelope, "invalid agent_kind")
                     return
             session_agent_kind = None
+            session = None
+            if self._session_manager is not None:
+                session = self._session_manager.get_or_create(f"websocket:{cid}")
                 conversation = session.conversation_metadata
                 if (
                     conversation.type == "direct"
@@ -6324,9 +6324,6 @@ class WebSocketChannel(BaseChannel):
                         code="agent_unavailable",
                     )
                     return
-            session = None
-            if self._session_manager is not None:
-                session = self._session_manager.get_or_create(f"websocket:{cid}")
                 stored_agent_kind = session.metadata.get("agent_kind")
                 if isinstance(stored_agent_kind, str) and stored_agent_kind in DOCUMENT_PROFILES:
                     session_agent_kind = stored_agent_kind
@@ -6345,12 +6342,7 @@ class WebSocketChannel(BaseChannel):
             if promote_document:
                 session_agent_kind = message_agent_kind
             if message_agent_kind is not None and message_agent_kind != session_agent_kind:
-                await self._send_event(
-                    connection,
-                    "error",
-                    chat_id=cid,
-                    detail="invalid_agent_kind_context",
-                )
+                await self._reject_chat_message(connection, envelope, "invalid_agent_kind_context")
                 return
 
             binding = copy.deepcopy(session.metadata.get("model_binding")) if session is not None else None
@@ -6363,42 +6355,27 @@ class WebSocketChannel(BaseChannel):
                         if raw_selection is not None else None
                     )
                     if selection != binding and self._video_model_change_running(cid):
-                        await self._send_event(connection, "error", chat_id=cid, code="run_active",
-                                               detail="当前任务正在制作，请等待完成或停止后再切换模型。")
+                        await self._reject_chat_message(connection, envelope, "当前任务正在制作，请等待完成或停止后再切换模型。", code="run_active")
                         return
                     binding = await self._resolve_video_model_selection(
                         selection, agent_kind=session_agent_kind, previous=binding,
                     )
                     if binding != previous_binding and self._video_model_change_running(cid):
-                        await self._send_event(connection, "error", chat_id=cid, code="run_active",
-                                               detail="当前任务正在制作，请等待完成或停止后再切换模型。")
+                        await self._reject_chat_message(connection, envelope, "当前任务正在制作，请等待完成或停止后再切换模型。", code="run_active")
                         return
                 except (ValueError, OSError, TimeoutError) as exc:
-                    await self._send_event(connection, "error", chat_id=cid,
-                                           code="invalid_model_binding", detail=self._video_model_error_detail(exc))
+                    await self._reject_chat_message(connection, envelope, self._video_model_error_detail(exc), code="invalid_model_binding")
                     return
 
             raw_media = envelope.get("media")
             media_paths: list[str] = []
             if raw_media is not None:
                 if not isinstance(raw_media, list):
-                    await self._send_event(
-                        connection,
-                        "error",
-                        chat_id=cid,
-                        detail="image_rejected",
-                        reason="malformed",
-                    )
+                    await self._reject_chat_message(connection, envelope, "image_rejected", reason="malformed")
                     return
                 media_paths, reason = self._save_envelope_media(raw_media)
                 if reason is not None:
-                    await self._send_event(
-                        connection,
-                        "error",
-                        chat_id=cid,
-                        detail="image_rejected",
-                        reason=reason,
-                    )
+                    await self._reject_chat_message(connection, envelope, "image_rejected", reason=reason)
                     return
 
             # Document paths uploaded via the "doc_upload" envelope. These are
@@ -6429,9 +6406,7 @@ class WebSocketChannel(BaseChannel):
 
             # Allow image-only turns (content may be empty when media is attached).
             if not content.strip() and not media_paths:
-                await self._send_event(
-                    connection, "error", chat_id=cid, detail="missing content"
-                )
+                await self._reject_chat_message(connection, envelope, "missing content")
                 return
 
             # Auto-attach on first use so clients can one-shot without a separate attach.

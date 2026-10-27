@@ -640,6 +640,8 @@ export interface UIMessage {
   historyPosition?: number;
   /** Stable backend task identity shared by the initial request and injected follow-ups. */
   taskId?: string;
+  /** Local input awaiting admission or explicitly rejected; retain it until the user retries. */
+  sendState?: "pending" | "rejected";
   /** Short display text for user messages (e.g. action label). Falls back to ``content``. */
   displayContent?: string;
   /** The quoted message preview shown above this user turn. */
@@ -1327,7 +1329,16 @@ export type InboundEvent =
   | { event: "artifact_task_started"; chat_id: string; task_id: string }
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
-  | { event: "error"; chat_id?: string; detail?: string; request_id?: string; code?: string }
+  | {
+      event: "error";
+      chat_id?: string;
+      detail?: string;
+      request_id?: string;
+      code?: string;
+      /** The identified message was not accepted; an earlier task may still be running. */
+      message_rejected?: boolean;
+      task_id?: string;
+    }
   | {
       event: "doc_upload_result";
       ok: boolean;
@@ -1354,6 +1365,7 @@ export type InboundEvent =
       event:
         | "agent_config_update_result"
         | "custom_agent_create_result"
+        | "agent_delete_result"
         | "agent_instruction_save_result"
         | "agent_instruction_restore_result"
         | "agent_skill_action_result"
@@ -1365,7 +1377,6 @@ export type InboundEvent =
       request_id?: string;
       agent_id?: string;
       detail?: string;
-        | "agent_delete_result"
       config?: AgentUserConfigPayload;
       agent?: AgentSummary;
       instruction?: AgentInstruction;
@@ -1612,6 +1623,7 @@ export type Outbound =
       instructions?: string;
       request_id?: string;
     }
+  | { type: "agent_delete"; agent_id: string; request_id: string }
   | {
       type: "agent_config_update";
       agent_id: string;
@@ -1623,7 +1635,6 @@ export type Outbound =
       type: "agent_instruction_save";
       agent_id: string;
       key: AgentInstruction["key"];
-  | { type: "agent_delete"; agent_id: string; request_id: string }
       content: string;
       request_id?: string;
     }

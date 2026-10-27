@@ -51,6 +51,18 @@ describe("assistantOrdinalForMessage", () => {
 });
 
 describe("reconcileHistoryMessages", () => {
+  it("keeps a rejected input and its attachments when history contains the same text in the same task", () => {
+    const rejected: UIMessage = {
+      id: "rejected", role: "user", content: "try again", taskId: "task", sendState: "rejected", createdAt: 20,
+      media: [{ kind: "file", name: "brief.pdf" }],
+    };
+    const incoming: UIMessage = {
+      id: "canonical", role: "user", content: "try again", taskId: "task", createdAt: 10, historyPosition: 0,
+    };
+    expect(reconcileHistoryMessages([rejected], [incoming])).toEqual([incoming, rejected]);
+    expect(replaceHistoryRevision([rejected], [incoming])).toEqual([incoming, rejected]);
+  });
+
   it("replaces an optimistic discussion bubble when canonical history keeps its raw text and display label", () => {
     const displayContent = "Started topic: growth or profit? · Debate · 3 rounds · Analyst A, Analyst B";
     const result = reconcileHistoryMessages(

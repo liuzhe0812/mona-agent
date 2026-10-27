@@ -472,7 +472,7 @@
     "expertLibrary": "召唤伙伴",
     "createMenu": "创建",
     "newDirect": "新建私聊",
-    "newRoom": "新建协作群",
+    "newRoom": "新建群聊",
     "groups": {
       "pinned": "置顶",
       "recent": "最近",
@@ -1099,6 +1099,11 @@
     "cancel": "取消"
   },
   "errors": {
+    "messageRejected": {
+      "title": "消息未发送",
+      "body": "这条消息未被接收，输入和附件已保留在聊天中。请重新发送。",
+      "runActiveBody": "这条消息未被接收，输入和附件已保留在聊天中。当前任务仍在进行，请等它结束后重新发送。"
+    },
     "messageTooBig": {
       "title": "消息过大",
       "body": "服务端因超过大小限制拒收了上一条消息。可移除部分图片或使用更小的图片后重试。"

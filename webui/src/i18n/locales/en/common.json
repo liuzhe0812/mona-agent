@@ -1084,6 +1084,11 @@
     "cancel": "Cancel"
   },
   "errors": {
+    "messageRejected": {
+      "title": "Message not sent",
+      "body": "This message was not accepted. Your text and attachments are still in the chat. Please send it again.",
+      "runActiveBody": "This message was not accepted. Your text and attachments are still in the chat. The current task is still running; send it again after that task ends."
+    },
     "messageTooBig": {
       "title": "Message too large",
       "body": "The server rejected your last message because it exceeded the size limit. Remove some images or try smaller files, then send again."
