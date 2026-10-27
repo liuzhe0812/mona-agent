@@ -228,8 +228,12 @@ fn write_meta_json_under(root: &Path, meta: &EmlMeta) -> Result<(), String> {
 
 /// 读取 .meta.json。文件不存在返回 None。
 fn read_meta_json(account_id: &str, folder: &str, uid: &str) -> Option<EmlMeta> {
+    read_meta_json_under(&mail_root(), account_id, folder, uid)
+}
+
+fn read_meta_json_under(root: &Path, account_id: &str, folder: &str, uid: &str) -> Option<EmlMeta> {
     let rel = meta_relative_path(account_id, folder, uid);
-    let abs = eml_absolute_path(&rel);
+    let abs = eml_absolute_path_under(root, &rel);
     if !abs.exists() {
         return None;
     }
@@ -6570,6 +6574,12 @@ pub async fn email_mark_all_read(
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
+    let mailbox_lock = sync::mail_lock(state.inner(), &req.account_id, &req.mailbox, "metadata")?;
+    let _mailbox_guard = tokio::time::timeout(Duration::from_secs(10), mailbox_lock.lock()).await
+        .map_err(|_| "邮箱正在同步，请稍后再标记全部已读。".to_string())?;
+    let _flags_guard = tokio::time::timeout(Duration::from_secs(10), sync::lock_flag_flush()).await
+        .map_err(|_| "邮箱状态正在提交，请稍后再标记全部已读。".to_string())?;
+    let previous = sync::seen_revisions(state.inner(), &req.account_id, &req.mailbox)?;
     let url = format!("{}/email/mark_all_read", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -6595,42 +6605,13 @@ pub async fn email_mark_all_read(
     let count = result
         .get("count")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    // 本地缓存同步：将该文件夹所有邮件标记为已读
-    let conn = state.conn()?;
-    conn.execute(
-        "UPDATE messages SET is_read = 1 WHERE account_id = ?1 AND folder = ?2",
-        params![req.account_id, req.mailbox],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 同步 .meta.json：查询该文件夹所有 uid，在后台线程批量更新 is_read=true。
-    // 邮件列表以 SQLite 为准，此处不阻塞 API 返回。
-    let account_id = req.account_id.clone();
-    let mailbox = req.mailbox.clone();
-    let db_path = state.db_path().to_path_buf();
+        .ok_or_else(|| "邮箱未确认全部已读的结果，请重新同步后核对。".to_string())? as u32;
+    let state_copy = state.inner().clone();
+    let account_id = req.account_id;
+    let mailbox = req.mailbox;
     tokio::task::spawn_blocking(move || {
-        let Ok(conn) = Connection::open(db_path) else { return };
-        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
-        let mut stmt = match conn.prepare("SELECT uid FROM messages WHERE account_id = ?1 AND folder = ?2") {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let uids: Vec<String> = stmt
-            .query_map(params![account_id, mailbox], |row| row.get::<_, String>(0))
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
-        for uid in &uids {
-            if let Some(mut meta) = read_meta_json(&account_id, &mailbox, uid) {
-                meta.is_read = true;
-                let _ = write_meta_json(&meta);
-            }
-        }
-    });
+        sync::complete_mark_all_read(&state_copy, &mail_root(), &account_id, &mailbox, &previous)
+    }).await.map_err(|e| format!("保存本地已读状态失败: {e}"))??;
     Ok(count)
 }
 

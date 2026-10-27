@@ -1360,21 +1360,50 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   markAllRead: async (gatewayUrl, accountId, mailbox) => {
     const account = get().accounts.find((a) => a.id === accountId);
     if (!account) return;
-    // 乐观更新：先本地标记已读
-    const prevMessages = get().messages;
+    const isTargetMessage = (message: EmailMessage) =>
+      message.accountId === accountId && message.folder === mailbox;
+    const previouslyUnread = new Map(
+      get().messages
+        .filter((message) => isTargetMessage(message) && !message.isRead)
+        .map((message) => [emailMessageKey(message), message] as const),
+    );
+    const selectedBefore = get().selectedMessage;
+    const selectedWasUnread = selectedBefore && isTargetMessage(selectedBefore) && !selectedBefore.isRead
+      ? selectedBefore
+      : null;
+    // 乐观更新：只更新目标账号和文件夹中的邮件及当前选中邮件。
     set((state) => ({
       messages: state.messages.map((m) =>
-        m.folder === mailbox && m.accountId === accountId
+        isTargetMessage(m)
           ? { ...m, isRead: true }
           : m,
       ),
       error: null,
+      selectedMessage: state.selectedMessage && isTargetMessage(state.selectedMessage)
+        ? { ...state.selectedMessage, isRead: true }
+        : state.selectedMessage,
     }));
     try {
       await api.markAllRead(gatewayUrl, account, mailbox);
       await get().refreshUnreadCounts(accountId);
     } catch (e) {
-      set({ messages: prevMessages, error: String(e) });
+      set((state) => ({
+        messages: state.messages.map((message) => {
+          const before = previouslyUnread.get(emailMessageKey(message));
+          return before && message.isRead && sameEmailIdentity(message, before)
+            ? { ...message, isRead: false }
+            : message;
+        }),
+        selectedMessage:
+          selectedWasUnread &&
+          state.selectedMessage &&
+          emailMessageKey(state.selectedMessage) === emailMessageKey(selectedWasUnread) &&
+          state.selectedMessage.isRead &&
+          sameEmailIdentity(state.selectedMessage, selectedWasUnread)
+            ? { ...state.selectedMessage, isRead: false }
+            : state.selectedMessage,
+        error: String(e),
+      }));
       throw e;
     }
   },

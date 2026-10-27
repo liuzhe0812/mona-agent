@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   syncEmail: vi.fn(),
   getUnreadCounts: vi.fn(),
   fetchEmailBody: vi.fn(),
+  markAllRead: vi.fn(),
   showNotification: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("../lib/emailApi", async (importOriginal) => ({
   syncEmail: mocks.syncEmail,
   getUnreadCounts: mocks.getUnreadCounts,
   fetchEmailBody: mocks.fetchEmailBody,
+  markAllRead: mocks.markAllRead,
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
@@ -67,6 +69,7 @@ describe("email mailbox refresh", () => {
     mocks.syncEmail.mockReset().mockResolvedValue({ newCount: 0, newMessages: [] });
     mocks.getUnreadCounts.mockReset().mockResolvedValue({});
     mocks.fetchEmailBody.mockReset().mockResolvedValue({ bodyText: "", bodyHtml: null, attachments: [] });
+    mocks.markAllRead.mockReset().mockResolvedValue(1);
     mocks.showNotification.mockReset().mockResolvedValue(undefined);
     useEmailStore.setState({
       accounts: [],
@@ -271,6 +274,59 @@ describe("email mailbox refresh", () => {
 
     expect(mocks.fetchEmailBody).toHaveBeenCalledOnce();
     expect(useEmailStore.getState().bodyCache[cacheKey]?.bodyText).toBe("reloaded body");
+  });
+
+  it("marks only the target mailbox and selected message read after success", async () => {
+    const accountA = makeAccount("account-a");
+    const target = makeMessage({ uid: "42", isRead: false });
+    const otherAccount = makeMessage({ uid: "42", accountId: "account-b", isRead: false });
+    const otherFolder = makeMessage({ uid: "42", folder: "Archive", isRead: true });
+    useEmailStore.setState({
+      accounts: [accountA, makeAccount("account-b")],
+      messages: [target, otherAccount, otherFolder],
+      selectedMessage: target,
+      selectedAccountId: accountA.id,
+      selectedFolder: "INBOX",
+    });
+
+    await useEmailStore.getState().markAllRead("http://127.0.0.1:17174", accountA.id, "INBOX");
+
+    const state = useEmailStore.getState();
+    expect(mocks.markAllRead).toHaveBeenCalledWith("http://127.0.0.1:17174", accountA, "INBOX");
+    expect(state.messages.map((message) => message.isRead)).toEqual([true, false, true]);
+    expect(state.selectedMessage?.isRead).toBe(true);
+  });
+
+  it("rolls back only the original target messages and selected mail after failure", async () => {
+    let rejectMarkAllRead!: (error: Error) => void;
+    mocks.markAllRead.mockImplementation(
+      () => new Promise<number>((_resolve, reject) => { rejectMarkAllRead = reject; }),
+    );
+    const accountA = makeAccount("account-a");
+    const target = makeMessage({ uid: "42", isRead: false });
+    const otherAccount = makeMessage({ uid: "42", accountId: "account-b", isRead: false });
+    const otherFolder = makeMessage({ uid: "42", folder: "Archive", isRead: true });
+    useEmailStore.setState({
+      accounts: [accountA, makeAccount("account-b")],
+      messages: [target, otherAccount, otherFolder],
+      selectedMessage: target,
+      selectedAccountId: accountA.id,
+      selectedFolder: "INBOX",
+    });
+
+    const action = useEmailStore.getState().markAllRead("http://127.0.0.1:17174", accountA.id, "INBOX");
+    expect(useEmailStore.getState().messages.map((message) => message.isRead)).toEqual([true, false, true]);
+    expect(useEmailStore.getState().selectedMessage?.isRead).toBe(true);
+
+    const arrivedDuringAction = makeMessage({ uid: "43", isRead: false });
+    useEmailStore.setState((state) => ({ messages: [...state.messages, arrivedDuringAction] }));
+    rejectMarkAllRead(new Error("server rejected operation"));
+
+    await expect(action).rejects.toThrow("server rejected operation");
+    const state = useEmailStore.getState();
+    expect(state.messages.map((message) => message.isRead)).toEqual([false, false, true, false]);
+    expect(state.selectedMessage?.isRead).toBe(false);
+    expect(state.messages[3]).toBe(arrivedDuringAction);
   });
 
   it("uses the account and mailbox supplied by an IDLE event and keeps default INBOX sync", async () => {

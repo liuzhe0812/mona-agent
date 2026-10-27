@@ -1858,9 +1858,11 @@ def _email_extract_flagged_flag(fetched: list[Any]) -> bool:
 def _email_extract_flag(fetched: list[Any], flag: str) -> bool:
     """从 IMAP fetch 结果中提取指定标记是否存在。"""
     for item in fetched:
-        if isinstance(item, tuple) and item and isinstance(item[0], (bytes, bytearray)):
-            head = bytes(item[0]).decode("utf-8", errors="ignore")
-            if flag in head:
+        header = item[0] if isinstance(item, tuple) and item else item
+        if isinstance(header, (bytes, bytearray)):
+            head = bytes(header).decode("utf-8", errors="ignore")
+            match = re.search(r"\bFLAGS\s*\(([^)]*)\)", head, re.IGNORECASE)
+            if match and flag.casefold() in {value.casefold() for value in match[1].split()}:
                 return True
     return False
 
@@ -4730,17 +4732,24 @@ def _imap_mark_all_read(body: dict[str, Any]) -> int:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> int:
-        client.select(_imap_quote_mailbox(mailbox))
+        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        if status != "OK":
+            raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
         # 搜索所有未读邮件
-        typ, data = client.search(None, "UNSEEN")
-        if typ != "OK" or not data or not data[0]:
+        typ, data = client.uid("SEARCH", "UNSEEN")
+        if typ != "OK":
+            raise RuntimeError(f"Searching unseen message UIDs failed: {typ}")
+        if not data or not data[0]:
             return 0
         uids = data[0].split()
         if not uids:
             return 0
-        # 批量标记已读：UID STORE uid1,uid2,... +FLAGS (\Seen)
-        uid_set = b",".join(uids).decode()
-        client.uid("STORE", uid_set, "+FLAGS", "(\\Seen)")
+        # 分批 STORE，避免超长 UID 集合被服务器拒绝。
+        for start in range(0, len(uids), 200):
+            uid_set = b",".join(uids[start : start + 200]).decode()
+            status, _ = client.uid("STORE", uid_set, "+FLAGS", "(\\Seen)")
+            if status != "OK":
+                raise RuntimeError(f"Marking unseen messages read failed: {status}")
         return len(uids)
 
     return imap_pool_manager.run(body, op)

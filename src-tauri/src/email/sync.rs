@@ -1,14 +1,18 @@
-use super::{decrypt_password, get_imap_credentials, read_meta_json, write_meta_json, EmailState, SetFlagRequest};
+use super::{decrypt_password, get_imap_credentials, read_meta_json, read_meta_json_under, write_meta_json, write_meta_json_under, EmailState, EmlMeta, SetFlagRequest};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 type LockKey = (PathBuf, String, String, String);
 type MailLocks = Mutex<HashMap<LockKey, Weak<tokio::sync::Mutex<()>>>>;
 static MAIL_LOCKS: OnceLock<MailLocks> = OnceLock::new();
 static FLAG_FLUSH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(super) async fn lock_flag_flush() -> tokio::sync::MutexGuard<'static, ()> {
+    FLAG_FLUSH.lock().await
+}
 
 pub(super) fn mail_lock(state: &EmailState, account: &str, folder: &str, operation: &str) -> Result<Arc<tokio::sync::Mutex<()>>, String> {
     let mut locks = MAIL_LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().map_err(|e| e.to_string())?;
@@ -61,6 +65,51 @@ pub(super) fn pending_keys(state: &EmailState, account: &str, folder: &str) -> R
     let mut stmt = conn.prepare("SELECT uid, flag FROM email_pending_flags WHERE account_id = ?1 AND folder = ?2 AND COALESCE(last_error,'') != 'stale'").map_err(|e| e.to_string())?;
     let rows = stmt.query_map(params![account, folder], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())?;
     rows.collect::<Result<HashSet<_>, _>>().map_err(|e| e.to_string())
+}
+
+pub(super) fn seen_revisions(state: &EmailState, account: &str, folder: &str) -> Result<Vec<(String, i64)>, String> {
+    let conn = state.conn()?;
+    let mut stmt = conn.prepare("SELECT uid, revision FROM email_pending_flags WHERE account_id=?1 AND folder=?2 AND flag='\\Seen' AND COALESCE(last_error,'')!='stale'").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![account, folder], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+pub(super) fn complete_mark_all_read(
+    state: &EmailState,
+    root: &Path,
+    account: &str,
+    folder: &str,
+    previous: &[(String, i64)],
+) -> Result<(), String> {
+    let mut conn = state.conn()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+    // 批量操作覆盖此前的未读意图，之后新产生的单封修改仍然优先。
+    for (uid, revision) in previous {
+        tx.execute("DELETE FROM email_pending_flags WHERE account_id=?1 AND folder=?2 AND uid=?3 AND flag='\\Seen' AND revision=?4",
+            params![account, folder, uid, revision]).map_err(|e| e.to_string())?;
+    }
+    tx.execute("UPDATE messages SET is_read=1 WHERE account_id=?1 AND folder=?2 AND is_read=0
+        AND NOT EXISTS(SELECT 1 FROM email_pending_flags p WHERE p.account_id=messages.account_id AND p.folder=messages.folder AND p.uid=messages.uid AND p.flag='\\Seen' AND COALESCE(p.last_error,'')!='stale')",
+        params![account, folder]).map_err(|e| e.to_string())?;
+    let records = {
+        let mut stmt = tx.prepare("SELECT uid,is_read,is_starred,has_attachments,body_fetched,COALESCE(message_id,'') FROM messages WHERE account_id=?1 AND folder=?2").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![account, folder], |row| Ok(EmlMeta {
+            uid: row.get(0)?, account_id: account.into(), folder: folder.into(),
+            is_read: row.get(1)?, is_starred: row.get(2)?, has_attachments: row.get(3)?,
+            body_fetched: row.get(4)?, message_id: row.get(5)?, eml_mtime: 0,
+        })).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+    };
+    for record in records {
+        let mut meta = match read_meta_json_under(root, account, folder, &record.uid) {
+            Some(meta) if meta.is_read == record.is_read => continue,
+            Some(meta) => meta,
+            None => record.clone(),
+        };
+        meta.is_read = record.is_read;
+        write_meta_json_under(root, &meta)?;
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 pub(super) fn apply_flags(state: &EmailState, account: &str, folder: &str, flags: &[Value], protected: &HashSet<(String, String)>) -> Result<(), String> {
@@ -145,8 +194,8 @@ pub(super) async fn flush_flags(state: &EmailState, service_url: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_flags, init_schema, pending_keys, queue_flag};
-    use crate::email::{EmailState, SetFlagRequest};
+    use super::{apply_flags, complete_mark_all_read, init_schema, pending_keys, queue_flag, seen_revisions};
+    use crate::email::{read_meta_json_under, write_meta_json_under, EmlMeta, EmailState, SetFlagRequest};
     use rusqlite::{params, Connection};
     use serde_json::json;
     use std::sync::{
@@ -334,6 +383,75 @@ mod tests {
 
         assert_eq!(message_flags(&state, &account, "42"), (false, false));
         assert!(pending_keys(&state, &account, FOLDER).unwrap().is_empty());
+    }
+
+    #[test]
+    fn mark_all_read_persists_before_restart_and_supersedes_old_unread_intent() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("mail");
+        let (state, account) = isolated_state(&temp);
+        let conn = state.conn().unwrap();
+        insert_message(&conn, &account, "42", false, true);
+        insert_message(&conn, &account, "43", false, false);
+        insert_message(&conn, &account, "99", false, false);
+        conn.execute("UPDATE messages SET folder='Sent' WHERE account_id=?1 AND uid='99'", params![account]).unwrap();
+        insert_message(&conn, "other-account", "42", false, false);
+        drop(conn);
+        queue_flag(&state, &request(&account, "42", "\\Seen", false)).unwrap();
+        queue_flag(&state, &request(&account, "42", "\\Flagged", true)).unwrap();
+        write_meta_json_under(&root, &EmlMeta {
+            uid: "42".into(), account_id: account.clone(), folder: FOLDER.into(),
+            is_read: false, is_starred: true, has_attachments: false, body_fetched: false,
+            message_id: String::new(), eml_mtime: 123,
+        }).unwrap();
+        let previous = seen_revisions(&state, &account, FOLDER).unwrap();
+
+        complete_mark_all_read(&state, &root, &account, FOLDER, &previous).unwrap();
+        let (reopened, _) = isolated_state(&temp);
+        assert_eq!(message_flags(&reopened, &account, "42"), (true, true));
+        assert_eq!(message_flags(&reopened, &account, "43"), (true, false));
+        assert_eq!(message_flags(&reopened, "other-account", "42"), (false, false));
+        assert!(!reopened.conn().unwrap().query_row("SELECT is_read FROM messages WHERE account_id=?1 AND folder='Sent' AND uid='99'", params![account], |row| row.get::<_, bool>(0)).unwrap());
+        let pending = pending_keys(&reopened, &account, FOLDER).unwrap();
+        assert!(!pending.contains(&("42".into(), "\\Seen".into())));
+        assert!(pending.contains(&("42".into(), "\\Flagged".into())));
+        let meta = read_meta_json_under(&root, &account, FOLDER, "42").unwrap();
+        assert!(meta.is_read && meta.is_starred);
+        assert_eq!(meta.eml_mtime, 123);
+        assert!(read_meta_json_under(&root, &account, FOLDER, "43").unwrap().is_read);
+    }
+
+    #[test]
+    fn mark_all_read_preserves_newer_explicit_unread_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, account) = isolated_state(&temp);
+        insert_message(&state.conn().unwrap(), &account, "42", false, false);
+        insert_message(&state.conn().unwrap(), &account, "43", true, false);
+        queue_flag(&state, &request(&account, "42", "\\Seen", false)).unwrap();
+        let previous = seen_revisions(&state, &account, FOLDER).unwrap();
+        queue_flag(&state, &request(&account, "42", "\\Seen", false)).unwrap();
+        queue_flag(&state, &request(&account, "43", "\\Seen", false)).unwrap();
+
+        complete_mark_all_read(&state, temp.path(), &account, FOLDER, &previous).unwrap();
+        assert_eq!(message_flags(&state, &account, "42"), (false, false));
+        assert_eq!(message_flags(&state, &account, "43"), (false, false));
+        assert_eq!(pending_keys(&state, &account, FOLDER).unwrap().len(), 2);
+        assert!(!read_meta_json_under(temp.path(), &account, FOLDER, "42").unwrap().is_read);
+    }
+
+    #[test]
+    fn mark_all_read_reports_disk_failure_without_acknowledging_local_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, account) = isolated_state(&temp);
+        insert_message(&state.conn().unwrap(), &account, "42", false, false);
+        queue_flag(&state, &request(&account, "42", "\\Seen", false)).unwrap();
+        let previous = seen_revisions(&state, &account, FOLDER).unwrap();
+        let blocked_root = temp.path().join("not-a-directory");
+        std::fs::write(&blocked_root, b"blocked").unwrap();
+
+        assert!(complete_mark_all_read(&state, &blocked_root, &account, FOLDER, &previous).is_err());
+        assert_eq!(message_flags(&state, &account, "42"), (false, false));
+        assert!(pending_keys(&state, &account, FOLDER).unwrap().contains(&("42".into(), "\\Seen".into())));
     }
 
     #[test]

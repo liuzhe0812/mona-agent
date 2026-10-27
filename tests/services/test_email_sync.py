@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import imaplib
 import json
 from email.message import EmailMessage
 
@@ -15,6 +16,19 @@ def test_sync_repairs_gaps_above_the_oldest_local_uid():
     assert selected == [str(uid).encode() for uid in range(1050, 1000, -1)]
     assert historical == set(selected)
     assert has_more
+
+
+@pytest.mark.parametrize(("fetched", "seen", "starred"), [
+    ([(b"1 (UID 42 FLAGS (\\Seen))", b"body")], True, False),
+    ([(b"1 (UID 42 FLAGS (\\seen \\FLAGGED))", b"body")], True, True),
+    ([(b"1 (UID 42 BODY[HEADER] {4}", b"body"), b" FLAGS (\\Seen))"], True, False),
+    ([b"1 (UID 42 FLAGS (\\FLAGGED))"], False, True),
+    ([(b"1 (UID 42 BODY[] {13}", b"FLAGS (\\Seen)")], False, False),
+    ([b"1 (UID 42 FLAGS (\\SeenOther))"], False, False),
+])
+def test_header_flags_preserve_server_read_state_across_response_forms(fetched, seen, starred):
+    assert api._email_extract_seen_flag(fetched) is seen
+    assert api._email_extract_flagged_flag(fetched) is starred
 
 
 @pytest.mark.asyncio
@@ -367,3 +381,146 @@ def test_history_page_does_not_repeatedly_fetch_known_flags(monkeypatch):
     assert [message["uid"] for message in result["messages"]] == ["1"]
     assert result["flags"] == []
     assert client.select_readonly == [True]
+
+
+class MarkAllReadClient:
+    def __init__(self, *, select_status="OK", uid_search_status="OK", uid_search_data=None, store_status="OK", select_error=None):
+        self.select_status = select_status
+        self.uid_search_status = uid_search_status
+        self.uid_search_data = [b"105 209"] if uid_search_data is None else uid_search_data
+        self.store_status = store_status
+        self.select_error = select_error
+        self.calls = []
+        self.store_calls = 0
+
+    def select(self, mailbox, readonly=False):
+        self.calls.append(("SELECT", mailbox, readonly))
+        if self.select_error is not None:
+            raise self.select_error
+        return self.select_status, []
+
+    def search(self, _charset, *criteria):
+        self.calls.append(("SEARCH", criteria))
+        raise AssertionError("Plain SEARCH returns sequence numbers such as 1 2; use UID SEARCH.")
+
+    def uid(self, operation, *args):
+        self.calls.append(("UID SEARCH" if operation == "SEARCH" else operation, args))
+        if operation == "SEARCH":
+            return self.uid_search_status, self.uid_search_data
+        status = self.store_status
+        if operation == "STORE" and isinstance(status, (list, tuple)):
+            status = status[self.store_calls]
+        if operation == "STORE":
+            self.store_calls += 1
+        return status, []
+
+
+def _install_mark_all_read_client(monkeypatch, client):
+    monkeypatch.setattr(api, "_validate_mail_host", lambda _host: None)
+    monkeypatch.setattr(
+        api.imap_pool_manager,
+        "run",
+        lambda _body, operation, *, background=False: operation(client),
+    )
+    return {"imapHost": "mail.example.test", "imapUsername": "reader", "mailbox": "INBOX"}
+
+
+def test_mark_all_read_checks_writable_select_search_and_store(monkeypatch):
+    client = MarkAllReadClient(uid_search_data=[b"7 9"])
+    body = _install_mark_all_read_client(monkeypatch, client)
+    body["uidValidity"] = "stale-local-value"
+
+    assert api._imap_mark_all_read(body) == 2
+    assert client.calls == [
+        ("SELECT", '"INBOX"', False),
+        ("UID SEARCH", ("UNSEEN",)),
+        ("STORE", ("7,9", "+FLAGS", "(\\Seen)")),
+    ]
+
+
+def test_mark_all_read_stores_uids_instead_of_sequence_numbers(monkeypatch):
+    client = MarkAllReadClient(uid_search_data=[b"105 209"])
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    assert api._imap_mark_all_read(body) == 2
+    assert client.calls == [
+        ("SELECT", '"INBOX"', False),
+        ("UID SEARCH", ("UNSEEN",)),
+        ("STORE", ("105,209", "+FLAGS", "(\\Seen)")),
+    ]
+
+
+def test_mark_all_read_empty_unseen_set_succeeds_without_store(monkeypatch):
+    client = MarkAllReadClient(uid_search_data=[b""])
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    assert api._imap_mark_all_read(body) == 0
+    assert client.calls == [("SELECT", '"INBOX"', False), ("UID SEARCH", ("UNSEEN",))]
+
+
+@pytest.mark.parametrize("stage", ["select", "readonly", "uid_search", "STORE"])
+def test_mark_all_read_never_reports_a_failed_imap_stage_as_success(monkeypatch, stage):
+    options = {
+        "select_status": "NO" if stage == "select" else "OK",
+        "uid_search_status": "NO" if stage == "uid_search" else "OK",
+        "store_status": "NO" if stage == "STORE" else "OK",
+        "select_error": imaplib.IMAP4.readonly("mailbox is not writable") if stage == "readonly" else None,
+    }
+    client = MarkAllReadClient(**options)
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    with pytest.raises((RuntimeError, imaplib.IMAP4.readonly)):
+        api._imap_mark_all_read(body)
+
+    assert client.calls[0][0] == "SELECT"
+    if stage in {"select", "readonly"}:
+        assert len(client.calls) == 1
+    elif stage == "uid_search":
+        assert len(client.calls) == 2
+        assert client.calls[1][0] == "UID SEARCH"
+    else:
+        assert len(client.calls) == 3
+        assert client.calls[2][0] == "STORE"
+
+
+async def test_mark_all_read_handler_returns_error_when_store_is_rejected(monkeypatch):
+    client = MarkAllReadClient(uid_search_data=[b"7 9"], store_status="NO")
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    class Request:
+        async def json(self):
+            return body
+
+    response = await api.handle_email_mark_all_read(Request())
+
+    assert response.status == 500
+    assert json.loads(response.body).get("status") is None
+
+
+def test_mark_all_read_batches_uids_in_groups_of_200(monkeypatch):
+    uids = [str(uid).encode() for uid in range(1, 451)]
+    client = MarkAllReadClient(
+        uid_search_data=[b" ".join(uids)],
+        store_status=["OK", "OK", "OK"],
+    )
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    assert api._imap_mark_all_read(body) == 450
+    store_sets = [call[1][0].split(",") for call in client.calls if call[0] == "STORE"]
+    assert [len(uid_set) for uid_set in store_sets] == [200, 200, 50]
+    assert [uid for uid_set in store_sets for uid in uid_set] == [str(uid) for uid in range(1, 451)]
+
+
+def test_mark_all_read_stops_when_a_store_batch_fails(monkeypatch):
+    uids = [str(uid).encode() for uid in range(1, 451)]
+    client = MarkAllReadClient(
+        uid_search_data=[b" ".join(uids)],
+        store_status=["OK", "NO", "OK"],
+    )
+    body = _install_mark_all_read_client(monkeypatch, client)
+
+    with pytest.raises(RuntimeError, match="Marking unseen messages read failed: NO"):
+        api._imap_mark_all_read(body)
+
+    store_sets = [call[1][0].split(",") for call in client.calls if call[0] == "STORE"]
+    assert [len(uid_set) for uid_set in store_sets] == [200, 200]
