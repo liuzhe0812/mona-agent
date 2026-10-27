@@ -2,6 +2,27 @@
 
 use tauri::{AppHandle, Emitter, Manager};
 
+#[cfg(any(windows, test))]
+fn cache_notification_icon(cache_dir: &std::path::Path, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    // The image path changes with the asset, so Windows cannot reuse a previous logo.
+    let path = cache_dir.join(format!("notification-icon-{}.png", hex::encode(Sha256::digest(bytes))));
+    if std::fs::read(&path).ok().as_deref() == Some(bytes) {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(cache_dir).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    if let Err(error) = file.persist_noclobber(&path) {
+        if std::fs::read(&path).ok().as_deref() != Some(bytes) {
+            error.file.persist(&path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(path)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationAction {
@@ -105,16 +126,11 @@ pub async fn show_native(app: &AppHandle, payload: NotificationPayload) -> Resul
 #[cfg(windows)]
 async fn show_platform(app: &AppHandle, payload: NotificationPayload) -> Result<(), String> {
     use tauri_winrt_notification::{IconCrop, Toast};
-    let icon = app
+    let cache_dir = app
         .path()
         .app_cache_dir()
-        .map_err(|error| error.to_string())?
-        .join("notification-icon.png");
-    if !icon.exists() {
-        std::fs::create_dir_all(icon.parent().unwrap()).map_err(|error| error.to_string())?;
-        std::fs::write(&icon, include_bytes!("../icons/icon.png"))
-            .map_err(|error| error.to_string())?;
-    }
+        .map_err(|error| error.to_string())?;
+    let icon = cache_notification_icon(&cache_dir, include_bytes!("../icons/icon.png"))?;
     let app_handle = app.clone();
     let (sent, received) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
@@ -233,6 +249,42 @@ pub async fn show_notification(app: AppHandle, payload: NotificationPayload) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_icon_refreshes_old_and_damaged_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("notification-icon.png");
+        std::fs::write(&old_path, b"old logo").unwrap();
+        let current = include_bytes!("../icons/icon.png");
+
+        let path = cache_notification_icon(dir.path(), current).unwrap();
+        assert_ne!(path, old_path);
+        assert_eq!(std::fs::read(&path).unwrap(), current);
+        assert_eq!(cache_notification_icon(dir.path(), current).unwrap(), path);
+
+        std::fs::write(&path, b"damaged").unwrap();
+        assert_eq!(cache_notification_icon(dir.path(), current).unwrap(), path);
+        assert_eq!(std::fs::read(&path).unwrap(), current);
+
+        let next = cache_notification_icon(dir.path(), b"next logo").unwrap();
+        assert_ne!(next, path);
+        assert_eq!(std::fs::read(next).unwrap(), b"next logo");
+
+        let concurrent_dir = dir.path().join("concurrent");
+        let paths = std::thread::scope(|scope| {
+            (0..8)
+                .map(|_| scope.spawn(|| {
+                    let path = cache_notification_icon(&concurrent_dir, current).unwrap();
+                    assert_eq!(std::fs::read(&path).unwrap(), current);
+                    path
+                }))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(paths.iter().all(|path| path == &paths[0]));
+    }
 
     fn payload() -> NotificationPayload {
         serde_json::from_value(serde_json::json!({
