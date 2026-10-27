@@ -246,7 +246,11 @@ function LearningProgressDetails({ document }: { document: AgentKnowledgeDocumen
   );
 }
 
-export function AgentKnowledgePanel({
+export function AgentKnowledgePanel(props: AgentKnowledgePanelProps) {
+  return <AgentKnowledgePanelContent key={props.agentId} {...props} />;
+}
+
+function AgentKnowledgePanelContent({
   agentId,
   selection = null,
   onSelect,

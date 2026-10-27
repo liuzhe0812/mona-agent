@@ -16,7 +16,7 @@ from typing import Any
 from aiohttp import web
 from loguru import logger
 
-from mona.agent.partners import normalize_agent_id
+from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.config.paths import get_agent_knowledge_dir, get_agents_dir, get_data_dir
 from mona.materials.access import allowed_library_ids
 from mona.materials.api import (
@@ -51,7 +51,11 @@ def _state_path(root: Path) -> Path:
 
 
 def _empty_state() -> dict[str, Any]:
-    return {"schemaVersion": _STATE_SCHEMA_VERSION, "documents": []}
+    return {
+        "schemaVersion": _STATE_SCHEMA_VERSION,
+        "legacyScopeIsolated": True,
+        "documents": [],
+    }
 
 
 def _read_state(root: Path) -> dict[str, Any]:
@@ -101,9 +105,27 @@ _VISUAL_SOURCE_EXTENSIONS = {
 
 def ensure_agent_knowledge_state(agent_id: str) -> dict[str, Any]:
     """Create private state and conservatively copy the Agent's legacy scope."""
+    agent_id = normalize_agent_id(agent_id)
     root = get_agent_knowledge_dir(agent_id)
     if _state_path(root).exists():
-        return _read_state(root)
+        state = _read_state(root)
+        if not state.get("legacyScopeIsolated"):
+            if agent_id != MONA_AGENT_ID:
+                from mona.agent.user_config import load_agent_user_config
+
+                scope = load_agent_user_config(agent_id).knowledge_base_scope
+                selected = set(scope.knowledge_base_ids) if scope.mode == "specific" else set()
+                for record in state["documents"]:
+                    library_id = record.get("legacyKnowledgeBaseId")
+                    if (
+                        library_id
+                        and library_id not in selected
+                        and record.get("active", True)
+                    ):
+                        _remove_under_lock(root, state, record)
+            state["legacyScopeIsolated"] = True
+            _write_state(root, state)
+        return state
 
     from mona.materials.vault import get_vault_path
 
@@ -603,7 +625,7 @@ def _schedule(agent_id: str, document_id: str) -> None:
 
 
 def _register_paths(agent_id: str, root: Path, paths: list[str]) -> list[dict[str, Any]]:
-    state = _read_state(root)
+    state = ensure_agent_knowledge_state(agent_id)
     results: list[dict[str, Any]] = []
     raw_root = root / "raw"
     now = _now()

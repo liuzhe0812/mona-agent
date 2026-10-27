@@ -95,6 +95,7 @@ export interface EffectiveAgentConfigPayload {
 }
 
 export interface AgentDetailPayload {
+  deletionPolicy?: "purge_private_data" | "retain_private_data";
   agent: AgentSummary;
   definition: {
     id: string;
@@ -1364,6 +1365,7 @@ export type InboundEvent =
       request_id?: string;
       agent_id?: string;
       detail?: string;
+        | "agent_delete_result"
       config?: AgentUserConfigPayload;
       agent?: AgentSummary;
       instruction?: AgentInstruction;
@@ -1621,6 +1623,7 @@ export type Outbound =
       type: "agent_instruction_save";
       agent_id: string;
       key: AgentInstruction["key"];
+  | { type: "agent_delete"; agent_id: string; request_id: string }
       content: string;
       request_id?: string;
     }

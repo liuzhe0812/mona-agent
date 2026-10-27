@@ -182,6 +182,17 @@ def get_agents_dir() -> Path:
     return ensure_dir(get_data_dir() / "agents")
 
 
+def get_agent_deletion_marker(agent_id: str, *, agents_dir: Path | None = None) -> Path:
+    """Resolve the deletion record without following links outside its Agent."""
+    from mona.agent.partners import normalize_agent_id
+
+    root = (agents_dir if agents_dir is not None else get_agents_dir()).resolve()
+    target = root / normalize_agent_id(agent_id) / ".deleted"
+    if target.resolve() != target:
+        raise ValueError("Agent 数据路径已变化，无法删除。")
+    return target
+
+
 def get_packages_dir() -> Path:
     """Return the rebuildable downloaded-package root."""
     return ensure_dir(get_data_dir() / "packages")

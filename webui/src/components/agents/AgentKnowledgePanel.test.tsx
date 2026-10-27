@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -128,6 +128,25 @@ describe("AgentKnowledgePanel", () => {
     await user.click(screen.getByRole("button", { name: "更多操作 产品手册.pdf" }));
     expect(screen.getByRole("menuitem", { name: "重新学习 产品手册.pdf" })).not.toHaveAttribute("data-disabled");
     expect(screen.queryByText(/知识库|编译|证据覆盖|MD5/)).not.toBeInTheDocument();
+  });
+
+  it("ignores a delayed list response from the previous Agent", async () => {
+    let resolveA!: (documents: AgentKnowledgeDocument[]) => void;
+    let resolveB!: (documents: AgentKnowledgeDocument[]) => void;
+    mocks.listAgentKnowledgeDocuments.mockImplementation((agentId: string) => new Promise((resolve) => {
+      if (agentId === "agent.a") resolveA = resolve;
+      else resolveB = resolve;
+    }));
+    const { rerender } = render(<AgentKnowledgePanel agentId="agent.a" onSelect={() => undefined} />);
+
+    rerender(<AgentKnowledgePanel agentId="agent.b" onSelect={() => undefined} />);
+    await waitFor(() => expect(resolveB).toBeDefined());
+    await act(async () => resolveB([availableDocument]));
+    expect(await screen.findByRole("button", { name: "选择 产品手册.pdf" })).toBeInTheDocument();
+
+    await act(async () => resolveA([failedDocument]));
+    expect(screen.getByRole("button", { name: "选择 产品手册.pdf" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "选择 扫描页.png" })).not.toBeInTheDocument();
   });
 
   it("selects a document with an Agent-scoped raw path", async () => {

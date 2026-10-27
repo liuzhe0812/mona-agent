@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -484,10 +485,69 @@ class AgentRegistry:
     # Queries
     # ------------------------------------------------------------------
 
+    def _active_entry(self, agent_id: str) -> ResolvedAgent | None:
+        from mona.config.paths import get_agent_deletion_marker
+
+        agent_id = normalize_agent_id(agent_id)
+        entry = self._agents.get(agent_id)
+        if entry is not None and agent_id != MONA_AGENT_ID:
+            if get_agent_deletion_marker(agent_id, agents_dir=self._installed_dir).exists():
+                return None
+        return entry
+
+    def deletion_policy(self, agent_id: str) -> Literal["purge_private_data", "retain_private_data"]:
+        """Only locally created Agents permanently discard their private data."""
+        from mona.config.paths import get_agent_deletion_marker
+
+        agent_id = normalize_agent_id(agent_id)
+        with self._lock:
+            entry = self._agents.get(agent_id)
+            if entry is None:
+                raise ValueError("此 Agent 已不存在，请刷新后重试。")
+            if agent_id.startswith("local.custom.") and entry.package_root is not None:
+                private_root = get_agent_deletion_marker(
+                    agent_id, agents_dir=self._installed_dir,
+                ).parent
+                if entry.package_root.resolve() == private_root:
+                    return "purge_private_data"
+            return "retain_private_data"
+
+    def delete(self, agent_id: str) -> None:
+        """Remove an Agent, clearing custom data but retaining user history and output."""
+        from mona.agent.memory_versions import write_text_atomic
+        from mona.config.paths import get_agent_deletion_marker
+
+        agent_id = normalize_agent_id(agent_id)
+        if agent_id == MONA_AGENT_ID:
+            raise ValueError("主 Agent Mona 不能删除。")
+        with self._lock:
+            if agent_id not in self._agents:
+                raise ValueError("此 Agent 已不存在，请刷新后重试。")
+            policy = self.deletion_policy(agent_id)
+            marker = get_agent_deletion_marker(agent_id, agents_dir=self._installed_dir)
+            write_text_atomic(marker, "")
+            if policy == "purge_private_data":
+                try:
+                    for child in marker.parent.iterdir():
+                        if child == marker:
+                            continue
+                        if child.is_dir() and not child.is_symlink():
+                            if child.resolve() == child:
+                                shutil.rmtree(child)
+                            else:
+                                child.rmdir()
+                        else:
+                            child.unlink()
+                except OSError as exc:
+                    logger.exception("Failed to clear private data for Agent {}", agent_id)
+                    raise ValueError(
+                        "此 Agent 已移除，但私人数据尚未清理完成。请在此窗口重试删除。"
+                    ) from exc
+
     def get(self, agent_id: str) -> AgentDefinition | None:
         """Return the definition for an agent ID, or None."""
         with self._lock:
-            entry = self._agents.get(normalize_agent_id(agent_id))
+            entry = self._active_entry(agent_id)
             return entry.definition if entry else None
 
     def require(self, agent_id: str) -> AgentDefinition:
@@ -500,12 +560,15 @@ class AgentRegistry:
     def list_agents(self) -> list[AgentDefinition]:
         """List all loaded agents (Mona first, then built-ins, then installed)."""
         with self._lock:
-            return [entry.definition for entry in self._agents.values()]
+            return [
+                entry.definition for agent_id, entry in self._agents.items()
+                if self._active_entry(agent_id) is not None
+            ]
 
     def package_root(self, agent_id: str) -> Path | None:
         """Return the package root for an agent (None for Mona or unknown IDs)."""
         with self._lock:
-            entry = self._agents.get(normalize_agent_id(agent_id))
+            entry = self._active_entry(agent_id)
             return entry.package_root if entry else None
 
     def resolve_skill_dirs(self, agent_id: str) -> list[Path]:
@@ -516,7 +579,7 @@ class AgentRegistry:
         are skipped so downstream loaders never see a skill root.
         """
         with self._lock:
-            entry = self._agents.get(normalize_agent_id(agent_id))
+            entry = self._active_entry(agent_id)
             if entry is None or entry.package_root is None:
                 return []
             dirs: list[Path] = []
@@ -529,7 +592,7 @@ class AgentRegistry:
     def load_prompt(self, agent_id: str) -> str:
         """Load the agent prompt markdown; empty string for Mona or unknown IDs."""
         with self._lock:
-            entry = self._agents.get(normalize_agent_id(agent_id))
+            entry = self._active_entry(agent_id)
             if entry is None or entry.package_root is None or not entry.definition.prompt:
                 return ""
             prompt_path = _resolve_within(
@@ -541,11 +604,9 @@ class AgentRegistry:
         if not isinstance(agent_id, str):
             return False
         try:
-            with self._lock:
-                return normalize_agent_id(agent_id) in self._agents
+            return self.get(agent_id) is not None
         except ValueError:
             return False
 
     def __len__(self) -> int:
-        with self._lock:
-            return len(self._agents)
+        return len(self.list_agents())

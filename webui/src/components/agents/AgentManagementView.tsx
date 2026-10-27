@@ -63,6 +63,7 @@ import {
 } from "@/lib/api";
 import { developmentApi, executorLabels, isCodeBuddyConnected, type DevExecutor } from "@/lib/development-api";
 import { getAgentKnowledgeGraph } from "@/lib/materials-api";
+import { RoomCommandError } from "@/lib/mona-client";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { useNativeProviderState } from "@/lib/native-provider-state";
 import type {
@@ -1004,6 +1005,10 @@ export function AgentManagementView({
   const [knowledgeSelection, setKnowledgeSelection] = useState<AgentKnowledgeSelection | null>(null);
   const [knowledgeGraphRevision, setKnowledgeGraphRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deletingRef = useRef(false);
   const [modelExecutorsError, setModelExecutorsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modelPresets, setModelPresets] = useState<Array<{ name: string; label: string; model: string; provider: string }>>([]);
@@ -1088,6 +1093,8 @@ export function AgentManagementView({
     setTab("overview");
     setSelectedInstruction("soul");
     setKnowledgeSelection(null);
+    setDeleteDialogOpen(false);
+    setDeleteError(null);
   }, [agentId]);
   useEffect(() => {
     if (!pendingMaterialOpen || pendingMaterialOpen.agentId !== agentId) return;
@@ -1166,6 +1173,21 @@ export function AgentManagementView({
       setSkillSetupError(cause instanceof Error ? cause.message : "无法取消准备");
     }
   };
+  const deleteAgent = async () => {
+    if (!client || deletingRef.current || agentId === MONA_AGENT_ID) return;
+    deletingRef.current = true;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await client.deleteAgent(agentId);
+      onBack();
+    } catch (cause) {
+      setDeleteError(cause instanceof RoomCommandError ? cause.message : "删除结果尚未确认，请关闭弹窗后刷新列表核对。");
+    } finally {
+      deletingRef.current = false;
+      setDeleting(false);
+    }
+  };
   useEffect(() => {
     if (!client || !configuringSkill || !skillSetupJob || !["queued", "running"].includes(skillSetupJob.state)) return;
     const timer = window.setInterval(() => {
@@ -1219,6 +1241,7 @@ export function AgentManagementView({
 
   if (loading && !detail) return <div className="flex h-full items-center justify-center text-muted-foreground">正在加载 Agent 管理…</div>;
   if (!detail) return <div className="flex h-full items-center justify-center text-destructive">{error ?? "Agent 不存在"}</div>;
+  const purgesPrivateData = detail.deletionPolicy === "purge_private_data";
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -1232,7 +1255,7 @@ export function AgentManagementView({
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="flex min-h-0 flex-1 flex-col">
          <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8 !bg-transparent p-0"><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="overview">概览</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="identity">个性化</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="knowledge">知识</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="permissions">工具</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="skills">技能</TabsTrigger></TabsList></div>
         <TabsContent value="overview" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；人设和长期记忆可在“个性化”中查看、编辑和恢复上一版。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
+          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；人设和长期记忆可在“个性化”中查看、编辑和恢复上一版。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section>{detail.agent.id !== MONA_AGENT_ID ? <section className="mt-8 flex items-center justify-between gap-4 border-t border-border/60 pt-4"><div><h2 className="text-ui font-medium">删除 Agent</h2><p className="mt-1 text-caption text-muted-foreground">{purgesPrivateData ? "删除会永久清除配置、私有知识、记忆和技能；历史会话与已交付文件保留，历史会话只读。" : "配置、私有知识、记忆和技能会保留以便重新安装恢复；历史会话与已交付文件保留，历史会话只读。"}</p></div><Button variant="destructive" className="gap-1.5" onClick={() => setDeleteDialogOpen(true)}><Trash2 className="h-4 w-4" />删除 Agent</Button></section> : null}</div>
         </TabsContent>
         <TabsContent value="identity" className="m-0 min-h-0 flex-1 overflow-auto p-6">
           <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as InstructionKey[]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">保存时自动保留上一版。</p></div><div className="flex items-center gap-2">{selected?.hasPrevious ? <Button size="sm" variant="ghost" onClick={() => void restoreInstruction()}>恢复上一版</Button> : null}<Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /></div></div>
@@ -1309,6 +1332,13 @@ export function AgentManagementView({
           <SkillSetupDialog skill={configuringSkill} busy={skillSetupBusy || skillSetupJob?.state === "queued" || skillSetupJob?.state === "running"} job={skillSetupJob} error={skillSetupError} onRun={() => void runSkillSetup()} onCancel={() => void cancelSkillSetup()} onOpenChange={(open) => { if (!open) setConfiguringSkill(null); }} />
         </TabsContent>
       </Tabs>
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { if (!deleting) { setDeleteDialogOpen(open); if (!open) setDeleteError(null); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>删除 Agent</DialogTitle><DialogDescription>{purgesPrivateData ? `确定删除“${detail.agent.displayName}”吗？配置、私有知识、记忆和技能将被永久删除；历史会话和已交付文件保留，历史会话只读。` : `确定删除“${detail.agent.displayName}”吗？配置、私有知识、记忆和技能会保留以便重新安装恢复；历史会话和已交付文件保留，历史会话只读。`}</DialogDescription></DialogHeader>
+          {deleteError ? <p role="alert" className="text-caption text-destructive">{deleteError}</p> : null}
+          <DialogFooter><Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>取消</Button><Button variant="destructive" onClick={() => void deleteAgent()} disabled={deleting}>{deleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}删除 Agent</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

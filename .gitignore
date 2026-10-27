@@ -141,6 +141,7 @@ design-assets/
 !tests/tools/test_visualizer.py
 !/tests/agent/
 /tests/agent/*
+!/tests/agent/test_agent_deletion.py
 !/tests/agent/test_video_model_binding.py
 !/tests/agent/test_shared_room_context.py
 !tests/agent/test_consolidation_backoff.py
@@ -302,6 +303,8 @@ design-assets/
 !tests/distill/test_user_profile_scope.py
 !/tests/materials/
 /tests/materials/*
+!tests/materials/test_agent_knowledge.py
+!tests/materials/test_agent_library_scope.py
 !tests/materials/test_services_auth.py
 !tests/materials/test_visual_context.py
 !tests/materials/test_visual_knowledge.py
@@ -331,6 +334,7 @@ docs/architecture/*
 !docs/architecture/user-profile-distillation.md
 !docs/architecture/engineering-boundaries.md
 !docs/architecture/module-invariants.md
+!docs/architecture/retrieval-architecture.md
 !docs/architecture/mona-worker-notebook-deployment.md
 !docs/architecture/browser-development-framework.md
 !docs/architecture/development-permissions.md

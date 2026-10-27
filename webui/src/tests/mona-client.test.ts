@@ -69,6 +69,19 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("sends the agent deletion command and resolves its correlated result", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect();
+    lastSocket().fakeOpen();
+    const pending = client.deleteAgent("agent.demo");
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(request).toMatchObject({ type: "agent_delete", agent_id: "agent.demo" });
+    expect(request.request_id).toBeTruthy();
+    lastSocket().fakeMessage({ event: "agent_delete_result", ok: true, agent_id: "agent.demo", request_id: request.request_id });
+    await expect(pending).resolves.toBeUndefined();
+    client.close();
+  });
+
   it("restores only the previous Agent instruction without sending a commit id", async () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     client.connect();

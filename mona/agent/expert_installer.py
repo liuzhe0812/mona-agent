@@ -20,6 +20,7 @@ from mona.agent.package_store import (
     ExpertCatalogEntry,
     InstalledAgentPackage,
 )
+from mona.config.paths import get_agent_deletion_marker
 from mona.runtime.download import ProgressCallback, VerifiedDownloader
 
 
@@ -89,6 +90,8 @@ class ExpertInstaller:
         version: str | None = None,
         progress: ProgressReporter | None = None,
     ) -> ExpertInstallResult:
+        deletion_marker = get_agent_deletion_marker(expert_id)
+        reinstalling = deletion_marker.exists()
         self._report(progress, "catalog")
         snapshot = await self.catalog_client.fetch()
         entry = self._select_entry(snapshot.catalog.experts, expert_id, version)
@@ -134,6 +137,8 @@ class ExpertInstaller:
                 result = self.registry_reload()
                 if inspect.isawaitable(result):
                     await result
+            if reinstalling:
+                deletion_marker.unlink(missing_ok=True)
         except Exception as exc:
             await self._rollback_activation(entry, previous_active)
             raise ExpertInstallError("partner activation failed; previous version restored") from exc

@@ -516,7 +516,8 @@
     "update": "更新",
     "start": "開始對話",
     "cancel": "取消",
-    "historyNeedsInstall": "此歷史對話的夥伴尚未安裝；記憶與個人設定仍然保留。",
+    "historyNeedsInstall": "此 Agent 已無法使用，歷史對話僅供查看；重新安裝後可恢復記憶與個人設定。",
+    "historyCustomDeleted": "此自訂 Agent 已刪除，歷史對話僅供查看。",
     "reinstall": "重新安裝",
     "stages": {
       "queued": "等待安裝",

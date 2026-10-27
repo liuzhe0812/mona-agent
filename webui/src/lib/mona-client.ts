@@ -722,6 +722,14 @@ export class MonaClient {
   }
 
   private recordTaskPlanSnapshot(chatId: string, ev: InboundEvent): void {
+  deleteAgent(agentId: string): Promise<void> {
+    return this.sendAgentCommandRaw("agent_delete_result", (requestId) => ({
+      type: "agent_delete",
+      agent_id: agentId,
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
     if (ev.event === "artifact_task_started") {
       this.artifactTaskIdByChatId.set(chatId, ev.task_id);
       this.taskPlanByChatId.delete(chatId);
@@ -1150,6 +1158,7 @@ export class MonaClient {
       parsed.event === "video_model_binding_result" ||
       parsed.event === "custom_agent_create_result" ||
       parsed.event === "agent_instruction_save_result" ||
+      parsed.event === "agent_delete_result" ||
       parsed.event === "agent_instruction_restore_result" ||
       parsed.event === "agent_skill_action_result" ||
       parsed.event === "agent_skill_setup_start_result" ||

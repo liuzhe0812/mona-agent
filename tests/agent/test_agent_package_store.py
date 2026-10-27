@@ -118,6 +118,25 @@ def test_registry_reload_sees_newly_activated_package(tmp_path: Path) -> None:
     assert registry.require(AGENT_ID).package_version == "1.0.0"
 
 
+def test_downloaded_agent_deletion_survives_registry_reload(tmp_path: Path) -> None:
+    store = AgentPackageStore(tmp_path / "packages")
+    archive = _write_archive(tmp_path / "expert.zip", _package_files("1.0.0"))
+    _install(store, archive, "1.0.0")
+    registry = AgentRegistry(
+        builtin_dir=tmp_path / "no-builtin",
+        installed_dir=tmp_path / "agents",
+        package_store_dir=store.root,
+    )
+    assert registry.get(AGENT_ID) is not None
+
+    registry.delete(AGENT_ID)
+    registry.reload()
+
+    assert registry.get(AGENT_ID) is None
+    assert [agent.id for agent in registry.list_agents()] == ["mona"]
+    assert store.active(AGENT_ID) is not None
+
+
 def test_install_new_version_and_rollback_keeps_private_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

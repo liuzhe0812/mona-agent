@@ -564,7 +564,8 @@
     "update": "Update",
     "start": "Start chat",
     "cancel": "Cancel",
-    "historyNeedsInstall": "This partner is not installed. Its memory and personal settings are still preserved.",
+    "historyNeedsInstall": "This agent is unavailable. This conversation is read-only; reinstall the agent to restore its memory and personal settings.",
+    "historyCustomDeleted": "This custom agent has been deleted. This conversation is read-only.",
     "reinstall": "Reinstall",
     "stages": {
       "queued": "Waiting to install",

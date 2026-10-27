@@ -1609,6 +1609,38 @@ describe("ThreadShell", () => {
         pendingDirectAgentId="com.mona.xiaohongshu"
         onCreateDirectChat={onCreateDirectChat}
       />,
+  it.each(["local.custom.deleted", "com.example.deleted"])("keeps deleted agent %s history read-only", async (agentId) => {
+    const client = makeClient();
+    invalidateAgents();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/agents")) return httpJson({ agents: [] });
+      if (url.includes("/webui-thread")) return httpJson(transcriptFromSimpleMessages([
+        { role: "user", content: "Original request" },
+        { role: "assistant", content: "Original answer" },
+      ]));
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    render(wrap(client, <ThreadShell
+      session={{ ...session("deleted-agent-history"), conversation: { type: "direct", title: "Old chat", agentIds: [agentId], directAgentId: agentId } }}
+      title="Old chat"
+      onToggleSidebar={() => {}}
+      onNewChat={() => {}}
+      queuedPrompt={{ id: "queued-after-delete", content: "New request" }}
+    />));
+
+    expect(await screen.findByText("Original answer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Message input")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    if (agentId.startsWith("local.custom.")) {
+      expect(screen.getByText(i18n.t("experts.historyCustomDeleted"))).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("experts.reinstall") })).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("button", { name: i18n.t("experts.reinstall") })).toBeInTheDocument();
+    }
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
     ));
 
     expect(await screen.findByTestId("partner-agent-welcome")).toHaveTextContent("小红书运营");

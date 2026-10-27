@@ -157,6 +157,7 @@ const skills = [
 
 const clientMocks = vi.hoisted(() => ({
   actOnAgentSkill: vi.fn(async () => undefined),
+  deleteAgent: vi.fn(async () => undefined),
   startAgentSkillSetup: vi.fn(async () => ({
     schemaVersion: 1,
     jobId: "setup-1",
@@ -230,6 +231,7 @@ beforeEach(() => {
   Object.assign(detail.config, { revision: 1, modelPreset: null, modelBinding: null });
   useNativeProviderState.setState({ revision: 0 });
   clientMocks.updateAgentConfig.mockReset().mockResolvedValue(undefined);
+  clientMocks.deleteAgent.mockReset().mockResolvedValue(undefined);
   clientMocks.saveAgentInstruction.mockClear();
   clientMocks.restoreAgentInstruction.mockClear();
   instructionMocks.listAgentInstructions.mockClear();
@@ -258,7 +260,23 @@ vi.mock("@/lib/api", () => ({
       { name: "review", label: "评审模型", model: "review-model", provider: "demo" },
     ],
   })),
-  getAgentDetail: vi.fn(async (_token: string, agentId: string) => agentId === "mona"
+  getAgentDetail: vi.fn(async (_token: string, agentId: string) => agentId === "agent.custom-purge"
+    ? {
+        ...detail,
+        deletionPolicy: "purge_private_data" as const,
+        agent: { ...detail.agent, id: agentId, displayName: "Custom Agent" },
+        definition: { ...detail.definition, id: agentId },
+        effective: { ...detail.effective, agentId, displayName: "Custom Agent" },
+      }
+    : agentId === "agent.reinstallable"
+      ? {
+          ...detail,
+          deletionPolicy: "retain_private_data" as const,
+          agent: { ...detail.agent, id: agentId, displayName: "Reinstallable Agent" },
+          definition: { ...detail.definition, id: agentId },
+          effective: { ...detail.effective, agentId, displayName: "Reinstallable Agent" },
+        }
+      : agentId === "mona"
     ? {
         ...detail,
         agent: { ...detail.agent, id: "mona", displayName: "Mona" },
@@ -338,6 +356,7 @@ vi.mock("@/providers/ClientProvider", () => ({
     token: "test-token",
     client: {
       onAgentsUpdated: () => () => {},
+      deleteAgent: clientMocks.deleteAgent,
       actOnAgentSkill: clientMocks.actOnAgentSkill,
       startAgentSkillSetup: clientMocks.startAgentSkillSetup,
       getAgentSkillSetup: clientMocks.getAgentSkillSetup,
@@ -353,6 +372,91 @@ vi.mock("@/providers/ClientProvider", () => ({
 import { AgentManagementView } from "./AgentManagementView";
 
 describe("AgentManagementView navigation surfaces", () => {
+  it("confirms deletion, allows cancellation, hides it for Mona, and returns after success", async () => {
+    const user = userEvent.setup();
+    const onBack = vi.fn();
+    const view = render(<AgentManagementView agentId="agent.demo" onBack={onBack} onStartDirect={() => {}} />);
+    await screen.findByText("Demo Agent");
+    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    expect(screen.getAllByText(/配置、私有知识、记忆和技能会保留以便重新安装恢复/)).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(clientMocks.deleteAgent).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" }));
+    await waitFor(() => expect(clientMocks.deleteAgent).toHaveBeenCalledWith("agent.demo"));
+    expect(onBack).toHaveBeenCalledOnce();
+    view.unmount();
+    const monaBack = vi.fn();
+    render(<AgentManagementView agentId="mona" onBack={monaBack} onStartDirect={() => {}} />);
+    await screen.findByText("Mona");
+    expect(screen.queryByRole("button", { name: "删除 Agent" })).not.toBeInTheDocument();
+  });
+
+  it("shows deletion consequences from the backend policy and defaults to retaining private data", async () => {
+    const user = userEvent.setup();
+    const cases = [
+      {
+        agentId: "agent.demo",
+        displayName: "Demo Agent",
+        overview: "配置、私有知识、记忆和技能会保留以便重新安装恢复",
+        confirmation: "会保留以便重新安装恢复",
+        history: "历史会话和已交付文件保留，历史会话只读",
+      },
+      {
+        agentId: "agent.custom-purge",
+        displayName: "Custom Agent",
+        overview: "删除会永久清除配置、私有知识、记忆和技能",
+        confirmation: "配置、私有知识、记忆和技能将被永久删除",
+        history: "历史会话和已交付文件保留，历史会话只读",
+      },
+      {
+        agentId: "agent.reinstallable",
+        displayName: "Reinstallable Agent",
+        overview: "配置、私有知识、记忆和技能会保留以便重新安装恢复",
+        confirmation: "会保留以便重新安装恢复",
+        history: "历史会话和已交付文件保留，历史会话只读",
+      },
+    ];
+
+    for (const item of cases) {
+      const view = render(<AgentManagementView agentId={item.agentId} onBack={() => {}} onStartDirect={() => {}} />);
+      await screen.findByText(item.displayName);
+      expect(screen.getByText(new RegExp(item.overview))).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+      const dialog = within(screen.getByRole("dialog"));
+      expect(dialog.getByText(new RegExp(item.confirmation))).toBeInTheDocument();
+      expect(dialog.getByText(new RegExp(item.history))).toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it("shows deletion errors and keeps the management page open", async () => {
+    const user = userEvent.setup();
+    const onBack = vi.fn();
+    clientMocks.deleteAgent.mockRejectedValueOnce(new Error("agent_delete_result timed out"));
+    render(<AgentManagementView agentId="agent.demo" onBack={onBack} onStartDirect={() => {}} />);
+    await screen.findByText("Demo Agent");
+    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("删除结果尚未确认");
+    expect(screen.queryByText(/agent_delete_result/)).not.toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("prevents duplicate deletion while the request is pending", async () => {
+    const user = userEvent.setup();
+    let resolveDelete!: () => void;
+    clientMocks.deleteAgent.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveDelete = resolve; }));
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    await screen.findByText("Demo Agent");
+    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" });
+    await user.click(confirm);
+    expect(confirm).toBeDisabled();
+    expect(clientMocks.deleteAgent).toHaveBeenCalledOnce();
+    await act(async () => { resolveDelete(); });
+  });
   it("uses transparent tabs and a red instruction selection marker", async () => {
     const user = userEvent.setup();
     render(

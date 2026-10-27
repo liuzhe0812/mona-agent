@@ -904,6 +904,7 @@ export function ThreadShell({
       if (isStreaming) {
         const officeContext = activeOfficeContextRef.current;
         pendingQueue.enqueue(
+      if (missingInstalledPartner) return;
           content,
           _images,
           officeContext ? { ...(_options ?? {}), ...officeContext } : _options,
@@ -929,7 +930,7 @@ export function ThreadShell({
         officeContext ? { ...(options ?? {}), ...officeContext } : options,
       );
     },
-    [conversation?.type, isStreaming, pendingQueue, send],
+    [conversation?.type, isStreaming, missingInstalledPartner, pendingQueue, send],
   );
 
   const handleQuote = useCallback((message: UIMessage, author: string) => {
@@ -997,7 +998,7 @@ export function ThreadShell({
   );
 
   useEffect(() => {
-    if (!queuedPrompt || !chatId || booting || isStreaming) return;
+    if (!queuedPrompt || !chatId || booting || isStreaming || missingInstalledPartner) return;
     if (consumedQueuedPromptRef.current === queuedPrompt.id) return;
 
     consumedQueuedPromptRef.current = queuedPrompt.id;
@@ -1030,7 +1031,7 @@ export function ThreadShell({
     return () => {
       cancelled = true;
     };
-  }, [booting, chatId, conversation?.type, isStreaming, onQueuedPromptConsumed, queuedPrompt, send]);
+  }, [booting, chatId, conversation?.type, isStreaming, missingInstalledPartner, onQueuedPromptConsumed, queuedPrompt, send]);
 
   const composerPlaceholder = showHeroComposer
     ? "与 Mona 协作"
@@ -1059,7 +1060,7 @@ export function ThreadShell({
           chatId={chatId}
           onSend={handleThreadSend}
           suggestedPrompt={widgetPrompt}
-          disabled={!chatId || Boolean(historyUnavailable)}
+          disabled={!chatId || Boolean(historyUnavailable) || missingInstalledPartner}
           isStreaming={isStreaming}
           computerUseActive={computerUseActive}
           isAwaitingModelResponse={isAwaitingModelResponse}
@@ -2012,11 +2013,11 @@ export function ThreadShell({
           {missingInstalledPartner ? (
             <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/8 px-4 py-2 text-sm">
               <span className="text-amber-800 dark:text-amber-200">
-                {t("experts.historyNeedsInstall")}
+                {t(directAgentId?.startsWith("local.custom.") ? "experts.historyCustomDeleted" : "experts.historyNeedsInstall")}
               </span>
-              <Button variant="outline" size="sm" onClick={onOpenExpertLibrary}>
+              {!directAgentId?.startsWith("local.custom.") ? <Button variant="outline" size="sm" onClick={onOpenExpertLibrary}>
                 {t("experts.reinstall")}
-              </Button>
+              </Button> : null}
             </div>
           ) : null}
           <ThreadViewport

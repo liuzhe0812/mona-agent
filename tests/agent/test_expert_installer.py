@@ -15,6 +15,7 @@ import mona.runtime.download as download_module
 from mona.agent.expert_catalog import ExpertCatalogClient
 from mona.agent.expert_installer import ExpertInstaller, ExpertInstallError
 from mona.agent.package_store import AgentPackageStore
+from mona.config.paths import get_agent_deletion_marker
 from mona.runtime.download import VerifiedDownloader
 
 AGENT_ID = "com.example.catalog-expert"
@@ -78,12 +79,20 @@ def _catalog_entry(payload: bytes, digest: str, *, min_version: str = "1.0.0") -
 
 
 @pytest.fixture(autouse=True)
-def allow_test_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+def allow_test_hosts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(catalog_module, "validate_url_target", lambda _url: (True, ""))
     monkeypatch.setattr(download_module, "validate_url_target", lambda _url: (True, ""))
+    monkeypatch.setattr("mona.config.paths.get_agents_dir", lambda: tmp_path / "agents")
 
 
-async def test_installs_runtime_then_activates_and_reloads(tmp_path: Path) -> None:
+@pytest.mark.parametrize("delete_during_install", [False, True])
+async def test_installs_runtime_then_activates_and_reloads(
+    tmp_path: Path, delete_during_install: bool,
+) -> None:
+    marker = get_agent_deletion_marker(AGENT_ID)
+    marker.parent.mkdir(parents=True)
+    if not delete_during_install:
+        marker.touch()
     _path, payload = _archive(tmp_path)
     digest = hashlib.sha256(payload).hexdigest()
     catalog = _catalog_entry(payload, digest)
@@ -98,6 +107,8 @@ async def test_installs_runtime_then_activates_and_reloads(tmp_path: Path) -> No
 
     async def install_runtime(packs: list[str], _progress) -> None:
         runtime_calls.append(packs)
+        if delete_during_install:
+            marker.touch()
 
     installer = ExpertInstaller(
         catalog_client=ExpertCatalogClient(
@@ -120,6 +131,7 @@ async def test_installs_runtime_then_activates_and_reloads(tmp_path: Path) -> No
     result = await installer.install(AGENT_ID, progress=lambda event: progress.append(event.stage))
 
     assert result.package.activated is True
+    assert marker.exists() is delete_during_install
     assert runtime_calls == [["python-base@3.12"]]
     assert reloads == [True]
     assert progress[0] == "catalog"
@@ -197,6 +209,9 @@ async def test_runtime_failure_never_activates_package(tmp_path: Path) -> None:
 
 
 async def test_registry_reload_failure_rolls_back_activation(tmp_path: Path) -> None:
+    marker = get_agent_deletion_marker(AGENT_ID)
+    marker.parent.mkdir(parents=True)
+    marker.touch()
     _path, payload = _archive(tmp_path)
     digest = hashlib.sha256(payload).hexdigest()
     catalog = _catalog_entry(payload, digest)
@@ -239,3 +254,4 @@ async def test_registry_reload_failure_rolls_back_activation(tmp_path: Path) -> 
 
     assert store.active(AGENT_ID) is None
     assert reload_calls == 2
+    assert marker.exists()

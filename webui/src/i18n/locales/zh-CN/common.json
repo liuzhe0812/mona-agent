@@ -579,7 +579,8 @@
     "update": "更新",
     "start": "开始对话",
     "cancel": "取消",
-    "historyNeedsInstall": "此历史会话的伙伴尚未安装；记忆与个人配置仍然保留。",
+    "historyNeedsInstall": "此 Agent 已不可用，历史会话仅供查看；重新安装后可恢复记忆和个人配置。",
+    "historyCustomDeleted": "此自定义 Agent 已删除，历史会话仅供查看。",
     "reinstall": "重新安装",
     "stages": {
       "queued": "等待安装",

@@ -1426,6 +1426,7 @@ class WebSocketChannel(BaseChannel):
                         "definition": {
                             "id": definition.id,
                             "model": definition.model,
+                        "deletionPolicy": registry.deletion_policy(agent_id),
                             "toolAllowlist": definition.tool_allowlist,
                             "canDelegate": definition.can_delegate,
                             "skills": definition.skills,
@@ -3971,6 +3972,52 @@ class WebSocketChannel(BaseChannel):
     async def _handle_agent_instruction_save_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
+    async def _handle_agent_delete_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.partners import normalize_agent_id
+
+            raw_agent_id = envelope.get("agent_id")
+            if not isinstance(raw_agent_id, str):
+                raise ValueError("请选择要删除的 Agent。")
+            agent_id = normalize_agent_id(raw_agent_id)
+            registry = self._room_agent_registry()
+            if registry.deletion_policy(agent_id) == "purge_private_data" and self._session_manager is not None:
+                for session in self._session_manager.list_sessions():
+                    conversation = session.get("conversation") or {}
+                    if agent_id not in conversation.get("agentIds", []):
+                        continue
+                    key = session.get("key", "")
+                    if not key.startswith("websocket:"):
+                        continue
+                    chat_id = key.split(":", 1)[1]
+                    running_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
+                    if websocket_turn_wall_started_at(chat_id) is not None or (
+                        running_count is not None and running_count(key) > 0
+                    ):
+                        raise ValueError("此 Agent 仍在处理任务，请先停止相关任务再删除。")
+            registry.delete(agent_id)
+            await self._send_event(
+                connection,
+                "agent_delete_result",
+                ok=True,
+                request_id=request_id,
+                agent_id=agent_id,
+            )
+            await self._broadcast_agent_event("agents_updated", agent_id=agent_id)
+        except Exception as exc:
+            if not isinstance(exc, ValueError):
+                self.logger.exception("Failed to delete Agent")
+            await self._send_event(
+                connection,
+                "agent_delete_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc) if isinstance(exc, ValueError) else "删除 Agent 失败，请刷新列表后重试。",
+            )
+
         request_id = self._room_request_id(envelope)
         try:
             from mona.agent.agent_management import write_instruction
@@ -6065,6 +6112,17 @@ class WebSocketChannel(BaseChannel):
     async def _dispatch_envelope(
         self,
         connection: Any,
+    async def _reject_chat_message(
+        self, connection: Any, envelope: dict[str, Any], detail: str, **fields: Any,
+    ) -> None:
+        task_id = envelope.get("task_id")
+        if isinstance(task_id, str) and task_id.strip() and len(task_id) <= 512:
+            fields["task_id"] = task_id.strip()
+        await self._send_event(
+            connection, "error", chat_id=envelope.get("chat_id"),
+            message_rejected=True, detail=detail, **fields,
+        )
+
         client_id: str,
         envelope: dict[str, Any],
     ) -> None:
@@ -6166,6 +6224,9 @@ class WebSocketChannel(BaseChannel):
         if t == "agent_instruction_save":
             await self._handle_agent_instruction_save_envelope(connection, envelope)
             return
+        if t == "agent_delete":
+            await self._handle_agent_delete_envelope(connection, envelope)
+            return
         if t == "agent_instruction_restore":
             await self._handle_agent_instruction_restore_envelope(connection, envelope)
             return
@@ -6251,6 +6312,18 @@ class WebSocketChannel(BaseChannel):
                     )
                     return
             session_agent_kind = None
+                conversation = session.conversation_metadata
+                if (
+                    conversation.type == "direct"
+                    and conversation.direct_agent_id != "mona"
+                    and self._room_agent_registry().get(conversation.direct_agent_id) is None
+                ):
+                    await self._reject_chat_message(
+                        connection, envelope,
+                        "此 Agent 已不可用，历史会话仅供查看。",
+                        code="agent_unavailable",
+                    )
+                    return
             session = None
             if self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{cid}")
