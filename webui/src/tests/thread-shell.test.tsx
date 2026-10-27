@@ -690,7 +690,7 @@ describe("ThreadShell", () => {
 
     await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
       "chat-canvas",
-      expect.stringContaining("请按 mona-canvas skill 处理"),
+      expect.stringContaining("请读取 mona-canvas skill"),
       undefined,
       expect.objectContaining({
         displayContent: "帮我画一个退款审批流程图",
@@ -1064,7 +1064,7 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByTestId("conversation-canvas-panel"))
       .toHaveTextContent("退款审批流程图:creating"));
     const wireContent = String(client.sendMessage.mock.calls[0]?.[1] ?? "");
-    expect(wireContent).toContain("请按 mona-canvas skill 处理");
+    expect(wireContent).toContain("请读取 mona-canvas skill");
     expect(wireContent).not.toContain("baseHash 必须为");
     const baseHash = computeFlowchartSemanticHash(createBlankFlowchartDocument());
     const patch = {
@@ -1109,7 +1109,7 @@ describe("ThreadShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
       "chat-canvas-result",
-      expect.stringContaining("请按 mona-canvas skill 处理"),
+      expect.stringContaining("请读取 mona-canvas skill"),
       undefined,
       expect.objectContaining({
         displayContent: "增加财务复核节点",
@@ -1702,10 +1702,7 @@ describe("ThreadShell", () => {
 
     const heroComposer = screen.getByTestId("mona-hero-composer");
     const companion = within(heroComposer).getByRole("button", { name: "Mona 快捷提示词" });
-    expect(companion.querySelector("img")).toHaveAttribute(
-      "src",
-      "/brand/v2/composer-human-chibi-resting.png",
-    );
+    expect(companion.querySelector("svg.mona-composer-peek")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
     expect(within(heroComposer).queryByText("MONA")).not.toBeInTheDocument();
     expect(within(heroComposer).queryByText("网页生成笔记")).not.toBeInTheDocument();
@@ -1751,7 +1748,7 @@ describe("ThreadShell", () => {
 
     const companion = await within(screen.getByTestId("mona-hero-composer"))
       .findByRole("button", { name: "Mona 快捷提示词" });
-    expect(companion.querySelector("img")).toHaveAttribute("src", "/brand/v2/composer-human-chibi-resting.png");
+    expect(companion.querySelector("svg.mona-composer-peek")).toBeInTheDocument();
     expect(document.querySelector(`img[src="${customAvatar}"]`)).not.toBeInTheDocument();
   });
 
