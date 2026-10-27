@@ -23,7 +23,7 @@ from mona.development.executors.host_tools import WORK_TOOL, WorkToolCall
 from mona.development.executors.rpc import RemoteRpcError, RpcError
 from mona.development.executors.sdk import SDKExecutor
 from mona.development.executors.sdk_policy import prepare_sdk_profile
-from mona.development.input_content import MAX_NATIVE_TEXT_CHARS
+from mona.development.input_content import validate_content
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.providers.capabilities import ModelCapabilities
 
@@ -33,6 +33,48 @@ _ERROR_MESSAGES = {
     "authentication_required": "该模型账号需要登录。请在模型设置中完成登录后重试。",
     "context_window_exceeded": "当前会话超过所选模型可处理的容量。请新建会话或选择更大容量的模型。",
     "native_account_check_failed": "模型账号状态检查未能完成，尚未开始本次生成。请稍后重试，或在模型设置中检查连接。",
+    "input_text_too_large": "这条消息超过 20 万字符，本次内容尚未发送。请缩短文字或拆分发送。",
+    "input_images_too_large": "附件图片合计超过 8 MB，本次内容尚未发送。请压缩图片或减少附件后重试。",
+    "input_parts_too_many": "这条消息的附件或内容片段过多，本次内容尚未发送。请减少附件或拆分发送。",
+    "invalid_input_content": "消息内容或图片格式无法识别，本次内容尚未发送。请重新添加附件后重试。",
+    "rpc_frame_too_large": "会话内容和附件超过单次传输容量，本次内容尚未发送。请减少附件，或新建会话并引用已有工作文件继续。",
+    "executor_disabled": "所选模型来源已停用，本次生成尚未开始。请在模型设置中启用该来源或选择其他模型。",
+    "executor_unavailable": "未找到所选模型需要的本机程序，本次生成尚未开始。请在模型设置中检查连接。",
+    "native_catalog_unavailable": "所选来源的模型列表尚未就绪，本次生成尚未开始。请在模型设置中刷新后重试。",
+    "native_launch_failed": "所选模型需要的本机程序未能启动，本次生成尚未开始。请在模型设置中检查程序路径及安装状态。",
+    "executable_access_denied": "系统拒绝启动所选模型的本机程序，本次生成尚未开始。请检查程序的访问权限。",
+    "invalid_executable_format": "所选模型程序与当前系统不兼容，本次生成尚未开始。请安装适用于当前系统的程序。",
+    "native_request_rejected": "模型程序拒绝了本次请求。请核对已有结果，并在模型设置中检查连接及配套程序版本后重试。",
+    "native_dispatch_rejected": "模型连接当前无法接受新请求，本次内容尚未发送。请等待当前任务结束，或在模型设置中检查连接后重试。",
+    "native_dispatch_unconfirmed": "模型请求未收到明确的接受回执，结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
+    "native_turn_incomplete": "模型未返回本轮的完成状态，结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
+    "native_turn_interrupted": "本次模型回复已中断，请核对已有内容和文件结果后继续。",
+    "native_policy_violation": "模型请求了当前任务未授权的操作，Mona 已停止本轮。请核对操作授权和已有结果后继续。",
+    "native_request_timeout": "等待模型确认超时，本次结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
+    "native_transport_lost": "与本机模型程序的连接中断，本次结果尚未确认。请先核对会话和文件结果，再继续。",
+    "native_disconnected": "本机模型程序的连接已关闭。请在模型设置中检查连接，并核对本轮已有结果后继续。",
+    "native_protocol_error": "模型程序返回的内容格式无法识别。请核对已有结果，并检查配套程序版本后重试。",
+    "sdk_contract_incompatible": "模型程序与 Mona 的接口不兼容，本次生成未能开始。请检查配套程序版本。",
+    "sdk_not_installed": "所选模型需要的配套组件未安装，本次生成尚未开始。请修复应用安装后重试。",
+    "sdk_dependency_missing": "所选模型需要的配套组件不完整，本次生成尚未开始。请修复应用安装后重试。",
+    "session_budget_exceeded": "当前模型任务已达到运行预算。请核对已有进度，缩小任务范围后继续。",
+    "rate_limit_exceeded": "模型服务的请求频率已达到限制。请稍后重试。",
+    "model_service_unavailable": "所选模型服务当前不可用。请稍后重试或选择其他模型。",
+    "model_policy_rejected": "模型服务因内容政策拒绝了本次请求。请调整请求内容后重试。",
+    "model_permission_denied": "模型连续遇到操作权限拒绝，本次任务已结束。请核对所需操作的授权后继续。",
+    "upstream_internal_error": "模型服务发生内部错误。请稍后重试或选择其他模型。",
+    "upstream_invalid_request": "模型服务拒绝了请求参数。请检查所选模型是否支持本次输入；若持续发生，请反馈诊断日志。",
+    "upstream_input_too_large": "模型服务拒绝了过大的请求。请减少附件或整理上下文后重试。",
+    "model_access_denied": "当前账号无权访问所选模型，或请求被模型服务拒绝。请在模型设置中确认账号与模型权限。",
+    "upstream_not_found": "模型服务未找到请求地址或所选模型。请检查模型来源配置后重试。",
+    "upstream_connection_failed": "未能连接到模型服务。请检查网络，稍后重试。",
+    "upstream_timeout": "模型服务响应超时。请核对已有内容后稍后继续。",
+    "upstream_stream_disconnected": "模型服务在回复完成前断开了连接。请核对已有内容和文件结果后继续。",
+    "upstream_retries_exhausted": "模型服务多次重连仍未能完成回复。请核对已有结果，稍后继续或选择其他模型。",
+    "native_rollback_failed": "模型程序未能恢复会话状态。请核对已有结果后新建会话继续。",
+    "native_sandbox_error": "模型程序的运行环境发生错误。请检查配套程序状态，核对已有结果后重试。",
+    "native_turn_failed": "模型程序明确报告本轮生成失败，但未提供可识别的原因。请核对已有结果，稍后继续；若持续发生，请反馈诊断日志。",
+    "native_execution_failed": "模型程序明确报告本轮任务失败。请核对已有内容和文件结果后继续；若持续发生，请反馈诊断日志。",
 }
 
 
@@ -66,28 +108,8 @@ def _native_history_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def native_history_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fit older tool text to transport limits without changing saved history."""
-    blocks = _native_history_blocks(messages)
-    if sum(len(block.get("text", "")) for block in blocks) <= MAX_NATIVE_TEXT_CHARS:
-        return blocks
-    last_user = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=0)
-    history = list(messages)
-    omitted = "[Older tool text omitted to fit input limits. The full result remains saved. Read the current project/files before relying on it; do not replay historical operations.]"
-    for index, message in enumerate(messages[:last_user]):
-        if message.get("role") != "tool":
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and len(content) > 4096:
-            reduced = omitted
-        elif isinstance(content, list) and sum(len(item.get("text", "")) for item in content) > 4096:
-            reduced = [{**item, "text": omitted} if item.get("type") == "text" else item for item in content]
-        else:
-            continue
-        history[index] = {**message, "content": reduced}
-        blocks = _native_history_blocks(history)
-        if sum(len(block.get("text", "")) for block in blocks) <= MAX_NATIVE_TEXT_CHARS:
-            break
-    return blocks
+    """Pack history losslessly after the runner's model-token budget check."""
+    return _native_history_blocks(messages)
 
 
 class NativeWorkProvider(LLMProvider):
@@ -114,6 +136,7 @@ class NativeWorkProvider(LLMProvider):
         self._message_count = 0
         self._catalog_path: Path | None = None
         self._definitions = ""
+        self._request_stage = "input"
 
     def get_capabilities(self, model: str) -> ModelCapabilities:
         return ModelCapabilities(supports_vision=True, supports_tool_calling=True)
@@ -152,6 +175,9 @@ class NativeWorkProvider(LLMProvider):
             self._pending.pop(request.id, None)
 
     async def _start(self, messages, tools, model, reasoning_effort) -> None:
+        self._request_stage = "input"
+        history = native_history_input(messages)
+        validate_content(history, context_input=True)
         config = self.config.development
         if self.executor.value not in config.enabled_engines:
             raise RpcError("executor_disabled", "此模型来源已停用，请在模型设置中启用或选择其他模型。")
@@ -177,11 +203,16 @@ class NativeWorkProvider(LLMProvider):
         context = ProjectContext("work", self.workspace, (), (), (), fingerprint, fingerprint)
         session = DevelopmentSession(project_id="work", executor=self.executor, model=model,
                                      model_reasoning_effort=reasoning_effort)
+        self._request_stage = "initialization"
         self._binding = await self._host.create_session(SessionStart(session, context, model=model, work_prompt=prompt))
         self._events = self._host.events(self._binding).__aiter__()
-        receipt = await self._host.send(self._binding, f"input_{uuid4().hex}", native_history_input(messages))
+        self._request_stage = "dispatch"
+        receipt = await self._host.send(self._binding, f"input_{uuid4().hex}", history)
+        if receipt.outcome == "rejected":
+            raise RpcError("native_dispatch_rejected", "模型连接拒绝了本次派发，未发送模型请求。")
         if receipt.outcome != "accepted":
             raise RpcError("native_dispatch_unconfirmed", "模型请求的结果尚未确认，请核对原会话。", outcome_unknown=True)
+        self._request_stage = "response"
         self._event_task = asyncio.create_task(anext(self._events))
         self._tool_task = asyncio.create_task(self._requests.get())
         self._message_count = len(messages)
@@ -218,6 +249,58 @@ class NativeWorkProvider(LLMProvider):
         usage.update(self._context_usage)
         return LLMResponse(content=content or None, tool_calls=calls or [], usage=usage,
                            finish_reason="tool_calls" if calls else "stop")
+
+    def _error_response(self, code: str, *, exc: Exception | None = None,
+                        status_code: int | None = None) -> LLMResponse:
+        if type(status_code) is not int or not 100 <= status_code <= 599:
+            status_code = None
+        method = exc.rpc_method if isinstance(exc, RemoteRpcError) else None
+        rpc_code = exc.rpc_code if isinstance(exc, RemoteRpcError) else None
+        if self.executor == ExecutorId.CODEX and method == "account/read" and self._binding is None:
+            code = "native_account_check_failed"
+        if code in {"upstream_connection_failed", "upstream_stream_disconnected", "upstream_retries_exhausted"}:
+            if status_code == 401:
+                code = "authentication_required"
+            elif status_code == 403:
+                code = "model_access_denied"
+            elif status_code == 404:
+                code = "upstream_not_found"
+            elif status_code in {408, 504}:
+                code = "upstream_timeout"
+            elif status_code == 413:
+                code = "upstream_input_too_large"
+            elif status_code == 429:
+                code = "rate_limit_exceeded"
+            elif status_code is not None and status_code >= 500:
+                code = "upstream_internal_error"
+            elif status_code is not None and status_code >= 400:
+                code = "upstream_invalid_request"
+        logger.warning("Work native model response failed for {}: {} ({}, stage={}, method={}, rpc_code={}, http_status={})",
+                       self.executor.value, code, type(exc).__name__ if exc else "NativeEvent",
+                       self._request_stage, method, rpc_code, status_code)
+        content = _ERROR_MESSAGES.get(code)
+        if content is None:
+            preparing = self._request_stage in {"input", "initialization"}
+            if exc is None:
+                content = _ERROR_MESSAGES["native_turn_failed"]
+            elif isinstance(exc, RpcError):
+                content = ("所选模型的本机连接未能准备就绪，本次生成尚未开始。请在模型设置中检查连接及配套组件。"
+                           if preparing else
+                           "与模型程序通信时发生错误，本次结果尚未确认。请先核对会话和文件结果，再继续；若持续发生，请反馈诊断日志。")
+            else:
+                content = ("Mona 在准备模型请求时发生内部错误，本次生成尚未开始。请重试；若持续发生，请反馈诊断日志。"
+                           if preparing else
+                           "Mona 在处理模型请求时发生内部错误，尚未收到完整结果。请核对已有内容和文件结果后继续；若持续发生，请反馈诊断日志。")
+        if code == "native_request_timeout" and self._request_stage in {"input", "initialization"}:
+            content = "连接模型超时，尚未开始本次生成。请检查网络和模型设置后重试。"
+        if code == "native_request_rejected" and self._request_stage == "initialization":
+            content = "模型连接拒绝了初始化请求，尚未开始本次生成。请在模型设置中检查连接及配套程序版本后重试。"
+        if self._turn_progress and code in {"server_overloaded", "usage_limit_exceeded", "rate_limit_exceeded",
+                                           "model_service_unavailable", "upstream_internal_error", "authentication_required"}:
+            content += "本轮已产生内容或执行过操作，请先核对会话和文件结果后再继续。"
+        return LLMResponse(content=content, finish_reason="error", error_code=code,
+                           error_status_code=status_code,
+                           error_should_retry=self._done and code == "server_overloaded" and not self._turn_progress)
 
     async def _chat(self, messages, tools, model, reasoning_effort, on_content_delta=None, on_thinking_delta=None):
         if self._done:
@@ -287,11 +370,11 @@ class NativeWorkProvider(LLMProvider):
             elif event.type == "run.failed":
                 self._done = True
                 code = payload.get("errorCode") or "native_turn_failed"
-                raise RpcError(code, _ERROR_MESSAGES.get(code, "模型响应未完成，请核对会话结果后重试或选择其他模型。"))
+                return self._error_response(code, status_code=payload.get("errorStatusCode"))
             elif event.type in {"run.unknown", "run.interrupted", "policy.violation"}:
-                logger.warning("Work native turn incomplete for {}: event={}, reason={}",
-                               self.executor.value, event.type, payload.get("reason"))
-                raise RpcError("native_turn_incomplete", "模型响应未完成，请核对会话后重试。", outcome_unknown=True)
+                code = {"run.unknown": "native_turn_incomplete", "run.interrupted": "native_turn_interrupted",
+                        "policy.violation": "native_policy_violation"}[event.type]
+                return self._error_response(code)
 
     async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7,
                    reasoning_effort=None, tool_choice=None) -> LLMResponse:
@@ -306,17 +389,7 @@ class NativeWorkProvider(LLMProvider):
             raise
         except Exception as exc:
             code = getattr(exc, "code", "native_response_failed")
-            method = exc.rpc_method if isinstance(exc, RemoteRpcError) else None
-            rpc_code = exc.rpc_code if isinstance(exc, RemoteRpcError) else None
-            if self.executor == ExecutorId.CODEX and method == "account/read" and self._binding is None:
-                code = "native_account_check_failed"
-            logger.warning("Work native model response failed for {}: {} ({}, method={}, rpc_code={})",
-                           self.executor.value, code, type(exc).__name__, method, rpc_code)
-            content = _ERROR_MESSAGES.get(code, "模型响应未完成，请核对会话结果后重试或选择其他模型。")
-            if code == "server_overloaded" and self._turn_progress:
-                content = "当前模型繁忙，响应已中断。请核对会话结果后稍后继续，或选择其他模型。"
-            return LLMResponse(content=content, finish_reason="error", error_code=code,
-                               error_should_retry=self._done and code == "server_overloaded" and not self._turn_progress)
+            return self._error_response(code, exc=exc)
 
     async def aclose(self) -> None:
         for future in self._pending.values():

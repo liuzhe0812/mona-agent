@@ -30,27 +30,50 @@ _CODEX_ERROR_CODES = {
     "unauthorized": "authentication_required",
     "contextWindowExceeded": "context_window_exceeded",
     "context_window_exceeded": "context_window_exceeded",
+    "sessionBudgetExceeded": "session_budget_exceeded",
+    "rateLimitExceeded": "rate_limit_exceeded",
+    "flexUnavailable": "model_service_unavailable",
+    "cyberPolicy": "model_policy_rejected",
+    "misalignmentPolicyViolation": "model_policy_rejected",
+    "tooManyDenials": "model_permission_denied",
+    "internalServerError": "upstream_internal_error",
+    "badRequest": "upstream_invalid_request",
+    "threadRollbackFailed": "native_rollback_failed",
+    "sandboxError": "native_sandbox_error",
+    "httpConnectionFailed": "upstream_connection_failed",
+    "responseStreamConnectionFailed": "upstream_connection_failed",
+    "responseStreamDisconnected": "upstream_stream_disconnected",
+    "responseTooManyFailedAttempts": "upstream_retries_exhausted",
 }
 
 
-def _codex_error_code(error: Any) -> str:
+def _codex_error(error: Any) -> dict[str, Any]:
+    fallback = {"errorCode": "native_turn_failed"}
     if not isinstance(error, dict):
-        return "native_turn_failed"
+        return fallback
     fields = [name for name in ("codexErrorInfo", "codex_error_info") if name in error]
     if len(fields) != 1:
-        return "native_turn_failed"
+        return fallback
     info = error[fields[0]]
+    details = None
     if isinstance(info, dict):
         if len(info) != 1:
-            return "native_turn_failed"
+            return fallback
         tag, details = next(iter(info.items()))
         if details is not None and not isinstance(details, dict):
-            return "native_turn_failed"
+            return fallback
     elif isinstance(info, str):
         tag = info
     else:
-        return "native_turn_failed"
-    return _CODEX_ERROR_CODES.get(tag, "native_turn_failed") if isinstance(tag, str) else "native_turn_failed"
+        return fallback
+    code = _CODEX_ERROR_CODES.get(tag) if isinstance(tag, str) else None
+    if code is None:
+        return fallback
+    result = {"errorCode": code}
+    status = details.get("httpStatusCode") if isinstance(details, dict) else None
+    if tag in {"httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"} and type(status) is int and 100 <= status <= 599:
+        result["errorStatusCode"] = status
+    return result
 
 
 def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bool = False,
@@ -67,10 +90,10 @@ def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bo
             "completed": "run.completed", "interrupted": "run.interrupted", "failed": "run.failed",
         }.get(status, "run.unknown")
         error = turn.get("error")
-        error_code = (_codex_error_code(error) if error is not None else
-                      "native_turn_failed" if method == "turn/completed" and status == "failed" else None)
+        error_info = (_codex_error(error) if error is not None else {"errorCode":
+                      "native_turn_failed" if method == "turn/completed" and status == "failed" else None})
         return NativeEvent(native_turn_id=turn_id, type=kind,
-                           payload={"status": status, "errorCode": error_code})
+                           payload={"status": status, **error_info})
     if method == "item/agentMessage/delta":
         return NativeEvent(native_turn_id=turn_id, type="agent.message.delta",
                            payload={"itemId": item_id, "delta": params.get("delta", "")})

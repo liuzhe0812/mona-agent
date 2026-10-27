@@ -666,7 +666,7 @@ class Worker:
         if not self.client or not self.owner or self.owner.done():
             raise ValueError("sdk_not_connected")
         if method == "send":
-            content = sdk_content(params["text"])
+            content = sdk_content(params["text"], context_input=self.start.get("workPrompt") is not None)
             async def prompt():
                 yield {"type": "user", "message": {"role": "user", "content": content},
                        "session_id": self.start["nativeSessionId"]}

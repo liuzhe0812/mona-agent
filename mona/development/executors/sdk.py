@@ -415,8 +415,8 @@ class SDKExecutor:
         runtime.emit(event)
 
     async def send(self, binding: Binding, input_id: str, message: MessageContent) -> DispatchReceipt:
-        validate_content(message)
         runtime = self._runtime(binding)
+        validate_content(message, context_input=runtime.start.work_prompt is not None)
         if runtime.status != "idle" or runtime.connection is None or runtime.connection.closed:
             return DispatchReceipt(input_id=input_id, outcome="rejected", reason="原生会话不可接收新一轮任务。")
         if runtime.uses_local_account and not is_local_account_bound(self.profile.home):

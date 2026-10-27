@@ -22,7 +22,13 @@ from mona.development.executors.codex_policy import (
     prepare_codex_work_profile,
 )
 from mona.development.executors.host_tools import WORK_DESCRIPTION
-from mona.development.input_content import validate_content
+from mona.development.input_content import (
+    MAX_NATIVE_FRAME_BYTES,
+    codex_input,
+    sdk_content,
+    validate_content,
+)
+from mona.development.store import DevelopmentError
 from mona.providers.factory import build_provider_snapshot
 from mona.providers.native_work_provider import NativeWorkProvider, native_history_input
 
@@ -84,6 +90,10 @@ for line in sys.stdin:
         if failure == 'server_retry':
             event('error', {'threadId': 'work-thread', 'turnId': 'work-turn', 'willRetry': True,
                 'error': {'message': 'wording changed', 'codexErrorInfo': 'serverOverloaded'}})
+        if failure == 'classified':
+            event('turn/completed', {'threadId': 'work-thread', 'turn': {'id': 'work-turn', 'status': 'failed',
+                'error': {'message': 'private upstream detail', 'codexErrorInfo': json.loads(os.environ['PEER_ERROR_INFO'])}}})
+            continue
         if failure in {'overload_always', 'overload_after_output', 'unknown'} or failure == 'overload_once' and attempt == 1:
             if failure == 'overload_after_output':
                 event('item/agentMessage/delta', {'threadId': 'work-thread', 'turnId': 'work-turn',
@@ -107,7 +117,7 @@ for line in sys.stdin:
 '''
 
 
-def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure="", token_usage=None):
+def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure="", token_usage=None, error_info=None):
     root = tmp_path / "work"
     root.mkdir()
     peer = tmp_path / "native-peer.py"
@@ -142,6 +152,7 @@ def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure="", to
     profile = CodexProfile((sys.executable, "-u", str(peer)), tmp_path, root,
         {**os.environ, "PEER_CONFIG": json.dumps(effective), "PEER_PATH": str(output),
          "PEER_HOLD": "1" if hold else "0", "PEER_FAILURE": failure,
+         "PEER_ERROR_INFO": json.dumps(error_info),
          "PEER_TOKEN_USAGE": json.dumps(token_usage)},
         work_model_catalog=catalog)
     monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile", lambda *_: (profile, catalog))
@@ -408,7 +419,8 @@ async def test_work_initialization_rejection_reports_stage_without_replaying_or_
                 [{"role": "user", "content": "Prepare the storyboard"}], model="native-fixture")
         assert response.finish_reason == "error" and response.error_code == code
         assert not response.error_should_retry
-        assert ("尚未开始本次生成" in response.content) is (failure == "account_rejected")
+        assert "尚未开始本次生成" in response.content
+        assert ("账号状态检查" in response.content) is (failure == "account_rejected")
         assert "private upstream detail" not in response.content
         assert (root / "rejections.json").read_text() == "1"
         assert not (root / "turn-start.json").exists() and not output.exists()
@@ -419,6 +431,78 @@ async def test_work_initialization_rejection_reports_stage_without_replaying_or_
         logger.remove(sink)
         await provider.aclose()
     assert not catalog.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_info,code,message,status", [
+    ("contextWindowExceeded", "context_window_exceeded", "容量", None),
+    ("sessionBudgetExceeded", "session_budget_exceeded", "运行预算", None),
+    ("usageLimitExceeded", "usage_limit_exceeded", "使用额度", None),
+    ("rateLimitExceeded", "rate_limit_exceeded", "请求频率", None),
+    ("unauthorized", "authentication_required", "登录", None),
+    ("badRequest", "upstream_invalid_request", "请求参数", None),
+    ("internalServerError", "upstream_internal_error", "模型服务发生内部错误", None),
+    ("cyberPolicy", "model_policy_rejected", "内容政策", None),
+    ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_stream_disconnected", "断开", None),
+    ({"httpConnectionFailed": {"httpStatusCode": 401}}, "authentication_required", "登录", 401),
+    ({"httpConnectionFailed": {"httpStatusCode": 403}}, "model_access_denied", "模型权限", 403),
+    ({"httpConnectionFailed": {"httpStatusCode": 404}}, "upstream_not_found", "请求地址", 404),
+    ({"httpConnectionFailed": {"httpStatusCode": 429}}, "rate_limit_exceeded", "请求频率", 429),
+    ({"responseTooManyFailedAttempts": {"httpStatusCode": 502}}, "upstream_internal_error", "模型服务发生内部错误", 502),
+    ("futureErrorVariant", "native_turn_failed", "未提供可识别的原因", None),
+])
+async def test_native_work_reports_sanitized_error_categories(tmp_path, monkeypatch, error_info, code, message, status):
+    config, root, output, _ = use_peer(tmp_path, monkeypatch, failure="classified", error_info=error_info)
+    provider = NativeWorkProvider(config, root)
+    try:
+        async with asyncio.timeout(10):
+            response = await provider.chat_stream_with_retry([{"role": "user", "content": "Inspect"}], model="native-fixture")
+        assert response.finish_reason == "error" and response.error_code == code
+        assert response.error_status_code == status and message in response.content
+        assert "private upstream detail" not in response.content and not response.error_should_retry
+        assert (root / "attempts.json").read_text() == "1" and not output.exists()
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_invalid_local_input_is_reported_before_starting_a_model(tmp_path, monkeypatch):
+    config, root, output, _ = use_peer(tmp_path, monkeypatch)
+    provider = NativeWorkProvider(config, root)
+    response = await provider.chat_stream_with_retry([
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,invalid"}}]},
+    ])
+    assert response.error_code == "invalid_input_content"
+    assert "图片格式无法识别" in response.content and "尚未发送" in response.content
+    assert not response.error_should_retry and not (root / "thread-start.json").exists()
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_internal_preparation_error_does_not_blame_model_or_expose_exception(tmp_path, monkeypatch):
+    config, root, _, _ = use_peer(tmp_path, monkeypatch)
+    def broken_history(_):
+        raise AttributeError("PRIVATE_INTERNAL_DETAIL")
+    monkeypatch.setattr("mona.providers.native_work_provider.native_history_input", broken_history)
+    response = await NativeWorkProvider(config, root).chat_stream_with_retry([{"role": "user", "content": "Inspect"}])
+    assert response.error_code == "native_response_failed" and "Mona" in response.content
+    assert "内部错误" in response.content and "尚未开始" in response.content
+    assert "PRIVATE_INTERNAL_DETAIL" not in response.content and not response.error_should_retry
+    assert not (root / "thread-start.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_unmapped_connection_setup_error_still_reports_setup_stage(tmp_path, monkeypatch):
+    from mona.development.executors.rpc import RpcError
+
+    config, root, _, _ = use_peer(tmp_path, monkeypatch)
+    def unavailable(*_):
+        raise RpcError("work_policy_unverified", "PRIVATE_CONFIGURATION_DETAIL")
+    monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile", unavailable)
+    response = await NativeWorkProvider(config, root).chat_stream_with_retry([{"role": "user", "content": "Inspect"}])
+    assert response.error_code == "work_policy_unverified" and "本机连接未能准备就绪" in response.content
+    assert "尚未开始" in response.content and "内部错误" not in response.content
+    assert "PRIVATE_CONFIGURATION_DETAIL" not in response.content and not response.error_should_retry
 
 
 @pytest.mark.asyncio
@@ -520,7 +604,7 @@ def test_native_history_text_coalescing_preserves_image_position():
     assert "after-image" in content[2]["text"] and "later-response" in content[2]["text"]
 
 
-def test_completed_video_tool_history_fits_next_turn_without_dropping_user_or_current_results():
+def test_work_context_preserves_large_history_and_tool_arguments():
     messages = [
         {"role": "user", "content": "Use the approved script, voice and Dashi style."},
         {"role": "assistant", "tool_calls": [{"id": "old-preview", "function": {"name": "video", "arguments": {"action": "preview"}}}]},
@@ -531,23 +615,133 @@ def test_completed_video_tool_history_fits_next_turn_without_dropping_user_or_cu
     ]
     saved = copy.deepcopy(messages)
     content = native_history_input(messages)
-    validate_content(content)
+    validate_content(content, context_input=True)
     assert messages == saved
     text = "".join(block.get("text", "") for block in content)
     assert "Use the approved script, voice and Dashi style." in text
     assert "Change only the last sentence of scene 2." in text
     assert "CURRENT APPROVED PLAN" in text and "old-preview" in text
-    assert "Older tool text omitted" in text and "do not replay" in text
+    assert messages[2]["content"] in text
+    assert "Older tool text omitted" not in text
 
 
-def test_native_history_never_trims_the_current_user_request_to_hide_input_overflow():
-    from mona.development.store import DevelopmentError
-
+def test_model_context_and_single_user_input_have_separate_limits():
     request = "user's current facts " * 11_000
     content = native_history_input([{"role": "user", "content": request}])
     assert request in content[0]["text"]
-    with pytest.raises(DevelopmentError, match="输入内容无效"):
+    with pytest.raises(DevelopmentError) as error:
         validate_content(content)
+    assert error.value.code == "input_text_too_large"
+    assert codex_input(content, context_input=True)[0]["text"] == content[0]["text"]
+    assert sdk_content(content, context_input=True) == content
+
+
+def test_work_context_still_rejects_a_request_above_the_transport_byte_limit():
+    # Multibyte text can exceed the byte budget while the character count is smaller.
+    content = [{"type": "text", "text": "汉" * (MAX_NATIVE_FRAME_BYTES // 3 + 1)}]
+    for convert in (codex_input, sdk_content):
+        with pytest.raises(DevelopmentError) as error:
+            convert(content, context_input=True)
+        assert error.value.code == "rpc_frame_too_large"
+
+
+def test_work_context_keeps_multiple_message_blocks_without_single_input_count_limit():
+    content = [{"type": "text", "text": f"message-{index}"} for index in range(40)]
+    with pytest.raises(DevelopmentError) as error:
+        validate_content(content)
+    assert error.value.code == "input_parts_too_many"
+    assert sdk_content(content, context_input=True) == content
+    assert codex_input(content, context_input=True) == content
+
+
+@pytest.mark.asyncio
+async def test_long_work_history_reaches_native_model_without_loss_or_replaying_tools(tmp_path, monkeypatch):
+    config, root, output, _ = use_peer(tmp_path, monkeypatch)
+    tools = ToolRegistry()
+    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    history = [{"role": "system", "content": "MONA_PERSONALITY"}, {"role": "user", "content": "Earlier task"}]
+    for index in range(80):
+        history.extend([
+            {"role": "assistant", "tool_calls": [{"id": f"old-{index}", "type": "function",
+                "function": {"name": "write_file", "arguments": json.dumps({"content": "a" * 1000})}}]},
+            {"role": "tool", "tool_call_id": f"old-{index}", "content": f"result-{index}:" + "b" * 3000},
+        ])
+    history.append({"role": "user", "content": "Write once"})
+    original = copy.deepcopy(history)
+    async with asyncio.timeout(10):
+        result = await AgentRunner(NativeWorkProvider(config, root)).run(AgentRunSpec(
+            history, tools, "native-fixture", 5, 16000, workspace=root, context_window_tokens=1_000_000))
+    assert result.stop_reason == "completed" and output.read_text() == "native work"
+    sent = json.loads((root / "turn-start.json").read_text())["input"][0]["text"]
+    assert len(sent) > 200_000
+    for message in original:
+        if message.get("role") == "tool":
+            assert message["content"] in sent
+    assert (root / "attempts.json").read_text() == "1"
+    assert len([m for m in result.messages[len(original):] if m.get("role") == "tool"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_work_model_token_budget_still_blocks_oversized_context_before_dispatch(tmp_path, monkeypatch):
+    config, root, _, _ = use_peer(tmp_path, monkeypatch)
+    async with asyncio.timeout(10):
+        result = await AgentRunner(NativeWorkProvider(config, root)).run(AgentRunSpec(
+            [{"role": "user", "content": "large input " * 40_000}], ToolRegistry(), "native-fixture", 2, 16000,
+            workspace=root, context_window_tokens=32_768, max_tokens=1024))
+    assert result.stop_reason == "context_limit"
+    assert not (root / "turn-start.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("executor", ["claude", "codebuddy"])
+@pytest.mark.parametrize("work_mode", [False, True])
+async def test_sdk_host_and_worker_agree_on_context_input_limits(tmp_path, executor, work_mode):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from mona.development.context import ProjectContext
+    from mona.development.contracts import Binding, DevelopmentSession, ExecutorId
+    from mona.development.executors.base import SessionStart
+    from mona.development.executors.sdk import SDKExecutor, _SDKSession
+    from mona.development.executors.sdk_events import SDKEventProjector
+    from mona.development.executors.sdk_policy import SDKProfile
+    from mona.development.executors.sdk_worker import Worker
+
+    selected = ExecutorId(executor)
+    session = DevelopmentSession(project_id="work", executor=selected)
+    context = ProjectContext("work", tmp_path, (), (), (), "rules", "skills")
+    prompt = "Use Mona tools" if work_mode else None
+    start = SessionStart(session, context, work_prompt=prompt)
+    binding = Binding(session_id=session.id, executor=selected, native_session_id="sdk-test", working_directory=str(tmp_path))
+    host = SDKExecutor(SDKProfile(selected, Path(sys.executable), tmp_path / "home", tmp_path, {}))
+    worker, delivered = Worker(), []
+    worker.start = {"nativeSessionId": binding.native_session_id, "workPrompt": prompt}
+    worker.projector = SDKEventProjector(binding.native_session_id, work_tool=work_mode)
+    async def query(content, **_):
+        delivered.extend([block async for block in content])
+    worker.client = SimpleNamespace(query=query)
+    worker.owner = asyncio.create_task(asyncio.Event().wait())
+    class Connection:
+        closed = False
+        async def request(self, method, params):
+            return await worker.handle(method, params)
+    host._sessions[binding.id] = _SDKSession(binding=binding, start=start, connection=Connection())
+    content = [{"type": "text", "text": "history " * 30_000}]
+    try:
+        if work_mode:
+            receipt = await host.send(binding, "input-test", content)
+            assert receipt.outcome == "accepted"
+            assert delivered[0]["message"]["content"] == content
+        else:
+            with pytest.raises(DevelopmentError) as error:
+                await host.send(binding, "input-test", content)
+            assert error.value.code == "input_text_too_large"
+            with pytest.raises(DevelopmentError):
+                await worker.handle("send", {"inputId": "input-test", "text": content})
+            assert delivered == []
+    finally:
+        worker.owner.cancel()
+        await asyncio.gather(worker.owner, return_exceptions=True)
 
 
 def test_codex_work_profile_removes_native_filesystem_tools(tmp_path):

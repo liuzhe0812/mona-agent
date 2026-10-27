@@ -540,7 +540,7 @@ class CodexExecutor:
         runtime = self._runtime(binding)
         if not input_id or len(input_id) > 200:
             raise RpcError("invalid_input", "请求标识和消息内容不能为空。")
-        content = codex_input(message)
+        content = codex_input(message, context_input=runtime.start.work_prompt is not None)
         fingerprint = hashlib.sha256((str(steering) + "\x00" + encoded_content(message)).encode()).hexdigest()
         async with runtime.dispatch_lock:
             prior = runtime.receipts.get(input_id)

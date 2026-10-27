@@ -18,12 +18,14 @@ def encoded_content(content: MessageContent) -> str:
     return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
-def validate_content(content: MessageContent) -> None:
+def validate_content(content: MessageContent, *, context_input: bool = False) -> None:
+    text_chars = image_bytes = 0
+    valid = False
     if isinstance(content, str):
-        if content.strip() and len(content) <= MAX_NATIVE_TEXT_CHARS:
-            return
-    elif isinstance(content, list) and 1 <= len(content) <= 33:
-        image_bytes = text_chars = 0
+        text_chars, valid = len(content), bool(content.strip())
+    elif isinstance(content, list) and content:
+        if not context_input and len(content) > 33:
+            raise DevelopmentError("input_parts_too_many", "这条消息的附件或内容片段过多，本次内容尚未发送。请减少附件或拆分发送。")
         for block in content:
             if not isinstance(block, dict):
                 break
@@ -46,9 +48,18 @@ def validate_content(content: MessageContent) -> None:
             else:
                 break
         else:
-            if image_bytes <= MAX_IMAGE_BYTES and text_chars <= MAX_NATIVE_TEXT_CHARS and (image_bytes or text_chars):
-                return
-    raise DevelopmentError("invalid_input_content", "输入内容无效或超过大小限制，请减少附件后重试。")
+            valid = bool(image_bytes or text_chars)
+    if not valid:
+        raise DevelopmentError("invalid_input_content", "消息内容或图片格式无法识别，本次内容尚未发送。请重新添加附件后重试。")
+    if image_bytes > MAX_IMAGE_BYTES:
+        raise DevelopmentError("input_images_too_large", "附件图片合计超过 8 MB，本次内容尚未发送。请压缩图片或减少附件后重试。")
+    # Work history is model context, not a single user input. The RPC envelope
+    # still enforces its byte limit after model token-budget admission.
+    if context_input:
+        if len(encoded_content(content).encode("utf-8")) > MAX_NATIVE_FRAME_BYTES:
+            raise DevelopmentError("rpc_frame_too_large", "会话内容和附件超过单次传输容量，本次内容尚未发送。请减少附件或整理会话后重试。")
+    elif text_chars > MAX_NATIVE_TEXT_CHARS:
+        raise DevelopmentError("input_text_too_large", "这条消息超过 20 万字符，本次内容尚未发送。请缩短文字或拆分发送。")
 
 
 def with_context(content: MessageContent, *context: str) -> MessageContent:
@@ -58,16 +69,16 @@ def with_context(content: MessageContent, *context: str) -> MessageContent:
     return ([{"type": "text", "text": prefix}] if prefix else []) + content
 
 
-def codex_input(content: MessageContent) -> list[dict]:
-    validate_content(content)
+def codex_input(content: MessageContent, *, context_input: bool = False) -> list[dict]:
+    validate_content(content, context_input=context_input)
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     return [{"type": "text", "text": block["text"]} if block["type"] == "text"
             else {"type": "image", "url": block["image_url"]["url"]} for block in content]
 
 
-def sdk_content(content: MessageContent) -> list[dict]:
-    validate_content(content)
+def sdk_content(content: MessageContent, *, context_input: bool = False) -> list[dict]:
+    validate_content(content, context_input=context_input)
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     result = []
