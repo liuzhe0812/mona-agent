@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   ArrowDownUp,
-  BookOpen,
   ChevronDown,
   Clipboard,
   Copy,
@@ -10,7 +9,6 @@ import {
   FileType,
   FolderInput,
   FolderOpen,
-  GitMerge,
   Network,
   Pencil,
   Plus,
@@ -44,7 +42,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, NoteContextLevel, NoteSourceKind, OperationNote } from "./notes-data";
-import { NOTE_CONTEXT_LEVEL_LABELS, formatRelativeTime } from "./notes-data";
+import { formatRelativeTime } from "./notes-data";
+
+export function preserveEditorFocus(event: Event) {
+  if (document.activeElement?.closest('[data-note-editor="true"]')) event.preventDefault();
+}
 
 export type SortMode =
   | "title-asc"
@@ -88,8 +90,6 @@ interface NoteListProps {
   /** 正在被 AI 处理的笔记 id */
   aiProcessingNoteId?: string | null;
 }
-
-const CONTEXT_LEVEL_ORDER: NoteContextLevel[] = ["full", "summary", "none"];
 
 const SORT_LABELS: Record<SortMode, string> = {
   "title-asc": "文件名 (A-Z)",
@@ -195,7 +195,7 @@ export function NoteList({
               </div>
             </div>
           </ContextMenuTrigger>
-          <ContextMenuContent className="w-44">
+          <ContextMenuContent className="w-44" onCloseAutoFocus={preserveEditorFocus}>
             <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
               <Plus className="mr-2 h-3.5 w-3.5" />
               新建笔记
@@ -269,7 +269,7 @@ export function NoteList({
             </div>
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent className="w-44">
+        <ContextMenuContent className="w-44" onCloseAutoFocus={preserveEditorFocus}>
           <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
             <Plus className="mr-2 h-3.5 w-3.5" />
             新建笔记
@@ -404,11 +404,8 @@ export function NoteRow({
   onRename,
   onOpenInNewTab,
   onMoveToNotebook,
-  onMergeNote,
   onDelete,
   notebooks,
-  allNotes = [],
-  onSetContextLevel,
   onToggleFavorite,
   onExportDocx,
   isRecording = false,
@@ -437,8 +434,6 @@ export function NoteRow({
   /** 该笔记正在被 AI 处理 */
   isAiProcessing?: boolean;
 }) {
-  const currentLevel: NoteContextLevel = note.contextLevel ?? "full";
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -539,30 +534,6 @@ export function NoteRow({
               ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        {onMergeNote && note.type !== "mindmap" && note.type !== "flowchart" ? (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger
-              disabled={allNotes.filter((n) => n.id !== note.id).length === 0}
-              className="text-ui"
-            >
-              <GitMerge className="mr-2 h-3.5 w-3.5" />
-              将该笔记合并到...
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="max-h-[260px] w-52 overflow-y-auto">
-              {allNotes
-                .filter((n) => n.id !== note.id)
-                .map((target) => (
-                  <ContextMenuItem
-                    key={target.id}
-                    onSelect={() => onMergeNote(note, target.id)}
-                    className="text-ui"
-                  >
-                    <span className="min-w-0 truncate">{target.title || "未命名笔记"}</span>
-                  </ContextMenuItem>
-                ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        ) : null}
         {onToggleFavorite ? (
           <ContextMenuItem onSelect={() => onToggleFavorite(note)}>
             <Star className={cn("mr-2 h-3.5 w-3.5", note.favorite && "fill-current text-amber-500")} />
@@ -591,35 +562,6 @@ export function NoteRow({
             <FolderOpen className="mr-2 h-3.5 w-3.5" />
             打开文件路径
           </ContextMenuItem>
-        ) : null}
-        {onSetContextLevel ? (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuSub>
-              <ContextMenuSubTrigger className="text-ui">
-                <BookOpen className="mr-2 h-3.5 w-3.5" />
-                AI 上下文级别
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="w-44">
-                {CONTEXT_LEVEL_ORDER.map((level) => (
-                  <ContextMenuItem
-                    key={level}
-                    onSelect={() => onSetContextLevel(note, level)}
-                    className="text-ui"
-                  >
-                    <span className="flex items-center gap-2">
-                      {currentLevel === level ? (
-                        <span className="text-info">✓</span>
-                      ) : (
-                        <span className="inline-block w-[14px]" />
-                      )}
-                      {NOTE_CONTEXT_LEVEL_LABELS[level]}
-                    </span>
-                  </ContextMenuItem>
-                ))}
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          </>
         ) : null}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onRename?.()}>

@@ -80,6 +80,8 @@ export type EditorMode = "visual" | "markdown";
 
 export interface MarkdownEditorProps {
   content: string;
+  autoFocus?: boolean;
+  onAutoFocus?: () => void;
   mode?: EditorMode;
   onModeChange?: (mode: EditorMode) => void;
   onContentChange: (next: {
@@ -184,6 +186,8 @@ const NoteImage = TiptapImage.extend({
 
 export function MarkdownEditor({
   content,
+  autoFocus = false,
+  onAutoFocus,
   mode = "visual",
   onModeChange,
   onContentChange,
@@ -807,6 +811,16 @@ export function MarkdownEditor({
   // Keep editorRef in sync so wiki-link callbacks can access the editor
   // without being in its useCallback dependency array (avoids TDZ).
   editorRef.current = editor;
+
+  useEffect(() => {
+    if (!autoFocus || !editor) return;
+    const frame = requestAnimationFrame(() => {
+      if (mode === "markdown") textareaRef.current?.focus();
+      else editor.view.focus();
+      onAutoFocus?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus, editor, mode, onAutoFocus]);
 
   // 强制设置光标颜色：WebView2 对 caret-color 的 CSS 变量/currentColor 支持不稳定，
   // 直接用 JS 操作 DOM 读取计算后的 color 值再赋给 caretColor，确保可见。

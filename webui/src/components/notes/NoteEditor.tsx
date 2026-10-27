@@ -12,6 +12,8 @@ import type { OperationNote } from "./notes-data";
 
 interface NoteEditorProps {
   note: OperationNote;
+  autoFocus?: boolean;
+  onAutoFocus?: () => void;
   saveStatus?: "idle" | "saving" | "saved" | "error";
   mode: EditorMode;
   noteTitles?: string[];
@@ -50,6 +52,8 @@ export interface NoteEditorHandle {
 
 export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEditor({
   note,
+  autoFocus,
+  onAutoFocus,
   saveStatus = "idle",
   mode,
   noteTitles,
@@ -152,6 +156,8 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
   return (
     <MarkdownEditor
       content={note.contentMarkdown}
+      autoFocus={autoFocus}
+      onAutoFocus={onAutoFocus}
       mode={mode}
       editorClassName="note-editor-cursor"
       noteTitles={noteTitles}

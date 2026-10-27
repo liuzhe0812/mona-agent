@@ -96,7 +96,7 @@ import { FlowchartAgentPanel } from "./flowchart/FlowchartAgentPanel";
 import { MaterialsSidebar, MaterialsPreview, type MaterialsSelection, type MaterialsSidebarHandle } from "./materials/MaterialsView";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
-import { NoteList, NoteRow, sortNotesByMode, type SortMode } from "./NoteList";
+import { NoteList, NoteRow, preserveEditorFocus, sortNotesByMode, type SortMode } from "./NoteList";
 import { RightSidebar, type RightTab } from "./RightSidebar";
 import { RightSidebarToggleIcon } from "./RightSidebarToggleIcon";
 import { LeftSidebarToggleIcon } from "./LeftSidebarToggleIcon";
@@ -178,6 +178,7 @@ export function NotesView({
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
   const [notes, setNotes] = useState<OperationNote[]>([]);
+  const [focusNewNoteId, setFocusNewNoteId] = useState<string | null>(null);
   const [transformations, setTransformations] = useState<NoteTransformation[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
@@ -935,6 +936,7 @@ export function NotesView({
         return;
       }
       setNotes((current) => [nextNote, ...current]);
+      setFocusNewNoteId(nextNote.id);
       setActiveNoteId(nextNote.id);
       setWorkspace((prev) => {
         const leafId = prev.activeLeafId;
@@ -965,6 +967,14 @@ export function NotesView({
     onCreateOnOpenHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createOnOpen, storageReady]);
+
+  useEffect(() => {
+    if (!focusNewNoteId) return;
+    const activeLeaf = findLeafById(workspace.root, workspace.activeLeafId);
+    if (activeLeaf?.graphOpen || activeLeaf?.activeTabId !== focusNewNoteId) {
+      setFocusNewNoteId(null);
+    }
+  }, [focusNewNoteId, workspace]);
 
   const createNoteFromTemplateAction = useCallback(
     (templateId: string, title: string) => {
@@ -2160,9 +2170,34 @@ export function NotesView({
                   <div className="ml-auto flex items-center gap-0.5">
                     {moduleView === "notes" && (
                       <>
-                        <IconButton label="新建笔记" onClick={() => createNote("manual", "")}>
-                          <Plus className="h-3.5 w-3.5" />
-                        </IconButton>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <TooltipButton
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              aria-label="新建"
+                              title="新建"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </TooltipButton>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            className="w-48"
+                            onCloseAutoFocus={preserveEditorFocus}
+                          >
+                            <DropdownMenuItem onSelect={() => createNote("manual", "")}>
+                              <FileText className="mr-2 h-3.5 w-3.5" />
+                              新建笔记
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={createNotebook}>
+                              <FolderPlus className="mr-2 h-3.5 w-3.5" />
+                              新建文件夹
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <TooltipButton
@@ -2177,11 +2212,6 @@ export function NotesView({
                             </TooltipButton>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuItem onSelect={createNotebook}>
-                              <FolderPlus className="mr-2 h-3.5 w-3.5" />
-                              新建文件夹
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
                             <DropdownMenuItem onSelect={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
                               <Search className="mr-2 h-3.5 w-3.5" />
                               全局搜索
@@ -2422,7 +2452,7 @@ export function NotesView({
                       )}
                     </div>
                   </ContextMenuTrigger>
-                  <ContextMenuContent className="w-48">
+                  <ContextMenuContent className="w-48" onCloseAutoFocus={preserveEditorFocus}>
                     <ContextMenuItem onSelect={() => createNote("manual", "")}>
                       <FileText className="mr-2 h-3.5 w-3.5" />
                       新建笔记
@@ -2453,6 +2483,8 @@ export function NotesView({
                   notes={notes}
                   notebooks={notebooks}
                   editorMode={editorMode}
+                  focusNewNoteId={focusNewNoteId}
+                  onNewNoteFocused={(noteId) => setFocusNewNoteId((current) => current === noteId ? null : current)}
                   noteTitles={noteTitles}
                   saveStatus={saveStatus}
                   tabMenuCallbacks={tabMenuCallbacks}
@@ -3332,7 +3364,7 @@ function NotebookSection({
             </span>
           </Button>
         </ContextMenuTrigger>
-        <ContextMenuContent className="w-48">
+        <ContextMenuContent className="w-48" onCloseAutoFocus={preserveEditorFocus}>
           <ContextMenuItem onSelect={() => onCreateNote?.("manual", notebook.id)}>
             <FileText className="mr-2 h-3.5 w-3.5" />
             新建笔记

@@ -117,6 +117,8 @@ interface WorkspaceProps {
   notes: OperationNote[];
   notebooks: Notebook[];
   editorMode: EditorMode;
+  focusNewNoteId?: string | null;
+  onNewNoteFocused?: (noteId: string) => void;
   noteTitles: string[];
   saveStatus?: "idle" | "saving" | "saved" | "error";
   onTitleChange: (noteId: string, title: string) => void;
@@ -159,6 +161,8 @@ interface PaneLeafProps {
   notebooks: Notebook[];
   isActive: boolean;
   editorMode: EditorMode;
+  focusNewNoteId?: string | null;
+  onNewNoteFocused?: (noteId: string) => void;
   noteTitles: string[];
   saveStatus?: "idle" | "saving" | "saved" | "error";
   onTitleChange: (noteId: string, title: string) => void;
@@ -207,7 +211,10 @@ function PaneLeafView({
   leaf,
   notes,
   notebooks,
+  isActive,
   editorMode,
+  focusNewNoteId,
+  onNewNoteFocused,
   noteTitles,
   saveStatus,
   onTitleChange,
@@ -310,6 +317,8 @@ function PaneLeafView({
           <NoteEditor
             key={activeNote.id}
             note={activeNote}
+            autoFocus={isActive && focusNewNoteId === activeNote.id}
+            onAutoFocus={() => onNewNoteFocused?.(activeNote.id)}
             saveStatus={saveStatus}
             mode={editorMode}
             noteTitles={noteTitles}
@@ -347,6 +356,8 @@ interface SplitViewProps {
   notebooks: Notebook[];
   activeLeafId: string;
   editorMode: EditorMode;
+  focusNewNoteId?: string | null;
+  onNewNoteFocused?: (noteId: string) => void;
   noteTitles: string[];
   saveStatus?: "idle" | "saving" | "saved" | "error";
   onTitleChange: (noteId: string, title: string) => void;
@@ -396,6 +407,8 @@ function SplitView({
   notebooks,
   activeLeafId,
   editorMode,
+  focusNewNoteId,
+  onNewNoteFocused,
   noteTitles,
   saveStatus,
   onTitleChange,
@@ -484,6 +497,8 @@ function SplitView({
                 notebooks={notebooks}
                 isActive={child.id === activeLeafId}
                 editorMode={editorMode}
+                focusNewNoteId={focusNewNoteId}
+                onNewNoteFocused={onNewNoteFocused}
                 noteTitles={noteTitles}
                 saveStatus={saveStatus}
                 onTitleChange={onTitleChange}
@@ -541,6 +556,8 @@ function SplitView({
                 notebooks={notebooks}
                 activeLeafId={activeLeafId}
                 editorMode={editorMode}
+                focusNewNoteId={focusNewNoteId}
+                onNewNoteFocused={onNewNoteFocused}
                 noteTitles={noteTitles}
                 saveStatus={saveStatus}
                 onTitleChange={onTitleChange}
@@ -595,6 +612,8 @@ export function Workspace({
   notes,
   notebooks,
   editorMode,
+  focusNewNoteId,
+  onNewNoteFocused,
   noteTitles,
   saveStatus,
   onTitleChange,
@@ -756,6 +775,8 @@ export function Workspace({
     notes,
     notebooks,
     editorMode,
+    focusNewNoteId,
+    onNewNoteFocused,
     noteTitles,
     saveStatus,
     onTitleChange,
@@ -828,6 +849,8 @@ export function Workspace({
       notebooks={notebooks}
       activeLeafId={workspace.activeLeafId}
       editorMode={editorMode}
+      focusNewNoteId={focusNewNoteId}
+      onNewNoteFocused={onNewNoteFocused}
       noteTitles={noteTitles}
       saveStatus={saveStatus}
       onTitleChange={onTitleChange}
