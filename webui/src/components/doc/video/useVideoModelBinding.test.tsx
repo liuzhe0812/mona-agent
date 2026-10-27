@@ -1,16 +1,39 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RoomCommandError } from "@/lib/mona-client";
-import { useVideoModelBinding } from "./useVideoModelBinding";
+import { useVideoModelBinding, useVideoSessionKind } from "./useVideoModelBinding";
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn(), update: vi.fn() }));
-vi.mock("@/lib/api", async (original) => ({ ...await original<typeof import("@/lib/api")>(), fetchVideoSessionModelBinding: mocks.fetch }));
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), update: vi.fn(), listSessions: vi.fn() }));
+vi.mock("@/lib/api", async (original) => ({ ...await original<typeof import("@/lib/api")>(), fetchVideoSessionModelBinding: mocks.fetch, listSessions: mocks.listSessions }));
 vi.mock("@/providers/ClientProvider", () => ({ useClient: () => ({ token: "test", client: { updateVideoModelBinding: mocks.update } }) }));
 const codex = { executor: "codex", model: "gpt-6.1-sol", provider: null, effort: "high" } as const;
 const api = { executor: "mona", model: "api-model", provider: "configured-api", effort: null } as const;
 
 describe("video model binding", () => {
-  beforeEach(() => { mocks.fetch.mockReset().mockResolvedValue(null); mocks.update.mockReset(); });
+  beforeEach(() => { mocks.fetch.mockReset().mockResolvedValue(null); mocks.update.mockReset(); mocks.listSessions.mockReset(); });
+
+  it("does not read or change a binding for a regular owner conversation", async () => {
+    const { result } = renderHook(() => useVideoModelBinding("regular-owner", null, false));
+    expect(result.current.loading).toBe(false);
+    await act(async () => { await result.current.changeBinding(codex); });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("resolves an unknown project owner from Gateway session metadata before enabling a binding", async () => {
+    let resolve!: (sessions: unknown[]) => void;
+    mocks.listSessions.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const { result } = renderHook(() => {
+      const session = useVideoSessionKind("regular-owner");
+      useVideoModelBinding("regular-owner", null, session.agentKind === "video");
+      return session;
+    });
+    expect(result.current.agentKind).toBeUndefined();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    await act(async () => resolve([{ channel: "websocket", chatId: "regular-owner", agentKind: null }]));
+    expect(result.current.agentKind).toBeNull();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
 
   it("restores the saved selection and retains it on an explicit rejection", async () => {
     mocks.fetch.mockResolvedValue(codex);

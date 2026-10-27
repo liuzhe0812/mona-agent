@@ -10,6 +10,7 @@ const harness = vi.hoisted(() => ({
   updateSidebarState: vi.fn(),
   sessions: [] as any[],
   persistedSidebarStates: [] as any[],
+  projectOwnerChatIds: [] as string[],
 }));
 
 vi.mock("@/lib/bootstrap", () => ({
@@ -121,6 +122,9 @@ vi.mock("@/components/doc/DocMakerView", async () => {
     DocMakerView: (props: any) => {
       const [visibleChatId, setVisibleChatId] = ReactModule.useState<string | null>(null);
       ReactModule.useEffect(() => {
+        props.onVideoChatsChange?.(harness.projectOwnerChatIds);
+      }, [props.onVideoChatsChange]);
+      ReactModule.useEffect(() => {
         if (!props.visible) {
           setVisibleChatId(null);
           props.onVisibleConversationChange?.(null);
@@ -135,6 +139,7 @@ vi.mock("@/components/doc/DocMakerView", async () => {
           "data-request-chat-id": props.videoConversationRequest?.chatId ?? "",
           "data-request-id": props.videoConversationRequest?.requestId ?? "",
           "data-visible-chat-id": visibleChatId ?? "",
+          "data-regular-agent-kind": String(props.sessionAgentKinds?.["regular-chat-1"]),
         },
         ReactModule.createElement(
           "button",
@@ -242,6 +247,7 @@ describe("video conversation navigation and read state", () => {
     const sessions = makeSessions();
     harness.sessions = sessions;
     harness.persistedSidebarStates = [];
+    harness.projectOwnerChatIds = [];
     harness.listSessions.mockReset().mockResolvedValue(sessions);
     harness.fetchSidebarState.mockReset().mockResolvedValue(makeSidebarState(sessions));
     harness.updateSidebarState.mockReset().mockImplementation(async (_token: string, state: any) => {
@@ -291,6 +297,26 @@ describe("video conversation navigation and read state", () => {
     expect(screen.getByTestId("thread-shell").parentElement).not.toHaveClass("hidden");
     expect(docView).toHaveAttribute("data-visible", "false");
     expect(docView).toHaveAttribute("data-request-chat-id", "");
+  });
+
+  it.each([null, undefined])("keeps a regular video owner in ThreadShell when its saved kind is %s", async (agentKind) => {
+    const sessions = makeSessions();
+    sessions[1].agentKind = agentKind;
+    harness.listSessions.mockResolvedValue(sessions);
+    harness.projectOwnerChatIds = ["regular-chat-1"];
+    localStorage.setItem("mona.ai-docs.workspace.v1", JSON.stringify([{
+      id: "video:普通聊天视频", kind: "video-workflow", chatId: "regular-chat-1",
+      project: { name: "普通聊天视频", phase: "done", chatId: "regular-chat-1" },
+    }]));
+    await renderReadyApp();
+    await screen.findByTestId("doc-maker-view");
+    expect(harness.sessions.find((session: ChatSummary) => session.chatId === "regular-chat-1")?.agentKind).not.toBe("video");
+    fireEvent.click(screen.getByTestId("select-chat-session"));
+    await waitFor(() => expect(screen.getByTestId("thread-shell")).toHaveAttribute("data-chat-id", "regular-chat-1"));
+    expect(screen.getByTestId("thread-shell").parentElement).not.toHaveClass("hidden");
+    expect(screen.getByTestId("doc-maker-view")).toHaveAttribute("data-visible", "false");
+    expect(screen.getByTestId("doc-maker-view")).toHaveAttribute("data-request-chat-id", "");
+    expect(screen.getByTestId("doc-maker-view")).toHaveAttribute("data-regular-agent-kind", "null");
   });
 
   it("marks the visible DocMaker conversation read and retains its marker when cleared or hidden", async () => {

@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => ({
   })),
   fetchVideoProject: vi.fn(),
   fetchVideoSessionModelBinding: vi.fn(async () => null),
+  listSessions: vi.fn(),
   fetchVideoProjectAssets: vi.fn(async () => ({
     ok: true,
     assets: [],
@@ -301,6 +302,9 @@ function scene(index: number, overrides: Partial<VideoScene> = {}): VideoScene {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.fetchVideoSessionModelBinding.mockReset().mockResolvedValue(null);
+  mocks.listSessions.mockReset().mockResolvedValue([
+    "chat", "host-chat", "focus-chat", "video-progress",
+  ].map((chatId) => ({ channel: "websocket", chatId, agentKind: "video" })));
   mocks.fetchVideoProject.mockReset().mockResolvedValue({
     name: "proj",
     resolution: "1920x1080",
@@ -1505,6 +1509,53 @@ describe("VideoMakerView director workspace", () => {
     expect(client.sendMessage.mock.calls[0][3]).toMatchObject({ modelBinding: binding });
   });
 
+  it("resolves an existing owner before continuing and preserves its ordinary Mona identity", async () => {
+    const client = makeClient();
+    const onSessionKindResolved = vi.fn();
+    let resolve!: (sessions: unknown[]) => void;
+    mocks.listSessions.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(wrap(<VideoMakerView onSessionKindResolved={onSessionKindResolved} initialProject={{ name: "聊天视频", phase: "storyboard", chatId: "regular-owner" }} />, client));
+    const resume = await screen.findByRole("button", { name: "继续准备分镜" });
+    expect(resume).toBeDisabled();
+    expect(mocks.fetchVideoSessionModelBinding).not.toHaveBeenCalled();
+    await act(async () => resolve([{ channel: "websocket", chatId: "regular-owner", agentKind: null }]));
+    expect(resume).toBeEnabled();
+    expect(onSessionKindResolved).toHaveBeenCalledWith("regular-owner", null);
+    expect(screen.queryByRole("button", { name: "选择制作模型" })).not.toBeInTheDocument();
+    fireEvent.click(resume);
+    expect(client.sendMessage).toHaveBeenCalledWith("regular-owner", expect.any(String), undefined, { displayContent: "继续准备分镜" });
+    expect(client.newChat).not.toHaveBeenCalled();
+    expect(mocks.fetchVideoSessionModelBinding).not.toHaveBeenCalled();
+  });
+
+  it("confirms a regular owner's plan and sends production to the original ordinary conversation", async () => {
+    const client = makeClient();
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
+    render(wrap(<VideoMakerView sessionAgentKind={null} initialProject={{ name: "聊天视频", phase: "storyboard", chatId: "regular-owner" }} />, client));
+    const confirm = await screen.findByRole("button", { name: "确认并生成" });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.confirmVideoProjectPlan).toHaveBeenCalledWith("tok", "聊天视频", 1);
+    expect(client.sendMessage).toHaveBeenCalledWith("regular-owner", expect.stringContaining("修订号 1"), undefined, { displayContent: "确认分镜，开始生成视频" });
+    expect(client.newChat).not.toHaveBeenCalled();
+    expect(mocks.fetchVideoSessionModelBinding).not.toHaveBeenCalled();
+    expect(mocks.listSessions).not.toHaveBeenCalled();
+  });
+
+  it("keeps embedded ordinary-owner sends free of the video model binding", async () => {
+    const client = makeClient();
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="regular-owner" sessionAgentKind={null} onSendVideoTurn={onSendVideoTurn} />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "继续普通聊天的视频" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    await waitFor(() => expect(onSendVideoTurn).toHaveBeenCalledOnce());
+    expect(onSendVideoTurn).toHaveBeenCalledWith(expect.any(String), "继续普通聊天的视频");
+    expect(client.newChat).not.toHaveBeenCalled();
+    expect(mocks.fetchVideoSessionModelBinding).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "选择制作模型" })).not.toBeInTheDocument();
+  });
+
   it("tracks the selected scene and playhead as video focus, then clears it on exit", async () => {
     const onFocusChange = vi.fn();
     mocks.fetchVideoProject.mockResolvedValue({
@@ -1943,7 +1994,9 @@ describe("VideoMakerView director workspace", () => {
     const client = makeClient();
     render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={vi.fn()} />, client));
     expect(await screen.findByRole("heading", { name: "项目" })).toBeInTheDocument();
-    act(() => client.__emitChat("chat", { event: "error", detail: "invalid_agent_kind_context" }));
+    act(() => client.__emitChat("chat", { event: "error", detail: "invalid_agent_kind_context", message_rejected: true, task_id: "composer-task" }));
+    expect(screen.queryByText("视频会话未就绪，请重试准备分镜。")).not.toBeInTheDocument();
+    act(() => client.__emitChat("chat", { event: "error", detail: "invalid_agent_kind_context", message_rejected: true }));
     expect(await screen.findByText("视频会话未就绪，请重试准备分镜。")).toBeInTheDocument();
     act(() => client.__emitVideoProjectChanged({ projectName: "项目", hint: "scenes" }));
     expect(client.sendMessage).not.toHaveBeenCalled();

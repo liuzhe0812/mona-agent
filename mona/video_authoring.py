@@ -1,4 +1,4 @@
-"""Prepare Huashu Motion's single film for isolated preview and rendering."""
+"""Prepare Mona Motion's single film for isolated preview and rendering."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _script_json(value: Any) -> str:
 
 
 def _resource_root() -> Path:
-    return Path(__file__).parent / "skills/mona-video/assets/huashu-motion"
+    return Path(__file__).parent / "skills/mona-motion/assets/huashu-motion"
 
 
 def _script(source: str) -> str:
@@ -142,7 +142,7 @@ def _inner_document(source: str, project: Path, meta: Mapping[str, Any], style: 
     prefix += '<script type="application/json" id="om-cues">' + _script_json({"words": words}) + '</script>'
     for path in ("runtime/om-engine.js", "templates/blank/vendor/gsap.min.js", "runtime/om.js"):
         prefix += _script((_resource_root() / path).read_text(encoding="utf-8"))
-    bridge = Path(__file__).parent / "skills/mona-video/runtime/mona-player.js"
+    bridge = Path(__file__).parent / "skills/mona-motion/runtime/mona-player.js"
     prefix += _script(bridge.read_text(encoding="utf-8"))
     source = re.sub(r"(?i)<html\b", '<html data-om-signature="off"', source, count=1)
     return re.sub(r"(?i)<head\b[^>]*>", lambda m: m[0] + prefix, source, count=1)

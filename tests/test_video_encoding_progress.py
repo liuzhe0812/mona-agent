@@ -24,7 +24,7 @@ def _load_renderer():
         Path(__file__).parents[1]
         / "mona"
         / "skills"
-        / "mona-video"
+        / "mona-motion"
         / "scripts"
         / "render.py"
     )

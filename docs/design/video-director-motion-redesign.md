@@ -1,6 +1,6 @@
 # 视频导演台与口播动画重设计
 
-> 2026-10-24 更新：创作资源与运行时已统一为 Huashu Motion。本文涉及 Dashi、旧 huashu-art-motion 或 Remotion 的实现说明仅保留为历史记录；当前边界以 docs/architecture/module-invariants.md 和 docs/plans/video-huashu-motion-replacement.md 为准。
+> 2026-10-24 更新：创作资源与运行时已统一为 Mona Motion。本文涉及 Dashi、旧 huashu-art-motion 或 Remotion 的实现说明仅保留为历史记录；当前边界以 docs/architecture/module-invariants.md 和 docs/plans/video-huashu-motion-replacement.md 为准。
 整体改造与后续实施见 [Mona 视频工作台整体改造方案](video-workbench-rebuild.md)。本文保留已有修复和实测记录；新方案的能力以实施与验收结果为准。
 
 日期：2026-10-13。依据用户明确纠偏及当前源码审计。
@@ -97,7 +97,7 @@ Remotion Agent 和 Mona 新链路完成：流程推进、因果/比较、数据/
 按用户要求尽量完整继承 Huashu Art Motion 的创作知识和动画能力。来源固定为
 `64cb27271ee0ad3375298e2890b33cbec36d4051`，保留 MIT 许可与适配说明。
 
-- `mona-video/SKILL.md` 全文、`creative-direction.md` 核心设计方法和讲解语法索引
+- `mona-motion/SKILL.md` 全文、`creative-direction.md` 核心设计方法和讲解语法索引
   直接进入视频 Agent 的规划上下文，详细资料继续按需读取。专业知识包括：
   核心方法、35 个艺术配方、9 种讲解语法、镜头/角色/审片经验及设计源码参考。
   按内容目标读取，既不一次塞入所有资料，也不变成前端固定模板菜单。

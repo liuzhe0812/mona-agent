@@ -6464,10 +6464,13 @@ async def handle_video_projects(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_video_project_create(request: web.Request) -> web.Response:
+async def handle_video_project_create(
+    request: web.Request, *, _agent_context: Mapping[str, Any] | None = None
+) -> web.Response:
     """POST /api/video/project/create  body: {"name", "resolution",
     optional "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate"}.
     """
+    created_project_dir: Path | None = None
     try:
         body = await request.json()
     except Exception:
@@ -6574,6 +6577,7 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "project already exists"}, status=409
             )
+        created_project_dir = project_dir
         # Pre-build the standard directory layout.
         for sub in (
             "scenes",
@@ -6823,7 +6827,7 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         }
         meta.update({"authoringMode": "huashu-motion", "structuredCompiler": False,
                      "requirePlanApproval": True, "planRevision": 0,
-                     "approvedPlanRevision": None})
+                     "approvedPlanRevision": None, "executionMode": "interactive"})
         if series is None:
             meta.update({"templateId": template_id, "stylePreference": style_preference})
         if narration_enabled:
@@ -6900,9 +6904,16 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
                 )
                 + "\n",
             )
+        if _agent_context is not None:
+            _atomic_write_text(project_dir / ".chat_id", _agent_context["owner"])
+            meta.update({key: _agent_context[key] for key in (
+                "executionMode", "executionAuthorization", "creationRequestId"
+            )})
         _save_video_meta(project_dir, meta)
         return web.json_response({"ok": True, "name": name})
     except Exception as e:
+        if _agent_context is not None and created_project_dir is not None:
+            shutil.rmtree(created_project_dir, ignore_errors=True)
         logger.exception("video project create error")
         return web.json_response({"error": str(e)}, status=500)
 
@@ -7384,7 +7395,13 @@ async def handle_video_project_save_chat_id(request: web.Request) -> web.Respons
         if not project_dir.is_dir():
             return web.json_response({"error": "project not found"}, status=404)
         chat_id = str(body.get("chatId", "") or "")
-        (project_dir / ".chat_id").write_text(chat_id, encoding="utf-8")
+        binding = project_dir / ".chat_id"
+        previous = binding.read_text(encoding="utf-8").strip() if binding.is_file() else ""
+        if previous != chat_id:
+            meta = _load_video_meta(project_dir)
+            if _revoke_video_automatic_execution(meta):
+                _save_video_meta(project_dir, meta)
+        binding.write_text(chat_id, encoding="utf-8")
         return web.json_response({"ok": True})
     except Exception as e:
         logger.exception("video save chat id error")
@@ -7564,6 +7581,16 @@ def _load_video_meta(project_dir: Path) -> dict:
         meta.setdefault("requirePlanApproval", False)
         meta.setdefault("planRevision", 0)
         meta.setdefault("approvedPlanRevision", None)
+        meta.setdefault("executionMode", "interactive")
+        authorization = meta.get("executionAuthorization")
+        if meta["executionMode"] == "automatic" or (
+            isinstance(authorization, Mapping) and authorization.get("mode") == "automatic"
+        ):
+            binding = project_dir / ".chat_id"
+            owner = binding.read_text(encoding="utf-8").strip() if binding.is_file() else ""
+            if not owner or not isinstance(authorization, Mapping) or authorization.get("chatId") != owner:
+                _revoke_video_automatic_execution(meta)
+                _save_video_meta(project_dir, meta)
         from mona.video_project import ensure_scene_ids
 
         ensure_scene_ids(meta, project_dir.resolve().as_uri())
@@ -7602,11 +7629,41 @@ def _scene_content(scene: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _revoke_video_automatic_execution(meta: dict) -> bool:
+    authorization = meta.get("executionAuthorization")
+    if meta.get("executionMode") != "automatic" and not (
+        isinstance(authorization, Mapping) and authorization.get("mode") == "automatic"
+    ):
+        return False
+    meta.update({"executionMode": "interactive", "requirePlanApproval": True,
+                 "approvedPlanRevision": None, "phase": "storyboard"})
+    meta.pop("executionAuthorization", None)
+    return True
+
+
+def _video_automatic_execution_authorized(meta: Mapping[str, Any]) -> bool:
+    authorization = meta.get("executionAuthorization")
+    return bool(
+        meta.get("executionMode") == "automatic"
+        and not meta.get("styleAuthoring")
+        and isinstance(meta.get("name"), str)
+        and meta["name"].strip()
+        and isinstance(authorization, Mapping)
+        and authorization.get("mode") == "automatic"
+        and authorization.get("projectName") == meta.get("name")
+        and isinstance(authorization.get("chatId"), str)
+        and authorization["chatId"].strip()
+        and isinstance(authorization.get("instruction"), str)
+        and authorization["instruction"].strip()
+    )
+
+
 def _video_plan_changed(meta: dict) -> None:
     meta["requirePlanApproval"] = not bool(meta.get("styleAuthoring"))
     meta["planRevision"] = int(meta.get("planRevision") or 0) + 1
-    meta["approvedPlanRevision"] = None
-    meta["phase"] = "storyboard"
+    automatic = _video_automatic_execution_authorized(meta)
+    meta["approvedPlanRevision"] = meta["planRevision"] if automatic else None
+    meta["phase"] = "producing" if automatic else "storyboard"
 
 
 def _require_video_plan_approval(meta: Mapping[str, Any], revision: Any = None, *, check_revision: bool = False) -> None:
@@ -7787,7 +7844,7 @@ def _sync_storyboard(project_dir: Path, scenes: list[dict]) -> None:
     """Write scenes to storyboard.md via the write_storyboard script logic."""
     import importlib.util
 
-    skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+    skill_dir = Path(__file__).parent.parent / "skills" / "mona-motion"
     script = skill_dir / "scripts" / "write_storyboard.py"
     spec = importlib.util.spec_from_file_location("write_storyboard", script)
     if spec is None or spec.loader is None:
@@ -7852,7 +7909,7 @@ async def handle_video_project_storyboard(request: web.Request) -> web.Response:
         # Parse from storyboard.md and cache into meta.json
         import importlib.util
 
-        skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+        skill_dir = Path(__file__).parent.parent / "skills" / "mona-motion"
         script = skill_dir / "scripts" / "parse_storyboard.py"
         spec = importlib.util.spec_from_file_location("parse_storyboard", script)
         if spec is None or spec.loader is None:
@@ -8898,7 +8955,7 @@ async def handle_video_project_scene_narration(request: web.Request) -> web.Resp
 
 
 def _video_skill_dir() -> Path:
-    return Path(__file__).parent.parent / "skills" / "mona-video"
+    return Path(__file__).parent.parent / "skills" / "mona-motion"
 
 
 async def handle_video_project_scene_preview(request: web.Request) -> web.Response:
@@ -10863,7 +10920,7 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
                 "message": "请先生成全部场景，再预览整片。",
             }, status=409)
 
-        skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+        skill_dir = Path(__file__).parent.parent / "skills" / "mona-motion"
         script = skill_dir / "scripts" / "merge_scenes.py"
         if not script.is_file():
             return web.json_response(

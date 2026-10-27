@@ -49,8 +49,8 @@ webui/office-editor/scripts/*
 !webui/office-editor/scripts/preset-visual.mjs
 !webui/office-editor/scripts/preset-assets.mjs
 !webui/office-editor/scripts/scenario-fixtures.mjs
-!mona/skills/mona-video/scripts/
-!mona/skills/mona-video/scripts/compile_scene_spec.py
+!mona/skills/mona-motion/scripts/
+!mona/skills/mona-motion/scripts/compile_scene_spec.py
 !mona/agents/com.mona.academic-researcher/skills/*/scripts/
 !mona/agents/com.mona.academic-researcher/skills/*/scripts/**
 design-assets/
@@ -588,8 +588,8 @@ webui/task-test.png
 /renders/
 /sessions/
 /src-tauri/target-*/
-/mona/skills/mona-video/runtime/*
-!/mona/skills/mona-video/runtime/mona-player.js
+/mona/skills/mona-motion/runtime/*
+!/mona/skills/mona-motion/runtime/mona-player.js
 !/tests/test_video_remotion_runtime.py
 !/tests/test_video_voice_preview.py
 !/webui/scripts/build-video-runtime.mjs

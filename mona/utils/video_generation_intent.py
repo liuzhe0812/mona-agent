@@ -2,40 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 VIDEO_GENERATION_METADATA_KEY = "video_generation"
 
-_EXPLICIT_VIDEO_GENERATION_PATTERNS = (
-    re.compile(
-        r"(?:请|帮我|给我|开始|重新|重试|再试|继续)?"
-        r"(?:生成|制作|创建|做)(?:一个|一段|个|段)?[^。！？\n]{0,24}"
-        r"(?:视频|影片|短片|动画)"
-    ),
-    re.compile(
-        r"\b(?:generate|create|make|regenerate)\b[^.!?\n]{0,48}"
-        r"\b(?:video|clip|animation)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:retry|continue)\b[^.!?\n]{0,48}"
-        r"\b(?:generating|generation of)?\s*(?:a\s+)?(?:video|clip|animation)\b",
-        re.IGNORECASE,
-    ),
-)
-
-
-def is_video_generation_request(
-    content: str,
-    metadata: dict[str, Any] | None,
-) -> bool:
-    """Return whether this turn explicitly asks Mona to generate a video."""
+def is_video_generation_mode(metadata: dict[str, Any] | None) -> bool:
+    """Return whether the user explicitly selected the video-model UI mode."""
     raw = (metadata or {}).get(VIDEO_GENERATION_METADATA_KEY)
-    if isinstance(raw, dict) and raw.get("enabled") is True:
-        return True
-    text = content.strip()
-    return bool(text) and any(pattern.search(text) for pattern in _EXPLICIT_VIDEO_GENERATION_PATTERNS)
+    return isinstance(raw, dict) and raw.get("enabled") is True
 
 
 def video_generation_prompt(
@@ -51,17 +25,11 @@ def video_generation_prompt(
     prompt itself and maps attached images to general references or explicit
     first/last frames according to the user's wording.
     """
-    raw = (metadata or {}).get(VIDEO_GENERATION_METADATA_KEY)
-    mode_selected = isinstance(raw, dict) and raw.get("enabled") is True
-    if not is_video_generation_request(content, metadata):
+    if not is_video_generation_mode(metadata):
         return content
 
     parts: list[str] = [
-        (
-            "The user selected WebUI video generation mode."
-            if mode_selected
-            else "The user's message explicitly requests video generation."
-        ),
+        "The user selected WebUI video generation mode for the configured video model.",
         "Use the generate_video tool directly; do not use terminal tools or manual HTTP requests to invoke the provider.",
         "Choose suitable aspect_ratio and duration yourself based on the prompt.",
     ]

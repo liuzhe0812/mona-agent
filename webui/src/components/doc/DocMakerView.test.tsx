@@ -74,8 +74,9 @@ vi.mock("@/components/office/OfficeEditorHost", () => ({
 vi.mock("@/components/doc/DocChatPanel", async () => {
   const { useEffect } = await import("react");
   return {
-    DocChatPanel: ({ chatId, getSendOptions, onReadyChange }: {
+    DocChatPanel: ({ chatId, disabled, getSendOptions, onReadyChange }: {
       chatId: string;
+      disabled?: boolean;
       getSendOptions?: (content: string) => Record<string, unknown> | undefined;
       onReadyChange?: (chatId: string | null) => void;
     }) => {
@@ -86,7 +87,7 @@ vi.mock("@/components/doc/DocChatPanel", async () => {
       return (
         <div>
           <span>AI 对话：{chatId}</span>
-          <button type="button" onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
+          <button type="button" disabled={disabled} onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
         </div>
       );
     },
@@ -99,6 +100,9 @@ vi.mock("@/components/doc/video/VideoMakerView", () => ({
     initialProject,
     onStyleWorkspaceChange,
     styleConversationRequest,
+    sessionAgentKind,
+    onSessionKindResolved,
+    onSendVideoTurn,
   }: {
     onProjectChange?: (project: {
       name: string;
@@ -108,10 +112,16 @@ vi.mock("@/components/doc/video/VideoMakerView", () => ({
     initialProject?: { name: string; phase: string; chatId: string | null } | null;
     onStyleWorkspaceChange?: (state: { chatId: string; visible: boolean; ready: boolean } | null) => void;
     styleConversationRequest?: number;
+    sessionAgentKind?: string | null;
+    onSessionKindResolved?: (chatId: string, kind: string | null) => void;
+    onSendVideoTurn?: (content: string, displayText?: string, modelBinding?: import("@/lib/types").AgentModelBinding | null) => void;
   }) => (
     <div>
       视频工作流
       <span data-testid="style-conversation-request">{styleConversationRequest}</span>
+      <span data-testid="embedded-video-session-kind">{String(sessionAgentKind)}</span>
+      <button onClick={() => initialProject?.chatId && onSessionKindResolved?.(initialProject.chatId, null)}>报告普通会话身份</button>
+      <button onClick={() => onSendVideoTurn?.("继续制作", "继续制作", { executor: "codex", model: "gpt-6.1-sol", provider: null, effort: "high" })}>继续制作测试</button>
       <button onClick={() => onStyleWorkspaceChange?.({ chatId: "style-chat", visible: true, ready: true })}>打开风格对话</button>
       <button onClick={() => onStyleWorkspaceChange?.({ chatId: "style-chat", visible: false, ready: true })}>隐藏风格对话</button>
       <span data-testid="embedded-video-project-chat-id">{initialProject?.chatId}</span>
@@ -312,11 +322,9 @@ describe("DocMakerView", () => {
 
   it("opens, restores, and closes a new video tab without creating a chat", async () => {
     const onVisibleConversationChange = vi.fn();
-    const onVideoChatsChange = vi.fn();
     const renderView = () => (
       <DocMakerView
         onVisibleConversationChange={onVisibleConversationChange}
-        onVideoChatsChange={onVideoChatsChange}
       />
     );
     const view = render(renderView());
@@ -336,8 +344,6 @@ describe("DocMakerView", () => {
     });
     expect(mocks.newChat).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    expect(onVideoChatsChange).toHaveBeenLastCalledWith([]);
-    expect(onVideoChatsChange.mock.calls.flatMap(([chatIds]) => chatIds)).not.toContain(null);
     expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null);
 
     view.unmount();
@@ -352,16 +358,13 @@ describe("DocMakerView", () => {
     await waitFor(() => expect(screen.queryByRole("tab", { name: "新建视频" })).not.toBeInTheDocument());
     expect(mocks.newChat).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    expect(onVideoChatsChange.mock.calls.flatMap(([chatIds]) => chatIds)).not.toContain(null);
   });
 
-  it("binds the first confirmed storyboard chat to the parent tab and registers it", async () => {
+  it("binds the first confirmed storyboard chat to the parent tab", async () => {
     const onVisibleConversationChange = vi.fn();
-    const onVideoChatsChange = vi.fn();
     render(
       <DocMakerView
         onVisibleConversationChange={onVisibleConversationChange}
-        onVideoChatsChange={onVideoChatsChange}
       />,
     );
 
@@ -373,7 +376,6 @@ describe("DocMakerView", () => {
     const panel = await screen.findByRole("complementary", { name: "制作对话" });
     expect(within(panel).getByText("AI 对话：storyboard-chat")).toBeInTheDocument();
     await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith("storyboard-chat"));
-    await waitFor(() => expect(onVideoChatsChange).toHaveBeenLastCalledWith(["storyboard-chat"]));
     expect(screen.getByTestId("embedded-video-project-chat-id")).toHaveTextContent("storyboard-chat");
     expect(mocks.newChat).not.toHaveBeenCalled();
   });
@@ -567,6 +569,50 @@ describe("DocMakerView", () => {
     expect(await screen.findByRole("tab", { name: /恢复的视频/ })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("complementary", { name: "制作对话" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "收起制作对话" })).toBeInTheDocument();
+  });
+
+  it.each(["history", "restored"])("keeps a regular owner conversation ordinary when its video is opened from %s", async (source) => {
+    const project = videoProject("普通聊天的视频", "regular-owner");
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [project] });
+    if (source === "restored") storeVideoTab(project);
+    render(<DocMakerView sessionAgentKinds={{ "regular-owner": null }} />);
+    if (source === "history") {
+      const row = await screen.findByTestId(`document-history-row-video:${project.name}`);
+      fireEvent.click(within(row).getByText(project.name));
+    }
+    expect(await screen.findByText("AI 对话：regular-owner")).toBeInTheDocument();
+    expect(screen.getByTestId("embedded-video-session-kind")).toHaveTextContent("null");
+    fireEvent.click(screen.getByRole("button", { name: "发送测试消息" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续制作测试" }));
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    for (const [chatId, , , options] of mocks.sendMessage.mock.calls) {
+      expect(chatId).toBe("regular-owner");
+      expect(options).not.toHaveProperty("agentKind");
+      expect(options).not.toHaveProperty("modelBinding");
+    }
+    expect(mocks.newChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dedicated video identity when continuing an existing video conversation", async () => {
+    storeVideoTab(videoProject("专用制作", "video-owner"));
+    render(<DocMakerView sessionAgentKinds={{ "video-owner": "video" }} />);
+    await screen.findByText("AI 对话：video-owner");
+    fireEvent.click(screen.getByRole("button", { name: "发送测试消息" }));
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith("video-owner", expect.any(String), undefined, expect.objectContaining({ agentKind: "video" }));
+    expect(mocks.newChat).not.toHaveBeenCalled();
+  });
+
+  it("waits for verified metadata when a restored owner's kind is initially unknown", async () => {
+    storeVideoTab(videoProject("待识别视频", "regular-owner"));
+    render(<DocMakerView />);
+    const send = await screen.findByRole("button", { name: "发送测试消息" });
+    expect(send).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "报告普通会话身份" }));
+    expect(send).toBeEnabled();
+    fireEvent.click(send);
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage.mock.calls[0][3]).not.toHaveProperty("agentKind");
+    expect(mocks.newChat).not.toHaveBeenCalled();
   });
 
   it("drops obsolete PPT workflow tabs from the saved workspace", async () => {

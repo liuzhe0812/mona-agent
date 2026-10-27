@@ -18,7 +18,7 @@ metadata:
 | 网页、前端、桌面界面 | 读 [前端接入](references/mona-web.md)，再读 [网页设计](references/modules/web.md)。沿用实际项目框架、组件、交互和设计系统。 |
 | App 原型 | 先读前端接入，再按需读 [App 设计](references/app-prototype.md)。 |
 | 原生 PPT | 使用 `mona-pptx`，读 [原生 PPT 设计接入](references/native-pptx.md)。以 Office 当前文稿为准，继续原生制作与修改。 |
-| 视频 | 使用 `mona-video` 的 Huashu Motion 创作、导演确认、配音与导出流程；本包补充相关视觉参考。 |
+| 视频 | 使用 `mona-motion` 的动画创作、导演确认、配音与导出流程；本包补充相关视觉参考。 |
 | 信息图、可视化 | 读 [信息图设计](references/modules/infographic.md)，按用户要求的媒介制作。 |
 | 设计评审 | 读 [设计评审](references/critique-guide.md)，依据真实画面和用途指出可执行的问题；模型评分不是质量认证。 |
 

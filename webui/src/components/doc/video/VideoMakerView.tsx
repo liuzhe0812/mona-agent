@@ -75,7 +75,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AssetRightsDialog } from "./style/AssetRightsDialog";
 import { VideoNarrationSettingsDialog } from "./VideoNarrationSettingsDialog";
 import { VoicePreviewButton } from "./VoicePreviewButton";
-import { useVideoModelBinding } from "./useVideoModelBinding";
+import { useVideoModelBinding, useVideoSessionKind } from "./useVideoModelBinding";
 import { VideoModelControl } from "./VideoModelControl";
 import {
   EDGE_TTS_VOICES,
@@ -110,6 +110,9 @@ export interface EmbeddedVideoProject {
 interface VideoMakerViewProps {
   embedded?: boolean;
   hostChatId?: string | null;
+  sessionAgentKind?: string | null;
+  onSessionKindResolved?: (chatId: string, kind: string | null) => void;
+  onSessionError?: (message: string) => void;
   hostIsStreaming?: boolean;
   initialProject?: EmbeddedVideoProject | null;
   onProjectChange?: (project: EmbeddedVideoProject | null) => void;
@@ -154,6 +157,9 @@ function videoGenerationError(detail?: string): string {
 export function VideoMakerView({
   embedded = false,
   hostChatId = null,
+  sessionAgentKind,
+  onSessionKindResolved,
+  onSessionError,
   hostIsStreaming = false,
   initialProject = null,
   onProjectChange,
@@ -232,9 +238,19 @@ export function VideoMakerView({
   const [workspaceView, setWorkspaceView] = useState<"director" | "preview">(initialProject?.phase && initialProject.phase !== "storyboard" ? "preview" : "director");
   const [contentOpen, setContentOpen] = useState(false);
   const [chatId, setChatId] = useState<string | null>(initialProject?.chatId ?? hostChatId);
-  const videoModel = useVideoModelBinding(chatId);
+  const [createdVideoChatId, setCreatedVideoChatId] = useState<string | null>(null);
+  const session = useVideoSessionKind(chatId, chatId && chatId === createdVideoChatId ? "video" : chatId === (initialProject?.chatId ?? hostChatId) ? sessionAgentKind : undefined);
+  const videoSession = !chatId || session.agentKind === "video";
+  const sessionUnavailable = Boolean(chatId && session.agentKind === undefined);
+  const videoModel = useVideoModelBinding(chatId, null, videoSession);
   const [projectName, setProjectName] = useState<string | null>(initialProject?.name ?? null);
   const [createError, setCreateError] = useState<string | null>(null);
+  useEffect(() => {
+    if (visible && session.error) (onSessionError ?? setCreateError)(session.error);
+  }, [onSessionError, session.error, visible]);
+  useEffect(() => {
+    if (chatId && session.agentKind !== undefined) onSessionKindResolved?.(chatId, session.agentKind);
+  }, [chatId, onSessionKindResolved, session.agentKind]);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
@@ -338,7 +354,7 @@ export function VideoMakerView({
   useEffect(() => {
     if (!chatId) return;
     return client.onChat(chatId, (event) => {
-      if (event.event === "error") {
+      if (event.event === "error" && (!event.message_rejected || !event.task_id || event.request_id)) {
         setGenerationError(videoGenerationError(event.detail));
       }
       if (event.event === "turn_end") {
@@ -615,6 +631,7 @@ export function VideoMakerView({
       pending.chatId ??
       (embedded && hostChatId ? hostChatId : await client.newChat(45_000, false, null, "video", pending.modelBinding));
     if (!newChatId) throw new Error("当前视频会话尚未就绪");
+    if (!pending.chatId && !(embedded && hostChatId)) setCreatedVideoChatId(newChatId);
     pending.chatId = newChatId;
     setChatId(newChatId);
     if (!pending.chatIdSaved) {
@@ -623,11 +640,11 @@ export function VideoMakerView({
       pending.chatIdSaved = true;
     }
     if (embedded && onSendVideoTurn && hostChatId === newChatId) {
-      onSendVideoTurn(pending.prompt, pending.displayText, pending.modelBinding);
+      if (videoSession) onSendVideoTurn(pending.prompt, pending.displayText, pending.modelBinding);
+      else onSendVideoTurn(pending.prompt, pending.displayText);
     } else {
       client.sendMessage(newChatId, pending.prompt, undefined, {
-        agentKind: "video",
-        modelBinding: pending.modelBinding,
+        ...(videoSession ? { agentKind: "video", modelBinding: pending.modelBinding } : {}),
         displayContent: pending.displayText,
       });
     }
@@ -635,11 +652,11 @@ export function VideoMakerView({
     setPhase("storyboard");
     setWorkspaceView("director");
     setHistoryKey((current) => current + 1);
-  }, [client, embedded, hostChatId, onSendVideoTurn, token]);
+  }, [client, embedded, hostChatId, onSendVideoTurn, token, videoSession]);
 
   const handleStartGeneration = useCallback(async () => {
     if (generatingRef.current) return;
-    if (videoModel.loading || videoModel.saving || videoModel.error) return;
+    if (sessionUnavailable || videoModel.loading || videoModel.saving || videoModel.error) return;
     setCreateError(null);
     generatingRef.current = true;
     setStarting(true);
@@ -769,7 +786,7 @@ export function VideoMakerView({
   }, [
     topic, draftProjectName, ratio, singleStyleSource, selectedStyleSeries,
     templateId, styleTemplates, narrationEnabled, ttsProvider, ttsVoice, ttsRate, subtitleMode,
-    sourcePaths, musicFilePath, musicPreset, musicRights, resumePendingGeneration, token, videoModel.binding, videoModel.loading, videoModel.saving, videoModel.error,
+    sourcePaths, musicFilePath, musicPreset, musicRights, resumePendingGeneration, sessionUnavailable, token, videoModel.binding, videoModel.loading, videoModel.saving, videoModel.error,
   ]);
 
   // Detect AI turn completion: streaming transitions from true → false.
@@ -794,7 +811,7 @@ export function VideoMakerView({
   const handlePlanEdited = useCallback(() => setApprovedRevision(null), []);
 
   const handleRetryStoryboardGeneration = useCallback(() => {
-    if (!projectName) return;
+    if (!projectName || sessionUnavailable) return;
     setGenerationError(null);
     if (pendingGenerationRef.current) {
       void handleStartGeneration();
@@ -818,17 +835,18 @@ export function VideoMakerView({
       return;
     }
     client.sendMessage(chatId, prompt, undefined, {
-      agentKind: "video",
+      ...(videoSession ? { agentKind: "video" } : {}),
       displayContent: "继续准备分镜",
     });
-  }, [chatId, client, embedded, handleStartGeneration, hostChatId, onSendVideoTurn, projectName, videoModel.binding]);
+  }, [chatId, client, embedded, handleStartGeneration, hostChatId, onSendVideoTurn, projectName, sessionUnavailable, videoModel.binding, videoSession]);
 
   const handleRequestAgent = useCallback(async (request: string, displayText = request) => {
-    if (!projectName || isChatRunning || hostIsStreaming) return;
+    if (!projectName || isChatRunning || hostIsStreaming || sessionUnavailable) return;
     const currentChatId = chatId ?? (embedded && hostChatId
       ? hostChatId
       : await client.newChat(45_000, false, null, "video", videoModel.binding));
     if (!currentChatId) throw new Error("视频会话尚未就绪，请稍后重试。");
+    if (!chatId && !(embedded && hostChatId)) setCreatedVideoChatId(currentChatId);
     if (!chatId) {
       const saved = await saveVideoChatId(token, projectName, currentChatId);
       if (!saved.ok) throw new Error("会话尚未保存，请重试。");
@@ -840,14 +858,14 @@ export function VideoMakerView({
       onSendVideoTurn(prompt, displayText);
     } else {
       client.sendMessage(currentChatId, prompt, undefined, {
-        agentKind: "video",
+        ...(videoSession ? { agentKind: "video" } : {}),
         displayContent: displayText,
       });
     }
-  }, [chatId, client, embedded, hostChatId, hostIsStreaming, isChatRunning, onSendVideoTurn, projectName, token, videoModel.binding]);
+  }, [chatId, client, embedded, hostChatId, hostIsStreaming, isChatRunning, onSendVideoTurn, projectName, sessionUnavailable, token, videoModel.binding, videoSession]);
 
   const handleConfirmPlan = useCallback(async () => {
-    if (!projectName || confirming || isChatRunning || hostIsStreaming) return;
+    if (!projectName || confirming || isChatRunning || hostIsStreaming || sessionUnavailable) return;
     setConfirming(true);
     setConfirmationError(null);
     try {
@@ -871,7 +889,7 @@ export function VideoMakerView({
     } finally {
       setConfirming(false);
     }
-  }, [confirming, handleRequestAgent, hostIsStreaming, isChatRunning, projectName, token]);
+  }, [confirming, handleRequestAgent, hostIsStreaming, isChatRunning, projectName, sessionUnavailable, token]);
 
   const handleContinueProduction = useCallback(() => {
     if (requiresApproval && (approvedRevision === null || approvedRevision !== currentPlanRevision)) {
@@ -1326,10 +1344,10 @@ export function VideoMakerView({
             </div>
               <div className="shrink-0 border-t border-border/70 px-4 py-2">
                 <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-                <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={starting} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />
+                {videoSession ? <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={starting} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} /> : null}
                 <Button
                   size="sm"
-                  disabled={starting || videoModel.loading || videoModel.saving || Boolean(videoModel.error) || (!topic.trim() && sourcePaths.length === 0) || (singleStyleSource === "series" && !selectedStyleSeries) || (musicPreset !== "none" && !musicFilePath)}
+                  disabled={sessionUnavailable || starting || videoModel.loading || videoModel.saving || Boolean(videoModel.error) || (!topic.trim() && sourcePaths.length === 0) || (singleStyleSource === "series" && !selectedStyleSeries) || (musicPreset !== "none" && !musicFilePath)}
                   onClick={() => void handleStartGeneration()}
                 >
                   {starting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
@@ -1343,7 +1361,7 @@ export function VideoMakerView({
               <VideoWorkbenchHeader projectName={projectName ?? ""} activeView="director"
                 previewAvailable={!requiresApproval || approvedRevision !== null && approvedRevision === currentPlanRevision}
                 onViewChange={(view) => leaveStoryboardWhenSaved(() => setWorkspaceView(view))}>
-                  <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming || confirming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />
+                  {videoSession ? <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming || confirming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} /> : null}
                   <Button variant="ghost" size="sm" onClick={() => { setNarrationSettingsError(null); setNarrationSettingsOpen(true); }} disabled={isChatRunning || hostIsStreaming}>声音与字幕</Button>
               </VideoWorkbenchHeader>
               {isChatRunning || hostIsStreaming ? (
@@ -1364,15 +1382,15 @@ export function VideoMakerView({
                   onFocusChange={handleFocusChange}
                   readOnly={approvedRevision !== null && approvedRevision === currentPlanRevision}
                   busy={isChatRunning || hostIsStreaming || confirming}
-                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video", quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
+                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
                 />
               </div>
               <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 px-4 py-1.5">
                 <div className="min-w-0 text-caption text-muted-foreground">
                   {generationError ? <span className="text-destructive">{generationError}</span> : planDetails.sceneCount ? approvedRevision !== null && approvedRevision === currentPlanRevision ? `${planDetails.sceneCount} 段 · ${planDetails.duration} 秒，可在对话中告诉 Mona 要改哪里。` : `${planDetails.sceneCount} 段 · 预计 ${planDetails.duration} 秒，修改会自动保存。` : "方案准备好后，会显示旁白和对应的动画安排。"}
                 </div>
-                {planDetails.sceneCount === 0 || generationError ? <Button variant="outline" size="sm" onClick={handleRetryStoryboardGeneration} disabled={isChatRunning || hostIsStreaming || starting}>继续准备分镜</Button> : null}
-                {approvedRevision !== null && approvedRevision === currentPlanRevision ? null : <Button size="sm" disabled={isChatRunning || hostIsStreaming || confirming || planDetails.sceneCount === 0 || planDetails.planRevision === null} onClick={() => void handleConfirmPlan()}>
+                {planDetails.sceneCount === 0 || generationError ? <Button variant="outline" size="sm" onClick={handleRetryStoryboardGeneration} disabled={sessionUnavailable || isChatRunning || hostIsStreaming || starting}>继续准备分镜</Button> : null}
+                {approvedRevision !== null && approvedRevision === currentPlanRevision ? null : <Button size="sm" disabled={sessionUnavailable || isChatRunning || hostIsStreaming || confirming || planDetails.sceneCount === 0 || planDetails.planRevision === null} onClick={() => void handleConfirmPlan()}>
                   {confirming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
                   {confirming ? "正在开始…" : "确认并生成"}
                 </Button>}
@@ -1381,7 +1399,7 @@ export function VideoMakerView({
           ) : (
             <ProducingPhase
               projectName={projectName ?? ""}
-              modelControl={<VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />}
+              modelControl={videoSession ? <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} /> : undefined}
               onPhaseChange={handleProjectPhaseChange}
               onRequestAgent={handleRequestAgent}
               onFocusChange={handleFocusChange}
@@ -1394,7 +1412,7 @@ export function VideoMakerView({
               onRetryGeneration={handleContinueProduction}
               onEditContent={(section) => { if (section === "assets") setContentOpen(true); else setWorkspaceView("director"); }}
               chatPanel={embedded ? undefined : (
-                <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video", quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
+                <DocChatPanel chatId={chatId} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
               )}
             />
           )}

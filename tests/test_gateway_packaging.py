@@ -10,15 +10,15 @@ import pytest
 _ALLOWED_SCRIPTS = {
     "mona/skills/mona-pptx/scripts/extract_source_images.py",
     "mona/skills/pdf/scripts/helpers/convert.py",
-    "mona/skills/mona-video/scripts/render.py",
-    "mona/skills/mona-video/scripts/nested/storyboard.py",
+    "mona/skills/mona-motion/scripts/render.py",
+    "mona/skills/mona-motion/scripts/nested/storyboard.py",
 }
 _EXCLUDED_SCRIPTS = {
     "mona/skills/pdf/scripts/tests/test_helper.py",
     "mona/skills/pdf/scripts/test/fixture.py",
     "mona/skills/pdf/scripts/__pycache__/cached.py",
-    "mona/skills/mona-video/scripts/node_modules/pkg/ignored.py",
-    "mona/skills/mona-video/scripts/.git/ignored.py",
+    "mona/skills/mona-motion/scripts/node_modules/pkg/ignored.py",
+    "mona/skills/mona-motion/scripts/.git/ignored.py",
 }
 _ORDINARY_MODULE = "mona/ordinary_module.py"
 _WEB_DIST_FILES = {
@@ -76,7 +76,7 @@ def _prepare_fixture(root: Path, *, include_office: bool) -> None:
     for relative in _ALLOWED_SCRIPTS | _EXCLUDED_SCRIPTS | {_ORDINARY_MODULE} | _WEB_DIST_FILES:
         _write_fixture_file(root, relative)
     _write_fixture_file(root, "mona/development/sandbox_node/component.json")
-    _write_fixture_file(root, "mona/skills/mona-video/runtime/mona-player.js")
+    _write_fixture_file(root, "mona/skills/mona-motion/runtime/mona-player.js")
     _write_fixture_file(root, "mona/skills/mona-design/provenance.json")
     if include_office:
         _write_fixture_file(root, f"{_OFFICE_ROOT}/manifest.json")

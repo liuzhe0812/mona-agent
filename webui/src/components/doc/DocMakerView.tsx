@@ -269,19 +269,24 @@ export function DocMakerView({
   videoConversationRequest = null,
   onVideoConversationHandled,
   onVisibleConversationChange,
-  onVideoChatsChange,
+  sessionAgentKinds,
   onShowChatHistory,
 }: {
   visible?: boolean;
   videoConversationRequest?: VideoConversationRequest | null;
   onVideoConversationHandled?: (requestId: number) => void;
   onVisibleConversationChange?: (chatId: string | null) => void;
-  onVideoChatsChange?: (chatIds: string[]) => void;
+  sessionAgentKinds?: Readonly<Record<string, string | null>>;
   onShowChatHistory?: (chatId: string) => void;
 } = {}) {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((state) => state.workspacePath);
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
+  const [resolvedSessionKinds, setResolvedSessionKinds] = useState<Record<string, string | null>>({});
+  const knownSessionKinds = useMemo(() => ({ ...resolvedSessionKinds, ...sessionAgentKinds }), [resolvedSessionKinds, sessionAgentKinds]);
+  const handleSessionKindResolved = useCallback((chatId: string, kind: string | null) => {
+    setResolvedSessionKinds((current) => current[chatId] === kind ? current : { ...current, [chatId]: kind });
+  }, []);
   const [activeTabId, setActiveTabId] = useState(() => readStoredString(ACTIVE_TAB_STORAGE_KEY, START_TAB_ID));
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const rightSidebarPanelRef = useRef<PanelImperativeHandle | null>(null);
@@ -311,6 +316,8 @@ export function DocMakerView({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const activeVideoChatId = activeTab?.kind === "video-workflow" ? activeTab.chatId : null;
+  const activeVideoAgentKind = activeVideoChatId ? knownSessionKinds[activeVideoChatId] : undefined;
   useEffect(() => client.onRunStatus((chatId, startedAt) => {
     const matching = tabs.filter((tab) => tab.chatId === chatId);
     setStreamingByTab((current) => {
@@ -332,14 +339,6 @@ export function DocMakerView({
     onVisibleConversationChange?.(visible && !videoConversationRequest && !openingVideoConversation ? currentChat : null);
     return () => onVisibleConversationChange?.(null);
   }, [activeTab?.chatId, onVisibleConversationChange, openingVideoConversation, readyChatId, showDocumentSidebar, activeStyleWorkspace, videoConversationRequest, visible]);
-
-  useEffect(() => {
-    onVideoChatsChange?.([...new Set([
-      ...tabs.flatMap((tab) => tab.kind === "video-workflow" && tab.chatId ? [tab.chatId] : []),
-      ...videoProjects.flatMap((project) => project.chatId ? [project.chatId] : []),
-      ...Object.values(styleWorkspaces).flatMap((state) => state?.chatId ? [state.chatId] : []),
-    ])]);
-  }, [onVideoChatsChange, tabs, videoProjects, styleWorkspaces]);
 
   useLayoutEffect(() => {
     const panel = rightSidebarPanelRef.current;
@@ -874,8 +873,12 @@ export function DocMakerView({
       client.sendMessage(tab.chatId, content, undefined, { displayContent });
       return;
     }
-    if (tab.chatId) client.sendMessage(tab.chatId, content, undefined, { agentKind: "video", displayContent, ...(modelBinding !== undefined ? { modelBinding } : {}) });
-  }, [client]);
+    const agentKind = tab.chatId ? knownSessionKinds[tab.chatId] : undefined;
+    if (tab.chatId && agentKind !== undefined) client.sendMessage(tab.chatId, content, undefined, {
+      displayContent,
+      ...(agentKind === "video" ? { agentKind: "video", ...(modelBinding !== undefined ? { modelBinding } : {}) } : {}),
+    });
+  }, [client, knownSessionKinds]);
 
   const historyItems = useMemo<HistoryItem[]>(() => {
     const officeItems: HistoryItem[] = recentOffice.map((office) => ({ key: office.key, kind: "office", title: office.title, createdAt: office.updatedAt, detail: OFFICE_META[office.officeType].label, office }));
@@ -1038,7 +1041,7 @@ export function DocMakerView({
                   ) : tab.kind === "canvas" ? (
                     <Suspense fallback={<LoadingLabel label="正在打开画布…" />}><CanvasFileView filePath={tab.filePath} /></Suspense>
                   ) : (
-                    <Suspense fallback={<LoadingLabel label="正在打开视频…" />}><VideoMakerView styleConversationRequest={styleConversationRequests[tab.id]} visible={visible && activeTabId === tab.id} onStyleWorkspaceChange={(state) => setStyleWorkspaces((current) => { const previous = current[tab.id]; return previous?.chatId === state?.chatId && previous?.visible === state?.visible && previous?.ready === state?.ready && Boolean(previous) === Boolean(state) ? current : { ...current, [tab.id]: state }; })} embedded hostChatId={tab.chatId} hostIsStreaming={Boolean(streamingByTab[tab.id])} onOpenChat={() => setRightSidebarOpen(true)} initialProject={tab.project} onProjectChange={(project) => handleEmbeddedProjectChange(tab.id, project)} onSendVideoTurn={(content, displayContent, modelBinding) => sendForTab(tab, content, displayContent, modelBinding)} onFocusChange={(focus) => { videoFocusByTab.current[tab.id] = focus; }} /></Suspense>
+                    <Suspense fallback={<LoadingLabel label="正在打开视频…" />}><VideoMakerView styleConversationRequest={styleConversationRequests[tab.id]} visible={visible && activeTabId === tab.id} onStyleWorkspaceChange={(state) => setStyleWorkspaces((current) => { const previous = current[tab.id]; return previous?.chatId === state?.chatId && previous?.visible === state?.visible && previous?.ready === state?.ready && Boolean(previous) === Boolean(state) ? current : { ...current, [tab.id]: state }; })} embedded hostChatId={tab.chatId} sessionAgentKind={tab.chatId ? knownSessionKinds[tab.chatId] : undefined} onSessionKindResolved={handleSessionKindResolved} onSessionError={setActionError} hostIsStreaming={Boolean(streamingByTab[tab.id])} onOpenChat={() => setRightSidebarOpen(true)} initialProject={tab.project} onProjectChange={(project) => handleEmbeddedProjectChange(tab.id, project)} onSendVideoTurn={(content, displayContent, modelBinding) => sendForTab(tab, content, displayContent, modelBinding)} onFocusChange={(focus) => { videoFocusByTab.current[tab.id] = focus; }} /></Suspense>
                   )}
                 </div>
               ))}
@@ -1062,7 +1065,7 @@ export function DocMakerView({
             <aside aria-label={activeTabIsVideo ? "制作对话" : "MONA AI 文档助手"} className="flex h-full min-w-0 flex-col bg-background">
               <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-3 pr-11"><div className="flex min-w-0 items-center gap-2"><AgentLogo state={activeTab && streamingByTab[activeTab.id] ? "working" : "idle"} className="h-5 w-5 shrink-0" title="Mona" /><div className="text-ui font-semibold">{activeTabIsVideo ? "制作对话" : "MONA AI"}</div></div></div>
               <div className="min-h-0 flex-1">
-{activeTab?.chatId ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} onReadyChange={setReadyChatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { agentKind: "video", quote: videoFocusQuote(videoFocusByTab.current[activeTab.id]) } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
+{activeTab?.chatId ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} disabled={activeTabIsVideo && activeVideoAgentKind === undefined} onReadyChange={setReadyChatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { ...(activeVideoAgentKind === "video" ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(videoFocusByTab.current[activeTab.id]) } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
               </div>
             </aside>
           ) : null}

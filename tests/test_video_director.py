@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image, ImageDraw
 
 import mona.agent  # noqa: F401
@@ -129,6 +130,266 @@ async def test_video_agent_requires_internal_token_and_bound_chat(project: Path)
     response = await handle_video_agent(_request(body))
     assert response.status == 200
     assert json.loads(response.body)["ok"] is True
+
+
+async def test_automatic_project_over_http_plans_and_syncs_without_confirmation(project: Path, tmp_path: Path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("解释水如何经过滤层。", encoding="utf-8")
+    app = web.Application()
+    app.router.add_post("/api/video/agent", handle_video_agent)
+    headers = _request({}).headers
+    name = "automatic-film"
+    instruction = "自动完成过滤原理动画，审片后导出，不要中途等我确认。"
+    async with TestClient(TestServer(app)) as client:
+        created = await client.post("/api/video/agent", headers=headers, json={
+            "action": "create", "name": name, "execution_mode": "automatic", "instruction": instruction,
+            "request_id": "automatic-request", "settings": {"narrationEnabled": False},
+            "source_paths": [str(source)], "chatId": "untrusted-owner",
+        })
+        assert created.status == 200
+        creation = await created.json()
+        target = Path(creation["projectPath"])
+        assert creation["executionMode"] == "automatic" and creation["planRevision"] == 0
+        assert OWNER not in json.dumps(creation)
+        assert (target / ".chat_id").read_text(encoding="utf-8") == OWNER
+        assert (target / "sources/source-01.md").read_bytes() == source.read_bytes()
+        created_meta = server._load_video_meta(target)
+        assert created_meta.get("narrationEnabled", False) is False
+        authorization = created_meta["executionAuthorization"]
+        assert authorization["chatId"] == OWNER
+        assert authorization["instruction"] == instruction
+        inspected = await client.post("/api/video/agent", headers=headers, json={"action": "inspect", "name": name})
+        inspection = await inspected.json()
+        assert inspection["executionMode"] == inspection["executionAuthorizationMode"] == "automatic"
+        assert "stop for initial confirmation" not in inspection["authoringContract"]
+        assert "executionAuthorization" not in inspection
+        plan = {"action": "plan", "name": name, "scenes": [{
+            "title": "过滤", "duration": 3, "visual": "水流通过滤层", "animation": "颗粒被截留", "narration": "",
+        }]}
+        assert (await client.post("/api/video/agent", headers=headers, json=plan)).status == 409
+        planned = await client.post("/api/video/agent", headers=headers, json={**plan, "plan_revision": 0})
+        result = await planned.json()
+        assert planned.status == 200 and result["awaitingConfirmation"] is False
+        assert result["planRevision"] == 1
+        meta = server._load_video_meta(target)
+        assert meta["requirePlanApproval"] is True
+        assert meta["planRevision"] == meta["approvedPlanRevision"] == 1
+        assert meta["phase"] == "producing"
+        repeated = await client.post("/api/video/agent", headers=headers, json={**plan, "plan_revision": 1})
+        assert (await repeated.json())["planRevision"] == 1
+        assert not (target / "versions").exists()
+        original = _film('<div data-om-id="filter">过滤层</div>')
+        sync = {"action": "sync", "name": name, "source_file": str(tmp_path / "work/film.html"),
+                "source_content": original, "plan_revision": 1}
+        stale = await client.post("/api/video/agent", headers=headers, json={**sync, "plan_revision": 0})
+        assert stale.status == 422
+        assert not (target / "scene_sources/film.html").exists()
+        synced = await client.post("/api/video/agent", headers=headers, json=sync)
+        assert synced.status == 200, await synced.text()
+        assert (target / "scene_sources/film.html").read_text(encoding="utf-8") == original
+        assert not (tmp_path / "work/film.html").exists()
+        exported = await client.post("/api/video/agent", headers=headers, json={"action": "export", "name": name})
+        assert exported.status == 409
+        assert (await exported.json())["code"] == "MOTION_REVIEW_REQUIRED"
+        assert name not in server._video_render_tasks
+        switched = await client.post("/api/video/agent", headers=headers, json={
+            "action": "style", "name": name, "style_id": "huashu-whiteboard", "plan_revision": 1,
+        })
+        assert switched.status == 200
+        meta = server._load_video_meta(target)
+        assert meta["planRevision"] == meta["approvedPlanRevision"] == 2
+        assert meta["executionAuthorization"] == authorization
+
+
+async def test_agent_create_is_owned_idempotent_and_defaults_to_interactive(project: Path, tmp_path: Path) -> None:
+    create = {"action": "create", "name": "ordinary-film", "request_id": "ordinary-request"}
+    with pytest.raises(web.HTTPUnauthorized):
+        await handle_video_agent(_request(create, token=""))
+    with pytest.raises(web.HTTPForbidden):
+        await handle_video_agent(_request(create, owner=""))
+    for extra in ({"execution_mode": "automatic"}, {"settings": {"requirePlanApproval": False}}, {"request_id": ""}):
+        invalid = await handle_video_agent(_request({**create, **extra}))
+        assert invalid.status == 422
+        assert not (tmp_path / "video_projects/ordinary-film").exists()
+    created = await handle_video_agent(_request(create))
+    assert created.status == 200
+    target = Path(json.loads(created.body)["projectPath"])
+    meta = server._load_video_meta(target)
+    assert meta["narrationEnabled"] is True and meta["ttsProvider"] == "edge"
+    before = (target / "meta.json").read_bytes()
+    repeated = await handle_video_agent(_request(create))
+    assert repeated.status == 200 and json.loads(repeated.body)["reused"] is True
+    assert (target / "meta.json").read_bytes() == before
+    assert (await handle_video_agent(_request({**create, "request_id": "different-request"}))).status == 409
+    with pytest.raises(web.HTTPForbidden):
+        await handle_video_agent(_request(create, owner="another-chat"))
+    assert (target / ".chat_id").read_text(encoding="utf-8") == OWNER
+    assert (await handle_video_agent(_request({**create, "name": project.name}))).status == 409
+    assert (project / ".chat_id").read_text(encoding="utf-8") == OWNER
+    assert server._load_video_meta(target)["executionMode"] == "interactive"
+    await _plan(target)
+    blocked = await handle_video_agent(_request({
+        "action": "sync", "name": target.name, "plan_revision": 1, "source_content": _film("<div>draft</div>"),
+    }))
+    assert blocked.status == 422 and "导演台" in json.loads(blocked.body)["error"]
+
+
+async def test_agent_create_failure_does_not_leave_an_unbound_automatic_project(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write = server._atomic_write_text
+
+    def fail_binding(path: Path, content: str) -> None:
+        if path.name == ".chat_id":
+            raise OSError("binding write failed")
+        write(path, content)
+
+    monkeypatch.setattr(server, "_atomic_write_text", fail_binding)
+    body = {"action": "create", "name": "failed-film", "request_id": "failed-request",
+            "execution_mode": "automatic", "instruction": "自动完成并导出。"}
+    failed = await handle_video_agent(_request(body))
+    assert failed.status == 500
+    assert not (tmp_path / "video_projects/failed-film").exists()
+    monkeypatch.setattr(server, "_atomic_write_text", write)
+    assert (await handle_video_agent(_request(body))).status == 200
+
+
+async def test_execution_mode_requires_current_revision_and_preserves_production(project: Path) -> None:
+    assert (await _sync(project, _film("<div>Existing animation</div>"))).status == 200
+    meta = server._load_video_meta(project)
+    scene = meta["scenes"][0]
+    scene.update({"audioInputHash": "existing-audio", "motionReview": {"distinctVisualStates": 2},
+                  "motionReviewSourceHash": scene["sourceHash"]})
+    server._save_video_meta(project, meta)
+    audio = project / "audio/scene_01.mp3"
+    audio.parent.mkdir(exist_ok=True)
+    audio.write_bytes(b"existing narration")
+    original_scene = copy.deepcopy(scene)
+    old_source = (project / "scene_sources/film.html").read_bytes()
+    old_versions = set((project / "versions").iterdir())
+    body = {"action": "execution", "name": project.name, "execution_mode": "automatic", "instruction": "自动完成这个视频。"}
+    before = (project / "meta.json").read_bytes()
+    for revision in (None, 0, True):
+        refused = await handle_video_agent(_request({**body, "plan_revision": revision}))
+        assert refused.status == 409
+        assert (project / "meta.json").read_bytes() == before
+    missing_instruction = await handle_video_agent(_request({**body, "plan_revision": 1, "instruction": ""}))
+    assert missing_instruction.status == 422
+    with pytest.raises(web.HTTPForbidden):
+        await handle_video_agent(_request({**body, "plan_revision": 1}, owner="another-chat"))
+    switched = await handle_video_agent(_request({**body, "plan_revision": 1}))
+    assert switched.status == 200
+    current = server._load_video_meta(project)
+    assert current["planRevision"] == current["approvedPlanRevision"] == 1
+    assert current["scenes"][0] == original_scene
+    current["phase"] = "exportable"
+    server._save_video_meta(project, current)
+    before = (project / "meta.json").read_bytes()
+    assert (await handle_video_agent(_request({**body, "plan_revision": 1}))).status == 200
+    assert (project / "meta.json").read_bytes() == before
+    assert set((project / "versions").iterdir()) == old_versions
+    manual = await handle_video_agent(_request({**body, "plan_revision": 1, "execution_mode": "interactive"}))
+    assert manual.status == 200 and json.loads(manual.body)["awaitingConfirmation"] is True
+    current = server._load_video_meta(project)
+    assert current["planRevision"] == 1 and current["approvedPlanRevision"] is None
+    assert current["phase"] == "storyboard" and current["requirePlanApproval"] is True
+    assert current["scenes"][0] == original_scene
+    assert audio.read_bytes() == b"existing narration"
+    assert (project / "scene_sources/film.html").read_bytes() == old_source
+    current["styleAuthoring"] = {"seriesId": "sample-style"}
+    server._save_video_meta(project, current)
+    before = (project / "meta.json").read_bytes()
+    assert (await handle_video_agent(_request({**body, "plan_revision": 1}))).status == 422
+    assert (project / "meta.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("rebind", ["route", "file"])
+async def test_rebinding_does_not_transfer_automatic_execution_authorization(project: Path, rebind: str) -> None:
+    assert (await _plan(project)).status == 200
+    execution = {"action": "execution", "name": project.name, "execution_mode": "automatic",
+                 "plan_revision": 1, "instruction": "请自动完成原会话的视频。"}
+    assert (await handle_video_agent(_request(execution))).status == 200
+    before = (project / "meta.json").read_bytes()
+    unchanged = await server.handle_video_project_save_chat_id(_Request({"name": project.name, "chatId": OWNER}))
+    assert unchanged.status == 200
+    assert (project / "meta.json").read_bytes() == before
+    new_owner = "new-video-chat"
+    if rebind == "route":
+        rebound = await server.handle_video_project_save_chat_id(_Request({"name": project.name, "chatId": new_owner}))
+        assert rebound.status == 200
+        assert json.loads((project / "meta.json").read_text(encoding="utf-8"))["executionMode"] == "interactive"
+    else:
+        (project / ".chat_id").write_text(new_owner, encoding="utf-8")
+    with pytest.raises(web.HTTPForbidden):
+        await handle_video_agent(_request({"action": "inspect", "name": project.name}))
+    inspected = await handle_video_agent(_request({"action": "inspect", "name": project.name}, owner=new_owner))
+    inspection = json.loads(inspected.body)
+    assert inspection["executionMode"] == inspection["executionAuthorizationMode"] == "interactive"
+    current = json.loads((project / "meta.json").read_text(encoding="utf-8"))
+    assert current["planRevision"] == 1 and current["approvedPlanRevision"] is None
+    assert current["phase"] == "storyboard" and current["requirePlanApproval"] is True
+    assert "executionAuthorization" not in current
+    sync = {"action": "sync", "name": project.name, "plan_revision": 1,
+            "source_content": _film("<div>New owner needs a new authorization</div>")}
+    blocked = await handle_video_agent(_request(sync, owner=new_owner))
+    assert blocked.status == 422 and "导演台" in json.loads(blocked.body)["error"]
+    assert not (project / "scene_sources/film.html").exists()
+    scene = {key: current["scenes"][0][key] for key in ("title", "duration", "visual", "animation", "narration", "assets")}
+    planned = await handle_video_agent(_request({"action": "plan", "name": project.name, "scenes": [scene]}, owner=new_owner))
+    assert json.loads(planned.body)["awaitingConfirmation"] is True
+    assert server._load_video_meta(project)["approvedPlanRevision"] is None
+    authorized = await handle_video_agent(_request({**execution, "instruction": "请在本会话自动完成并导出。"}, owner=new_owner))
+    assert authorized.status == 200
+    current = server._load_video_meta(project)
+    assert current["executionAuthorization"]["chatId"] == new_owner
+    assert current["planRevision"] == current["approvedPlanRevision"] == 1
+    assert (await handle_video_agent(_request(sync, owner=new_owner))).status == 200
+
+
+async def test_host_source_content_uses_the_same_validation_and_version_history(project: Path, tmp_path: Path) -> None:
+    old = _film("<div>old</div>")
+    assert (await _sync(project, old)).status == 200
+    versions = set((project / "versions").iterdir())
+    new = _film("<div>新的画面</div>")
+    body = {"action": "sync", "name": project.name, "plan_revision": 1,
+            "source_file": str(tmp_path / "work/film.html"), "source_content": new}
+    synced = await handle_video_agent(_request(body))
+    assert synced.status == 200
+    added = set((project / "versions").iterdir()) - versions
+    assert len(added) == 1
+    assert (added.pop() / "scene_sources/film.html").read_text(encoding="utf-8") == old
+    assert (project / "scene_sources/film.html").read_text(encoding="utf-8") == new
+    before = (project / "meta.json").read_bytes()
+    versions = set((project / "versions").iterdir())
+    for content in (None, "a" * (2 * 1024 * 1024 + 1), _film('<img src="file:///private.png">')):
+        refused = await handle_video_agent(_request({**body, "source_content": content}))
+        assert refused.status == 422
+        assert (project / "meta.json").read_bytes() == before
+        assert (project / "scene_sources/film.html").read_text(encoding="utf-8") == new
+        assert set((project / "versions").iterdir()) == versions
+
+
+async def test_agent_status_marks_completed_output_stale_after_plan_changes(project: Path) -> None:
+    assert (await _plan(project)).status == 200
+    output = project / "renders/output.mp4"
+    output.write_bytes(b"previous finished video")
+    server._write_render_status(project, {"stage": "done", "progress": 100, "output": "renders/output.mp4"})
+    request = {"action": "status", "name": project.name}
+    fresh = await handle_video_agent(_request(request))
+    assert fresh.status == 200
+    result = json.loads(fresh.body)
+    assert result["stage"] == "done" and result["outputStale"] is False
+    assert result["planRevision"] == 1
+    changed = await server.handle_video_project_scene_update(_Request({
+        "name": project.name, "index": 1, "animation": "新增最后的过滤结果展示", "expectedPlanRevision": 1,
+    }))
+    assert changed.status == 200
+    status = await handle_video_agent(_request(request))
+    result = json.loads(status.body)
+    assert status.status == 200 and result["stage"] == "done"
+    assert result["hasVideo"] is True and result["outputStale"] is True
+    assert result["planRevision"] == 2
+    assert output.read_bytes() == b"previous finished video"
 
 
 @pytest.mark.parametrize("source", [

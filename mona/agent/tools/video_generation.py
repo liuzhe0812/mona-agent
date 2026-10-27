@@ -125,8 +125,11 @@ class VideoGenerationTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Generate a video from a text prompt with optional general references and explicit first/last frames, "
-            "and store it as a persistent artifact. Returns the artifact id and local path. "
+            "Call the configured external video model to generate footage from a text prompt, "
+            "optional general references and explicit first/last frames. For authored code animation, "
+            "explainers, diagrams or precise text/data motion, read mona-motion and use video instead. "
+            "Choose the method from the content and user's request; merely asking for animation does not select this tool. "
+            "Stores the resulting video as a persistent artifact and returns its id and local path. "
             "Video generation is asynchronous and may take tens of seconds to a few minutes."
         )
 

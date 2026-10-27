@@ -118,7 +118,7 @@ allow-direct-references = true
 
 [tool.hatch.build]
 exclude = ["mona/web/**"]
-artifacts = ["mona/skills/mona-video/runtime/**", "mona/skills/mona-design/**"]
+artifacts = ["mona/skills/mona-motion/runtime/**", "mona/skills/mona-design/**"]
 include = [
     "mona/**/*.py",
     "mona/templates/**/*.md",
@@ -140,8 +140,8 @@ include = [
     "mona/skills/**/*.css",
     "mona/skills/**/*.js",
     "mona/skills/mona-design/**",
-    "mona/skills/mona-video/references/huashu-motion/**",
-    "mona/skills/mona-video/assets/huashu-motion/**",
+    "mona/skills/mona-motion/references/huashu-motion/**",
+    "mona/skills/mona-motion/assets/huashu-motion/**",
     "mona/skills/**/*.ttf",
     "mona/skills/**/*.txt",
     "mona/skills/**/*.toml",

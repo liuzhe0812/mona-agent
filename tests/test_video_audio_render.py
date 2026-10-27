@@ -21,7 +21,7 @@ def media(monkeypatch):
     ffmpeg, ffprobe = runtime.get_ffmpeg_path(), runtime.get_ffprobe_path()
     if not ffmpeg or not ffprobe:
         pytest.skip("Existing video runtime is required")
-    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-video" / "scripts"
+    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-motion" / "scripts"
     monkeypatch.syspath_prepend(str(scripts))
     spec = importlib.util.spec_from_file_location("mona_video_audio_render", scripts / "render.py")
     module = importlib.util.module_from_spec(spec)

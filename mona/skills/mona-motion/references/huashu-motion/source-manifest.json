@@ -1,0 +1,230 @@
+{
+  "upstream": {
+    "repository": "https://github.com/alchaincyf/huashu-motion",
+    "version": "0.3.1",
+    "commit": "52467f99c602b76ba86d511d37acdfe93fa1e16e",
+    "referencesPath": "skills/huashu-motion/references",
+    "licensePath": "LICENSE"
+  },
+  "files": [
+    {
+      "path": "about-author.md",
+      "sha256": "9517aaae8d99a4374d3d31fc35611b212e27d5fa6d29e9c3bd77113245a5b450",
+      "size": 10281
+    },
+    {
+      "path": "colour.md",
+      "sha256": "b21c3c50a31aa0d44c71518bedce24b5f7ee74f5ae1112d13dd9dac5990fbeb2",
+      "size": 9005
+    },
+    {
+      "path": "contract.md",
+      "sha256": "5a508f4dcd0abebc4d7ff5805183656118dd1481d333abcd3eaab24564f96f79",
+      "size": 7137
+    },
+    {
+      "path": "craft.md",
+      "sha256": "1adc77bbb27fafc570ec594f8cbc7b737d53d764ea0d5895afd9719c46d899a6",
+      "size": 3332
+    },
+    {
+      "path": "depth.md",
+      "sha256": "e5b4ba060922515cdf492a75b27964c6d594a8464594d7bf88c03cbe1604ba77",
+      "size": 8479
+    },
+    {
+      "path": "director.md",
+      "sha256": "2dc1075bbfe99543156b7663d4281754636e1e23168e160aa39634f68c6a6f8f",
+      "size": 18396
+    },
+    {
+      "path": "experience.md",
+      "sha256": "c072bc6f045d7a7e6d86955b584b1a31f6943963f5e9dbcaf8b5a0aa7fba2ab6",
+      "size": 27612
+    },
+    {
+      "path": "grammars.md",
+      "sha256": "674ef8e1fe53cdd5a35e0818206b41a3d44e4418b374a4b4a4abdfb4bbe81ea2",
+      "size": 6909
+    },
+    {
+      "path": "library/formats.md",
+      "sha256": "f1a2cf2e5d1250ead38f8b660de24e997d0beb3bec63decc38b785f1c274f9ed",
+      "size": 9724
+    },
+    {
+      "path": "library/languages/3d-object.md",
+      "sha256": "edf25d39b52e5b6667afd4d8545acf13db1556f4df8e088d92df1f0c0fd2617a",
+      "size": 2379
+    },
+    {
+      "path": "library/languages/card-montage.md",
+      "sha256": "06dcf9b1c8651dfe9647dbbaef04c3ff09b893b2b4f072ba28f3dcbbe2668c03",
+      "size": 3848
+    },
+    {
+      "path": "library/languages/character.md",
+      "sha256": "2187bb34f935c980053cc9b1c4bdfee3bfc57820a14d4defc25974f7c825f266",
+      "size": 2004
+    },
+    {
+      "path": "library/languages/continuous-morph.md",
+      "sha256": "df8fde1b9693b086775b979a79dfb9ee5ef1d58189710eba89f6e331356131c4",
+      "size": 4571
+    },
+    {
+      "path": "library/languages/cursor-demo.md",
+      "sha256": "76398c21941043dfcebe0953a090b0420bf6db9f6ff96bfa25c82973f7bf7145",
+      "size": 4684
+    },
+    {
+      "path": "library/languages/data-story.md",
+      "sha256": "6510ca74a12e8601b6613362d5add8f8ed0ca2626e0356820cc26682b1d84141",
+      "size": 2106
+    },
+    {
+      "path": "library/languages/editorial-collage.md",
+      "sha256": "5a9f19b649df0c8955440e81f57b6b2499f826659cc27700b87b671037878c2c",
+      "size": 1553
+    },
+    {
+      "path": "library/languages/flat-world.md",
+      "sha256": "1733317a12c314ee1236226bf8a327f025ab487080404676100e1da033aa250a",
+      "size": 1266
+    },
+    {
+      "path": "library/languages/generative-field.md",
+      "sha256": "002f5116a338134a45d091eff9d73de57617922cdc897d4a2653c6728a89dfb3",
+      "size": 1418
+    },
+    {
+      "path": "library/languages/hand-drawn.md",
+      "sha256": "39a68da4a133471064954caa8a949dabdbc92935a78e921cbf3881a341e7eb0d",
+      "size": 1525
+    },
+    {
+      "path": "library/languages/kinetic-type.md",
+      "sha256": "de7338cacacdc341465a86faba358f1a1bb77d91dd5f09f009f1d00c4469a5ba",
+      "size": 3680
+    },
+    {
+      "path": "library/languages/liquid-glass.md",
+      "sha256": "6ceeda57b113b15d92a7066959c86856f24a6c6a8da4ca05a135d716e0255c0f",
+      "size": 1146
+    },
+    {
+      "path": "library/languages/mechanism.md",
+      "sha256": "fdb9637948e4be93c1bece55f1d097ee4219422079503acf58e642af4e17e01a",
+      "size": 1577
+    },
+    {
+      "path": "library/languages/modular-grid.md",
+      "sha256": "607d009fd899b1f1538eb96c95f7441664fef6cc72b8c8f4a7f6e5ed92e8842f",
+      "size": 1767
+    },
+    {
+      "path": "library/languages/photo-led.md",
+      "sha256": "cf035ad5b58b70d6e141d856c1b36a5de917040704efffdc9d0d775a7aef8b5b",
+      "size": 1228
+    },
+    {
+      "path": "library/languages/retro-digital.md",
+      "sha256": "435ae1a048e52961b97bec52c8fc40bdec9fd0fdb50cf7e07527754f850653cc",
+      "size": 1101
+    },
+    {
+      "path": "library/languages/showreel.md",
+      "sha256": "29d630fa2c72cc704d4e30ee29456cd3d531c0cea16a49b2c6455e9ec6e1cd2a",
+      "size": 3032
+    },
+    {
+      "path": "library/languages/system-diagram.md",
+      "sha256": "4177ffa9d95eea45a0577ab1869a4298ad0c2fe94c2d9508a2e6f30e2f68ba82",
+      "size": 1552
+    },
+    {
+      "path": "library/languages/talking-head.md",
+      "sha256": "f48c677433c24d45ab7fd301e867fcdbd816df726daea8e920b996f0f9a14151",
+      "size": 482
+    },
+    {
+      "path": "library/product-fit.md",
+      "sha256": "a29fa0fc4f821da482c707da2943ed173c0f715de596c2e4139685776ee820ef",
+      "size": 7312
+    },
+    {
+      "path": "library/README.md",
+      "sha256": "20400d3eeb081919fc03fe738d62237c3f3c2f8ef5543dd8731bfab7c3bad49e",
+      "size": 6640,
+      "sourceSha256": "323f7267378acf73ee3df174a55065fda72479cc4a4cda2b7fa374511218c56f"
+    },
+    {
+      "path": "library/techniques.md",
+      "sha256": "b4e56c7e5dbe8c459a8fa7d147a7004cef6225fe306173d682580683663afc71",
+      "size": 20783
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "1a5ff5e96257ba6aee86c7e45c99fac5c2a90d0393f2b242f5767a782a5a086a",
+      "size": 1084
+    },
+    {
+      "path": "music.md",
+      "sha256": "e551347e56e25f6268899e4e33e09d294d8abdd86ae79b38bc2811e29bf3e8d8",
+      "size": 15888
+    },
+    {
+      "path": "product-demo-continuity.md",
+      "sha256": "1bfa284d0520a2d5be6d600252b5a2e5ce822ac50f2b5ac629d36d0dc6be4401",
+      "size": 8721
+    },
+    {
+      "path": "provenance.md",
+      "sha256": "dd7534e8af104cf6a457ad108f7bbb762d5a895a579e4ddffaf8668e5f61128f",
+      "size": 2246
+    },
+    {
+      "path": "rhythm.md",
+      "sha256": "7ed71bbafc92f9e38526e41a8dfe49f664d05498426ace97d0b1649f375a761d",
+      "size": 12559
+    },
+    {
+      "path": "scores/first-light.abc",
+      "sha256": "f5ab722faaa2d1cb40add0c7df70447e2530d482ae8ed3d3f52fde202092cbff",
+      "size": 3094
+    },
+    {
+      "path": "scores/four-rooms.abc",
+      "sha256": "0931f8fd085828f384f850ab4184c73bd5a13a8c9a55aeaa3e26543de7ae5014",
+      "size": 4360
+    },
+    {
+      "path": "scores/signal.abc",
+      "sha256": "51ed924f061238bddb656aa9c2ea309ddd475d1af69b792b88ab50e3b840f25c",
+      "size": 4105
+    },
+    {
+      "path": "sound.md",
+      "sha256": "fee80fc32f0daef38b3f21e8974b67c1b9ddd9fe0a7348847e7ccd2aac785a61",
+      "size": 13807
+    },
+    {
+      "path": "talking-head.md",
+      "sha256": "7156689ede14483bf73ae604405ab89196ad15d203db4e9ddf42945615ee08ee",
+      "size": 10384
+    },
+    {
+      "path": "verification.md",
+      "sha256": "06999f1746b5040f67ab36401cc06d6325219adaaf7ad17b4de4f2eaf9deda72",
+      "size": 2327
+    },
+    {
+      "path": "visual-direction.md",
+      "sha256": "0b4aae601b9e92c27d64ad3c8d97779472ec4a60c086454ec0d6d00be515745f",
+      "size": 9114
+    }
+  ],
+  "adaptations": [
+    "Removed the art-styles entry and its external engine instructions; Mona uses the unified bundled Huashu Motion runtime. Original source hashes are retained for adapted files."
+  ]
+}

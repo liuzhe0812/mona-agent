@@ -7,6 +7,8 @@ import json
 from importlib.resources import files as pkg_files
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from mona.agent.document_loop import DOCUMENT_PROFILES, DocumentAgentLoop
 from mona.agent.loop import _TASK_PLAN_NOTE, AgentLoop
 from mona.agent.runner import AgentRunner, AgentRunSpec
@@ -46,7 +48,7 @@ from mona.session.manager import SessionManager
 from mona.utils.helpers import estimate_message_tokens
 from mona.utils.prompt_templates import render_template
 from mona.utils.video_generation_intent import (
-    is_video_generation_request,
+    is_video_generation_mode,
     video_generation_prompt,
 )
 
@@ -487,10 +489,13 @@ def test_document_loop_preloads_pipeline_tools_and_matching_contract(tmp_path) -
     # Planning receives the complete creative essentials, not only a skill link.
     from mona.agent.skills import SkillsLoader
 
-    skill = SkillsLoader(tmp_path).load_skill("mona-video")
+    loader = SkillsLoader(tmp_path)
+    skill = loader.load_skill("mona-motion")
     assert skill is not None
+    assert loader.resolve_skill_dir("mona-video") is None
+    assert loader.get_skill_metadata("mona-motion")["name"] == "mona-motion"
     assert skill.split("---", 2)[2].strip() in messages[0]["content"]
-    skill_dir = SkillsLoader(tmp_path).resolve_skill_dir("mona-video")
+    skill_dir = loader.resolve_skill_dir("mona-motion")
     for reference in DOCUMENT_PROFILES["video"].skill_references:
         assert (skill_dir / "references" / reference).read_text(encoding="utf-8") in messages[0]["content"]
 
@@ -566,11 +571,12 @@ def test_explicit_image_mode_keeps_generation_skill_and_resources(tmp_path) -> N
     assert "### Skill: image-generation" in messages[0]["content"]
 
 
-def test_explicit_video_generation_request_preloads_video_tool(tmp_path) -> None:
+@pytest.fixture
+def video_generation_loop(tmp_path) -> AgentLoop:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation.max_tokens = 4096
-    loop = AgentLoop(
+    return AgentLoop(
         bus=MessageBus(),
         provider=provider,
         workspace=tmp_path,
@@ -580,36 +586,103 @@ def test_explicit_video_generation_request_preloads_video_tool(tmp_path) -> None
         ),
         video_generation_provider_configs={"agnes": ProviderConfig(api_key="test-key")},
     )
-    session = loop.sessions.get_or_create("websocket:chat-video")
-    loop._set_tool_context("websocket", "chat-video", session=session)
 
-    assert loop.tools.is_visible("generate_video") is False
+
+@pytest.mark.parametrize(
+    ("content", "metadata"),
+    [
+        ("制作一个简短动画，描述一张A4纸对折N次后能到月球", {}),
+        ("重试生成视频", {}),
+        ("用 Python 写代码，制作小球弹跳动画并保存为视频", {}),
+        ("Create a short animation showing an A4 sheet folded until it reaches the Moon.", {}),
+        ("Write JavaScript code to animate a bouncing ball and save it as a video.", {}),
+        ("为什么视频生成会失败？", {}),
+        ("Why did video generation fail?", {}),
+        ("重试生成视频", {"video_generation": {"enabled": False}}),
+        ("重试生成视频", {"video_generation": {"enabled": "true"}}),
+        ("重试生成视频", {"video_generation": {"enabled": 1}}),
+        ("重试生成视频", {"video_generation": {}}),
+        ("重试生成视频", {"video_generation": True}),
+        ("重试生成视频", {"video_generation": []}),
+        ("重试生成视频", {"video_generation": None}),
+    ],
+)
+def test_ordinary_video_requests_keep_user_text_and_do_not_preload_generation(
+    video_generation_loop, content, metadata,
+) -> None:
+    loop = video_generation_loop
+    assert loop.tools.has("generate_video")
+    session = loop.sessions.get_or_create("websocket:chat-video")
+    loop._set_tool_context("websocket", "chat-video", metadata=metadata, session=session)
+
     messages = loop._build_initial_messages(
         InboundMessage(
             channel="websocket",
             sender_id="user",
             chat_id="chat-video",
-            content="重试生成视频",
+            content=content,
+            metadata=metadata,
         ),
         session,
         [],
         None,
     )
 
-    assert loop.tools.is_visible("generate_video") is True
-    assert "Use the generate_video tool directly" in messages[-1]["content"]
+    assert is_video_generation_mode(metadata) is False
+    assert video_generation_prompt(content, metadata) == content
+    assert messages[-1]["role"] == "user"
+    assert messages[-1]["content"].startswith(f"{content}\n\n{loop.context._RUNTIME_CONTEXT_TAG}")
+    assert not loop.tools.is_visible("generate_video")
+    assert "generate_video" not in {
+        item["function"]["name"] for item in loop.tools.get_definitions()
+    }
 
 
-def test_video_generation_intent_is_explicit_and_does_not_capture_diagnosis() -> None:
+def test_explicit_video_mode_keeps_generation_tool_and_reference_guidance(
+    video_generation_loop, tmp_path,
+) -> None:
+    loop = video_generation_loop
+    image = tmp_path / "reference.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
     content = "重试生成视频"
-    assert is_video_generation_request(content, {}) is True
-    prompt = video_generation_prompt(content, {})
+    metadata = {"video_generation": {"enabled": True}}
+    session = loop.sessions.get_or_create("websocket:chat-video")
+    loop._set_tool_context("websocket", "chat-video", metadata=metadata, session=session)
+
+    messages = loop._build_initial_messages(
+        InboundMessage(
+            channel="websocket",
+            sender_id="user",
+            chat_id="chat-video",
+            content=content,
+            media=[str(image)],
+            metadata=metadata,
+        ),
+        session,
+        [],
+        None,
+    )
+
+    assert is_video_generation_mode(metadata) is True
+    assert loop.tools.is_visible("generate_video")
+    assert "generate_video" in {
+        item["function"]["name"] for item in loop.tools.get_definitions()
+    }
+    assert messages[-1]["role"] == "user"
+    assert any(block["type"] == "image_url" for block in messages[-1]["content"])
+    prompt = next(block["text"] for block in messages[-1]["content"] if block["type"] == "text")
+    assert prompt.startswith(content + "\n\n")
     assert "Use the generate_video tool directly" in prompt
     assert "do not use terminal tools" in prompt
+    assert "aspect_ratio" in prompt and "duration" in prompt
+    assert "reference_images" in prompt and "first_frame" in prompt and "last_frame" in prompt
+    assert repr(str(image)) in prompt
 
-    diagnostic = "为什么视频生成会失败？"
-    assert is_video_generation_request(diagnostic, {}) is False
-    assert video_generation_prompt(diagnostic, {}) == diagnostic
+
+def test_video_generation_prompt_without_metadata_keeps_original_text() -> None:
+    content = "重试生成视频"
+    assert is_video_generation_mode(None) is False
+    assert video_generation_prompt(content, None) == content
 
 
 def test_unavailable_tool_does_not_assume_a_terminal_panel() -> None:
@@ -749,6 +822,62 @@ def test_skill_read_unlocks_resources_only_after_success(monkeypatch, tmp_path) 
     assert registry.is_visible("skill_reference_read")
     result = asyncio.run(registry.execute("skill_reference_read", {"skill": "my", "ref_path": "examples.md"}))
     assert not result.startswith("Error")
+
+
+def test_video_skill_read_and_history_restore_full_creation_capabilities_without_permissions(
+    monkeypatch, tmp_path,
+) -> None:
+    import mona.agent.tools.skill_tools as skill_tools
+    from mona.agent.skills import SkillsLoader
+    from mona.agent.tools.video import VideoTool
+
+    skills = SkillsLoader(tmp_path)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: skills)
+    registry = ToolRegistry()
+    registry.register(LoadCapabilityTool(workspace=tmp_path, agent_id="mona", registry=registry))
+    registry.register(SkillReadTool(track_usage=False))
+    registry.register(SkillReferenceReadTool(track_usage=False))
+    registry.register(WriteFileTool(workspace=tmp_path, allowed_dir=tmp_path))
+    registry.register(_NamedTool("generate_image"))
+    video = VideoTool(tmp_path)
+    context = RequestContext(channel="websocket", chat_id="video-skill")
+    video.set_context(context)
+    registry.register(video)
+    registry.set_allowed_tool_names({"load_capability", "skill_read"})
+    bind_capability_context(context)
+
+    result = asyncio.run(registry.execute("skill_read", {"name": "mona-motion"}))
+    assert isinstance(result, str)
+    for tool_name in ("video", "write_file", "skill_reference_read", "generate_image"):
+        assert tool_enabled_by_capability(tool_name) is True
+    assert not registry.is_visible("video")
+    _tool, _params, permission_error = registry.prepare_call(
+        "video", {"action": "inspect", "name": "demo"},
+    )
+    assert permission_error is not None
+    assert "not permitted" in permission_error
+
+    resumed_context = RequestContext(channel="websocket", chat_id="video-skill-resumed")
+    bind_capability_context(resumed_context)
+    video.set_context(resumed_context)
+    activate_capabilities_for_history([{
+        "role": "assistant",
+        "tool_calls": [{"function": {
+            "name": "skill_read", "arguments": json.dumps({"name": "mona-motion"}),
+        }}],
+    }])
+    for tool_name in ("video", "write_file", "skill_reference_read", "generate_image"):
+        assert tool_enabled_by_capability(tool_name) is True
+    assert not registry.is_visible("video")
+
+    registry.set_allowed_tool_names({
+        "load_capability", "skill_read", "skill_reference_read", "write_file",
+        "generate_image", "video",
+    })
+    assert registry.is_visible("video")
+    assert registry.is_visible("write_file")
+    assert registry.is_visible("skill_reference_read")
+    assert registry.is_visible("generate_image")
 
 
 def test_retained_calls_restore_capabilities_without_replaying_or_expanding_permissions(tmp_path) -> None:

@@ -119,6 +119,7 @@ async def test_create_project_starts_in_storyboard_phase(
     assert meta["requirePlanApproval"] is True
     assert meta["planRevision"] == 0
     assert meta["approvedPlanRevision"] is None
+    assert meta.get("narrationEnabled", False) is False
     assert (
         tmp_path
         / "video_projects"
@@ -147,6 +148,37 @@ async def test_create_project_never_stores_tts_api_key(
     meta = _read_meta(tmp_path / "video_projects" / "demo")
     assert meta["narrationEnabled"] is True
     assert not any("apikey" in key.lower() for key in meta)
+
+
+async def test_automatic_project_keeps_request_authorization_when_director_fields_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_schedule_video_push", lambda *_args: None)
+    project = _make_project(tmp_path)
+    authorization = {"mode": "automatic", "projectName": project.name, "chatId": "current-chat",
+                     "instruction": "自动完成这个讲解视频。", "source": "user-request"}
+    (project / ".chat_id").write_text("current-chat", encoding="utf-8")
+    meta = {"name": project.name, "executionMode": "automatic", "executionAuthorization": authorization,
+            "scenes": [{"index": 1, "title": "过滤", "duration": 3, "visual": "水经过滤层", "animation": "颗粒停留", "narration": ""}]}
+    server._video_plan_changed(meta)
+    _write_meta(project, meta)
+    updated = await server.handle_video_project_scene_update(_post_request({
+        "name": project.name, "index": 1, "animation": "水流持续前进，颗粒留在滤层", "expectedPlanRevision": 1,
+    }))
+    assert updated.status == 200
+    current = _read_meta(project)
+    assert current["planRevision"] == current["approvedPlanRevision"] == 2
+    assert current["phase"] == "producing" and current["requirePlanApproval"] is True
+    assert current["executionAuthorization"] == authorization
+    server._require_video_plan_approval(current, 2, check_revision=True)
+    with pytest.raises(ValueError, match="已更新"):
+        server._require_video_plan_approval(current, 1, check_revision=True)
+    for invalid in (None, {**authorization, "projectName": "another-project"}, {**authorization, "instruction": ""}):
+        copied = {**current, "executionAuthorization": invalid}
+        server._video_plan_changed(copied)
+        assert copied["requirePlanApproval"] is True and copied["approvedPlanRevision"] is None
+        assert copied["phase"] == "storyboard"
 
 
 async def test_project_music_is_registered_and_enters_commercial_rights_gate(
@@ -1263,7 +1295,7 @@ def test_quality_presets_map_to_expected_fps() -> None:
     script = (
         Path(server.__file__).parent.parent
         / "skills"
-        / "mona-video"
+        / "mona-motion"
         / "scripts"
         / "render.py"
     )
@@ -1729,7 +1761,7 @@ def _load_render_module():
     script = (
         Path(server.__file__).parent.parent
         / "skills"
-        / "mona-video"
+        / "mona-motion"
         / "scripts"
         / "render.py"
     )

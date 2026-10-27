@@ -245,10 +245,10 @@ for source, destination in collect_data_files("mona"):
         continue
     datas.append((source, destination))
 
-video_runtime = MONA_PKG / "skills/mona-video/runtime"
+video_runtime = MONA_PKG / "skills/mona-motion/runtime"
 if not (video_runtime / "mona-player.js").is_file():
-    raise FileNotFoundError("Huashu Motion preview bridge missing")
-datas.append((str(video_runtime), "mona/skills/mona-video/runtime"))
+    raise FileNotFoundError("Mona Motion preview bridge missing")
+datas.append((str(video_runtime), "mona/skills/mona-motion/runtime"))
 binaries = []
 
 for package in ("trafilatura", "curl_cffi"):

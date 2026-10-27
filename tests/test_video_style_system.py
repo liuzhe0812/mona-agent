@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -55,7 +57,7 @@ def test_templates_are_the_nine_huashu_motion_sources() -> None:
         "huashu-type", "huashu-collage", "huashu-science", "huashu-3d", "huashu-ui-space",
     }
     required = {"cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"}
-    skill = Path(__file__).resolve().parents[1] / "mona/skills/mona-video"
+    skill = Path(__file__).resolve().parents[1] / "mona/skills/mona-motion"
     for item in templates:
         assert required <= set(item["components"])
         assert validate_style(item)["valid"]
@@ -72,11 +74,39 @@ async def test_style_template_list_includes_real_huashu_preview_urls(
     assert response.status == 200
     templates = {item["id"]: item for item in (await response.json())["templates"]}
 
-    assert templates["huashu-whiteboard"]["preview"] == {
-        "poster": "/api/video/style/templates/huashu-whiteboard/preview?kind=poster",
-        "motion": "/api/video/style/templates/huashu-whiteboard/preview?kind=motion",
-    }
+    for kind, url in templates["huashu-whiteboard"]["preview"].items():
+        parsed = urlsplit(url)
+        assert parsed.path == "/api/video/style/templates/huashu-whiteboard/preview"
+        assert parse_qs(parsed.query)["kind"] == [kind]
+        assert int(parse_qs(parsed.query)["v"][0], 16) > 0
     assert all(set(item["preview"]) == {"poster", "motion"} for item in templates.values())
+
+
+async def test_updated_style_preview_uses_a_new_cache_url(services_client, tmp_path, monkeypatch) -> None:
+    assets = tmp_path / "preview-assets"
+    assets.mkdir()
+    poster = assets / "poster.png"
+    _image(poster, size=(16, 16))
+    _image(assets / "motion.gif", size=(16, 16), fmt="GIF")
+    monkeypatch.setattr(video_series, "_HUASHU_ASSET_ROOT", assets)
+    monkeypatch.setattr(video_series, "_HUASHU_TEMPLATE_PREVIEWS", {
+        "huashu-whiteboard": {"poster": ("poster.png", "PNG"), "motion": ("motion.gif", "GIF")},
+    })
+
+    async def poster_url():
+        response = await services_client.get("/api/video/style/templates")
+        assert response.status == 200
+        return next(item["preview"]["poster"] for item in (await response.json())["templates"] if item["id"] == "huashu-whiteboard")
+
+    before = await poster_url()
+    stamp = poster.stat()
+    Image.new("RGB", (16, 16), "green").save(poster)
+    os.utime(poster, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+    after = await poster_url()
+    assert before != after
+    updated = await services_client.get(after)
+    assert updated.status == 200
+    assert await updated.read() == poster.read_bytes()
 
 
 async def test_huashu_preview_endpoint_serves_real_template_captures(

@@ -39,7 +39,7 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `mona-xlsx` | Professional spreadsheet editing through live Office sessions. |
 | `mona-pptx` | Presentation design and editing through live Office sessions. |
 | `mona-canvas` | Create and edit content on Mona's canvas. |
-| `mona-video` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
+| `mona-motion` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
 | `my` | Check and set the agent's own runtime state (model, iterations, token usage, web config). |
 | `pdf` | Built-in PDF text/table extraction, rendering, creation, merging, page extraction and forms; reuses Mona's bundled Python libraries. |
 | `skill-creator` | Create or update AgentSkills. |

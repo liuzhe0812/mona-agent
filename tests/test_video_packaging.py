@@ -10,14 +10,15 @@ def test_base_wheel_includes_standard_skill_dependency_manifests() -> None:
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert "mona/skills/**/*.toml" in project["tool"]["hatch"]["build"]["include"]
-    for skill in ("mona-docx", "mona-video", "skill-creator"):
+    for skill in ("mona-docx", "mona-motion", "skill-creator"):
         assert (root / "mona" / "skills" / skill / "pyproject.toml").is_file()
+    assert not (root / "mona" / "skills" / "mona-video").exists()
     assert not (root / "mona" / "skills" / "mona-ppt").exists()
 
 
 def test_huashu_resources_keep_upstream_hashes_and_packaged_licenses() -> None:
     root = Path(__file__).resolve().parent.parent
-    assets = root / "mona/skills/mona-video/assets/huashu-motion"
+    assets = root / "mona/skills/mona-motion/assets/huashu-motion"
     provenance = json.loads((assets / "provenance.json").read_text(encoding="utf-8"))
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     patterns = project["tool"]["hatch"]["build"]["include"]
@@ -41,7 +42,7 @@ def test_huashu_builtin_previews_are_animated_real_template_captures() -> None:
     from PIL import Image
 
     root = Path(__file__).resolve().parent.parent
-    assets = root / "mona/skills/mona-video/assets/huashu-motion"
+    assets = root / "mona/skills/mona-motion/assets/huashu-motion"
     manifest = json.loads((assets / "previews/manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["previews"]) == 9
     for item in manifest["previews"]:

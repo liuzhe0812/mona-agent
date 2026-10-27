@@ -12,7 +12,7 @@ from PIL import Image
 
 @pytest.fixture
 def renderer(monkeypatch):
-    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-video" / "scripts"
+    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-motion" / "scripts"
     monkeypatch.syspath_prepend(str(scripts))
     spec = importlib.util.spec_from_file_location("mona_video_transition_render", scripts / "render.py")
     module = importlib.util.module_from_spec(spec)

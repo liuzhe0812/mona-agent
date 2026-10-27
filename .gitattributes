@@ -12,3 +12,5 @@
 
 # Vendored design resources are verified against the pinned upstream Git blobs.
 /mona/skills/mona-design/** -text
+/mona/skills/mona-motion/assets/huashu-motion/** -text
+/mona/skills/mona-motion/references/huashu-motion/** -text

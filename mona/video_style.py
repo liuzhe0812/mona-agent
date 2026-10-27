@@ -226,7 +226,7 @@ def _require_series(root: Path | str, series_id: str) -> Path:
 
 
 def _template_directory() -> Path:
-    return Path(__file__).parent / "skills" / "mona-video" / "templates" / "styles"
+    return Path(__file__).parent / "skills" / "mona-motion" / "templates" / "styles"
 
 
 def _custom_template() -> dict[str, Any]:

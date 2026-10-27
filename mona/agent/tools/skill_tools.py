@@ -126,6 +126,10 @@ class SkillReadTool(Tool):
         activate_capabilities({"skill_resources"})
         if name in {"pdf", "mona-docx", "mona-xlsx", "mona-pptx"}:
             activate_capabilities({"office"})
+        if name == "mona-motion":
+            from mona.agent.tools.capabilities import VIDEO_CREATION_CAPABILITIES
+
+            activate_capabilities(set(VIDEO_CREATION_CAPABILITIES))
         if self._track_usage:
             from mona.agent import skill_usage
 

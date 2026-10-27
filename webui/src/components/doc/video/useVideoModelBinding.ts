@@ -1,13 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, fetchVideoSessionModelBinding } from "@/lib/api";
+import { ApiError, fetchVideoSessionModelBinding, listSessions } from "@/lib/api";
 import { RoomCommandError } from "@/lib/mona-client";
 import type { AgentModelBinding } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 
-export function useVideoModelBinding(chatId: string | null, initialBinding: AgentModelBinding | null = null) {
+export function useVideoSessionKind(chatId: string | null, knownKind?: string | null) {
+  const { token } = useClient();
+  const [resolved, setResolved] = useState<{ chatId: string; kind: string | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const agentKind = knownKind !== undefined ? knownKind : resolved?.chatId === chatId ? resolved.kind : undefined;
+  useEffect(() => {
+    setError(null);
+    if (!chatId || knownKind !== undefined) return;
+    let active = true;
+    void listSessions(token).then((sessions) => {
+      const session = sessions.find((item) => item.channel === "websocket" && item.chatId === chatId);
+      if (!session) throw new Error("Session not found");
+      if (active) setResolved({ chatId, kind: session.agentKind ?? null });
+    }).catch(() => { if (active) setError("会话信息未能读取，请稍后重新打开项目。"); });
+    return () => { active = false; };
+  }, [chatId, knownKind, token]);
+  return { agentKind, error };
+}
+
+export function useVideoModelBinding(chatId: string | null, initialBinding: AgentModelBinding | null = null, enabled = true) {
   const { client, token } = useClient();
   const [binding, setBinding] = useState<AgentModelBinding | null>(initialBinding);
-  const [loading, setLoading] = useState(Boolean(chatId));
+  const [loading, setLoading] = useState(Boolean(chatId) && enabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -16,14 +35,15 @@ export function useVideoModelBinding(chatId: string | null, initialBinding: Agen
   useEffect(() => {
     let active = true;
     setError(null);
-    if (!chatId) { setLoading(false); return; }
+    if (!enabled || !chatId) { setLoading(false); return; }
     setLoading(true);
     void fetchVideoSessionModelBinding(token, chatId).then((value) => { if (active) setBinding(value); })
       .catch(() => { if (active) setError("模型设置未能读取，请重试。"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [chatId, token, revision]);
+  }, [chatId, enabled, token, revision]);
   const changeBinding = useCallback(async (value: AgentModelBinding | null) => {
+    if (!enabled) return null;
     setSaving(true);
     try {
       let saved = value;
@@ -46,6 +66,6 @@ export function useVideoModelBinding(chatId: string | null, initialBinding: Agen
       return saved;
     }
     finally { setSaving(false); }
-  }, [chatId, client, token]);
+  }, [chatId, client, enabled, token]);
   return { binding, setBinding, changeBinding, loading, saving, error, reload: () => setRevision((value) => value + 1) };
 }

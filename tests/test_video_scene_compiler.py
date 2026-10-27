@@ -597,7 +597,7 @@ def test_cli_writes_scene_file(tmp_path: Path, style: dict) -> None:
     spec_path.write_text(json.dumps(_spec(), ensure_ascii=False), encoding="utf-8")
     style_path.write_text(json.dumps(style, ensure_ascii=False), encoding="utf-8")
     scene_path.write_text(json.dumps({"duration": 7, "resolution": "960x540"}), encoding="utf-8")
-    script = Path(__file__).parents[1] / "mona" / "skills" / "mona-video" / "scripts" / "compile_scene_spec.py"
+    script = Path(__file__).parents[1] / "mona" / "skills" / "mona-motion" / "scripts" / "compile_scene_spec.py"
     result = subprocess.run(
         [sys.executable, str(script), "--spec", str(spec_path), "--style", str(style_path), "--scene", str(scene_path), "--project", str(project)],
         capture_output=True,

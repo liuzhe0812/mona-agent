@@ -86,7 +86,7 @@ async def test_full_preview_does_not_fall_back_to_scene_pages_when_film_is_unpre
 
 @pytest.fixture
 def renderer(monkeypatch):
-    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-video" / "scripts"
+    scripts = Path(__file__).parents[1] / "mona" / "skills" / "mona-motion" / "scripts"
     monkeypatch.syspath_prepend(str(scripts))
     spec = importlib.util.spec_from_file_location("mona_video_huashu_render", scripts / "render.py")
     module = importlib.util.module_from_spec(spec)

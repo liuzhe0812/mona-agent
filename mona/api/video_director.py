@@ -30,6 +30,7 @@ _MAX_REPRESENTATIVE_CUES = 4
 _REVIEW_FRAME_MAX_DIMENSION = 160
 _REVIEW_PIXEL_DELTA = 16
 _REVIEW_CHANGED_PIXEL_PERCENT = 0.1
+_MAX_SOURCE_BYTES = 2 * 1024 * 1024
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -242,19 +243,91 @@ class _ScenePreviewError(ValueError):
         self.diagnostics = diagnostics
 
 
+def _owner(request: web.Request) -> str:
+    if not is_valid_services_token(request.headers.get(SERVICES_TOKEN_HEADER)):
+        raise web.HTTPUnauthorized(reason="invalid services token")
+    owner = request.headers.get(OWNER_HEADER)
+    if not owner or not owner.strip():
+        raise web.HTTPForbidden(reason="视频操作缺少当前会话")
+    return owner
+
+
 def _project(request: web.Request, name: str):
     from mona.api import server
 
-    if not is_valid_services_token(request.headers.get(SERVICES_TOKEN_HEADER)):
-        raise web.HTTPUnauthorized(reason="invalid services token")
+    owner = _owner(request)
     project, error = server._video_project_dir_or_404(name)
     if error is not None:
         raise web.HTTPNotFound(reason="视频项目不存在")
     assert project is not None
     binding = project / ".chat_id"
-    if not binding.is_file() or not request.headers.get(OWNER_HEADER) or binding.read_text(encoding="utf-8").strip() != request.headers[OWNER_HEADER]:
+    if not binding.is_file() or binding.read_text(encoding="utf-8").strip() != owner:
         raise web.HTTPForbidden(reason="视频不属于当前会话")
     return project
+
+
+def _execution_authorization(
+    body: dict, name: str, owner: str, *, default_mode: str | None = None
+) -> tuple[str, dict[str, str]]:
+    mode = body.get("execution_mode", default_mode)
+    if mode not in ("interactive", "automatic"):
+        raise ValueError("请选择交互制作或自动完成")
+    instruction = body.get("instruction", "")
+    if not isinstance(instruction, str) or (mode == "automatic" and not instruction.strip()):
+        raise ValueError("自动完成需要保留用户本次明确的制作要求")
+    return mode, {"mode": mode, "instruction": instruction, "chatId": owner,
+                  "projectName": name, "source": "user-request"}
+
+
+async def _create_project(body: dict, name: str, owner: str) -> web.Response:
+    from mona.api import server
+
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return web.json_response({"ok": False, "error": "视频项目名称无效"}, status=400)
+    mode, authorization = _execution_authorization(body, name, owner, default_mode="interactive")
+    request_id = body.get("request_id")
+    if not isinstance(request_id, str) or not request_id.strip():
+        raise ValueError("创建视频需要当前请求标识")
+    settings = body.get("settings", {})
+    if not isinstance(settings, dict) or set(settings) - {
+        "resolution", "language", "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode"
+    }:
+        raise ValueError("视频设置包含不支持的选项")
+    settings = {"narrationEnabled": True, **settings}
+    server._video_settings_payload(settings)
+    paths = body.get("source_paths", [])
+    if not isinstance(paths, list) or any(not isinstance(path, str) or not Path(path).is_absolute() for path in paths):
+        raise ValueError("请使用已授权的资料文件")
+    style_id = body.get("style_id", "auto")
+    if not isinstance(style_id, str):
+        raise ValueError("请选择可用风格")
+    root = server._video_projects_dir().resolve()
+    project = (root / name).resolve()
+    if project == root or not project.is_relative_to(root):
+        raise ValueError("视频项目路径无效")
+    reused = project.exists()
+    if reused:
+        binding = project / ".chat_id"
+        if not binding.is_file():
+            return web.json_response({"ok": False, "error": "已有同名视频，请使用其他名称"}, status=409)
+        if binding.read_text(encoding="utf-8").strip() != owner:
+            raise web.HTTPForbidden(reason="视频不属于当前会话")
+        meta = server._load_video_meta(project)
+        if meta.get("creationRequestId") != request_id:
+            return web.json_response({"ok": False, "error": "已有同名视频，请使用其他名称"}, status=409)
+    else:
+        authorization["requestId"] = request_id
+        created = await server.handle_video_project_create(
+            _BodyRequest({"name": name, **settings, "templateId": style_id, "sourcePaths": paths}),
+            _agent_context={"owner": owner, "executionMode": mode, "executionAuthorization": authorization,
+                            "creationRequestId": request_id},
+        )
+        if created.status != 200:
+            return created
+        meta = server._load_video_meta(project)
+    return web.json_response({"ok": True, "name": name, "projectPath": str(project), "reused": reused,
+                              "executionMode": meta.get("executionMode", "interactive"),
+                              "planRevision": meta.get("planRevision", 0)})
 
 
 def _saved_video_style(root: Path, series_id: str) -> tuple[dict[str, Any], dict[str, Any], Path]:
@@ -496,12 +569,19 @@ async def _sync_composition(project: Path, meta: dict, body: dict) -> web.Respon
             raise ValueError("制作时只能添加已授权的素材，不能替换原素材")
         validate_asset_references(project, additions)
         target["assets"] = additions
-    source = Path(str(body.get("source_file") or "drafts/film.html"))
-    source = (project / source).resolve() if not source.is_absolute() else source.resolve()
     canonical = project / "scene_sources/film.html"
-    if not canonical.resolve().is_relative_to(project.resolve()) or not source.is_relative_to(project.resolve()) or not source.is_file() or source.suffix.lower() != ".html" or source == canonical.resolve():
-        raise ValueError("请将完整动画页面保存在当前项目的 drafts 目录，再同步制作")
-    original = source.read_text(encoding="utf-8")
+    if not canonical.resolve().is_relative_to(project.resolve()):
+        raise ValueError("动画源码超出项目范围")
+    if "source_content" in body:
+        original = body["source_content"]
+        if not isinstance(original, str) or len(original.encode("utf-8")) > _MAX_SOURCE_BYTES:
+            raise ValueError("动画源码必须是 2 MiB 以内的 UTF-8 页面")
+    else:
+        source = Path(str(body.get("source_file") or "drafts/film.html"))
+        source = (project / source).resolve() if not source.is_absolute() else source.resolve()
+        if not source.is_relative_to(project.resolve()) or not source.is_file() or source.suffix.lower() != ".html" or source == canonical.resolve():
+            raise ValueError("请将完整动画页面保存在当前项目的 drafts 目录，再同步制作")
+        original = source.read_text(encoding="utf-8")
     style = json.loads((project / "style/design-system.json").read_text(encoding="utf-8"))
     authored_scene_html(original, project, scenes[0], proposed, style)
     for scene in scenes:
@@ -540,13 +620,39 @@ async def handle_video_agent(request: web.Request) -> web.Response:
     from mona.api import server
 
     try:
+        owner = _owner(request)
         body = await request.json()
         if not isinstance(body, dict):
             raise ValueError("视频操作格式无效")
         name = str(body.get("name") or "").strip()
+        action = body.get("action")
+        if action == "create":
+            return await _create_project(body, name, owner)
         project = _project(request, name)
         meta = server._load_video_meta(project)
-        action = body.get("action")
+        if action == "execution":
+            if meta.get("styleAuthoring"):
+                raise ValueError("样片授权只用于当前风格样片，请另建普通视频")
+            revision = body.get("plan_revision")
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision != meta.get("planRevision", 0):
+                return web.json_response({"ok": False, "error": "方案已更新，请读取当前视频后再调整制作方式",
+                                          "planRevision": meta.get("planRevision", 0)}, status=409)
+            mode, authorization = _execution_authorization(body, name, owner)
+            automatic = mode == "automatic" and bool(meta.get("scenes"))
+            phase = "storyboard"
+            if automatic:
+                phase = meta.get("phase", "producing") if (
+                    meta.get("executionMode") == mode and meta.get("approvedPlanRevision") == revision
+                ) else "producing"
+            updates = {"name": name, "executionMode": mode, "executionAuthorization": authorization,
+                       "requirePlanApproval": True, "approvedPlanRevision": revision if automatic else None,
+                       "phase": phase}
+            if any(meta.get(key) != value for key, value in updates.items()):
+                meta.update(updates)
+                server._save_video_meta(project, meta)
+                server._schedule_video_push(name, "scenes")
+            return web.json_response({"ok": True, "executionMode": mode, "planRevision": revision,
+                                      "awaitingConfirmation": bool(meta.get("scenes")) and not automatic})
         if action == "inspect":
             from mona.video_assets import list_project_assets
 
@@ -575,10 +681,16 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                 "requirePlanApproval": meta.get("requirePlanApproval", False),
                 "planRevision": meta.get("planRevision", 0),
                 "approvedPlanRevision": meta.get("approvedPlanRevision"),
+                "executionMode": meta.get("executionMode", "interactive"),
+                "executionAuthorizationMode": "automatic" if server._video_automatic_execution_authorized(meta) else "interactive",
                 "sources": [str(path) for path in sorted((project / "sources").glob("source-*")) if path.is_file()],
                 "draftDirectory": str(project / "drafts"),
                 "renderStatus": server._read_render_status(project),
-                "authoringContract": 'Use the bundled Huashu Motion director, motion languages and real template source. Prepare the director plan and stop for initial confirmation. Then generate actual audio for every narrated scene, inspect global speech cues, write one complete drafts/film.html using GSAP + OM and sync(source_file,plan_revision) once for the whole film; scene_index is not required for sync. Every segment shares this continuous global timeline. Use registered assets, shared --mona-* style variables, OM.cue/OM.clock/OM.camera and local vendor scripts from the bundled Huashu resources. Audio remains in managed audioTracks; no audio elements in scene code. Do not run upstream installers, voice or render commands. Preserve data-om-id anchors and existing scene intentions during local edits. Preview each segment with scene_index; exact timestamps are partial observations, default preview completes the technical review. Inspect actual images and repair meaningful actions, continuity and readability before export. Pixel changes do not certify creative quality. Canonical scene_sources/film.html, composition/index.html and scene slices belong to the tool.',
+                "authoringContract": 'Use the bundled Mona Motion director, motion languages and real template source. '
+                + ('Prepare the director plan with the current plan_revision and continue automatically under the user request. '
+                   if server._video_automatic_execution_authorized(meta) else
+                   'Prepare the director plan and stop for initial confirmation. ')
+                + 'Then generate actual audio for every narrated scene, inspect global speech cues, write one complete drafts/film.html using GSAP + OM and sync(source_file,plan_revision) once for the whole film; scene_index is not required for sync. Every segment shares this continuous global timeline. Use registered assets, shared --mona-* style variables, OM.cue/OM.clock/OM.camera and local vendor scripts from the bundled Huashu resources. Audio remains in managed audioTracks; no audio elements in scene code. Do not run upstream installers, voice or render commands. Preserve data-om-id anchors and existing scene intentions during local edits. Preview each segment with scene_index; exact timestamps are partial observations, default preview completes the technical review. Inspect actual images and repair meaningful actions, continuity and readability before export. Pixel changes do not certify creative quality. Canonical scene_sources/film.html, composition/index.html and scene slices belong to the tool.',
             })
         if action == "style_rules":
             from mona.video_style import RevisionConflictError, read_style_draft, save_style_draft
@@ -615,7 +727,7 @@ async def handle_video_agent(request: web.Request) -> web.Response:
                 raise ValueError("请保留当前样片的画风，通过创作规则和样式调整，不自动替换风格")
             if isinstance(body.get("plan_revision"), bool) or not isinstance(body.get("plan_revision"), int) or body.get("plan_revision") != meta.get("planRevision", 0):
                 raise ValueError("方案已更新，请读取当前视频后再选择风格")
-            if meta.get("approvedPlanRevision") == meta.get("planRevision", 0):
+            if meta.get("approvedPlanRevision") == meta.get("planRevision", 0) and not server._video_automatic_execution_authorized(meta):
                 raise ValueError("风格已确认，改变整体风格须先准备新版方案")
             style_id = body.get("style_id")
             if not isinstance(style_id, str):
@@ -658,6 +770,12 @@ async def handle_video_agent(request: web.Request) -> web.Response:
         if action == "plan":
             from mona.video_assets import validate_asset_references
 
+            if meta.get("executionMode") == "automatic" and (
+                isinstance(body.get("plan_revision"), bool) or not isinstance(body.get("plan_revision"), int)
+                or body["plan_revision"] != meta.get("planRevision", 0)
+            ):
+                return web.json_response({"ok": False, "error": "方案已更新，请读取当前视频后再准备分镜",
+                                          "planRevision": meta.get("planRevision", 0)}, status=409)
             values = body.get("scenes")
             if not isinstance(values, list) or not values:
                 raise ValueError("请提供至少一个片段的分镜方案")
@@ -692,7 +810,13 @@ async def handle_video_agent(request: web.Request) -> web.Response:
             return web.json_response({"ok": True, "scenes": meta.get("scenes") or [], "planRevision": meta.get("planRevision", 0),
                                       "awaitingConfirmation": bool(meta.get("requirePlanApproval")) and meta.get("approvedPlanRevision") != meta.get("planRevision", 0)})
         if action == "status":
-            return await server.handle_video_project_export_status(_QueryRequest(name))
+            response = await server.handle_video_project_export_status(_QueryRequest(name))
+            if response.status == 200:
+                current = server._load_video_meta(project)
+                return web.json_response({**json.loads(response.body),
+                                          "outputStale": bool(current.get("outputStale")),
+                                          "planRevision": current.get("planRevision", 0)})
+            return response
         if action == "edit":
             from mona.video_assets import validate_asset_references
             from mona.video_project import approve_scoped_edit, scene_edit_changes

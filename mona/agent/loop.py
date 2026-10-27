@@ -68,7 +68,7 @@ from mona.utils.llm_runtime import LLMRuntime
 from mona.utils.prompt_templates import render_template
 from mona.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from mona.utils.video_generation_intent import (
-    is_video_generation_request,
+    is_video_generation_mode,
     video_generation_prompt,
 )
 
@@ -1348,7 +1348,7 @@ class AgentLoop:
         activate_capabilities_for_history(history)
         if (
             self.tools.has("generate_video")
-            and is_video_generation_request(msg.content, msg.metadata)
+            and is_video_generation_mode(msg.metadata)
         ):
             activate_capabilities({"video"})
         image_mode = msg.metadata.get("image_generation")

@@ -20,6 +20,7 @@ interface DocChatPanelProps {
   onReadyChange?: (chatId: string | null) => void;
   hideStop?: boolean;
 }
+  disabled?: boolean;
 
 export function DocChatPanel({
   chatId,
@@ -30,6 +31,7 @@ export function DocChatPanel({
   onReadyChange,
   hideStop = false,
 }: DocChatPanelProps) {
+  disabled = false,
   const [quote, setQuote] = useState<MessageQuote | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const onStreamingChangeRef = useRef(onStreamingChange);
@@ -91,7 +93,7 @@ export function DocChatPanel({
     images?: SendImage[],
     composerOptions?: SendOptions,
   ) => {
-    if (!chatId) return;
+    if (!chatId || disabled) return;
     const contextOptions = getSendOptions?.(content);
     const sendContent = prepareContent?.(content) ?? content;
     const options: SendOptions = {
@@ -105,7 +107,7 @@ export function DocChatPanel({
       return;
     }
     send(sendContent, images, options);
-  }, [chatId, getSendOptions, isStreaming, pendingQueue, prepareContent, send]);
+  }, [chatId, disabled, getSendOptions, isStreaming, pendingQueue, prepareContent, send]);
 
   const handlePendingAppend = useCallback((id: string) => {
     const pending = pendingQueue.messages.find((message) => message.id === id);
@@ -166,7 +168,7 @@ export function DocChatPanel({
           isAwaitingModelResponse={isAwaitingModelResponse}
           stopping={stopping}
           onStop={hideStop ? undefined : stop}
-          disabled={!chatId}
+          disabled={!chatId || disabled}
           placeholder={placeholder ?? "输入消息..."}
           quote={quote}
           onClearQuote={() => setQuote(null)}

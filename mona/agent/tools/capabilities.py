@@ -41,6 +41,7 @@ CAPABILITY_TOOL_GROUPS: dict[str, frozenset[str]] = {
     "computer": frozenset({"computer_act", "computer_observe"}),
 }
 CAPABILITY_NAMES = tuple(CAPABILITY_TOOL_GROUPS)
+VIDEO_CREATION_CAPABILITIES = frozenset({"video", "development", "skill_resources", "image"})
 _TOOL_CAPABILITIES: dict[str, frozenset[str]] = {
     tool_name: frozenset(
         capability
@@ -62,7 +63,7 @@ _ACTIVE_CAPABILITIES: ContextVar[set[str] | None] = ContextVar(
 def _metadata_capabilities(metadata: dict[str, Any]) -> set[str]:
     active: set[str] = set()
     if metadata.get("agent_kind") == "video":
-        active.update({"video", "development", "skill_resources", "image"})
+        active.update(VIDEO_CREATION_CAPABILITIES)
     if metadata.get("office_session_id") or metadata.get("office_document_type"):
         active.add("office")
     attachments = metadata.get("_attachment_paths")
@@ -156,6 +157,8 @@ def activate_capabilities_for_history(history: list[dict[str, Any]]) -> None:
                     "pdf", "mona-docx", "mona-xlsx", "mona-pptx",
                 }:
                     active.add("office")
+                if isinstance(arguments, dict) and arguments.get("name") == "mona-motion":
+                    active.update(VIDEO_CREATION_CAPABILITIES)
             else:
                 groups = capabilities_for_tool(name)
                 # Shared delivery tools do not imply that every media pack was used.

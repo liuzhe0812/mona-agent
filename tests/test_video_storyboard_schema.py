@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 _SCRIPTS = (
-    Path(__file__).parents[1] / "mona" / "skills" / "mona-video" / "scripts"
+    Path(__file__).parents[1] / "mona" / "skills" / "mona-motion" / "scripts"
 )
 
 

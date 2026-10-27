@@ -546,11 +546,10 @@ function Shell({
   );
   const [videoConversationRequest, setVideoConversationRequest] = useState<VideoConversationRequest | null>(null);
   const videoConversationRequestId = useRef(0);
-  const [documentVideoChatIds, setDocumentVideoChatIds] = useState<string[]>([]);
   const [visibleDocumentChatId, setVisibleDocumentChatId] = useState<string | null>(null);
-  const sessionsWithDocumentKinds = useMemo(() => sessions.map((session) =>
-    documentVideoChatIds.includes(session.chatId) && session.agentKind !== "video" ? { ...session, agentKind: "video" } : session,
-  ), [documentVideoChatIds, sessions]);
+  const sessionAgentKinds = useMemo(() => Object.fromEntries(sessions
+    .filter((session) => session.channel === "websocket")
+    .map((session) => [session.chatId, session.agentKind ?? null])), [sessions]);
   const handleVideoConversationHandled = useCallback((requestId: number) => {
     setVideoConversationRequest((current) => current?.requestId === requestId ? null : current);
   }, []);
@@ -1439,7 +1438,7 @@ function Shell({
 
   const onSelectChat = useCallback(
     (key: string) => {
-      const selectedSession = sessionsWithDocumentKinds.find((session) => session.key === key);
+      const selectedSession = sessions.find((session) => session.key === key);
       const selectedChatId = selectedSession?.chatId ?? (key.startsWith("websocket:") ? key.slice("websocket:".length) : undefined);
       if (selectedChatId) {
         setCompletedChatIds((current) => {
@@ -1453,7 +1452,7 @@ function Shell({
       setPendingDirectAgentId(null);
       setPendingDirectAgentName(null);
       setActiveKey(key);
-      if (selectedChatId && (selectedSession?.agentKind === "video" || documentVideoChatIds.includes(selectedChatId))) {
+      if (selectedChatId && selectedSession?.agentKind === "video") {
         setVideoConversationRequest({ chatId: selectedChatId, requestId: ++videoConversationRequestId.current });
         setView("doc");
       } else {
@@ -1463,7 +1462,7 @@ function Shell({
       switchToMonaTab();
       setMobileSidebarOpen(false);
     },
-    [documentVideoChatIds, sessionsWithDocumentKinds, switchToMonaTab],
+    [sessions, switchToMonaTab],
   );
 
   const onOpenProfileArtifact = useCallback(
@@ -1856,11 +1855,11 @@ function Shell({
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
       if (!current) return null;
-      const session = sessionsWithDocumentKinds.find((item) => item.key === current);
+      const session = sessions.find((item) => item.key === current);
       if (session) return session.agentKind === "video" ? null : current;
-      return sessionsWithDocumentKinds.find((item) => item.agentKind !== "video")?.key ?? null;
+      return sessions.find((item) => item.agentKind !== "video")?.key ?? null;
     });
-  }, [sessionsWithDocumentKinds, switchToMonaTab]);
+  }, [sessions, switchToMonaTab]);
 
   const onRestart = useCallback(() => {
     if (!client) return;
@@ -2030,7 +2029,7 @@ function Shell({
   }, [activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
 
   const sessionListProps = {
-    sessions: sessionsWithDocumentKinds,
+    sessions,
     activeKey,
     loading,
     error: sessionError,
@@ -2383,7 +2382,7 @@ function Shell({
                       videoConversationRequest={videoConversationRequest}
                       onVideoConversationHandled={handleVideoConversationHandled}
                       onVisibleConversationChange={setVisibleDocumentChatId}
-                      onVideoChatsChange={setDocumentVideoChatIds}
+                      sessionAgentKinds={sessionAgentKinds}
                       onShowChatHistory={showChatHistory} />
                   </Suspense>
                 </div>

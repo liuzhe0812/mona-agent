@@ -2,7 +2,7 @@
 
 按 ``agent_kind`` 声明式加载 DocumentProfile:
 - soul prompt(video_soul.md)
-- skill(mona-video)
+- skill(mona-motion)
 - tools whitelist
 
 DocumentAgentLoop 不直接消费 message bus。主 AgentLoop 在
@@ -62,7 +62,7 @@ DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
     "video": DocumentProfile(
         agent_kind="video",
         soul_template="agent/video_soul.md",
-        skill_name="mona-video",
+        skill_name="mona-motion",
         tools_whitelist=_VIDEO_TOOLS,
         skill_references=("creative-direction.md", "huashu-motion/library/README.md"),
     ),

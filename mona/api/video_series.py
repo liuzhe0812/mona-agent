@@ -53,7 +53,7 @@ _ASSET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _HUASHU_ASSET_ROOT = (
     Path(__file__).resolve().parents[1]
     / "skills"
-    / "mona-video"
+    / "mona-motion"
     / "assets"
     / "huashu-motion"
 )
@@ -99,8 +99,8 @@ async def handle_video_style_templates(request: web.Request) -> web.Response:
         template_id = str(item.get("id") or "")
         if template_id in _HUASHU_TEMPLATE_PREVIEWS:
             item["preview"] = {
-                kind: f"/api/video/style/templates/{template_id}/preview?kind={kind}"
-                for kind in ("poster", "motion")
+                kind: f"/api/video/style/templates/{template_id}/preview?kind={kind}&v={(_HUASHU_ASSET_ROOT / relative).stat().st_mtime_ns:x}"
+                for kind, (relative, _image_format) in _HUASHU_TEMPLATE_PREVIEWS[template_id].items()
             }
         templates.append(item)
     return web.json_response({"templates": templates})

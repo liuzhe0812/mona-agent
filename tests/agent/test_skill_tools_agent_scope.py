@@ -125,15 +125,15 @@ class TestSkillReadAgentScope:
     async def test_partner_skill_read_cannot_access_mona_only_builtin(
         self, builtin_dir: Path
     ) -> None:
-        _write_skill(builtin_dir, "mona-video", body="# Mona video skill\n")
+        _write_skill(builtin_dir, "mona-motion", body="# Mona video skill\n")
         _write_skill(builtin_dir, "memory", body="# Shared memory skill\n")
 
         partner = SkillReadTool(agent_id=AGENT_A)
         mona = SkillReadTool(agent_id=MONA_AGENT_ID)
 
-        assert "not found" in await partner.execute(name="mona-video")
+        assert "not found" in await partner.execute(name="mona-motion")
         assert await partner.execute(name="memory") == "# Shared memory skill\n"
-        assert await mona.execute(name="mona-video") == "# Mona video skill\n"
+        assert await mona.execute(name="mona-motion") == "# Mona video skill\n"
 
     async def test_agent_private_invisible_to_mona(
         self, skills_roots: dict[str, Path], builtin_dir: Path
