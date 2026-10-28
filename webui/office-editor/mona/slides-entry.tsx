@@ -161,6 +161,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function operationError(operations: SlidesCommand['operations'], index: number, reason: unknown): Error {
+  const operation = operations[index]
+  const name = isRecord(operation) && typeof operation.op === 'string' ? operation.op : '未知操作'
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return new Error(`operations[${index}]（第 ${index + 1} 项，${name}）：${message}`)
+}
+
 function isVersion(value: unknown): value is DocumentVersion {
   return isRecord(value)
     && typeof value.editorEpoch === 'string'
@@ -345,10 +352,6 @@ function paragraphAlign(value: unknown): 'left' | 'center' | 'right' | 'justify'
     : undefined
 }
 
-function addedTextParagraphs(payload: Record<string, unknown>) {
-  return nativeParagraphs(payload)
-}
-
 async function preparePresetImage(operation: SlidesCommand['operations'][number]): Promise<SlidesCommand['operations'][number]> {
   if (!['slide_add_preset', 'slide_add_design'].includes(operation.op) || !isRecord(operation.payload.content)) return operation
   if (typeof Image === 'undefined') return operation
@@ -370,12 +373,13 @@ async function preparePresetImage(operation: SlidesCommand['operations'][number]
 function translateOperation(
   document: SlidesDocument,
   operation: SlidesCommand['operations'][number],
+  payloadPath = 'payload',
 ): {
   op?: Op
   ops?: Op[]
   targets: string[]
   addedContent?: boolean
-  chartStyles?: Array<{ opOffset: number; slideId: string; style: Record<string, unknown> }>
+  chartStyles?: Array<{ opOffset: number; slideId: string; style: Record<string, unknown>; payloadPath: string }>
   preset?: {
     presetId: string
     slideId: string
@@ -397,7 +401,9 @@ function translateOperation(
     if (payload.region === undefined && document.opened.deck.slides[index]!.elements.length) {
       throw new Error('完整设计页只写入空白页；已有内容请按真实 ID 局部修改，或指定明确 region 组合组件。')
     }
-    const native = expandSlideDesign(payload, document).map((item) => translateOperation(document, item))
+    const native = expandSlideDesign(payload, document).map((item) => translateOperation(
+      document, item, item.op === 'slide_add_chart' ? `${payloadPath}.content.chart` : payloadPath,
+    ))
     const ops: Op[] = []
     const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
     for (const item of native) {
@@ -408,7 +414,7 @@ function translateOperation(
   }
   if (operation.op === 'slide_compose') {
     const slide = document.slides[slideIndex(document, payload.slideId)]!
-    const translated = composeSlide(payload, slide).map((item) => translateOperation(document, item))
+    const translated = composeSlide(payload, slide).map((item, index) => translateOperation(document, item, `${payloadPath}.items[${index}]`))
     const ops: Op[] = []
     const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
     for (const item of translated) {
@@ -499,7 +505,7 @@ function translateOperation(
     return {
       op: { ...chart, op: 'addChart', target, offset: operationBox(document, payload) } as Op,
       targets: changed,
-      ...(isRecord(payload.style) ? { chartStyles: [{ opOffset: 0, slideId: target.slide, style: payload.style }] } : {}),
+      ...(isRecord(payload.style) ? { chartStyles: [{ opOffset: 0, slideId: target.slide, style: payload.style, payloadPath }] } : {}),
     }
   }
   if (operation.op === 'slide_set_chart_style') {
@@ -507,7 +513,7 @@ function translateOperation(
     const style = payload.style
     const colors = ['textColor', 'titleColor', 'axisLabelColor', 'axisTitleColor', 'legendColor', 'dataLabelColor', 'gridColor', 'axisLineColor']
     const unknown = Object.keys(style).filter((key) => ![...colors, 'seriesColors', 'axisLabelFontSize'].includes(key))
-    if (unknown.length) throw new Error(`不支持的图表样式：${unknown.join(', ')}。`)
+    if (unknown.length) throw new Error(`不支持的图表样式：${unknown.map((key) => `${payloadPath}.style.${key}`).join(', ')}。`)
     if (colors.some((key) => key in style && (typeof style[key] !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(style[key] as string)))) {
       throw new Error('图表样式颜色必须是 #RRGGBB。')
     }
@@ -532,7 +538,7 @@ function translateOperation(
       op: {
         op: 'setText',
         target,
-        paragraphs: nativeParagraphs(payload) ?? (() => { throw new Error('需要 text 或 paragraphs。') })(),
+        paragraphs: nativeParagraphs(payload, payloadPath) ?? (() => { throw new Error('需要 text 或 paragraphs。') })(),
       },
       targets: changed,
     }
@@ -596,7 +602,7 @@ function translateOperation(
     const kind = operation.op === 'slide_add_text'
       ? 'textbox'
       : requiredText(payload.shape ?? 'rect', 'shape')
-    const paragraphs = addedTextParagraphs(payload)
+    const paragraphs = nativeParagraphs(payload, payloadPath)
     const strokeColor = typeof payload.strokeColor === 'string' ? payload.strokeColor : null
     return {
       op: {
@@ -636,7 +642,7 @@ function translateOperation(
     if (payload.content !== undefined) {
       if (!isRecord(payload.content)) throw new Error('slide_add.content 必须是原生网格内容对象。')
       if ('slideId' in payload.content || 'elementId' in payload.content) throw new Error('slide_add.content 不能包含 slideId 或 elementId；内容自动写入新页面。')
-      const content = translateOperation(document, { op: 'slide_compose', payload: { ...payload.content, slideId: target.slide } })
+      const content = translateOperation(document, { op: 'slide_compose', payload: { ...payload.content, slideId: target.slide } }, `${payloadPath}.content`)
       return {
         ops: [{ op: 'addBlankSlide', target: { slide: target.slide } }, ...(content.ops ?? [])],
         targets: [target.slide], addedContent: true,
@@ -1276,22 +1282,36 @@ function MonaSlidesEditor(): React.JSX.Element {
     if (command.operations.length === 0 || command.operations.length > 50) return
     let before: SlidesSnapshot | undefined
     try {
-      const preparedOperations = await Promise.all(command.operations.map(preparePresetImage))
+      const preparedOperations = await Promise.all(command.operations.map(async (operation, index) => {
+        try { return await preparePresetImage(operation) }
+        catch (reason) { throw operationError(command.operations, index, reason) }
+      }))
       if (!sameVersion(versionRef.current, currentVersion)) throw new VisualVersionConflict('准备素材时文档已变化，请重新读取后编辑。')
-      const translated = preparedOperations.map((operation) => translateOperation(document, operation))
+      const translated = preparedOperations.map((operation, index) => {
+        try { return translateOperation(document, operation) }
+        catch (reason) { throw operationError(command.operations, index, reason) }
+      })
       const ops: Op[] = []
+      const sources: Array<{ index: number; path?: string }> = []
       const presetPlans: Array<NonNullable<ReturnType<typeof translateOperation>['preset']> & {opOffset:number}> = []
       const contentPlans: Array<{ opOffset: number; opCount: number; targets: string[] }> = []
       const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
-      for (const item of translated) {
+      for (const [index, item] of translated.entries()) {
         const itemOps = item.ops ?? (item.op ? [item.op] : [])
         if (item.addedContent) contentPlans.push({ opOffset: ops.length, opCount: itemOps.length, targets: item.targets })
         if (item.preset) presetPlans.push({ ...item.preset, opOffset: ops.length })
         for (const pending of item.chartStyles ?? []) chartStyles.push({ ...pending, opOffset: ops.length + pending.opOffset })
+        sources.push(...itemOps.map((_op, offset) => {
+          const op = command.operations[index]!.op
+          const path = op === 'slide_apply_txn' ? `payload.ops[${offset}]`
+            : op === 'slide_compose' ? `payload.items[${offset}]`
+              : item.addedContent && offset > 0 ? `payload.content.items[${offset - 1}]` : undefined
+          return { index, path }
+        }))
         ops.push(...itemOps)
       }
       for (const plan of presetPlans) for (const pending of plan.pendingChartStyles) {
-        chartStyles.push({ opOffset: plan.opOffset + plan.roles.indexOf(pending.role), slideId: plan.slideId, style: pending.style })
+        chartStyles.push({ opOffset: plan.opOffset + plan.roles.indexOf(pending.role), slideId: plan.slideId, style: pending.style, payloadPath: '预设图表' })
       }
       const hasDesign = command.operations.some((operation) => operation.op === 'slide_add_design')
       // Public requests stay bounded at 50; vetted semantic components expand internally.
@@ -1302,17 +1322,21 @@ function MonaSlidesEditor(): React.JSX.Element {
       const paths = affectedSlidePaths(document, ops)
       before = takeSnapshot(document, paths)
       const outcome = { records: [] as OpRecord[] }
-      const execute = (batch: Op[]): void => {
+      const execute = (batch: Op[], offset: number): void => {
         if (!batch.length) return
         const result = runTxn(document.opened, { isolation: 'atomic', ops: batch })
-        if (!result.applied) throw new Error(result.failures?.map((failure) => failure.error).join('\n') || '幻灯片事务失败。')
+        if (!result.applied) throw new Error(result.failures?.map((failure) => {
+          const source = sources[offset + failure.index]
+          if (!source) return failure.error
+          return operationError(command.operations, source.index, `${source.path ? `${source.path}：` : ''}${failure.error}`).message
+        }).join('\n') || '幻灯片事务失败。')
         outcome.records.push(...(result.records ?? []))
       }
       let cursor = 0
       for (const plan of contentPlans) {
-        execute(ops.slice(cursor, plan.opOffset + 1))
+        execute(ops.slice(cursor, plan.opOffset + 1), cursor)
         const after = outcome.records[plan.opOffset]?.after
-        if (!isRecord(after) || !Number.isInteger(after.index)) throw new Error('无法定位新建幻灯片，已取消本次写入。')
+        if (!isRecord(after) || !Number.isInteger(after.index)) throw operationError(command.operations, sources[plan.opOffset]!.index, '无法定位新建幻灯片，已取消本次写入。')
         // The native executor validates the whole batch before writing, so bind
         // content only after the real page exists; the outer snapshot covers every stage.
         const addedId = slideId(document, Number(after.index))
@@ -1326,7 +1350,7 @@ function MonaSlidesEditor(): React.JSX.Element {
         plan.targets.push(addedId)
         cursor = plan.opOffset + 1
       }
-      execute(ops.slice(cursor))
+      execute(ops.slice(cursor), cursor)
       const presetElementIds = new Map<string,string>()
       for (const plan of presetPlans) {
         const slide = document.opened.deck.slides[slideIndex(document,plan.slideId)]!
@@ -1336,20 +1360,29 @@ function MonaSlidesEditor(): React.JSX.Element {
           if (created && element) presetElementIds.set(`${plan.slideId}/${created}`,elementDurableId(element) ?? created)
         })
       }
+      const styleSources: number[] = []
       const styleOps = chartStyles.flatMap((pending) => {
-        const created = outcome.records?.[pending.opOffset]?.created?.[0]
-        const slide = document.opened.deck.slides[slideIndex(document, pending.slideId)]!
-        const element = created ? slide.elements.find((item) => matchesElementRef(item, created)) : undefined
-        // New native nodes receive durable IDs during refresh; the engine's
-        // returned ID is authoritative inside this uncommitted transaction.
-        const elementId = element ? elementDurableId(element) ?? created : undefined
-        if (!elementId) throw new Error(`第 ${pending.opOffset + 1} 个操作的图表 ${created ?? '(无 ID)'} 无法在页面 ${pending.slideId} 定位，已取消本页写入。`)
-        const styled = translateOperation(document, { op: 'slide_set_chart_style', payload: { slideId: pending.slideId, elementId, style: pending.style } })
-        return styled.op ? [styled.op] : []
+        const source = sources[pending.opOffset]!
+        try {
+          const created = outcome.records?.[pending.opOffset]?.created?.[0]
+          const slide = document.opened.deck.slides[slideIndex(document, pending.slideId)]!
+          const element = created ? slide.elements.find((item) => matchesElementRef(item, created)) : undefined
+          // New native nodes receive durable IDs during refresh; the engine's
+          // returned ID is authoritative inside this uncommitted transaction.
+          const elementId = element ? elementDurableId(element) ?? created : undefined
+          if (!elementId) throw new Error(`图表 ${created ?? '(无 ID)'} 无法在页面 ${pending.slideId} 定位，已取消本页写入。`)
+          const styled = translateOperation(document, { op: 'slide_set_chart_style', payload: { slideId: pending.slideId, elementId, style: pending.style } }, pending.payloadPath)
+          if (styled.op) styleSources.push(source.index)
+          return styled.op ? [styled.op] : []
+        } catch (reason) {
+          throw operationError(command.operations, source.index, reason)
+        }
       })
       if (styleOps.length) {
         const result = runTxn(document.opened, { isolation: 'atomic', ops: styleOps })
-        if (!result.applied) throw new Error(`图表样式应用失败，已取消本页写入：${result.failures?.map((failure) => failure.error).join('；') ?? ''}`)
+        if (!result.applied) throw new Error(`图表样式应用失败，已取消本页写入：${result.failures?.map((failure) => (
+          operationError(command.operations, styleSources[failure.index]!, failure.error).message
+        )).join('；') ?? ''}`)
       }
       if (unchangedDocument(document, before)) {
         await displayDocument(restoreSnapshot(document, before))

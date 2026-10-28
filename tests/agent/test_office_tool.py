@@ -483,6 +483,53 @@ async def test_apply_returns_editor_authoritative_version(tmp_path: Path, monkey
     assert payload["version"] == {"editorEpoch": "epoch_1", "modelRevision": 1}
 
 
+@pytest.mark.parametrize("pending", [["slide_1", "slide_2"], []])
+async def test_apply_exposes_remaining_slide_review_without_an_extra_query(tmp_path, monkeypatch, pending):
+    class Client(_FakeOfficeClient):
+        async def apply(self, command, *, owner_session_key):
+            result = await super().apply(command, owner_session_key=owner_session_key)
+            return result.model_copy(update={"pending_visual_slide_ids": pending})
+
+    client = Client()
+    monkeypatch.setattr("mona.agent.tools.office.OfficeServiceClient.from_port", lambda _port: client)
+    payload = json.loads(await _tool(tmp_path).execute(
+        action="apply", session_id="office_1",
+        expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
+        operations=[{"op": "slide_add", "payload": {"slideId": "slide_1"}}],
+    ))
+    assert payload["pendingVisualSlideIds"] == pending
+    assert payload["version"]["modelRevision"] == 1
+    assert client.inspect_queries == []
+    if pending:
+        assert next(iter(payload)) == "reviewHint"
+        assert "2 页" in payload["reviewHint"] and "mode=visual" in payload["reviewHint"]
+    else:
+        assert "reviewHint" not in payload
+
+
+@pytest.mark.parametrize("pending", [["slide_2"], []])
+async def test_visual_result_keeps_the_image_and_reports_remaining_review(tmp_path, monkeypatch, pending):
+    data_url = "data:image/png;base64,cG5n"
+
+    class Client(_FakeOfficeClient):
+        async def inspect(self, request, *, owner_session_key):
+            return OfficeInspectSuccess(
+                ok=True, request_id="visual_1", session_id=request.session_id,
+                version=DocumentVersion(editor_epoch="epoch_1", model_revision=1),
+                result={"mode": "visual", "width": 1280, "height": 720,
+                        "target": "slide_1", "dataUrl": data_url, "pendingVisualSlideIds": pending},
+            )
+
+    monkeypatch.setattr("mona.agent.tools.office.OfficeServiceClient.from_port", lambda _port: Client())
+    blocks = await _tool(tmp_path).execute(
+        action="inspect", session_id="office_1", query={"mode": "visual", "slideId": "slide_1"},
+    )
+    payload = json.loads(blocks[0]["text"])
+    assert payload["result"]["pendingVisualSlideIds"] == pending
+    assert blocks[1]["image_url"]["url"] == data_url
+    assert ("reviewHint" in payload) is bool(pending)
+
+
 async def test_apply_defaults_to_the_active_office_session(tmp_path: Path, monkeypatch) -> None:
     fake = _FakeOfficeClient()
     monkeypatch.setattr(

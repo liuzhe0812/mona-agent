@@ -281,6 +281,53 @@ describe('Slides Mona entry', () => {
     expect((await inspect(bridge, sessionId, version, 'atomic-content-redo-create', { mode: 'slides' })).slides).toHaveLength(3)
   })
 
+  it('reports the public operation and font field without changing the document, and permits a corrected retry', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'operation-error-context'
+    const version = { editorEpoch: 'operation-error-context-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const initial = await inspect(bridge, sessionId, version, 'operation-error-initial', { mode: 'slides' })
+    const slideId = String((initial.slides as Array<{ id: string }>)[0]!.id)
+    const operations = Array.from({ length: 15 }, (_, index) => ({
+      op: 'slide_add_text',
+      payload: { slideId, x: 60, y: 60, width: 400, height: 50, text: `批量文字 ${index}`, font: index === 14 ? { fontSize: 18, text: '多余' } : { fontSize: 18 } },
+    }))
+    const failed = await apply(bridge, sessionId, version, 'operation-error-font', operations)
+    expect(failed).toEqual(expect.objectContaining({ ok: false, currentVersion: version, changedTargets: [], error: expect.objectContaining({
+      code: 'INVALID_OPERATION', retryable: false, message: expect.stringContaining('operations[14]（第 15 项，slide_add_text）'),
+    }) }))
+    expect((failed.error as { message: string }).message).toContain('payload.font.text')
+    expect((await inspect(bridge, sessionId, version, 'operation-error-unchanged', { mode: 'slides' })).slides).toEqual(initial.slides)
+    expect((await inspect(bridge, sessionId, version, 'operation-error-search', { mode: 'search', text: '批量文字' })).matches).toHaveLength(0)
+
+    const replayStart = harness.posts.length
+    bridge.emit({ type: 'office_command', command: { sessionId, operationId: 'operation-error-font', expectedVersion: version, operations } })
+    const replay = await waitForPost((message) => harness.posts.indexOf(message) >= replayStart && message.type === 'office_command_result')
+    expect(resultOf(replay)).toEqual(failed)
+
+    const nested = await apply(bridge, sessionId, version, 'operation-error-nested', [{
+      op: 'slide_compose', payload: { slideId, columns: [1, 1], rows: [1], items: [
+        { type: 'text', column: 0, row: 0, text: '未写入' },
+        { type: 'text', column: 1, row: 0, paragraphs: [{ runs: [{ text: '文字', extra: true }] }] },
+      ] },
+    }])
+    expect(nested.ok).toBe(false)
+    expect((nested.error as { message: string }).message).toContain('operations[0]（第 1 项，slide_compose）')
+    expect((nested.error as { message: string }).message).toContain('payload.items[1].paragraphs[0].runs[0].extra')
+    expect((await inspect(bridge, sessionId, version, 'operation-error-nested-unchanged', { mode: 'slides' })).slides).toEqual(initial.slides)
+
+    operations[14]!.payload.font = { fontSize: 18 }
+    const corrected = await apply(bridge, sessionId, version, 'operation-error-corrected', operations)
+    expect(corrected).toEqual(expect.objectContaining({ ok: true, version: { ...version, modelRevision: 1 } }))
+    expect(corrected.createdElements).toHaveLength(15)
+  })
+
   it('rolls back populated pages for later native and style failures and enforces content budgets before mutation', async () => {
     vi.resetModules()
     harness.posts = []; harness.cleanups = []; harness.bridge = undefined
@@ -321,6 +368,15 @@ describe('Slides Mona entry', () => {
     for (const test of cases) {
       const result = await apply(bridge, sessionId, version, `atomic-failure-${test.id}`, test.operations)
       expect(result, test.id).toEqual(expect.objectContaining({ ok: false, currentVersion: version, changedTargets: [] }))
+      const message = (result.error as { message: string }).message
+      if (test.id === 'later-native') {
+        expect(message).toContain('operations[2]（第 3 项，slide_apply_txn）')
+        expect(message).toContain('payload.ops[0]')
+      }
+      if (test.id === 'later-style') {
+        expect(message).toContain('operations[1]（第 2 项，slide_add）')
+        expect(message).toContain('payload.content.items[0].style.unsupported')
+      }
       const pages = await inspect(bridge, sessionId, version, `atomic-failure-pages-${test.id}`, { mode: 'slides' })
       expect(pages.slides, test.id).toEqual(initial.slides)
       expect((await inspect(bridge, sessionId, version, `atomic-failure-review-${test.id}`, { mode: 'review' })).pendingSlideIds).toEqual([])

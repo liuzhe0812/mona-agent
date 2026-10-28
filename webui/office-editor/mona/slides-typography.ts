@@ -5,37 +5,37 @@ import { slideFontMetrics } from './slides-font-metrics'
 type RecordValue = Record<string, unknown>
 const object = (v: unknown): v is RecordValue => !!v && typeof v === 'object' && !Array.isArray(v)
 const fontKeys = ['fontFamily', 'fontSize', 'bold', 'italic', 'underline', 'color', 'letterSpacing', 'baseline']
-export function nativeFont(value: unknown): Partial<TextRun> {
+export function nativeFont(value: unknown, path = 'font'): Partial<TextRun> {
   if (value === undefined) return {}
-  if (!object(value)) throw new Error('font 必须是对象。')
+  if (!object(value)) throw new Error(`${path} 必须是对象。`)
   const unknown = Object.keys(value).filter((key) => !fontKeys.includes(key))
-  if (unknown.length) throw new Error(`不支持的字体字段：${unknown.join(', ')}`)
-  for (const key of ['bold', 'italic', 'underline']) if (key in value && typeof value[key] !== 'boolean') throw new Error(`${key} 必须为布尔值。`)
-  if ('fontFamily' in value && (typeof value.fontFamily !== 'string' || !value.fontFamily.trim() || value.fontFamily.length > 200)) throw new Error('字体名称无效。')
-  if ('fontSize' in value && (typeof value.fontSize !== 'number' || !Number.isFinite(value.fontSize) || value.fontSize <= 0 || value.fontSize > 400)) throw new Error('字号须为 0–400pt 的有限正数。')
-  if ('color' in value && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(value.color))) throw new Error('文字颜色须为 #RRGGBB 或 #RRGGBBAA。')
-  for (const key of ['letterSpacing', 'baseline']) if (key in value && (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || Math.abs(value[key]) > (key === 'baseline' ? 100 : 20))) throw new Error(`${key} 超出允许范围。`)
+  if (unknown.length) throw new Error(`不支持的字体字段：${unknown.map((key) => `${path}.${key}`).join(', ')}`)
+  for (const key of ['bold', 'italic', 'underline']) if (key in value && typeof value[key] !== 'boolean') throw new Error(`${path}.${key} 必须为布尔值。`)
+  if ('fontFamily' in value && (typeof value.fontFamily !== 'string' || !value.fontFamily.trim() || value.fontFamily.length > 200)) throw new Error(`${path}.fontFamily 字体名称无效。`)
+  if ('fontSize' in value && (typeof value.fontSize !== 'number' || !Number.isFinite(value.fontSize) || value.fontSize <= 0 || value.fontSize > 400)) throw new Error(`${path}.fontSize 须为 0–400pt 的有限正数。`)
+  if ('color' in value && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(value.color))) throw new Error(`${path}.color 须为 #RRGGBB 或 #RRGGBBAA。`)
+  for (const key of ['letterSpacing', 'baseline']) if (key in value && (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || Math.abs(value[key]) > (key === 'baseline' ? 100 : 20))) throw new Error(`${path}.${key} 超出允许范围。`)
   return { ...value } as Partial<TextRun>
 }
 
-export function nativeParagraphs(payload: RecordValue): Paragraph[] | undefined {
-  const base = nativeFont(payload.font)
+export function nativeParagraphs(payload: RecordValue, path = 'payload'): Paragraph[] | undefined {
+  const base = nativeFont(payload.font, `${path}.font`)
   if (payload.paragraphs === undefined && payload.text === undefined) return undefined
   if (payload.paragraphs !== undefined && payload.text !== undefined) throw new Error('text 与 paragraphs 二选一。')
   const raw = payload.paragraphs ?? [{ runs: [{ text: payload.text }], ...(payload.align ? { align: payload.align } : {}) }]
   if (!Array.isArray(raw) || !raw.length || raw.length > 80) throw new Error('paragraphs 需要 1–80 个段落。')
   let characters = 0
-  return raw.map((p): Paragraph => {
+  return raw.map((p, paragraphIndex): Paragraph => {
     if (!object(p) || Object.keys(p).some((key) => !['runs', 'align', 'lineHeight', 'spaceBefore', 'spaceAfter'].includes(key))) throw new Error('段落字段仅支持 runs/align/lineHeight/spaceBefore/spaceAfter。')
     if (!Array.isArray(p.runs) || !p.runs.length || p.runs.length > 80) throw new Error('段落 runs 需要 1–80 个文字片段。')
     if (p.align !== undefined && !['left', 'center', 'right', 'justify'].includes(String(p.align))) throw new Error('段落 align 无效。')
     for (const key of ['lineHeight', 'spaceBefore', 'spaceAfter']) if (key in p && (typeof p[key] !== 'number' || !Number.isFinite(p[key]) || p[key] < 0 || p[key] > 400)) throw new Error(`${key} 无效。`)
-    const runs = p.runs.map((r): TextRun => {
+    const runs = p.runs.map((r, runIndex): TextRun => {
       if (!object(r) || typeof r.text !== 'string') throw new Error('每个 run 必须有 text。')
       characters += r.text.length
       if (characters > 30000) throw new Error('单个文字对象超过 30000 字符。')
       const { text, ...style } = r
-      return { ...base, ...nativeFont(style), text }
+      return { ...base, ...nativeFont(style, `${path}.paragraphs[${paragraphIndex}].runs[${runIndex}]`), text }
     })
     return { ...p, runs } as Paragraph
   })

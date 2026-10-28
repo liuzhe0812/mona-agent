@@ -56,6 +56,17 @@ _IMAGE_EXT_TO_MIME = {
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
+def _with_slide_review_hint(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result", payload)
+    pending = result.get("pendingVisualSlideIds") if isinstance(result, dict) else None
+    if payload.get("ok") is False or not isinstance(pending, list) or not pending:
+        return payload
+    return {"reviewHint": (
+        f"仍有 {len(pending)} 页待视觉检查。内容完成后，先按 pendingVisualSlideIds "
+        "逐页 inspect（mode=visual），处理检查问题后再 export；不要用总览代替单页检查。"
+    ), **payload}
+
+
 class OfficeToolConfig(Base):
     """Office document tool configuration."""
 
@@ -869,6 +880,7 @@ class OfficeTool(Tool, ContextAware):
             if result.result.mode == "visual":
                 payload = result.model_dump(by_alias=True, mode="json")
                 data_url = payload["result"].pop("dataUrl")
+                payload = _with_slide_review_hint(payload)
                 return [
                     {"type": "text", "text": json.dumps(payload, ensure_ascii=False)},
                     {"type": "image_url", "image_url": {"url": data_url}},
@@ -895,6 +907,7 @@ class OfficeTool(Tool, ContextAware):
                 exclude_unset=True,
             )
             self._add_session_recovery(payload, session_id=session_id)
+            payload = _with_slide_review_hint(payload)
             return json.dumps(payload, ensure_ascii=False, indent=2)
         if action == "save":
             result = await client.save(
