@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { UserQuestionPanel } from "@/components/thread/UserQuestionPanel";
 import { Button } from "@/components/ui/button";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
@@ -164,6 +165,7 @@ export function DocChatPanel({
       </div>
 
       <div className="shrink-0 px-2 pb-2">
+        <UserQuestionPanel chatId={chatId} />
         <ThreadComposer
           chatId={chatId}
           onSend={handleSubmit}

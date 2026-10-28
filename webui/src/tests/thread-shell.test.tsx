@@ -203,6 +203,7 @@ function makeClient() {
     _emitArtifactsChanged() {
       for (const h of artifactsChangedHandlers) h();
     },
+    getUserQuestions: () => [],
     sendMessage: vi.fn(),
     sendDocUpload: vi.fn(),
     newChat: vi.fn(),

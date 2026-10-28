@@ -557,7 +557,7 @@ export function MessageBubble({
   );
 }
 
-function MessageMedia({
+export function MessageMedia({
   media,
   align,
 }: {

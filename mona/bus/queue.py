@@ -3,6 +3,7 @@
 import asyncio
 
 from mona.bus.events import InboundMessage, OutboundMessage
+from mona.bus.user_questions import UserQuestions
 
 
 class MessageBus:
@@ -16,6 +17,7 @@ class MessageBus:
     def __init__(self):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+        self.user_questions = UserQuestions(self.publish_outbound)
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""

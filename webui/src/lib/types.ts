@@ -1,3 +1,5 @@
+import type { UserQuestionAnswer, UserQuestionRequest } from "./user-questions";
+
 export type Role = "user" | "assistant" | "tool" | "system";
 
 /** "trace" rows are intermediate agent breadcrumbs (tool-call hints,
@@ -1257,6 +1259,7 @@ export type InboundEvent =
       files: DeliveredFile[];
       media_urls?: Array<{ url: string; name?: string; kind?: UIMediaKind }>;
       inline_media?: boolean;
+      presentation?: "question_preview";
     }
   | {
       event: "delta";
@@ -1346,6 +1349,8 @@ export type InboundEvent =
       chat_id?: string;
       error?: string;
     }
+  | { event: "user_questions"; chat_id: string; requests: UserQuestionRequest[] }
+  | ({ event: "answer_user_question_result" } & RoomCommandResult)
   | ({ event: "create_room_result" } & RoomCommandResult)
   | ({ event: "update_room_result" } & RoomCommandResult)
   | ({ event: "room_state_result" } & RoomCommandResult)
@@ -1473,6 +1478,13 @@ export interface WebuiThreadPersistedPayload {
 }
 
 export type Outbound =
+  | {
+      type: "answer_user_question";
+      chat_id: string;
+      question_id: string;
+      answers: UserQuestionAnswer[] | null;
+      request_id?: string;
+    }
   | {
       type: "new_chat";
       ephemeral?: boolean;

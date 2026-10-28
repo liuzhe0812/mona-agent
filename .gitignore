@@ -144,6 +144,7 @@ design-assets/
 !tests/tools/test_visualizer.py
 !/tests/agent/
 /tests/agent/*
+!/tests/agent/test_ask_user_question.py
 !/tests/agent/test_context_prompt_cache.py
 !/tests/agent/test_runner_governance.py
 !/tests/agent/test_agent_deletion.py

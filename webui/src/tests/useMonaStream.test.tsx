@@ -211,6 +211,37 @@ describe("useMonaStream", () => {
     });
   });
 
+  it("shows prepared previews while a question is waiting without ending the turn", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("question-chat", EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    const file = { path: "style.jpg", name: "style.jpg", size: 20, size_human: "20 B", mime: "image/jpeg" };
+    act(() => {
+      fake.emit("question-chat", { event: "goal_status", chat_id: "question-chat", status: "running", started_at: 100 });
+      fake.emit("question-chat", { event: "deliver_files", chat_id: "question-chat", files: [file], presentation: "question_preview",
+        media_urls: [{ kind: "image", url: "/api/media/sig/style", name: "style.jpg" }] });
+      fake.emit("question-chat", { event: "user_questions", chat_id: "question-chat", requests: [{
+        request_id: "question-1", agent_id: "mona", questions: [{ id: "style", question: "选择风格" }],
+      }] });
+    });
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.messages[0]).toMatchObject({ kind: "trace", role: "tool", traces: [], deliveredFiles: [file],
+      media: [{ kind: "image", url: "/api/media/sig/style", name: "style.jpg" }] });
+    const previewId = result.current.messages[0].id;
+    act(() => {
+      fake.emit("question-chat", { event: "user_questions", chat_id: "question-chat", requests: [] });
+      fake.emit("question-chat", { event: "message", chat_id: "question-chat", kind: "progress", text: "office()" });
+      fake.emit("question-chat", { event: "message", chat_id: "question-chat", text: "PPT 已完成" });
+      fake.emit("question-chat", { event: "turn_end", chat_id: "question-chat" });
+    });
+    expect(result.current.messages[0].id).toBe(previewId);
+    expect(result.current.messages[0].deliveredFiles).toHaveLength(1);
+    expect(result.current.messages[0].traces).toEqual([]);
+    const final = result.current.messages.at(-1)!;
+    expect(final.content).toBe("PPT 已完成");
+    expect(final.media).toBeUndefined();
+    expect(final.deliveredFiles).toBeUndefined();
+  });
+
   it("batches answer deltas into one animation-frame update", async () => {
     const fake = fakeClient();
     const requestFrame = vi.spyOn(window, "requestAnimationFrame");

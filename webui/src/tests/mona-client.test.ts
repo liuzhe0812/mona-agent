@@ -69,6 +69,30 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("keeps question snapshots isolated and correlates structured answers and cancellation", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const question = { request_id: "question-1", agent_id: "mona", questions: [{ id: "style", question: "选哪种风格？" }] };
+    lastSocket().fakeMessage({ event: "user_questions", chat_id: "chat-a", requests: [question] });
+    expect(client.getUserQuestions("chat-a")).toEqual([question]);
+    expect(client.getUserQuestions("chat-b")).toEqual([]);
+    const answers = [{ id: "style", selected: [], custom: "米白底、墨绿色" }];
+    const answered = client.answerUserQuestion("chat-a", "question-1", answers);
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(request).toMatchObject({ type: "answer_user_question", chat_id: "chat-a", question_id: "question-1", answers });
+    lastSocket().fakeMessage({ event: "answer_user_question_result", request_id: request.request_id, ok: true });
+    await expect(answered).resolves.toBeUndefined();
+    lastSocket().fakeMessage({ event: "user_questions", chat_id: "chat-a", requests: [] });
+    expect(client.getUserQuestions("chat-a")).toEqual([]);
+    const cancelled = client.answerUserQuestion("chat-b", "question-2", null);
+    const cancelRequest = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(cancelRequest.answers).toBeNull();
+    const rejected = expect(cancelled).rejects.toThrow("问题已结束");
+    lastSocket().fakeMessage({ event: "answer_user_question_result", request_id: cancelRequest.request_id, ok: false, detail: "问题已结束" });
+    await rejected;
+    client.close();
+  });
+
   it("sends the agent deletion command and resolves its correlated result", async () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     client.connect();

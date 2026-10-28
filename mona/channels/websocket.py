@@ -36,6 +36,7 @@ from websockets.http11 import Response
 from mona.agent.partners import MONA_AGENT_ID
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
+from mona.bus.user_questions import USER_QUESTIONS_META
 from mona.channels.base import BaseChannel
 from mona.command.builtin import builtin_command_palette
 from mona.config.paths import get_data_dir, get_media_dir
@@ -746,7 +747,32 @@ class WebSocketChannel(BaseChannel):
         await self._maybe_push_turn_run_wall_clock(chat_id)
         await self._maybe_push_artifact_task(chat_id)
         await self._maybe_push_task_plan(chat_id)
+        await self._send_user_questions(chat_id)
         await self.send_artifacts_changed(chat_id=chat_id)
+
+    async def _send_user_questions(self, chat_id: str) -> None:
+        raw = json.dumps({"event": "user_questions", "chat_id": chat_id,
+                          "requests": self.bus.user_questions.snapshot(chat_id)}, ensure_ascii=False)
+        for connection in list(self._subs.get(chat_id, ())):
+            await self._safe_send_to(connection, raw, label="user_questions")
+
+    async def _handle_answer_user_question(self, connection: Any, envelope: dict[str, Any]) -> None:
+        chat_id = envelope.get("chat_id")
+        question_id = envelope.get("question_id")
+        fields = {"chat_id": chat_id, "request_id": self._room_request_id(envelope)}
+        if (not _is_valid_chat_id(chat_id) or chat_id not in self._conn_chats.get(connection, ())
+                or not isinstance(question_id, str) or len(question_id) > 100
+                or "answers" not in envelope):
+            await self._send_event(connection, "answer_user_question_result", ok=False,
+                                   detail="问题不属于当前会话或回答格式无效。", **fields)
+            return
+        try:
+            self.bus.user_questions.answer(chat_id, question_id, envelope["answers"])
+        except ValueError:
+            await self._send_event(connection, "answer_user_question_result", ok=False,
+                                   detail="回答未提交，问题可能已结束，请检查回答或查看最新会话。", **fields)
+            return
+        await self._send_event(connection, "answer_user_question_result", ok=True, **fields)
 
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
@@ -6131,6 +6157,9 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Route one typed inbound envelope (``new_chat`` / ``attach`` / ``message``)."""
         t = envelope.get("type")
+        if t == "answer_user_question":
+            await self._handle_answer_user_question(connection, envelope)
+            return
         if t == "branch_chat":
             await self._handle_branch_chat_envelope(connection, envelope)
             return
@@ -6627,6 +6656,7 @@ class WebSocketChannel(BaseChannel):
         conns: list[Any],
         *,
         include_media: bool = True,
+        question_preview: bool = False,
     ) -> None:
         payload: dict[str, Any] = {
             "event": "deliver_files",
@@ -6635,6 +6665,8 @@ class WebSocketChannel(BaseChannel):
         }
         if not include_media:
             payload["inline_media"] = False
+        if question_preview:
+            payload["presentation"] = "question_preview"
         self._try_append_webui_transcript(chat_id, dict(payload))
         if include_media:
             media_urls = self._delivered_file_media(files)
@@ -6737,6 +6769,9 @@ class WebSocketChannel(BaseChannel):
         return attached
 
     async def send(self, msg: OutboundMessage) -> None:
+        if USER_QUESTIONS_META in msg.metadata:
+            await self._send_user_questions(msg.chat_id)
+            return
         if msg.metadata.get("_runtime_model_updated"):
             await self.send_runtime_model_updated(
                 model_name=msg.metadata.get("model"),
@@ -6864,6 +6899,7 @@ class WebSocketChannel(BaseChannel):
                 deliver_files,
                 conns,
                 include_media=not bool(msg.media),
+                question_preview=msg.metadata.get("_question_preview") is True,
             )
             return
         text = msg.content

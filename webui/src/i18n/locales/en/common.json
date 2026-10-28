@@ -1,4 +1,15 @@
 {
+  "userQuestion": {
+    "pending": "Questions awaiting your answer",
+    "title": "Your answer is needed",
+    "clearSelection": "Clear selection",
+    "customAnswer": "Custom answer",
+    "placeholder": "Add details or enter your own answer",
+    "missing": "Choose an option or enter your own answer",
+    "submit": "Submit answers",
+    "submitting": "Submitting…",
+    "failed": "Could not submit your answer. Please try again."
+  },
   "visualizer": {
     "title": "Visual",
     "actions": {

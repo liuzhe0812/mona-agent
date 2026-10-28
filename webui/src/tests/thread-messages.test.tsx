@@ -12,6 +12,28 @@ function visibleTextMatches(text: string | RegExp): HTMLElement[] {
 }
 
 describe("ThreadMessages", () => {
+  it("keeps question previews in their original process position and folds them after completion", () => {
+    const media = ["A", "B", "C"].map((name) => ({ kind: "image" as const, name, url: `https://example.com/${name}.jpg` }));
+    const messages: UIMessage[] = [
+      { id: "u", role: "user", content: "制作产品 PPT", createdAt: 1 },
+      { id: "search", role: "tool", kind: "trace", content: "search()", traces: ["search()"], createdAt: 2 },
+      { id: "previews", role: "tool", kind: "trace", content: "", traces: [], media, createdAt: 3 },
+      { id: "write", role: "tool", kind: "trace", content: "office()", traces: ["office()"], createdAt: 4 },
+      { id: "answer", role: "assistant", content: "PPT 已完成", createdAt: 5 },
+    ];
+    const { rerender } = render(<ThreadMessages messages={messages} isStreaming />);
+    expect(screen.getByRole("img", { name: "A" })).toBeVisible();
+    const units = buildDisplayUnits(messages);
+    expect(units[1].type === "cluster" && units[1].messages.map((message) => message.id)).toEqual(["search", "previews", "write"]);
+    rerender(<ThreadMessages messages={messages} isStreaming={false} />);
+    expect(screen.queryByRole("img", { name: "A" })).not.toBeInTheDocument();
+    expect(screen.getByText("PPT 已完成")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Expand process" }));
+    const image = screen.getByRole("img", { name: "A" });
+    expect(image).toBeVisible();
+    expect(image.compareDocumentPosition(screen.getByText("PPT 已完成")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("groups consecutive reasoning and tool rows into one cluster before the answer", () => {
     const messages: UIMessage[] = [
       {

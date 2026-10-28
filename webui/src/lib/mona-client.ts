@@ -25,6 +25,7 @@ import type {
   WorkflowUpdatedPayload,
   MessageQuote,
 } from "./types";
+import type { UserQuestionAnswer, UserQuestionRequest } from "./user-questions";
 
 /** WebSocket readyState constants, referenced by value to stay portable
  * across runtimes that don't expose a global ``WebSocket`` (tests, SSR). */
@@ -194,6 +195,7 @@ export class MonaClient {
   private pendingNewChat: PendingNewChat | null = null;
   private newChatRequestSeq = 0;
   private pendingRoomCommands = new Map<string, PendingRoomCommand>();
+  private userQuestionsByChat = new Map<string, UserQuestionRequest[]>();
   private roomCommandSeq = 0;
   // Frames queued while the socket is not yet OPEN
   private sendQueue: Outbound[] = [];
@@ -328,6 +330,16 @@ export class MonaClient {
 
   getTaskPlan(chatId: string): TaskPlanWsPayload | undefined {
     return this.taskPlanByChatId.get(chatId);
+  }
+
+  getUserQuestions(chatId: string): UserQuestionRequest[] {
+    return this.userQuestionsByChat.get(chatId) ?? [];
+  }
+
+  async answerUserQuestion(chatId: string, questionId: string, answers: UserQuestionAnswer[] | null): Promise<void> {
+    await this.sendRoomCommandRaw("answer_user_question_result", (requestId) => ({
+      type: "answer_user_question", chat_id: chatId, question_id: questionId, answers, request_id: requestId,
+    }));
   }
 
   private recordGoalStatusForRunStrip(chatId: string, ev: InboundEvent): void {
@@ -1142,6 +1154,7 @@ export class MonaClient {
     }
 
     if (
+      parsed.event === "answer_user_question_result" ||
       parsed.event === "create_room_result" ||
       parsed.event === "create_direct_conversation_result" ||
       parsed.event === "update_room_result" ||
@@ -1261,6 +1274,7 @@ export class MonaClient {
 
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
+      if (parsed.event === "user_questions") this.userQuestionsByChat.set(chatId, parsed.requests);
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);
       this.recordTaskPlanSnapshot(chatId, parsed);

@@ -1,4 +1,15 @@
 {
+  "userQuestion": {
+    "pending": "待回答問題",
+    "title": "需要你的回答",
+    "clearSelection": "清除選擇",
+    "customAnswer": "補充回答",
+    "placeholder": "補充回答或填寫其他內容",
+    "missing": "請選擇一個選項或填寫補充回答",
+    "submit": "提交回答",
+    "submitting": "提交中…",
+    "failed": "回答提交失敗，請重試"
+  },
   "visualizer": {
     "title": "圖形",
     "actions": {

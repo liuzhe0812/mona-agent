@@ -845,6 +845,20 @@ def replay_transcript_to_ui_messages(
                     ]
                     if paths:
                         media = augment_user_media(paths)
+                next_record = lines[idx + 1] if idx + 1 < len(lines) else {}
+                # Older blocking questions emitted their preview delivery just before the tool result.
+                legacy_question_preview = bool(files) and all(str(file.get("mime", "")).startswith("image/") for file in files) and any(
+                    event.get("name") == "ask_user_question" and event.get("phase") == "end"
+                    for event in (next_record.get("tool_events") or []) if isinstance(event, dict)
+                )
+                if rec.get("presentation") == "question_preview" or legacy_question_preview:
+                    messages.append({
+                        "id": _new_id("question-preview", idx), "role": "tool", "kind": "trace",
+                        "content": "", "traces": [], "deliveredFiles": files, "media": media,
+                        "activitySegmentId": _ensure_activity_segment(), "createdAt": _ts_base + idx,
+                        "sourceTranscriptIndex": idx,
+                    })
+                    continue
                 attach_or_queue_delivered_files(files, media)
             continue
 
@@ -983,6 +997,7 @@ def replay_transcript_to_ui_messages(
                 if (
                     last
                     and last.get("kind") == "trace"
+                    and not last.get("media") and not last.get("deliveredFiles")
                     and not last.get("isStreaming")
                     and (last.get("activitySegmentId") in (None, segment))
                 ):

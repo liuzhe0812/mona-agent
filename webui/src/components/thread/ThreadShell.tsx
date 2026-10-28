@@ -22,6 +22,7 @@ import {
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
+import { UserQuestionPanel } from "@/components/thread/UserQuestionPanel";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { DiscussionDialog } from "@/components/discussion/DiscussionDialog";
@@ -1052,6 +1053,7 @@ export function ThreadShell({
         showHeroComposer && "[&_button[type=submit]]:border-action [&_button[type=submit]]:bg-action [&_button[type=submit]]:text-action-foreground [&_button[type=submit]]:hover:bg-action-hover [&_button[type=submit]]:focus-visible:ring-2 [&_button[type=submit]]:focus-visible:ring-action/40",
       )}
     >
+      <UserQuestionPanel chatId={chatId} />
       {streamError ? (
         <StreamErrorNotice
           error={streamError}

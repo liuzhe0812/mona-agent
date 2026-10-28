@@ -3,7 +3,7 @@ import { AlertCircle, ChevronRight, Pencil, SquareTerminal, Wrench } from "lucid
 import { useTranslation } from "react-i18next";
 
 import { FileReferenceChip } from "@/components/FileReferenceChip";
-import { ReasoningBubble, StreamingLabelSheen, TraceGroup } from "@/components/MessageBubble";
+import { MessageMedia, ReasoningBubble, StreamingLabelSheen, TraceGroup } from "@/components/MessageBubble";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isCommandTrace } from "@/lib/tool-traces";
@@ -152,7 +152,8 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
     const groups: UIMessage[][] = [];
     for (const message of messages) {
       const previous = groups[groups.length - 1];
-      if (message.kind === "trace" && previous?.[0].kind === "trace") previous.push(message);
+      if (message.kind === "trace" && previous?.[0].kind === "trace"
+        && !message.media?.length && !previous[0].media?.length) previous.push(message);
       else groups.push([message]);
     }
     return groups;
@@ -170,7 +171,8 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
   const summary = fileCount > 0 && hasCommands
     ? t("message.activityFilesAndCommands")
     : fileCount > 0 ? fileSummary : t(hasCommands ? "message.activityCommands" : "message.activityDetails");
-  if (reasoningSteps === 0 && toolCalls === 0 && fileCount === 0) return null;
+  const previews = messages.filter((message) => message.kind === "trace" && message.media?.length);
+  if (reasoningSteps === 0 && toolCalls === 0 && fileCount === 0 && previews.length === 0) return null;
   const Icon = fileCount > 0 ? Pencil : hasCommands ? SquareTerminal : Wrench;
   return <div className={cn("w-full", hasBodyBelow && "mb-1")}>
     {showTiming && <ActivityTimingHeader isTurnStreaming={isTurnStreaming} runStartedAt={runStartedAt}
@@ -183,9 +185,13 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
       {fileCount > 0 && hasDiffStats && <DiffPair added={added} deleted={deleted} />}
       <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", expanded && "rotate-90")} />
     </button>
+    {!expanded && previews.map((message) => (
+      <MessageMedia key={message.id} media={message.media!} align="left" />
+    ))}
     {expanded && <div data-testid="agent-activity-details" className="mt-2 flex flex-col gap-2">
       {activityGroups.map((group) => {
         const message = group[0];
+        if (message.media?.length) return <MessageMedia key={message.id} media={message.media} align="left" />;
         if (isReasoningOnlyAssistant(message)) return <ReasoningBubble key={message.id} text={message.reasoning ?? ""}
           streaming={isTurnStreaming && !!message.reasoningStreaming} hasBodyBelow={false} embeddedInCluster />;
         if (message.kind === "trace") {

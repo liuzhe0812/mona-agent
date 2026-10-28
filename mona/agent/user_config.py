@@ -46,6 +46,7 @@ USER_GRANTABLE_PLATFORM_TOOLS = frozenset({
 # user permissions and must survive old or empty permission selections.
 REQUIRED_AGENT_TOOLS = frozenset({
     "apply_patch",
+    "ask_user_question",
     "conversation_read",
     "conversation_search",
     "deliver_file",

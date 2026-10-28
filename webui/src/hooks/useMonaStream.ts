@@ -1107,6 +1107,22 @@ export function useMonaStream(
 
       flushPendingStreamEvents();
 
+      if (ev.event === "user_questions") {
+        if (ev.requests.length > 0) {
+          setIsAwaitingModelResponse(false);
+          setMessages((previous) => {
+            const visible = previous.map((message) => message.isStreaming ? { ...message, isStreaming: false } : message);
+            const next = appendDeliveredFilesToLastAssistant(
+              closeReasoningStream(visible), pendingDeliveredFilesRef.current, pendingDeliveredMediaRef.current,
+            );
+            pendingDeliveredFilesRef.current = [];
+            pendingDeliveredMediaRef.current = [];
+            return next;
+          });
+        }
+        return;
+      }
+
       if (ev.event === "widget") {
         if (suppressStreamUntilTurnEndRef.current && ev.widget.status === "streaming") return;
         setIsAwaitingModelResponse(false);
@@ -1318,6 +1334,7 @@ export function useMonaStream(
             if (
               last
               && last.kind === "trace"
+              && !last.media?.length && !last.deliveredFiles?.length
               && !last.isStreaming
               && (!identity.taskId || identity.taskId === last.taskId)
               && (!last.activitySegmentId || last.activitySegmentId === segmentId)
@@ -1560,6 +1577,14 @@ export function useMonaStream(
         if (files.length === 0) return;
         setIsAwaitingModelResponse(false);
         const media = ev.media_urls?.map((item) => toMediaAttachment(item)) ?? [];
+        if (ev.presentation === "question_preview") {
+          const activitySegmentId = ensureActivitySegmentId();
+          setMessages((previous) => [...previous, {
+            id: crypto.randomUUID(), role: "tool", kind: "trace", content: "", traces: [],
+            deliveredFiles: files, media, activitySegmentId, createdAt: Date.now(),
+          }]);
+          return;
+        }
         setMessages((prev) => {
           let targetIdx: number | null = null;
           for (let i = prev.length - 1; i >= 0; i--) {
