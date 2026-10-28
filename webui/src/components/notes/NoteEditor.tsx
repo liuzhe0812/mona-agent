@@ -3,6 +3,7 @@ import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
 import { Input } from "@/components/ui/input";
+import { openBrowserUrl } from "@/lib/browser-ipc";
 import { DEFAULT_NOTE_TITLE, deriveNoteTitle } from "@/lib/note-title";
 import { MindMapDocumentEditor, type MindMapDocumentEditorHandle } from "./mindmap/MindMapDocumentEditor";
 import { FlowchartDocumentEditor } from "./flowchart/FlowchartDocumentEditor";
@@ -112,6 +113,13 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
     onContentChange(next);
   };
 
+  const handleOpenExternalLink = (url: string) => {
+    void openBrowserUrl(url).catch(async () => {
+      const { message } = await import("@tauri-apps/plugin-dialog");
+      await message("链接未能打开，请检查地址后重试。", { title: "打开链接失败", kind: "error" });
+    });
+  };
+
   if (note.type === "mindmap") {
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
@@ -164,6 +172,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
       onContentChange={handleContentChange}
       onMoveSelectionToNote={onMoveSelectionToNote}
       onOpenNoteByTitle={onOpenNoteByTitle}
+      onOpenExternalLink={handleOpenExternalLink}
       toolbarExtra={toolbarExtra}
       toolbarLeadingExtra={toolbarLeadingExtra}
       enableSelectionAi

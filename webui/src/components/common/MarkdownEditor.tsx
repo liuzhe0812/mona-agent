@@ -63,6 +63,9 @@ import {
 } from "lucide-react";
 
 import { TooltipButton } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import {
   ContextMenu,
@@ -92,6 +95,7 @@ export interface MarkdownEditorProps {
   onMoveSelectionToNote?: (selectedText: string) => void;
   /** Open the note whose title matches the clicked wiki link. */
   onOpenNoteByTitle?: (title: string) => void;
+  onOpenExternalLink?: (url: string) => void;
   placeholder?: string;
   showToolbar?: boolean;
   showStats?: boolean;
@@ -193,6 +197,7 @@ export function MarkdownEditor({
   onContentChange,
   onMoveSelectionToNote,
   onOpenNoteByTitle,
+  onOpenExternalLink,
   placeholder = "记录想法、资料、处理过程或 Agent 输出...",
   showToolbar = true,
   showStats = true,
@@ -232,6 +237,8 @@ export function MarkdownEditor({
   const insertWikiLinkRef = useRef<(title: string) => void>(() => {});
   const onOpenNoteByTitleRef = useRef(onOpenNoteByTitle);
   onOpenNoteByTitleRef.current = onOpenNoteByTitle;
+  const onOpenExternalLinkRef = useRef(onOpenExternalLink);
+  onOpenExternalLinkRef.current = onOpenExternalLink;
   const resolveEmbedContentRef = useRef(resolveEmbedContent);
   resolveEmbedContentRef.current = resolveEmbedContent;
   const isEmbedFlowchartRef = useRef(isEmbedFlowchart);
@@ -585,11 +592,13 @@ export function MarkdownEditor({
     }
   }, []);
 
+  const hasExternalLinkHandler = !!onOpenExternalLink;
   const extensions = useMemo(
     () => [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
         codeBlock: false,
+        link: false,
       }),
       MermaidCodeBlock,
       NoteImage,
@@ -601,7 +610,7 @@ export function MarkdownEditor({
         HTMLAttributes: { "data-type": "taskItem" },
       }),
       Link.configure({
-        openOnClick: false,
+        openOnClick: !hasExternalLinkHandler,
         autolink: true,
         HTMLAttributes: {
           class: "text-[#2f7fca] underline underline-offset-2",
@@ -644,7 +653,7 @@ export function MarkdownEditor({
         onOpenNote: (title: string) => onOpenNoteByTitleRef.current?.(title),
       }),
     ],
-    [placeholder],
+    [placeholder, hasExternalLinkHandler],
   );
 
   const editor = useEditor({
@@ -755,6 +764,18 @@ export function MarkdownEditor({
         return false;
       },
       handleDOMEvents: {
+        click: (view, event) => {
+          const openLink = onOpenExternalLinkRef.current;
+          if (!openLink || event.button !== 0 || !(event.target instanceof Element)) return false;
+          const link = event.target.closest("a[href]");
+          if (!link || !view.dom.contains(link)) return false;
+          event.preventDefault();
+          const selection = view.dom.ownerDocument.getSelection();
+          if (!selection || selection.isCollapsed || !view.dom.contains(selection.anchorNode)) {
+            openLink(link.getAttribute("href") ?? "");
+          }
+          return true;
+        },
         contextmenu: (view, event: Event) => {
           // 右键点击图片时自动选中图片节点，使图片专属右键菜单生效
           const target = event.target as HTMLElement;
@@ -1382,6 +1403,11 @@ export function MarkdownEditor({
 function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor: Editor | null; children: React.ReactNode; onMoveSelectionToNote?: (selectedText: string) => void; }) {
   const [hasSelection, setHasSelection] = useState(false);
   const [selectedText, setSelectedText] = useState("");
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const linkInputRef = useRef<HTMLInputElement | null>(null);
+  const linkSelectionRef = useRef<{ from: number; to: number; doc: Editor["state"]["doc"] } | null>(null);
   const [isImageSelected, setIsImageSelected] = useState(false);
   const [imageNodePos, setImageNodePos] = useState<number | null>(null);
   const [imageFileName, setImageFileName] = useState<string | null>(null);
@@ -1511,9 +1537,29 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
 
   const handleAddExternalLink = () => {
     if (!editor) return;
-    const url = window.prompt("输入链接地址");
-    if (!url) return;
-    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+    const { from, to } = editor.state.selection;
+    linkSelectionRef.current = { from, to, doc: editor.state.doc };
+    setLinkUrl("");
+    setLinkError("");
+    setLinkDialogOpen(true);
+  };
+
+  const handleConfirmExternalLink = (event: React.FormEvent) => {
+    event.preventDefault();
+    const url = linkUrl.trim();
+    const selection = linkSelectionRef.current;
+    if (!editor || !url || !selection) return;
+    if (editor.state.doc !== selection.doc) {
+      setLinkError("笔记内容已变化，请取消后重新选择文字。");
+      return;
+    }
+    const applied = editor.chain().setTextSelection({ from: selection.from, to: selection.to })
+      .extendMarkRange("link").setLink({ href: url }).run();
+    if (!applied) {
+      setLinkError("链接地址无效，请检查后重试。");
+      return;
+    }
+    setLinkDialogOpen(false);
   };
 
   const handleRemoveLink = () => {
@@ -1609,11 +1655,14 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   };
 
   return (
+    <>
     <ContextMenu onOpenChange={(open) => { if (open) updateSelection(); }}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
+      <ContextMenuContent className="w-52" onCloseAutoFocus={(event) => {
+        if (linkSelectionRef.current) event.preventDefault();
+      }}>
         {isImageSelected ? (
           <>
             <ContextMenuItem onSelect={handleCopyImage}>
@@ -1876,6 +1925,38 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
         )}
       </ContextMenuContent>
     </ContextMenu>
+    <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+      <DialogContent className="max-w-[360px] gap-0 rounded-xl border-border/70 p-0" aria-describedby={undefined}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          linkInputRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          linkSelectionRef.current = null;
+          if (editor && !editor.isDestroyed) editor.commands.focus();
+        }}>
+        <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
+          <DialogTitle className="text-body">新增外部链接</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleConfirmExternalLink}>
+          <div className="px-4 py-3">
+            <label className="flex flex-col gap-2 text-caption text-foreground">
+              链接地址
+              <Input ref={linkInputRef} value={linkUrl} onChange={(event) => { setLinkUrl(event.target.value); setLinkError(""); }}
+                placeholder="https://..." inputMode="url" aria-invalid={!!linkError}
+                className="h-8 w-full rounded-lg border-border/70 bg-background px-2.5 text-caption shadow-none focus-visible:ring-0" />
+            </label>
+            {linkError && <p role="alert" className="mt-1 text-caption text-destructive">{linkError}</p>}
+          </div>
+          <DialogFooter className="border-t border-border/65 px-4 py-2.5">
+            <Button type="button" variant="ghost" size="sm" className="h-7 px-2.5 text-caption" onClick={() => setLinkDialogOpen(false)}>取消</Button>
+            <Button type="submit" size="sm" className="h-7 px-2.5 text-caption" disabled={!linkUrl.trim()}>确定</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
