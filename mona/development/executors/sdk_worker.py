@@ -352,6 +352,13 @@ class Worker:
 
     def build_options(self, start: dict):
         executor = ExecutorId(start["executor"])
+
+        def sdk_tool_result(result: dict) -> dict:
+            # Claude's Python SDK reads is_error; the host and CodeBuddy use MCP's isError.
+            if executor == ExecutorId.CLAUDE:
+                return {**result, "is_error": result.get("isError", False)}
+            return result
+
         version = sdk_version(executor)
         sdk = importlib.import_module(SDK_MODULES[executor])
         self.sdk = sdk
@@ -431,7 +438,7 @@ class Worker:
             if not callable(getattr(sdk, "tool", None)) or not callable(getattr(sdk, "create_sdk_mcp_server", None)):
                 raise ValueError("sdk_host_tools_unsupported")
             async def call_work_tool(arguments: dict) -> dict:
-                return await self.host_collaboration(arguments)
+                return sdk_tool_result(await self.host_collaboration(arguments))
             tool = sdk.tool(WORK_TOOL, WORK_DESCRIPTION, WorkToolCall.model_json_schema())(call_work_tool)
             options["mcp_servers"] = {WORK_SERVER: sdk.create_sdk_mcp_server(name=WORK_SERVER, version="1.0.0", tools=[tool])}
             options["allowed_tools"] = [SDK_WORK_TOOL]
@@ -448,12 +455,12 @@ class Worker:
             if not callable(getattr(sdk, "tool", None)) or not callable(getattr(sdk, "create_sdk_mcp_server", None)):
                 raise ValueError("sdk_host_tools_unsupported")
             async def collaborate(arguments: dict) -> dict:
-                return await self.host_collaboration(arguments)
+                return sdk_tool_result(await self.host_collaboration(arguments))
             tools = [sdk.tool(HOST_TOOL, HOST_DESCRIPTION, HostToolCall.model_json_schema())(collaborate)] if host_tools else []
             options["allowed_tools"] = [SDK_HOST_TOOL] if host_tools else []
             if design_tools:
                 async def read_design(arguments: dict) -> dict:
-                    return await self.host_collaboration(arguments, resource=True)
+                    return sdk_tool_result(await self.host_collaboration(arguments, resource=True))
                 tools.append(sdk.tool(DESIGN_TOOL, DESIGN_DESCRIPTION, DesignResourceCall.model_json_schema())(read_design))
                 options["allowed_tools"].append(SDK_DESIGN_TOOL)
             options["mcp_servers"] = {HOST_SERVER: sdk.create_sdk_mcp_server(name=HOST_SERVER, version="1.0.0", tools=tools)}
@@ -464,7 +471,7 @@ class Worker:
         self.projector = SDKEventProjector(start["nativeSessionId"], host_collaboration=host_tools,
                                            design_resources=design_tools,
                                            work_tool=work_mode,
-                                           resuming=start.get("resume") is True)
+                                           resuming=start.get("resume") is True, executor=executor)
         client_cls = sdk.ClaudeSDKClient if executor == ExecutorId.CLAUDE else sdk.CodeBuddySDKClient
         if executor == ExecutorId.CODEBUDDY:
             from mona.development.executors.codebuddy_transport import desktop_transport

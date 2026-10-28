@@ -131,9 +131,14 @@ class NativeWorkProvider(LLMProvider):
         self._usage: dict[str, int] = {}
         self._reported_usage: dict[str, int] = {}
         self._context_usage: dict[str, Any] = {}
+        self._carry_usage: dict[str, int] = {}
         self._done = False
         self._turn_progress = False
         self._message_count = 0
+        self._history_digest = ""
+        self._work_prompt: str | None = None
+        self._initial_definitions = ""
+        self._context_reset_failed = False
         self._catalog_path: Path | None = None
         self._definitions = ""
         self._request_stage = "input"
@@ -193,12 +198,17 @@ class NativeWorkProvider(LLMProvider):
                 credential_env=None if self.executor == ExecutorId.CLAUDE else config.codebuddy_api_key_env,
                 codebuddy_environment=config.codebuddy_environment)
             self._host = SDKExecutor(profile, tool_handler=self._host_tool)
-        prompt = "\n\n".join(str(message.get("content") or "") for message in messages
-                              if message.get("role") in {"system", "developer"})
         self._definitions = json.dumps(tools or [], ensure_ascii=False)
-        prompt += (f"\n\n所有工具调用使用 {WORK_TOOL}，参数 tool 为工具名、arguments 为该工具的参数。"
-                   "仅调用以下 Mona 工具；工具授权与可用性由 Mona 判断。\n"
-                   + self._definitions)
+        if self._work_prompt is None:
+            prompt = "\n\n".join(str(message.get("content") or "") for message in messages
+                                  if message.get("role") in {"system", "developer"})
+            self._work_prompt = prompt + (
+                f"\n\n所有工具调用使用 {WORK_TOOL}，参数 tool 为工具名、arguments 为该工具的参数。"
+                "仅调用以下 Mona 工具；工具授权与可用性由 Mona 判断。\n" + self._definitions)
+            self._initial_definitions = self._definitions
+        elif self._definitions != self._initial_definitions:
+            history.append({"type": "text", "text": "当前可用 Mona 工具已更新：\n" + self._definitions})
+        prompt = self._work_prompt
         fingerprint = hashlib.sha256(prompt.encode()).hexdigest()
         context = ProjectContext("work", self.workspace, (), (), (), fingerprint, fingerprint)
         session = DevelopmentSession(project_id="work", executor=self.executor, model=model,
@@ -216,6 +226,50 @@ class NativeWorkProvider(LLMProvider):
         self._event_task = asyncio.create_task(anext(self._events))
         self._tool_task = asyncio.create_task(self._requests.get())
         self._message_count = len(messages)
+        self._history_digest = self._history_fingerprint(messages)
+
+    @staticmethod
+    def _history_fingerprint(messages: list[dict]) -> str:
+        return hashlib.sha256(json.dumps(native_history_input(messages), ensure_ascii=False,
+                                         sort_keys=True).encode()).hexdigest()
+
+    async def _reset_context(self) -> None:
+        """Close a paused native run before replaying completed records as input."""
+        if self._host is not None and not self._done:
+            for future in list(self._pending.values()):
+                if not future.done():
+                    future.cancel()
+            try:
+                async with asyncio.timeout(5):
+                    await self._host.interrupt(self._binding)
+                    while self._event_task is not None:
+                        event = await self._event_task
+                        self._event_task = asyncio.create_task(anext(self._events))
+                        if event.type == "usage.updated":
+                            self._update_usage(event.payload)
+                        if event.type in {"run.completed", "run.failed", "run.interrupted"}:
+                            self._done = True
+                            break
+            except (TimeoutError, StopAsyncIteration):
+                logger.warning("Native Work context ended without a final usage receipt for {}", self.executor.value)
+            except BaseException:
+                self._context_reset_failed = True
+                raise
+        try:
+            await self.aclose()
+        except BaseException:
+            self._context_reset_failed = True
+            raise
+        for key, value in self._usage.items():
+            self._carry_usage[key] = self._carry_usage.get(key, 0) + max(0, value - self._reported_usage.get(key, 0))
+        self._done = False
+        self._binding = self._events = None
+        self._requests = asyncio.Queue()
+        self._pending.clear()
+        self._texts.clear()
+        self._usage.clear()
+        self._reported_usage.clear()
+        self._context_usage.pop("context_tokens", None)
 
     def _update_usage(self, payload: dict) -> None:
         usage = payload.get("usage") or (payload.get("tokenUsage") or {}).get("total") or {}
@@ -225,10 +279,10 @@ class NativeWorkProvider(LLMProvider):
         elif any(name in usage for name in (
             "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
         )):
-            prompt_tokens = sum(
+            prompt_tokens = (usage.get("input_tokens") if self.executor == ExecutorId.CODEBUDDY else sum(
                 usage.get(name, 0) or 0
                 for name in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-            )
+            ))
         if isinstance(prompt_tokens, int) and prompt_tokens >= 0:
             self._usage["prompt_tokens"] = prompt_tokens
         for name, aliases in {
@@ -244,8 +298,12 @@ class NativeWorkProvider(LLMProvider):
 
     def _response(self, content: str, calls: list[ToolCallRequest] | None = None) -> LLMResponse:
         usage = {key: max(0, value - self._reported_usage.get(key, 0)) for key, value in self._usage.items()}
+        for key, value in self._carry_usage.items():
+            usage[key] = usage.get(key, 0) + value
+        self._carry_usage.clear()
         self._reported_usage = dict(self._usage)
-        usage["total_tokens"] = usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+        if "prompt_tokens" in usage or "completion_tokens" in usage:
+            usage["total_tokens"] = usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
         usage.update(self._context_usage)
         return LLMResponse(content=content or None, tool_calls=calls or [], usage=usage,
                            finish_reason="tool_calls" if calls else "stop")
@@ -298,22 +356,42 @@ class NativeWorkProvider(LLMProvider):
         if self._turn_progress and code in {"server_overloaded", "usage_limit_exceeded", "rate_limit_exceeded",
                                            "model_service_unavailable", "upstream_internal_error", "authentication_required"}:
             content += "本轮已产生内容或执行过操作，请先核对会话和文件结果后再继续。"
-        return LLMResponse(content=content, finish_reason="error", error_code=code,
+        usage = self._response("").usage if self._usage or self._carry_usage or self._context_usage else {}
+        return LLMResponse(content=content, finish_reason="error", error_code=code, usage=usage,
                            error_status_code=status_code,
                            error_should_retry=self._done and code == "server_overloaded" and not self._turn_progress)
 
     async def _chat(self, messages, tools, model, reasoning_effort, on_content_delta=None, on_thinking_delta=None):
+        if self._context_reset_failed:
+            return self._error_response("native_turn_incomplete")
         if self._done:
-            await self.aclose()
-            self._done = False
-            self._turn_progress = False
-            self._texts.clear()
-            self._usage.clear()
-            self._reported_usage.clear()
-            self._context_usage.clear()
+            await self._reset_context()
+        elif self._host is not None:
+            completed = [message for message in messages if message.get("role") == "tool"
+                         and message.get("tool_call_id") in self._pending
+                         and not self._pending[message["tool_call_id"]].done()]
+            changed = self._history_fingerprint(messages[:self._message_count]) != self._history_digest
+            # WorkBuddy's MCP result processor stringifies images. Its user
+            # input path preserves pixels; only reseed at a completed-tool pause.
+            image_result = self.executor == ExecutorId.CODEBUDDY and any(
+                isinstance(message.get("content"), list)
+                and any(isinstance(block, dict) and block.get("type") == "image_url"
+                        for block in message["content"])
+                for message in completed)
+            added_images = any(
+                message.get("role") == "user" and isinstance(message.get("content"), list)
+                and any(isinstance(block, dict) and block.get("type") == "image_url"
+                        for block in message["content"])
+                for message in messages[self._message_count:])
+            if changed or image_result or added_images:
+                if not completed:
+                    return self._error_response("native_turn_incomplete")
+                await self._reset_context()
         if self._host is None:
             await self._start(messages, tools, model, reasoning_effort)
         else:
+            if completed:
+                self._context_usage.pop("context_tokens", None)
             for message in messages:
                 future = self._pending.get(message.get("tool_call_id")) if message.get("role") == "tool" else None
                 if future is not None and not future.done():
@@ -331,6 +409,7 @@ class NativeWorkProvider(LLMProvider):
                         result = [*result, text] if isinstance(result, list) else str(result) + "\n\n" + text["text"]
                     future.set_result(result)
             self._message_count = len(messages)
+            self._history_digest = self._history_fingerprint(messages)
         parts = []
         while True:
             await asyncio.wait({self._event_task, self._tool_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -401,13 +480,14 @@ class NativeWorkProvider(LLMProvider):
         await asyncio.gather(*tasks, return_exceptions=True)
         self._event_task = self._tool_task = None
         if self._host is not None:
-            host, self._host = self._host, None
+            host = self._host
             try:
                 if self._binding is not None and not self._done:
                     async with asyncio.timeout(5):
                         await host.interrupt(self._binding)
             finally:
                 await host.shutdown()
+                self._host = None
         if self._catalog_path is not None:
             self._catalog_path.unlink(missing_ok=True)
             self._catalog_path = None

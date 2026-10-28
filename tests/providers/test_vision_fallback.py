@@ -108,6 +108,25 @@ async def test_unknown_model_retries_nontransient_image_error_without_images(
     assert _content(messages) == retry_content
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize("error", [
+    "400 prompt is too long: 1055895 tokens > 1048576 maximum",
+    "prompt is too long",
+    "context_length_exceeded",
+])
+async def test_context_overflow_preserves_images_and_returns_to_the_runner(streaming: bool, error: str) -> None:
+    rejected = LLMResponse(content=error, finish_reason="error", error_status_code=400)
+    provider = RecordingProvider([rejected])
+    messages = _image_messages()
+    original = copy.deepcopy(messages)
+
+    response = await _request(provider, messages, streaming=streaming)
+
+    assert response is rejected
+    assert provider.calls == [original]
+    assert messages == original
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
 async def test_vision_capable_model_receives_images(streaming: bool) -> None:

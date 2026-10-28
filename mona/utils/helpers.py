@@ -466,17 +466,17 @@ def estimate_prompt_tokens(
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
     """Estimate text/protocol tokens; visual costs require provider-owned pricing."""
+    parts = [part for message in messages for part in _message_token_text(message)]
+    if tools:
+        parts.append(json.dumps(tools, ensure_ascii=False))
+    payload = "\n".join(parts)
+    per_message_overhead = len(messages) * 4
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        parts = [part for message in messages for part in _message_token_text(message)]
-
-        if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
-
-        per_message_overhead = len(messages) * 4
-        return len(enc.encode("\n".join(parts))) + per_message_overhead
-    except Exception:
-        return 0
+        return len(enc.encode(payload, disallowed_special=())) + per_message_overhead
+    except Exception as exc:
+        logger.warning("Token encoding unavailable ({}); using character estimate", type(exc).__name__)
+        return (len(payload) + 3) // 4 + per_message_overhead
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
@@ -486,9 +486,10 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
         return 4
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(4, len(enc.encode(payload)) + 4)
-    except Exception:
-        return max(4, len(payload) // 4 + 4)
+        return max(4, len(enc.encode(payload, disallowed_special=())) + 4)
+    except Exception as exc:
+        logger.warning("Token encoding unavailable ({}); using character estimate", type(exc).__name__)
+        return (len(payload) + 3) // 4 + 4
 
 
 def estimate_prompt_tokens_chain(

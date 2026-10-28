@@ -1747,6 +1747,7 @@ class AgentLoop:
                     context_window_verified=self.context_window_verified,
                     context_provider=self.context_provider,
                     context_block_limit=self.context_block_limit,
+                    auto_compact_token_limit=self.auto_compact_token_limit,
                     provider_retry_mode=self.provider_retry_mode,
                     progress_callback=on_progress,
                     stream_progress_deltas=on_stream is not None,

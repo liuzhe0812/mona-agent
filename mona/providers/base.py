@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from mona.providers.capabilities import ModelCapabilities, resolve_capabilities
+from mona.providers.context_window import is_context_window_error
 from mona.utils.helpers import image_placeholder_text
 
 if TYPE_CHECKING:
@@ -862,6 +863,8 @@ class LLMProvider(ABC):
                 identical_error_count = 1 if error_key else 0
 
             if not self._is_transient_response(response):
+                if is_context_window_error(response.content, response.error_type, response.error_code):
+                    return response
                 # Coordinate decisions cannot come from a text-only retry.
                 if require_image:
                     return response

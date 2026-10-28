@@ -48,7 +48,11 @@ _CONTEXT_LIMIT_MARKERS = (
     "context_window_exceeded",
     "context limit exceeded",
     "prompt is too long",
-    "too many tokens",
+)
+_PROMPT_LIMIT_VALUE = re.compile(
+    r"\bprompt\s+is\s+too\s+long:\s*[\d,_]+\s+tokens?\s*>\s*"
+    r"(?P<value>[\d,_]+)\s+maximum\b",
+    re.IGNORECASE,
 )
 _CONTEXT_LIMIT_VALUE = re.compile(
     r"(?:maximum\s+context(?:\s+(?:length|window))?|"
@@ -75,6 +79,12 @@ def _parse_token_count(value: str) -> int | None:
     return tokens if tokens >= 4_096 else None
 
 
+def is_context_window_error(*values: object) -> bool:
+    """Recognize context rejection separately from token rate/output limits."""
+    text = "\n".join(str(value) for value in values if value).lower()
+    return any(marker in text for marker in _CONTEXT_LIMIT_MARKERS)
+
+
 def context_window_from_error(*values: object) -> int | None:
     """Extract a provider-declared context ceiling from an error response.
 
@@ -83,9 +93,9 @@ def context_window_from_error(*values: object) -> int | None:
     destructive without improving reliability.
     """
     text = "\n".join(str(value) for value in values if value).lower()
-    if not any(marker in text for marker in _CONTEXT_LIMIT_MARKERS):
+    if not is_context_window_error(text):
         return None
-    match = _CONTEXT_LIMIT_VALUE.search(text)
+    match = _PROMPT_LIMIT_VALUE.search(text) or _CONTEXT_LIMIT_VALUE.search(text)
     return _parse_token_count(match.group("value")) if match else None
 
 

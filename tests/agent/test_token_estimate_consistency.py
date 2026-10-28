@@ -43,6 +43,27 @@ def test_single_message_and_prompt_estimates_share_text_protocol_basis(
     assert estimate_message_tokens(message) == estimate_prompt_tokens([message])
 
 
+@pytest.mark.parametrize("control_token", ["<|endoftext|>", "<|fim_prefix|>"])
+def test_literal_token_spellings_are_counted_consistently(control_token: str) -> None:
+    message = {"role": "user", "content": f"Discuss the literal {control_token} spelling."}
+
+    assert estimate_message_tokens(message) > 0
+    assert estimate_message_tokens(message) == estimate_prompt_tokens([message])
+
+
+def test_tokenizer_failure_uses_consistent_positive_character_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_to_load_encoding(_name: str) -> Any:
+        raise RuntimeError("tokenizer unavailable")
+
+    monkeypatch.setattr("mona.utils.helpers.tiktoken.get_encoding", fail_to_load_encoding)
+    message = {"role": "user", "content": "A nonempty message still has a positive estimate."}
+
+    assert estimate_message_tokens(message) > 0
+    assert estimate_message_tokens(message) == estimate_prompt_tokens([message])
+
+
 def test_inline_image_payload_size_does_not_change_text_estimate_or_mutate_message() -> None:
     text = "Describe the attached picture."
     small = {

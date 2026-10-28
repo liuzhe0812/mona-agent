@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from loguru import logger
+
+from mona.development.contracts import ExecutorId
 from mona.development.display_content import display_content
 from mona.development.executors.base import NativeEvent
 from mona.development.executors.host_tools import (
@@ -18,6 +22,7 @@ from mona.development.executors.host_tools import (
     host_servers_valid,
 )
 from mona.development.executors.rpc import RpcError
+from mona.providers.context_window import is_context_window_error
 
 
 def plain(value: Any) -> Any:
@@ -37,6 +42,17 @@ _REQUEST_USAGE_FIELDS = {
     "output_tokens": ("output_tokens", "outputTokens"),
 }
 _REQUEST_INPUT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+_CODEBUDDY_CONTEXT_ERROR = re.compile(
+    r"400 prompt is too long: (?P<actual>\d[\d,_]*) tokens > (?P<limit>\d[\d,_]*) maximum "
+    r"\([a-f0-9]{32}/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\)", re.IGNORECASE,
+)
+_API_ERROR_CODES = {
+    "authentication_failed": "authentication_required",
+    "billing_error": "usage_limit_exceeded",
+    "rate_limit": "rate_limit_exceeded",
+    "invalid_request": "upstream_invalid_request",
+    "server_error": "upstream_internal_error",
+}
 
 
 def _nonnegative_int(value: Any) -> int | None:
@@ -55,8 +71,10 @@ def _field(value: Any, *names: str) -> Any:
 
 class SDKEventProjector:
     def __init__(self, native_session_id: str, *, host_collaboration: bool = False,
-                 work_tool: bool = False, resuming: bool = False, design_resources: bool = False):
+                 work_tool: bool = False, resuming: bool = False, design_resources: bool = False,
+                 executor: ExecutorId = ExecutorId.CLAUDE):
         self.native_session_id = native_session_id
+        self.executor = executor
         self.resuming = resuming
         self.host_collaboration = host_collaboration
         self.design_resources = design_resources and not work_tool
@@ -85,11 +103,13 @@ class SDKEventProjector:
         self.primary_model: str | None = None
         self.finished = False
         self.uncertain = False
+        self.pending_api_error: str | None = None
 
     def begin(self, turn_id: str) -> None:
         self.turn_id, self.ordinal, self.item_id = turn_id, 0, ""
         self.streamed, self.text_seen, self.finished = False, False, False
         self.uncertain = False
+        self.pending_api_error = None
         self.tool_ids.clear()
         self.tool_blocks.clear()
         self.streamed_tool_ids.clear()
@@ -109,13 +129,38 @@ class SDKEventProjector:
         values = plain(usage)
         if not isinstance(values, dict):
             return
+        reported = {}
         for field, aliases in _REQUEST_USAGE_FIELDS.items():
             value = next((values[name] for name in aliases if name in values), None)
             token_count = _nonnegative_int(value)
             if token_count is not None:
-                self.request_usage[field] = token_count
-        if any(field in self.request_usage for field in _REQUEST_INPUT_FIELDS):
+                reported[field] = token_count
+        if not any(reported.values()):
+            return  # CLI start/stop placeholders are not provider measurements.
+        self.request_usage.update(reported)
+        if self.executor == ExecutorId.CODEBUDDY:
+            if self.request_usage.get("input_tokens", 0) > 0:
+                # CodeBuddy maps OpenAI prompt_tokens, which already includes cache.
+                self.context_tokens = self.request_usage["input_tokens"] + self.request_usage.get("output_tokens", 0)
+        elif any(self.request_usage.get(field, 0) > 0 for field in _REQUEST_INPUT_FIELDS):
             self.context_tokens = sum(self.request_usage.values())
+
+    def _result_usage(self, usage: Any) -> Any:
+        if self.executor != ExecutorId.CODEBUDDY:
+            return usage
+        values = plain(usage)
+        if not isinstance(values, dict) or not any(_nonnegative_int(value) for value in values.values()):
+            return None
+        if not values.get("input_tokens") and any(values.get(field, 0) for field in _REQUEST_INPUT_FIELDS[1:]):
+            values = {key: value for key, value in values.items()
+                      if key not in {"input_tokens", "output_tokens"} or value}
+        return values
+
+    @staticmethod
+    def _api_error_code(error: Any, *details: Any) -> str:
+        if is_context_window_error(error, *details):
+            return "context_window_exceeded"
+        return _API_ERROR_CODES.get(str(error), "native_execution_failed")
 
     def _usage_event(self, identity: Any = None) -> list[NativeEvent]:
         payload = {}
@@ -290,6 +335,23 @@ class SDKEventProjector:
                                     str(data["uuid"]) if data.get("uuid") else None)]
             return []
         if kind == "assistant":
+            error = data.get("error")
+            error_text = "\n".join(
+                block.get("text", "") for value in data.get("content", [])
+                if isinstance((block := plain(value)), dict) and isinstance(block.get("text"), str)
+            ).strip()
+            # This CLI version drops its error flag at the SDK boundary.
+            match = (_CODEBUDDY_CONTEXT_ERROR.fullmatch(error_text)
+                     if self.executor == ExecutorId.CODEBUDDY and self.work_tool else None)
+            codebuddy_context_error = (match is not None
+                and int(match["actual"].replace(",", "").replace("_", ""))
+                > int(match["limit"].replace(",", "").replace("_", "")) >= 4096)
+            if error or codebuddy_context_error:
+                self.pending_api_error = self._api_error_code(error, error_text)
+                logger.warning("Native SDK API request failed (executor={}, session={}, code={}); awaiting terminal result",
+                               self.executor.value, self.native_session_id, self.pending_api_error)
+                return []
+            self.pending_api_error = None
             if not self.streamed:
                 self.ordinal += 1
                 self.item_id = f"message-{self.ordinal}"
@@ -387,9 +449,9 @@ class SDKEventProjector:
             self.confirmed = True
             self._update_context_window(data)
             result = []
-            if not self.text_seen and isinstance(data.get("result"), str) and data["result"]:
+            if not data.get("is_error") and not self.text_seen and isinstance(data.get("result"), str) and data["result"]:
                 result.append(self._event("agent.message.completed", {"itemId": "result", "text": data["result"]}, "result:message"))
-            usage_payload = {"usage": data.get("usage"), "durationMs": data.get("duration_ms")}
+            usage_payload = {"usage": self._result_usage(data.get("usage")), "durationMs": data.get("duration_ms")}
             if self.context_tokens is not None:
                 usage_payload["contextTokens"] = self.context_tokens
             if self.context_window is not None:
@@ -404,9 +466,14 @@ class SDKEventProjector:
                 terminal = "run.completed"
             else:
                 terminal = "run.unknown"
+            failure = None
+            if terminal == "run.failed":
+                details = self._api_error_code("", data.get("result"), data.get("errors"))
+                failure = details if details != "native_execution_failed" else self.pending_api_error or details
             result.append(self._event(terminal, {"status": subtype,
-                "errorCode": "native_execution_failed" if data.get("is_error") else None,
+                "errorCode": failure,
                 "turnIdentitySource": "host_dispatch"}, "result:terminal"))
+            self.pending_api_error = None
             self.uncertain = terminal == "run.unknown"
             self.finished = True
             return result

@@ -305,6 +305,9 @@ def test_native_work_usage_diffs_cumulative_cache_updates():
     provider._usage = {}
     provider._reported_usage = {}
     provider._context_usage = {}
+    provider._carry_usage = {}
+    from mona.development.contracts import ExecutorId
+    provider.executor = ExecutorId.CLAUDE
 
     provider._update_usage({"usage": {
         "input_tokens": 90,
@@ -325,6 +328,24 @@ def test_native_work_usage_diffs_cumulative_cache_updates():
     assert first.usage == {"prompt_tokens": 104, "cached_tokens": 10, "completion_tokens": 5, "total_tokens": 109}
     assert second.usage == {"prompt_tokens": 74, "cached_tokens": 20, "completion_tokens": 4, "total_tokens": 78}
     assert repeated.usage == {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def test_codebuddy_native_cache_is_a_subset_and_missing_input_is_not_reported_as_zero(tmp_path):
+    config = Config()
+    config.agents.defaults.executor = "codebuddy"
+    provider = NativeWorkProvider(config, tmp_path)
+    provider._update_usage({"usage": {"input_tokens": 100, "cache_read_input_tokens": 90, "output_tokens": 5}})
+    response = provider._response("received")
+    assert response.usage == {"prompt_tokens": 100, "cached_tokens": 90, "completion_tokens": 5, "total_tokens": 105}
+    provider = NativeWorkProvider(config, tmp_path)
+    provider._update_usage({"usage": {"cache_read_input_tokens": 90}})
+    assert provider._response("received cache only").usage == {"cached_tokens": 90}
+
+
+def test_native_cumulative_usage_is_not_a_context_window_estimate():
+    spec = AgentRunSpec([], ToolRegistry(), "native-model", 1, 16000, context_usage_fallback=False)
+    usage = AgentRunner._contextualize_usage({"prompt_tokens": 5_500_000, "completion_tokens": 41_000}, spec)
+    assert usage == {"prompt_tokens": 5_500_000, "completion_tokens": 41_000}
 
 
 def test_runner_treats_zero_native_context_usage_as_reported():
@@ -842,3 +863,316 @@ async def test_work_model_selection_refreshes_stale_account_or_catalog_before_sa
         assert not runtime.tasks and not runtime.native.hosts and runtime.store.list_projects() == []
     finally:
         await client.close()
+
+
+class _NativeWorkImageHost:
+    def __init__(self, state, executor, tool_handler):
+        from mona.development.executors.base import NativeEvent
+
+        self.state = state
+        self.executor = executor
+        self.tool_handler = tool_handler
+        self.index = len(state["hosts"])
+        self.state["hosts"].append(self)
+        self.events_queue = asyncio.Queue()
+        self.binding = None
+        self.sent = []
+        self.tool_results = []
+        self.cancelled_tools = []
+        self.driver = None
+        self.shutdown_complete = False
+        self._native_event = NativeEvent
+
+    async def create_session(self, start):
+        from mona.development.contracts import Binding
+
+        previous = self.state["hosts"][:self.index]
+        assert all(host.shutdown_complete for host in previous)
+        self.state["work_prompts"].append(start.work_prompt.encode("utf-8"))
+        self.binding = Binding(
+            session_id=start.session.id,
+            executor=self.executor,
+            native_session_id=f"native-work-{self.index}",
+            working_directory=start.session.project_id,
+        )
+        return self.binding
+
+    async def send(self, binding, input_id, message):
+        from mona.development.executors.base import DispatchReceipt
+
+        assert binding == self.binding
+        self.sent.append(copy.deepcopy(message))
+        if self.state.get("hold"):
+            return DispatchReceipt(input_id=input_id, outcome="accepted")
+        if self.index == 2:
+            await self.events_queue.put(self._native_event(
+                type="agent.message.completed", payload={"itemId": "answer", "text": "done"}))
+            await self.events_queue.put(self._native_event(type="run.completed"))
+        else:
+            usage = {0: (10, 1, 700), 1: (3, 1, None)}[self.index]
+            payload = {"usage": {"inputTokens": usage[0], "outputTokens": usage[1]},
+                       "contextWindow": 1000}
+            if usage[2] is not None:
+                payload["contextTokens"] = usage[2]
+            await self.events_queue.put(self._native_event(type="usage.updated", payload=payload))
+            self.driver = asyncio.create_task(self._run_tools())
+        return DispatchReceipt(input_id=input_id, outcome="accepted", native_turn_id=f"turn-{self.index}")
+
+    async def _call_tool(self, tool, arguments):
+        try:
+            result = await self.tool_handler(
+                self.binding, f"turn-{self.index}", {"tool": tool, "arguments": arguments})
+        except asyncio.CancelledError:
+            self.cancelled_tools.append(tool)
+            raise
+        self.tool_results.append((tool, result))
+        if any(block.get("type") == "image" for block in result.get("content", [])):
+            self.state["mcp_image_results"].append((self.index, tool))
+
+    async def _run_tools(self):
+        append_args = {"content": "appended once"}
+        read_args = {"path": str(self.state["image_path"]), "force": True}
+        try:
+            if self.state.get("manual_tool") and self.index == 0:
+                await self._call_tool("read_file", read_args)
+            elif self.index == 0:
+                await self._call_tool("append_file", append_args)
+                await self._call_tool("read_file", read_args)
+                if self.executor != self.state["codebuddy"]:
+                    await self._call_tool("read_file", read_args)
+            elif self.index == 1:
+                await self._call_tool("read_file", read_args)
+            await self.events_queue.put(self._native_event(
+                type="agent.message.completed", payload={"itemId": "answer", "text": "done"}))
+            await self.events_queue.put(self._native_event(type="run.completed"))
+        except asyncio.CancelledError:
+            return
+
+    async def interrupt(self, binding, *, native_turn_id=None):
+        from mona.development.executors.base import InterruptReceipt
+
+        assert binding == self.binding
+        tokens = {0: (12, 2, 700), 1: (5, 2, 600)}[self.index]
+        payload = {"usage": {"inputTokens": tokens[0], "outputTokens": tokens[1]},
+                   "contextTokens": tokens[2]}
+        await self.events_queue.put(self._native_event(type="usage.updated", payload=payload))
+        await self.events_queue.put(self._native_event(type="run.interrupted"))
+        return InterruptReceipt(outcome="confirmed")
+
+    async def shutdown(self):
+        if self.driver is not None:
+            await asyncio.gather(self.driver, return_exceptions=True)
+        self.state["shutdown_attempts"].append(self.index)
+        if self.state.get("fail_shutdown") and self.index == 0:
+            raise RuntimeError("fixture shutdown failed")
+        self.shutdown_complete = True
+        self.state["shutdown_order"].append(self.index)
+
+    async def close_runtime(self, binding, *, force=False):
+        return None
+
+    async def get_status(self, binding):
+        return "idle"
+
+    async def events(self, binding):
+        assert binding == self.binding
+        while True:
+            event = await self.events_queue.get()
+            if event is None:
+                return
+            yield event
+
+
+def _install_native_work_image_hosts(monkeypatch, tmp_path, executor, *, hold=False, fail_shutdown=False):
+    from types import SimpleNamespace
+
+    from mona.development.contracts import ExecutorId
+
+    selected = ExecutorId(executor)
+    codebuddy = ExecutorId.CODEBUDDY
+    root = tmp_path / "work"
+    root.mkdir(exist_ok=True)
+    state = {"hosts": [], "work_prompts": [], "mcp_image_results": [], "shutdown_order": [],
+             "shutdown_attempts": [],
+             "image_path": root / "photo.png", "codebuddy": codebuddy,
+             "hold": hold, "fail_shutdown": fail_shutdown, "manual_tool": False}
+    state["image_path"].write_bytes(b"\x89PNG\r\n\x1a\n")
+    config = Config()
+    config.agents.defaults.executor = executor
+    config.agents.defaults.native_model = "native-fixture"
+    config.development.enabled_engines = [executor]
+    config.development.codex_path = str(tmp_path / "native-engine")
+    executable = str(tmp_path / "native-engine")
+    discovery = SimpleNamespace(executor=selected, state="detected", executable=executable)
+    monkeypatch.setattr("mona.providers.native_work_provider.discover_executors", lambda _config: [discovery])
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "mona.providers.native_work_provider.prepare_codex_work_profile",
+        lambda *_args: (object(), catalog),
+    )
+    monkeypatch.setattr(
+        "mona.providers.native_work_provider.prepare_sdk_profile",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    def factory(profile, *, tool_handler):
+        return _NativeWorkImageHost(state, selected, tool_handler)
+
+    monkeypatch.setattr("mona.providers.native_work_provider.CodexExecutor", factory)
+    monkeypatch.setattr("mona.providers.native_work_provider.SDKExecutor", factory)
+    return config, state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("executor", ["codebuddy", "claude", "codex"])
+async def test_native_work_image_history_rebuilds_only_codebuddy_and_carries_usage_once(
+    tmp_path, monkeypatch, executor,
+):
+    from mona.agent.tools.base import Tool
+    from mona.agent.tools.filesystem import ReadFileTool
+    config, state = _install_native_work_image_hosts(monkeypatch, tmp_path, executor)
+    root = tmp_path / "work"
+
+    class AppendFileTool(Tool):
+        def __init__(self, path):
+            self.path = path
+            self.calls = 0
+
+        @property
+        def name(self):
+            return "append_file"
+
+        @property
+        def description(self):
+            return "Append one line to the test file."
+
+        @property
+        def parameters(self):
+            return {"type": "object", "properties": {"content": {"type": "string"}},
+                    "required": ["content"]}
+
+        async def execute(self, *, content):
+            self.calls += 1
+            with self.path.open("a", encoding="utf-8") as stream:
+                stream.write(content + "\n")
+            return "appended"
+
+    append_path = root / "append.txt"
+    append_tool = AppendFileTool(append_path)
+    tools = ToolRegistry()
+    tools.register(append_tool)
+    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    provider = NativeWorkProvider(config, root)
+    history = [{"role": "system", "content": "stable Work instructions"},
+               {"role": "user", "content": "Inspect photo and append once"}]
+    async with asyncio.timeout(10):
+        result = await AgentRunner(provider).run(AgentRunSpec(
+            history, tools, "native-fixture", 8, 16000, workspace=root,
+            context_window_tokens=1000, context_window_verified=True,
+        ))
+
+    expected_rebuilds = 2 if executor == "codebuddy" else 0
+    assert result.stop_reason == "completed"
+    assert append_tool.calls == 1 and append_path.read_text(encoding="utf-8") == "appended once\n"
+    assert len(state["hosts"]) == expected_rebuilds + 1
+    assert state["shutdown_order"] == list(range(expected_rebuilds + 1))
+    assert len(set(state["work_prompts"])) == 1
+    assert all("Inspect photo and append once" in json.dumps(host.sent[0]) for host in state["hosts"])
+    image_counts = [sum(block.get("type") == "image_url" for block in message)
+                    for host in state["hosts"] for message in host.sent]
+    if executor == "codebuddy":
+        assert image_counts == [0, 1, 2]
+        assert state["mcp_image_results"] == []
+        assert state["hosts"][0].cancelled_tools == ["read_file"]
+        assert state["hosts"][1].cancelled_tools == ["read_file"]
+        assert result.usage == {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21}
+        assert result.final_usage["context_window_tokens"] == 1000
+        assert "context_tokens" not in result.final_usage
+    else:
+        assert image_counts == [0]
+        assert len(state["mcp_image_results"]) == 2
+        assert state["hosts"][0].cancelled_tools == []
+
+
+@pytest.mark.asyncio
+async def test_native_work_context_rebuild_requires_completed_tool_boundary(tmp_path, monkeypatch):
+    config, state = _install_native_work_image_hosts(monkeypatch, tmp_path, "codebuddy", hold=True)
+    root = tmp_path / "work"
+    provider = NativeWorkProvider(config, root)
+    messages = [{"role": "system", "content": "stable Work instructions"},
+                {"role": "user", "content": "original goal"}]
+    await provider._start(messages, [], "native-fixture", None)
+    changed = [messages[0], {"role": "user", "content": "changed projection"}]
+    result = await provider.chat_stream(changed, model="native-fixture")
+    assert result.error_code == "native_turn_incomplete"
+    assert len(state["hosts"]) == 1 and len(state["hosts"][0].sent) == 1
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_native_work_rebuild_includes_new_user_image_at_completed_tool_boundary(tmp_path, monkeypatch):
+    from mona.agent.tools.filesystem import ReadFileTool
+
+    config, state = _install_native_work_image_hosts(monkeypatch, tmp_path, "codebuddy")
+    state["manual_tool"] = True
+    root = tmp_path / "work"
+    tools = ToolRegistry()
+    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    provider = NativeWorkProvider(config, root)
+    initial = [{"role": "system", "content": "stable Work instructions"},
+               {"role": "user", "content": "original goal"}]
+    definitions = tools.get_definitions()
+    await provider._start(initial, definitions, "native-fixture", None)
+    first = await provider._chat(initial, definitions, "native-fixture", None)
+    call = first.tool_calls[0]
+    image_result = await tools.execute(call.name, call.arguments)
+    new_user_image = next(block for block in image_result if block.get("type") == "image_url")
+    messages = [*initial,
+        {"role": "assistant", "tool_calls": [{"id": call.id, "function": {
+            "name": call.name, "arguments": json.dumps(call.arguments)}}]},
+        {"role": "tool", "tool_call_id": call.id, "content": image_result},
+        {"role": "user", "content": [{"type": "text", "text": "also inspect this image"},
+            new_user_image]},
+    ]
+    async with asyncio.timeout(5):
+        await provider.chat_stream(messages, tools=definitions, model="native-fixture")
+    assert len(state["hosts"]) == 2
+    assert state["shutdown_order"] == [0]
+    rebuilt = state["hosts"][1].sent[0]
+    assert sum(block.get("type") == "image_url" for block in rebuilt) == 2
+    assert "original goal" in json.dumps(rebuilt)
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_native_work_shutdown_failure_does_not_dispatch_rebuilt_context(tmp_path, monkeypatch):
+    from mona.agent.tools.filesystem import ReadFileTool
+
+    config, state = _install_native_work_image_hosts(
+        monkeypatch, tmp_path, "codebuddy", fail_shutdown=True)
+    state["manual_tool"] = True
+    root = tmp_path / "work"
+    tools = ToolRegistry()
+    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    provider = NativeWorkProvider(config, root)
+    initial = [{"role": "system", "content": "stable Work instructions"},
+               {"role": "user", "content": "Inspect photo"}]
+    definitions = tools.get_definitions()
+    await provider._start(initial, definitions, "native-fixture", None)
+    first = await provider._chat(initial, definitions, "native-fixture", None)
+    call = first.tool_calls[0]
+    image_result = await tools.execute(call.name, call.arguments)
+    messages = [*initial,
+        {"role": "assistant", "tool_calls": [{"id": call.id, "function": {
+            "name": call.name, "arguments": json.dumps(call.arguments)}}]},
+        {"role": "tool", "tool_call_id": call.id, "content": image_result},
+    ]
+    await provider.chat_stream(messages, tools=definitions, model="native-fixture")
+    second = await provider.chat_stream(messages, tools=definitions, model="native-fixture")
+    assert len(state["hosts"]) == 1
+    assert len(state["hosts"][0].sent) == 1
+    assert state["shutdown_order"] == []
+    assert second.error_code == "native_turn_incomplete"
+    with pytest.raises(RuntimeError, match="fixture shutdown failed"):
+        await provider.aclose()

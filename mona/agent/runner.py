@@ -16,11 +16,16 @@ from typing import Any
 
 from loguru import logger
 
+from mona.agent.context_recovery import (
+    offload_tool_images,
+    persist_tool_images,
+    project_tool_images,
+)
 from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.result_compress import compress_tool_result
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from mona.providers.context_window import context_window_from_error
+from mona.providers.context_window import context_window_from_error, is_context_window_error
 from mona.utils.file_edit_events import (
     StreamingFileEditTracker,
     build_file_edit_end_event,
@@ -164,6 +169,8 @@ class AgentRunSpec:
     context_window_verified: bool = True
     context_provider: str | None = None
     context_block_limit: int | None = None
+    auto_compact_token_limit: int | None = None
+    context_usage_fallback: bool = True
     provider_retry_mode: str = "standard"
     progress_callback: Any | None = None
     stream_progress_deltas: bool = True
@@ -405,6 +412,7 @@ class AgentRunner:
 
         if isinstance(self.provider, NativeWorkProvider):
             provider = self.provider.for_turn(spec.workspace)
+            spec.context_usage_fallback = False
             try:
                 return await AgentRunner(provider)._run(spec)
             finally:
@@ -440,6 +448,31 @@ class AgentRunner:
         context_recovery_used = False
         force_context_compaction = False
         snipped_prefix_count = 0
+        # Indices belong to the append-only execution log, before any snipping.
+        tool_image_offloads: dict[int, list[dict]] = {}
+        rejected_context: list[dict] | None = None
+
+        async def offload_images(request: list[dict]) -> bool:
+            try:
+                replacements = await asyncio.to_thread(
+                    offload_tool_images, request, spec.workspace, spec.session_key,
+                )
+            except Exception:
+                logger.exception("Failed to preserve historical tool images for {}", spec.session_key or "default")
+                return False
+            tool_image_offloads.update(replacements)
+            return bool(replacements)
+
+        async def image_context() -> list[dict]:
+            projected = project_tool_images(messages, tool_image_offloads)
+            if spec.model_context_callback is None and spec.context_window_tokens:
+                threshold = min(
+                    spec.auto_compact_token_limit or int(spec.context_window_tokens * 0.8),
+                    self._context_budget(spec) or spec.context_window_tokens,
+                )
+                if raw_usage.get("context_tokens", 0) >= threshold and await offload_images(projected):
+                    projected = project_tool_images(messages, tool_image_offloads)
+            return projected
 
         def reset_repeat_guard() -> None:
             tool_call_rounds.clear()
@@ -465,7 +498,8 @@ class AgentRunner:
                 # may repair or compact historical messages for the model, but
                 # those synthetic edits must not shift the append boundary used
                 # later when the caller saves only the new turn.
-                messages_for_model = self._drop_orphan_tool_results(prepared if prepared is not None else messages)
+                messages_for_model = prepared if prepared is not None else await image_context()
+                messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 if prepared is None:
                     messages_for_model = self._retain_snipped_history_prefix(
@@ -490,12 +524,13 @@ class AgentRunner:
                     iteration,
                     spec.session_key or "default",
                 )
+                fallback_messages = project_tool_images(messages, tool_image_offloads)
                 try:
-                    messages_for_model = self._drop_orphan_tool_results(messages)
+                    messages_for_model = self._drop_orphan_tool_results(fallback_messages)
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
-                    messages_for_model = messages
-            if not self._fits_context_budget(spec, messages_for_model):
+                    messages_for_model = fallback_messages
+            if messages_for_model == rejected_context or not self._fits_context_budget(spec, messages_for_model):
                 final_content = "当前请求内容超出模型可用上下文，已保留已完成进度。请缩短输入或新开会话后重试。"
                 error = final_content
                 stop_reason = "context_limit"
@@ -717,7 +752,9 @@ class AgentRunner:
                 if loop_detected and tool_step_rounds:
                     stop_reason = "loop_detected"
                     error = _TOOL_LOOP_STOP_MESSAGE
-                    final_content, finalization_usage = await self._finalize_tool_loop(spec, messages)
+                    final_content, finalization_usage = await self._finalize_tool_loop(
+                        spec, await image_context(),
+                    )
                     self._accumulate_usage(usage, finalization_usage)
                     raw_usage = self._contextualize_usage(finalization_usage, spec)
                     await self._publish_context_usage(spec, raw_usage)
@@ -742,7 +779,9 @@ class AgentRunner:
                 # Only a tool-free report may follow; completed writes stay recorded.
                 stop_reason = "loop_detected"
                 error = _TOOL_LOOP_STOP_MESSAGE
-                final_content, finalization_usage = await self._finalize_tool_loop(spec, messages)
+                final_content, finalization_usage = await self._finalize_tool_loop(
+                    spec, await image_context(),
+                )
                 self._accumulate_usage(usage, finalization_usage)
                 raw_usage = self._contextualize_usage(finalization_usage, spec)
                 await self._publish_context_usage(spec, raw_usage)
@@ -846,6 +885,9 @@ class AgentRunner:
                 continue
 
             if response.finish_reason == "error":
+                context_rejected = is_context_window_error(
+                    response.content, response.error_type, response.error_code,
+                )
                 detected_context_window_tokens = context_window_from_error(
                     response.content,
                     response.error_type,
@@ -858,25 +900,27 @@ class AgentRunner:
                         or detected_context_window_tokens < spec.context_window_tokens
                     ):
                         spec.context_window_tokens = detected_context_window_tokens
-                if detected_context_window_tokens is not None and spec.model_context_callback is not None and not context_recovery_used:
+                if context_rejected and spec.model_context_callback is not None and not context_recovery_used and iteration + 1 < spec.max_iterations:
                     context_recovery_used = True
                     force_context_compaction = True
-                    spec.context_window_tokens = min(spec.context_window_tokens or detected_context_window_tokens, detected_context_window_tokens)
+                    rejected_context = copy.deepcopy(messages_for_model)
                     # Only the failed model request is retried; completed tools
                     # remain in the log and are never dispatched again.
                     continue
-                if (
-                    detected_context_window_tokens is not None
-                    and not context_recovery_used
-                    and spec.context_limit_callback is not None
-                    and await spec.context_limit_callback(detected_context_window_tokens)
-                ):
-                    context_recovery_used = True
-                    continue
-                if detected_context_window_tokens is not None:
+                if context_rejected and not context_recovery_used and iteration + 1 < spec.max_iterations:
+                    learned = (
+                        detected_context_window_tokens is not None
+                        and spec.context_limit_callback is not None
+                        and await spec.context_limit_callback(detected_context_window_tokens)
+                    )
+                    if await offload_images(project_tool_images(messages, tool_image_offloads)) or learned:
+                        context_recovery_used = True
+                        rejected_context = copy.deepcopy(messages_for_model)
+                        continue
+                if context_rejected:
                     final_content = (
-                        "模型返回的上下文容量小于当前估算值。"
-                        "已保留会话并准备按实际容量重新整理上下文。"
+                        "本轮内容超出模型可用上下文，已保留已完成进度。"
+                        "请分步继续任务或新开会话后重试。"
                     )
                     stop_reason = "context_limit"
                 else:
@@ -959,7 +1003,7 @@ class AgentRunner:
             )
             final_content, finalization_provider_usage = await self._finalize_without_tools(
                 spec,
-                messages,
+                await image_context(),
             )
             self._accumulate_usage(usage, finalization_provider_usage)
             raw_usage = self._contextualize_usage(finalization_provider_usage, spec)
@@ -1323,6 +1367,8 @@ class AgentRunner:
         result: dict[str, Any] = dict(usage)
         if "prompt_tokens" not in usage and "context_tokens" not in usage:
             return result
+        if "context_tokens" not in usage and not spec.context_usage_fallback:
+            return result
         # Native engines may bill several internal requests in one response.
         result.setdefault(
             "context_tokens",
@@ -1473,6 +1519,8 @@ class AgentRunner:
     @staticmethod
     def _accumulate_usage(target: dict[str, int], addition: dict[str, int]) -> None:
         for key, value in addition.items():
+            if key in {"context_tokens", "context_window_tokens"}:
+                continue
             target[key] = target.get(key, 0) + value
 
     async def _execute_tools(
@@ -1919,6 +1967,7 @@ class AgentRunner:
                 result,
                 max_chars=spec.max_tool_result_chars,
             )
+            content = persist_tool_images(content, spec.workspace, spec.session_key)
         except Exception:
             logger.exception(
                 "Tool result persist failed for {} in {}; using raw result",
@@ -2135,7 +2184,7 @@ class AgentRunner:
             )
         except Exception:
             logger.exception("Final context budget check failed for {}", spec.session_key or "default")
-            return True
+            return False
         return estimate <= budget
 
     def _partition_tool_batches(

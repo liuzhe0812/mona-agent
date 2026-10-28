@@ -70,6 +70,8 @@ design-assets/
 !/tests/development/test_git_generation.py
 !/tests/development/test_native_host_tools.py
 !/tests/development/test_work_native.py
+!/tests/development/test_work_native_images.py
+!/tests/development/test_sdk_context_recovery.py
 !/tests/development/test_native_collaboration_flow.py
 !/tests/development/test_collaboration_steering.py
 !/tests/development/test_permissions.py
@@ -86,6 +88,7 @@ design-assets/
 !tests/providers/test_custom_provider_network.py
 !tests/providers/test_video_generation.py
 !tests/providers/test_vision_fallback.py
+!tests/providers/test_context_window.py
 !tests/providers/test_openai_responses.py
 !tests/providers/test_bedrock_provider.py
 !/tests/test_video_style_system.py
@@ -142,6 +145,7 @@ design-assets/
 !/tests/agent/
 /tests/agent/*
 !/tests/agent/test_context_prompt_cache.py
+!/tests/agent/test_runner_governance.py
 !/tests/agent/test_agent_deletion.py
 !/tests/agent/test_video_model_binding.py
 !/tests/agent/test_shared_room_context.py
@@ -318,6 +322,7 @@ design-assets/
 !tests/test_official_distribution_builder.py
 !tests/test_webui_history_cache.py
 !tests/test_webui_replay_hotpath.py
+!tests/test_model_context_window.py
 !/tests/cloud/
 /tests/cloud/*
 !/tests/cloud/*.py
