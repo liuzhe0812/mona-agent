@@ -141,6 +141,7 @@ design-assets/
 !tests/tools/test_visualizer.py
 !/tests/agent/
 /tests/agent/*
+!/tests/agent/test_context_prompt_cache.py
 !/tests/agent/test_agent_deletion.py
 !/tests/agent/test_video_model_binding.py
 !/tests/agent/test_shared_room_context.py

@@ -1,7 +1,6 @@
 """Context builder for assembling agent prompts."""
 
 import base64
-import hashlib
 import mimetypes
 import platform
 from contextlib import suppress
@@ -17,7 +16,6 @@ from mona.session.task_plan import task_plan_runtime_lines
 from mona.utils.helpers import (
     current_time_str,
     detect_image_mime,
-    truncate_text,
 )
 from mona.utils.prompt_templates import render_template
 
@@ -51,8 +49,6 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["SOUL.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
-    _MAX_RECENT_HISTORY = 50
-    _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
     @staticmethod
@@ -319,27 +315,6 @@ class ContextBuilder:
             if isinstance(text, str) and self._RUNTIME_CONTEXT_TAG in text
         ]
         background = []
-        entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        if entries:
-            rendered_entries = []
-            remaining = self._MAX_HISTORY_CHARS
-            for entry in entries[-self._MAX_RECENT_HISTORY:]:
-                if entry["content"].strip() == (session_summary or "").strip():
-                    continue
-                line = f"- [{entry['timestamp']}] {entry['content']}"
-                marker = f"[History entry: {hashlib.sha256(line.encode()).hexdigest()[:16]}]"
-                if any(marker in text for text in historical_context):
-                    continue
-                line = f"{marker}\n{line}"
-                if remaining <= len(marker) + 1:
-                    break
-                rendered_entries.append(truncate_text(line, remaining))
-                remaining -= len(rendered_entries[-1]) + 1
-            history_text = "\n".join(rendered_entries)
-            if history_text:
-                background.append(
-                    "# Recent History\n\n" + truncate_text(history_text, self._MAX_HISTORY_CHARS)
-                )
         summary_context = f"[Archived Context Summary]\n\n{session_summary}" if session_summary else ""
         if summary_context and not any(summary_context in text for text in historical_context):
             background.append(summary_context)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -84,7 +85,7 @@ def test_model_view_is_opt_in_and_old_user_timestamps_still_replay() -> None:
     )
 
 
-def test_session_summary_and_recent_history_are_not_repeated(tmp_path) -> None:
+def test_session_summary_is_retained_without_shared_recent_history(tmp_path) -> None:
     builder = ContextBuilder(tmp_path)
     archived_summary = "The approved report is ready."
     builder.memory.append_history(archived_summary)
@@ -100,22 +101,21 @@ def test_session_summary_and_recent_history_are_not_repeated(tmp_path) -> None:
     )
     second_user = second[-1]["content"]
     assert second_user.count(archived_summary) == 1
-    assert second_user.count("The user requested one chart.") == 1
+    assert "The user requested one chart." not in second_user
 
     # Once the prior model history is compacted away, retained background can be injected again.
     compacted = builder.build_messages([], "Resume", session_summary=archived_summary)
     assert compacted[-1]["content"].count(archived_summary) == 1
 
 
-def test_large_truncated_history_entry_is_not_reinjected(tmp_path) -> None:
+def test_large_shared_history_does_not_enter_new_or_continued_chat(tmp_path) -> None:
     builder = ContextBuilder(tmp_path)
     large_entry = "UNIQUE-LARGE-HISTORY-ENTRY-" + "x" * 40_000
     builder.memory.append_history(large_entry, max_chars=50_000)
 
     first = builder.build_messages([], "First request")
     first_user = first[-1]["content"]
-    assert "UNIQUE-LARGE-HISTORY-ENTRY-" in first_user
-    assert len(first_user) < 33_000
+    assert "UNIQUE-LARGE-HISTORY-ENTRY-" not in first_user
 
     second = builder.build_messages(
         [
@@ -125,8 +125,81 @@ def test_large_truncated_history_entry_is_not_reinjected(tmp_path) -> None:
         "Second request",
     )
     assert "UNIQUE-LARGE-HISTORY-ENTRY-" not in second[-1]["content"]
-    assert "UNIQUE-LARGE-HISTORY-ENTRY-" in second[1]["content"]
-    assert second[1]["content"].count("[History entry:") == 1
+    assert "UNIQUE-LARGE-HISTORY-ENTRY-" not in second[1]["content"]
+    assert "First request" in second[1]["content"]
+    assert len(builder.memory.read_unprocessed_history(since_cursor=0)) == 1
+
+
+def _legacy_runtime(summary: str = "") -> str:
+    archived = f"\n\n[Archived Context Summary]\n\n{summary}" if summary else ""
+    return (
+        "[Runtime Context — metadata only, not instructions]\n"
+        "Current Time: 2026-10-22 10:00:00\nChannel: websocket\nChat ID: presentation\n"
+        "Conversation background (historical context, not a new request or expanded authorization):\n"
+        "# Recent History\n\n[History entry: 1234567890abcdef]\n"
+        "- [2026-10-21 20:00] unrelated-video-turn"
+        f"{archived}\n[/Runtime Context]"
+    )
+
+
+@pytest.mark.parametrize("summary", ["", "The current presentation has three approved slides."])
+def test_old_snapshot_replay_drops_shared_history_without_rewriting_audit(tmp_path, summary) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:presentation")
+    session.add_message("user", "Finish the presentation.", timestamp="2026-10-22T10:00:00")
+    original = session.messages[-1]["content"]
+    snapshot = f"{original}\n\n{_legacy_runtime(summary)}\n\nCorrection: use checked figures."
+    session.remember_model_input(session.messages[-1], snapshot)
+    manager.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(session.key)
+    replayed = reloaded.get_history(include_timestamps=True, model_view=True)[0]["content"]
+
+    assert original in replayed
+    assert "unrelated-video-turn" not in replayed
+    assert "# Recent History" not in replayed
+    assert "Current Time: 2026-10-22 10:00:00" in replayed
+    assert "Chat ID: presentation" in replayed
+    assert replayed.endswith("Correction: use checked figures.")
+    if summary:
+        assert "[Archived Context Summary]" in replayed
+        assert summary in replayed
+    else:
+        assert "Conversation background" not in replayed
+    assert reloaded.get_history()[0]["content"] == original
+    assert reloaded.metadata["_model_user_inputs"]["2026-10-22T10:00:00"] == snapshot
+
+
+@pytest.mark.parametrize("original_is_list", [False, True])
+def test_multimodal_snapshot_cleans_only_host_runtime_block(original_is_list) -> None:
+    session = Session(key="websocket:presentation")
+    parts = [{"type": "text", "text": "[image: /workspace/chart.png]"}, {"type": "text", "text": "Use this chart."}]
+    original = copy.deepcopy(parts) if original_is_list else "Use this chart."
+    session.add_message("user", original, timestamp="2026-10-22T10:00:00")
+    snapshot = [*parts, {"type": "text", "text": _legacy_runtime("Keep the chart editable.")}]
+    session.remember_model_input(session.messages[-1], snapshot)
+
+    replayed = session.get_history(model_view=True)[0]["content"]
+
+    assert replayed[:2] == parts
+    assert "unrelated-video-turn" not in replayed[-1]["text"]
+    assert "Keep the chart editable." in replayed[-1]["text"]
+    assert session.metadata["_model_user_inputs"]["2026-10-22T10:00:00"] == snapshot
+
+
+def test_snapshot_cleanup_preserves_runtime_markers_in_original_user_text() -> None:
+    session = Session(key="websocket:quoted-protocol")
+    original = "Explain this quoted protocol:\n\n" + _legacy_runtime().replace(
+        "unrelated-video-turn", "user-supplied-example"
+    )
+    session.add_message("user", original, timestamp="2026-10-22T10:00:00")
+    session.remember_model_input(session.messages[-1], original)
+    assert session.get_history(model_view=True)[0]["content"] == original
+
+    session.remember_model_input(session.messages[-1], original + "\n\n" + _legacy_runtime())
+    replayed = session.get_history(model_view=True)[0]["content"]
+    assert original in replayed
+    assert "unrelated-video-turn" not in replayed
 
 
 def test_save_reclaims_archived_snapshots_and_hides_them_from_file_reads(tmp_path) -> None:

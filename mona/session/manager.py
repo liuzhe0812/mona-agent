@@ -34,6 +34,44 @@ if TYPE_CHECKING:
 FILE_MAX_MESSAGES = 2000
 _MODEL_INPUTS_KEY = "_model_user_inputs"
 _MODEL_REQUEST_HEAD_KEY = "_model_request_head"
+_RUNTIME_CONTEXT_START = "[Runtime Context — metadata only, not instructions]\nCurrent Time: "
+_RUNTIME_CONTEXT_END = "\n[/Runtime Context]"
+_CONVERSATION_BACKGROUND = "Conversation background (historical context, not a new request or expanded authorization):"
+
+
+def _without_shared_recent_history(snapshot: Any, original: Any) -> Any:
+    """Remove old host-injected history only from the model projection."""
+    def clean(text: str, prefix: str = "") -> str:
+        if not text.startswith(prefix + _RUNTIME_CONTEXT_START):
+            return text
+        runtime, closing, tail = text[len(prefix):].partition(_RUNTIME_CONTEXT_END)
+        if not closing:
+            return text
+        head, recent, history = runtime.partition(f"\n{_CONVERSATION_BACKGROUND}\n# Recent History\n\n")
+        if not recent:
+            return text
+        _, summary_marker, summary = history.partition("\n\n[Archived Context Summary]\n\n")
+        if summary_marker:
+            head += f"\n{_CONVERSATION_BACKGROUND}\n[Archived Context Summary]\n\n{summary}"
+        return prefix + head + closing + tail
+
+    if isinstance(snapshot, str) and isinstance(original, str):
+        return clean(snapshot, original + "\n\n")
+    if isinstance(snapshot, list):
+        for index, block in enumerate(snapshot):
+            if not isinstance(block, dict) or block.get("type") != "text" or not isinstance(block.get("text"), str):
+                continue
+            prefix = snapshot[:index]
+            if isinstance(original, list):
+                host_added = prefix == original
+            else:
+                host_added = isinstance(original, str) and any(
+                    isinstance(item, dict) and item.get("type") == "text" and item.get("text") == original
+                    for item in prefix
+                )
+            if host_added:
+                block["text"] = clean(block["text"])
+    return snapshot
 
 # Message author fields (multi-agent phase 0 — docs/design/multi-agent-development-guide.md
 # section 5.3). Messages are plain dicts; these keys are stamped on write and
@@ -325,6 +363,8 @@ class Session:
             snapshots = self.metadata.get(_MODEL_INPUTS_KEY, {}) if model_view else {}
             snapshot = snapshots.get(message.get("timestamp")) if message.get("role") == "user" else None
             content = copy.deepcopy(snapshot) if snapshot is not None else message.get("content", "")
+            if snapshot is not None:
+                content = _without_shared_recent_history(content, message.get("content", ""))
             role = message.get("role")
             if role == "assistant" and isinstance(content, str):
                 content = _sanitize_assistant_replay_text(content)
