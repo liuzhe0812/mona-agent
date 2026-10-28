@@ -1,6 +1,6 @@
 # Mona Design → Mona 原生 PPT
 
-PPT 的设计入口：继承 Huashu 的设计判断、风格样张和源码参考，制作与修改使用 `mona-pptx` 的原生 `office` 协议。这里不执行 `modules/deck.md` 的 HTML→PDF/PPTX 流程，不引入三方向批准、Gate 文件或另一套偏好账本。
+PPT 的设计入口：继承 Huashu 的设计判断、风格样张和源码参考，制作与修改遵循 `mona-pptx` 的流程和原生 `office` 协议。不执行上游 HTML→PDF/PPTX、三套初稿批准或另一套偏好账本流程。
 
 ## 理解内容，再看真实参考
 
@@ -9,8 +9,10 @@ PPT 的设计入口：继承 Huashu 的设计判断、风格样张和源码参�
 先看真实样张，再按需读资料，不先遍历全部风格：
 
 1. 本入口首次读取已附 PPT 与中文/东亚真实总览图时，直接观察并选择相关候选，不重复读取相同总览。没有取得图像时，再用 `skill_reference_read(skill="mona-design", ref_path="assets/style-specimens/sheet-ppt.jpg")` 读取 PPT 总览，中文主题可再看 `assets/style-specimens/sheet-east.jpg`；路径说明不能当作已看到图像。
-2. 用 `skill_reference_read(skill="mona-design", ref_path="assets/style-specimens/ppt/")` 列实际文件名，再读取与当前内容相关的候选 JPG 及同名 HTML 源码；不要猜文件名，也不用逐一查看全部样张。
+2. 用 `skill_reference_read(skill="mona-design", ref_path="assets/style-specimens/ppt/")` 列实际文件名，再读取相关候选 JPG；方向确定后按需查看同名 HTML 源码，不用逐一查看全部样张。
 3. 需要进一步了解某个设计问题时，再用下面的资料。`design-styles.md` 是详细索引，不要求整份读取或遍历全部84类；文本通过 `offset`、`limit` 分页，例如 `skill_reference_read(skill="mona-design", ref_path="design-styles.md", offset=0, limit=8000)`。只在当前问题确需后续内容时，按回执 `nextOffset` 补读。
+
+向用户展示候选时，用 `skill_asset_copy` 将选中的 JPG 复制到当前工作区，再用 `deliver_file` 展示图片，随回复说明风格名和简短推荐理由。
 
 按需使用 `skill_reference_read(skill="mona-design", ref_path=...)`：
 
@@ -23,9 +25,9 @@ PPT 的设计入口：继承 Huashu 的设计判断、风格样张和源码参�
 | 内容、装饰与可读性 | `content-guidelines.md` |
 | 立意、主次和完成度 | `critique-guide.md` |
 
-借鉴实际候选样张和源码中的设计关系，不复制示例事实，也不要求复刻参考构图。已有品牌、用户指定参考或当前文稿优先，不因资源库丰富而另起风格探索。
+借鉴实际候选样张和源码中的设计关系，不复制示例事实。用户选定的风格、自定义要求、已有品牌及当前文稿优先，不因资源库丰富而另起风格探索。
 
-设计探索、评分和固定比例是参考。方向已确定或用户要求直接制作时继续执行，不强制选择风格、多个方案或代表页批准。不要把网页像素字号直接当作 Office 磅值。
+方向确定后直接推进制作，不增加代表页批准或主题冻结。不要把网页像素字号直接当作 Office 磅值。
 
 ## 落实到原生对象
 

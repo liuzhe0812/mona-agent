@@ -380,7 +380,7 @@ function translateOperation(
     presetId: string
     slideId: string
     roles: string[]
-    design: Pick<PresetContent, 'theme' | 'accentColor' | 'scenario'>
+    design: Pick<PresetContent, 'theme' | 'accentColor'>
     pendingChartStyles: Array<{ role: string; style: Record<string, unknown> }>
   }
 } {
@@ -441,8 +441,8 @@ function translateOperation(
       ops: translated.flatMap((item) => item.ops ?? (item.op ? [item.op] : [])),
       targets: [String(payload.slideId)],
       preset: { presetId: expanded.presetId, slideId: String(payload.slideId), roles: expanded.roles,
-        design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor,
-          scenario:(payload.content as unknown as PresetContent).scenario}, pendingChartStyles: expanded.pendingChartStyles },
+        design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor},
+        pendingChartStyles: expanded.pendingChartStyles },
     }
   }
   if (operation.op === 'slide_apply_txn') {
@@ -1425,7 +1425,6 @@ function MonaSlidesEditor(): React.JSX.Element {
         })
         return {
           presetId: plan.presetId,
-          ...(plan.design.scenario ? {scenario:plan.design.scenario} : {}),
           slideId: plan.slideId,
           roles: plan.roles,
           elements,

@@ -1,7 +1,6 @@
 import catalog from './presets/catalog.json'
 import extended from './presets/extended.json'
 import legacySemantics from './presets/legacy-semantics.json'
-import scenarioCatalog from './presets/scenarios.json'
 import scenarioPages from './presets/scenario-pages.json'
 import { expandAdditionalLayout, type AdditionalLayoutElement } from './slides-preset-layouts'
 import { missingRequiredFacts, preparePresetContent } from './slides-preset-content'
@@ -91,20 +90,7 @@ export interface PresetContent {
   relation?: PresetRelation
   axes?: { x: string; y: string }
   theme?: PresetThemeId
-  scenario?: string
   accentColor?: string
-}
-
-export interface PresetScenario {
-  id: string
-  label: string
-  description: string
-  sourceThemes: string[]
-  defaultTheme: PresetThemeId
-  templateIds: string[]
-  recommendedRoles: string[]
-  signaturePages: Array<{ id: string; label: string; role: string; relation: PresetRelation; preferredPresetId: string }>
-  palette: Record<PresetColorRole, string> & { seriesColors: string[] }
 }
 
 type PresetElement =
@@ -152,7 +138,6 @@ export interface PresetDefinition {
   id: string
   family: string
   roles?: string[]
-  scenarios?: string[]
   relation?: PresetRelation
   composition?: string
   theme: PresetThemeId
@@ -183,30 +168,17 @@ export interface ExpandedPreset {
 
 // Geometry and theme definitions have a single, data-only source.
 export const PRESET_THEMES = catalog.themes as Record<PresetThemeId, PresetTheme>
-export const PRESET_SCENARIOS = scenarioCatalog.scenarios as PresetScenario[]
 export const PRESETS: PresetDefinition[] = [
   ...catalog.presets.map((preset) => ({ ...preset, ...((legacySemantics as Record<string, object>)[preset.id] ?? {}) })),
   ...extended.presets,
   ...scenarioPages.presets,
-].map((preset) => ({ ...preset, scenarios: PRESET_SCENARIOS.filter((scenario) => scenario.templateIds.includes(preset.id)).map((scenario) => scenario.id) })) as PresetDefinition[]
+] as PresetDefinition[]
 
 const ICONS = { target: targetIcon, layers: layersIcon, workflow: workflowIcon, check: checkIcon }
 
-export function findPresetScenario(id: string): PresetScenario {
-  const scenario = PRESET_SCENARIOS.find((item) => item.id === id)
-  if (!scenario) throw new Error(`未知 PPT 场景：${id}。`)
-  return scenario
-}
-
 export function resolvePresetTheme(content: PresetContent, fallback: PresetThemeId = 'light-editorial'): PresetTheme {
-  const scenario = content.scenario === undefined ? undefined : findPresetScenario(content.scenario)
-  let base = PRESET_THEMES[content.theme ?? scenario?.defaultTheme ?? fallback]
+  const base = PRESET_THEMES[content.theme ?? fallback]
   if (!base) throw new Error('theme 必须是 light-editorial 或 dark-product。')
-  if (scenario && (!content.theme || content.theme === scenario.defaultTheme)) {
-    const { seriesColors, ...colors } = scenario.palette
-    base = { ...base, ...colors, chart: { ...base.chart, textColor: colors.text, axisLabelColor: colors.muted,
-      legendColor: colors.muted, dataLabelColor: colors.text, gridColor: colors.line, axisLineColor: colors.line, seriesColors } }
-  }
   if (content.accentColor === undefined) return base
   if (!/^#[0-9a-f]{6}$/i.test(content.accentColor)) throw new Error('accentColor 必须是 #RRGGBB 颜色。')
   return {...base,accent:content.accentColor,chart:{...base.chart,seriesColors:[content.accentColor,...base.chart.seriesColors.slice(1)]}}
@@ -233,7 +205,7 @@ export function presetWarnings(preset: PresetDefinition, content: PresetContent)
   const warnings: string[] = []
   if (!content || typeof content !== 'object' || Array.isArray(content)) return ['content 必须是对象']
   try { content = preparePresetContent(content) } catch (error) { return [error instanceof Error ? error.message : '内容无效'] }
-  const allowed = ['title', 'summary', 'takeaway', 'items', 'nodes', 'chart', 'image', 'images', 'facts', 'role', 'relation', 'axes', 'theme', 'scenario', 'accentColor']
+  const allowed = ['title', 'summary', 'takeaway', 'items', 'nodes', 'chart', 'image', 'images', 'facts', 'role', 'relation', 'axes', 'theme', 'accentColor']
   try { resolvePresetTheme(content) } catch (error) { return [String(error)] }
   for (const key of Object.keys(content)) if (!allowed.includes(key)) warnings.push(`不支持内容字段：${key}`)
   for (const key of ['title', 'summary', 'takeaway'] as const) {

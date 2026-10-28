@@ -5,6 +5,7 @@ import {
   expandPreset,
   findPreset,
   presetWarnings,
+  resolvePresetTheme,
   type PresetContent,
 } from './slides-presets'
 import {
@@ -115,6 +116,13 @@ describe('预设页面契约', () => {
       // 只用系统自带字体；缺字体时探针确认会被优雅替换而不破版
       expect(theme.fontFamily).toBe('Microsoft YaHei')
     }
+
+    const before = structuredClone(PRESET_THEMES)
+    const selected = resolvePresetTheme({ title: '重点结论', theme: 'dark-product', accentColor: '#C65B35' })
+    expect(selected.id).toBe('dark-product')
+    expect(selected.accent).toBe('#C65B35')
+    expect(selected.chart.seriesColors[0]).toBe('#C65B35')
+    expect(PRESET_THEMES).toEqual(before)
   })
 
   it('页面内容不越出主题安全边距', () => {
@@ -191,6 +199,8 @@ describe('预设页面契约', () => {
       .toThrow(/缺少必填内容：nodes/)
     expect(() => expandPreset({ slideId: 's1', presetId: 'unknown', content: { title: 'x' } }))
       .toThrow(/不存在：unknown/)
+    expect(() => expandPreset({ slideId: 's1', presetId: 'light-process-map', content: { title: '旧字段', scenario: 'business-report' } as PresetContent }))
+      .toThrow(/不支持内容字段：scenario/)
   })
 
   it('产品大图页要求真实素材，并把图注绑定到摘要', () => {

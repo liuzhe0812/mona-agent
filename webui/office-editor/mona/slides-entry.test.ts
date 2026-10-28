@@ -337,45 +337,43 @@ describe('Slides Mona entry', () => {
     expect((await inspect(bridge, sessionId, version, 'atomic-failure-undo', { mode: 'slides' })).slides).toEqual(initial.slides)
   })
 
-  it('keeps explicit native drawing without recommending or inheriting scene designs', async () => {
+  it('keeps explicit native drawing without automatic preset selection', async () => {
     vi.resetModules()
     harness.posts = []; harness.cleanups = []; harness.bridge = undefined
     ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
     ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
     await import('./slides-entry')
     const bridge = harness.bridge!
-    const sessionId = 'scenario-session'
-    let version = { editorEpoch: 'scenario-epoch', modelRevision: 0 }
+    const sessionId = 'preset-session'
+    let version = { editorEpoch: 'preset-epoch', modelRevision: 0 }
     bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
     await waitForPost((message) => message.type === 'office_editor_ready')
-    const pages = await inspect(bridge, sessionId, version, 'scenario-pages', { mode: 'slides' })
+    const pages = await inspect(bridge, sessionId, version, 'preset-pages', { mode: 'slides' })
     const firstId = String((pages.slides as Array<Record<string, unknown>>)[0]!.id)
-    const catalog = await inspect(bridge, sessionId, version, 'scenario-catalog', { mode: 'capabilities' })
-    expect(catalog).not.toHaveProperty('presetScenarios')
+    const catalog = await inspect(bridge, sessionId, version, 'preset-catalog', { mode: 'capabilities' })
     expect(catalog).not.toHaveProperty('presets')
     expect(catalog).not.toHaveProperty('templates')
-    const missing = await apply(bridge, sessionId, version, 'scenario-missing-preset', [{ op: 'slide_add_preset', payload: { slideId: firstId, content: { title: '不自动选版' } } }])
+    const missing = await apply(bridge, sessionId, version, 'preset-missing-id', [{ op: 'slide_add_preset', payload: { slideId: firstId, content: { title: '不自动选版' } } }])
     expect(missing.ok).toBe(false)
     expect(JSON.stringify(missing.error)).toContain('presetId')
-    const automatic = await apply(bridge, sessionId, version, 'scenario-auto-preset', [{ op: 'slide_add_preset', payload: { slideId: firstId, presetId: 'auto', content: { title: '不自动选版' } } }])
+    const automatic = await apply(bridge, sessionId, version, 'preset-auto-id', [{ op: 'slide_add_preset', payload: { slideId: firstId, presetId: 'auto', content: { title: '不自动选版' } } }])
     expect(automatic.ok).toBe(false)
-    const first = await apply(bridge, sessionId, version, 'scenario-first', [{ op: 'slide_add_preset', payload: {
-      slideId: firstId, presetId: 'education-practice', content: { title: '练习：复核证据', scenario: 'education-training', relation: 'sequence',
+    const first = await apply(bridge, sessionId, version, 'preset-first', [{ op: 'slide_add_preset', payload: {
+      slideId: firstId, presetId: 'education-practice', content: { title: '练习：复核证据', relation: 'sequence',
         nodes: ['观察', '练习', '检查'], items: ['阅读原始资料', '独立解释结论', '复核数字和口径'], takeaway: '保留判断依据' },
     } }])
     expect(first.ok, JSON.stringify(first.error)).toBe(true)
-    expect((first.presetPages as Array<{scenario: string}>)[0]!.scenario).toBe('education-training')
+    expect((first.presetPages as Array<{presetId: string}>)[0]!.presetId).toBe('education-practice')
     version = first.version as typeof version
-    const before = await inspect(bridge, sessionId, version, 'scenario-before', { mode: 'slides', slideId: firstId })
-    const added = await apply(bridge, sessionId, version, 'scenario-add', [{op:'slide_add',payload:{slideId:firstId}}])
+    const before = await inspect(bridge, sessionId, version, 'preset-before', { mode: 'slides', slideId: firstId })
+    const added = await apply(bridge, sessionId, version, 'preset-add', [{op:'slide_add',payload:{slideId:firstId}}])
     version = added.version as typeof version
     const secondId = String((added.createdSlides as Array<{id:string}>)[0]!.id)
-    const second = await apply(bridge, sessionId, version, 'scenario-second', [{op:'slide_add_preset',payload:{slideId:secondId,
+    const second = await apply(bridge, sessionId, version, 'preset-second', [{op:'slide_add_preset',payload:{slideId:secondId,
       presetId:'light-transition-statement',content:{title:'练习之后，检查依据',summary:'每个结论对应证据',takeaway:'逐项复核'}}}])
     expect(second.ok, JSON.stringify(second.error)).toBe(true)
-    expect((second.presetPages as Array<{scenario:string}>)[0]!.scenario).toBeUndefined()
     version = second.version as typeof version
-    const after = await inspect(bridge, sessionId, version, 'scenario-after', {mode:'slides',slideId:firstId})
+    const after = await inspect(bridge, sessionId, version, 'preset-after', {mode:'slides',slideId:firstId})
     expect((after.slides as Array<{id:string}>).find((slide) => slide.id === firstId))
       .toEqual((before.slides as Array<{id:string}>).find((slide) => slide.id === firstId))
   })

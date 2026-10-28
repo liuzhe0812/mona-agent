@@ -255,3 +255,58 @@ async def test_partner_can_read_builtin_mona_design_without_user_config(
     assert "Mona Design → Mona 原生 PPT" in json.loads(result[0]["text"])["content"]
     assert len([block for block in result if block.get("type") == "image_url"]) == 2
     assert seen_agent_ids == [PARTNER_AGENT_ID]
+
+
+@pytest.mark.asyncio
+async def test_three_ppt_style_previews_reach_chat_as_fetchable_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.agent.loop import previewable_delivered_media
+    from mona.agent.tools import skill_tools
+    from mona.agent.tools.context import RequestContext
+    from mona.agent.tools.deliver_file import DELIVER_FILES_PENDING_META, DeliverFileTool
+    from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
+    from mona.bus.queue import MessageBus
+    from mona.channels.websocket import WebSocketChannel
+    from mona.config.paths import get_agent_output_dir
+
+    monkeypatch.setattr("mona.config.loader._current_config_path", tmp_path / "config.json")
+    loader = _make_loader(tmp_path, monkeypatch, MONA_AGENT_ID)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: loader)
+    workspace = tmp_path / "workspace"
+    output = get_agent_output_dir(workspace, MONA_AGENT_ID)
+    bus = MessageBus()
+    pending: list[dict] = []
+    delivery = DeliverFileTool(bus.publish_outbound, workspace=workspace, restrict_to_workspace=True)
+    delivery._agent_id = MONA_AGENT_ID
+    delivery.set_context(RequestContext(
+        channel="websocket", chat_id="ppt-style-choice", session_key="websocket:ppt-style-choice",
+        metadata={DELIVER_FILES_PENDING_META: pending},
+    ))
+    names = ["09-bento-grid.jpg", "10-dark-hairline-terminal.jpg", "16-institutional-swiss.jpg"]
+    destinations = [f"风格推荐/{index}-{name}" for index, name in enumerate(names, 1)]
+    token = set_current_workspace(output)
+    try:
+        copier = skill_tools.SkillAssetCopyTool(track_usage=False)
+        for name, dest in zip(names, destinations, strict=True):
+            result = await copier.execute(skill="mona-design", asset=f"style-specimens/ppt/{name}", dest=dest)
+            assert not result.startswith("Error"), result
+            assert (output / dest).read_bytes() == (DESIGN_ROOT / "assets/style-specimens/ppt" / name).read_bytes()
+        result = await delivery.execute(paths=destinations, summary="PPT 风格推荐样张")
+    finally:
+        reset_current_workspace(token)
+    assert result == "Prepared 3 file(s) for final delivery"
+    assert [item["path"] for item in pending] == destinations
+    assert all(item["artifact_ref"]["session_id"] == "websocket:ppt-style-choice" for item in pending)
+    paths = previewable_delivered_media(pending)
+    assert paths == [str(output / dest) for dest in destinations]
+
+    channel = WebSocketChannel({"enabled": True}, bus)
+    for path in paths:
+        attachment = channel._sign_or_stage_media_path(Path(path))
+        assert attachment is not None
+        signature, payload = attachment["url"].removeprefix("/api/media/").split("/", 1)
+        response = channel._handle_media_fetch(signature, payload)
+        assert response.status_code == 200
+        assert response.headers["Content-Type"] == "image/jpeg"
+        assert response.body == Path(path).read_bytes()
