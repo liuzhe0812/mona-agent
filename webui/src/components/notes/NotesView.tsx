@@ -2212,10 +2212,6 @@ export function NotesView({
                             </TooltipButton>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuItem onSelect={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
-                              <Search className="mr-2 h-3.5 w-3.5" />
-                              全局搜索
-                            </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setViewMode((m) => (m === "favorite" ? "all" : "favorite"))}>
                               <Star className={cn("mr-2 h-3.5 w-3.5", viewMode === "favorite" && "fill-current text-warning")} />
                               {viewMode === "favorite" ? "显示全部笔记" : "显示收藏笔记"}
