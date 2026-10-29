@@ -46,7 +46,7 @@ Mona 复用 OE-Claw 的免费 Tauri/Minisign Ed25519 更新签名。它证明安
 
 默认主程序为 `src-tauri/target/release/mona-desktop.exe`，安装包在 `src-tauri/target/release/bundle/nsis/`。有自定义 target dir 时以入口实际支持和真实输出为准。核对平台架构和目标版本。
 
-把同次构建的主程序复制为 staging 根级 `Mona.exe`，把完整 Gateway 复制为根级 `mona-gateway/`。staging 只含这两项，输出文件必须在 staging 外：
+等待上述 Windows 构建与签名命令完整成功返回后，把同次构建的最终主程序复制为 staging 根级 `Mona.exe`，把完整 Gateway 复制为根级 `mona-gateway/`。不要复制 Tauri 打包过程中仍可能变化的中间主程序。staging 只含这两项，输出文件必须在 staging 外：
 
 ```powershell
 & $releasePython scripts/build_update_package.py $releaseVersion $releaseStaging $releaseArchive
@@ -58,15 +58,15 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $releaseInstaller, $releaseArchive
 
 ## 分阶段上传与恢复
 
-正式双端发布时，先完成本节前述 Windows 本地构建、免费签名与热更新包验收，然后执行 [macOS 发布](macos-release.md)，默认使用已获用户授权的免费 `publish=ad-hoc`，并验证 Apple Silicon DMG 已可从七牛下载。Mac 成功前不要运行下面的完整 Windows 上传 CLI；Mac 通过后再继续本节，以便官网日志和 Windows 更新清单在两端产物均可用后再更新。
+正式双端发布时，完成 Windows 本地构建、免费签名与热更新包验收后，先按本节分阶段上传并验证 Windows 产物，发布并验证官网日志，最后更新并验证 Windows 清单。Windows 上线后，再执行 [macOS 发布](macos-release.md)，默认使用 `publish=ad-hoc` 并验证 Apple Silicon DMG 的公开下载。
 
-完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件，无 dry-run/resume 参数：
+完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件，无 dry-run/resume 或阶段间验证；以下仅说明参数，正式发布按后续分阶段方式执行：
 
 ```powershell
 & $releasePython scripts/release_upload.py $releaseVersion $releaseInstaller $releaseArchive $releaseSha $releaseNotes $releaseGitHash --changelog-items-file $releaseChangelogItems
 ```
 
-更新条目文件是一个非空 JSON 字符串数组，只写用户可感知的变化。完整 CLI 会依次上传两个产物、构建并以备份切换官网静态站点、更新清单。需要先验证公共下载或恢复部分上传时，用短小的一次性 Python 入口导入现有脚本，仅调用仍需执行的阶段。通过 argv 传路径，不拼接 shell 字符串，不在临时文件写凭据。
+更新条目文件是一个非空 JSON 字符串数组，只写用户可感知的变化。完整 CLI 会连续上传产物、构建并以备份切换官网静态站点、更新清单，无法在阶段间验证，正式发布应使用短小的一次性 Python 入口导入现有脚本，分阶段调用并验收，仅重试仍需执行的阶段。通过 argv 传路径，不拼接 shell 字符串，不在临时文件写凭据。
 
 ```python
 import qiniu.config
@@ -78,7 +78,7 @@ release.upload_to_qiniu(local_path, object_key)
 
 安装包 key 为 `Mona-latest.exe`，签名 key 为 `Mona-latest.exe.sig`，热更新包 key 为包文件名。CLI 会调用 Node 验签器确认 `.sig` 与安装包字节匹配。直接调用上传函数会绕过该门槛，须先执行相同验签。超时先查远端，再决定是否重传。
 
-两份公共对象验证通过后，先调用 build_and_publish_changelog，确认官网 changelog 已显示本次版本；随后才单独调用：
+安装包、签名和热更新包三个公共对象验证通过后，先调用 build_and_publish_changelog，确认官网 changelog 已显示本次版本；随后才单独调用：
 
 ```python
 release.update_vps_manifest(

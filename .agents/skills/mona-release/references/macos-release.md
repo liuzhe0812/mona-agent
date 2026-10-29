@@ -10,7 +10,7 @@ macOS 只使用仓库 `.github/workflows/build-macos.yml`。该流程仅在 `mac
 
 ## 对外发布
 
-正式双端发布中，Windows NSIS、`.exe.sig` 和热更新包已完成本地构建及验收后，以 `publish=ad-hoc` 手动运行本流程。用户已固定选择免费方式，允许公开发布未公证 Mac 包；不要再次询问 Apple 付费开发者账户或公证凭据。这个阶段只准备、上传和验证 Mac 包；随后仍须回到 Windows 发布步骤上传 Windows 产物、官网日志及 `update.json`。Mac 单独上传不构成正式发布。
+正式双端发布中，先完成 Windows 产物、官网日志及 `update.json` 的上线与公开验证，再将记录的构建提交普通推送至发布分支，以 `publish=ad-hoc` 运行本流程，并核对工作流使用同一 `git_hash`。用户已固定选择免费方式，允许公开发布未公证 Mac 包；不要再次询问 Apple 付费开发者账户或公证凭据。Mac 失败时保留已上线的 Windows，从失败阶段续跑；两端均通过公开验证后才算正式双端发布完成。
 
 免费模式仅需要 GitHub Secrets：`QINIU_AK`、`QINIU_SK`、`QINIU_BUCKET`、`QINIU_DOMAIN`。它使用 `codesign` ad-hoc 签名，并验证内置二进制的架构、资源和签名完整性；不要求 Apple Developer ID、公证或 Gatekeeper 自动信任。官网下载说明应写明“未经过 Apple 公证”，首次打开遵循 macOS 针对单个应用的允许打开流程，不引导用户全局关闭系统安全检查。
 

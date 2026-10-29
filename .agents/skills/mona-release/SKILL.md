@@ -9,7 +9,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 
 用户已明确只使用免费发布方式：缺少 Apple Developer ID 或公证凭据时直接使用 `publish=ad-hoc`，不得每次发版再询问是否购买、配置 Apple 付费签名或是否允许未公证包。仅在已有可用且无需新增付费的正式签名、公证条件时使用 `publish=notarized`。官网下载说明必须明确 Mac 包未经公证及相应首次打开提示，不得声称已获 Apple 认可。
 
-默认发布流程：识别全部未提交改动 → 按主题拆分提交 → 更新并提交本地更新日志 → 升版本并提交 → 打包与验收 → 上传产物 → 更新官网日志 → 更新清单并验证线上结果。明确要求发布即包含上述本地整理和提交步骤；不自动 push、打 tag、清理用户修改或升级依赖。签名是现有上传脚本的要求。已经明确授权发布时直接推进，不重复确认；授权范围外的同版本覆盖、降级或发布方式变更，才在产物可审阅后确认。
+默认发布流程：识别全部未提交改动 → 按主题拆分提交 → 更新并提交本地更新日志 → 升版本并提交 → Windows 打包、验收并上线 → macOS 打包、验收并上线。用户要求打包、发布或上线，即授权对应流程所需的本地整理提交、版本同步、签名、发布分支普通推送、CI 及该模式包含的上传、官网和清单更新；连续执行并验收，不因这些步骤停下来询问或等待确认。只打包模式仍不上传。不自动打 tag、强推、合并主分支、清理用户修改或升级依赖。遇到失败先定位并从失败阶段恢复；缺少必要凭据、验收失败或版本与线上冲突等实际阻断无法恢复时，报告原因及已完成阶段。未明确授权的同版本覆盖、降级或发布方式变更不得擅自执行。
 
 ## 平台选择
 
@@ -19,18 +19,16 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 
 ## 双端正式发布门槛
 
-1. 完成本机 Windows NSIS、`.exe.sig` 和热更新包构建，验收版本、哈希与 Ed25519 签名。此时暂不运行会写入官网日志或更新清单的完整上传 CLI。
-2. 在 macOS GitHub Actions 中默认运行 `publish=ad-hoc`，构建并上传 Apple Silicon DMG；验证 App、Gateway、Office sidecar 的架构与签名完整性、DMG 内容及七牛公开下载 SHA-256。只有实际使用 `notarized` 时才要求通过公证验收。
-3. 只有 Mac 阶段成功后，才运行 [references/windows-release.md](references/windows-release.md) 中的完整 Windows 发布 CLI。该步骤上传 Windows EXE、`.sig` 和热更新包，随后发布官网日志并最后更新 `update.json`。
-4. 最后同时核对 Windows 安装包与 `.sig`、Windows 热更新清单，以及 macOS 版本化 DMG 的公开 URL 和 SHA-256。任一端构建、所选模式的签名验收、上传或公开下载校验失败，发布状态为未完成；ad-hoc 模式没有公证凭据不是失败。修复后从失败阶段续跑，不宣布单端成功为双端发版。
-
-不得先运行 Windows 完整发布 CLI、再尝试 Mac：它会先发布官网日志并更新 Windows 清单，届时 Mac 失败会留下已对用户开放的半次发布。
+1. 完成本机 Windows NSIS、`.exe.sig` 和热更新包构建，验收版本、哈希与 Ed25519 签名。
+2. 按 [references/windows-release.md](references/windows-release.md) 分阶段上传 Windows EXE、`.sig` 和热更新包并核对公开下载字节；发布并验证官网日志，最后更新并验证 `update.json`，完成 Windows 上线。
+3. 将记录的构建提交普通推送至发布分支，校验工作流使用同一 `git_hash`；在 macOS GitHub Actions 中默认运行 `publish=ad-hoc`，构建并上传 Apple Silicon DMG，验证 App、Gateway、Office sidecar 的架构与签名完整性、DMG 内容及七牛公开下载 SHA-256。只有实际使用 `notarized` 时才要求通过公证验收。
+4. 最后同时核对 Windows 安装包与 `.sig`、Windows 热更新清单，以及 macOS 版本化 DMG 的公开 URL 和 SHA-256。任一端构建、所选模式的签名验收、上传或公开下载校验失败，双端发布状态为未完成；ad-hoc 模式没有公证凭据不是失败。Mac 失败时保留已上线的 Windows，不自动回滚；修复后从失败阶段续跑，不宣布单端成功为双端发版。
 
 ## 整理提交与本地日志
 
 - 在升版本和构建前，检查全部已暂存、未暂存及未跟踪改动，包括新增、修改、删除和重命名。结合 diff、引用和用途识别代码、测试、配置、资源及文档，不只处理本次会话改动。
 - 按功能、修复或模块形成可解释的独立提交，相关实现、测试和文档一起提交；同一文件混有不同主题时按改动块拆分。逐批核对暂存 diff 后提交，不用一次 `git add .` 将所有内容混成一个提交，不覆盖或还原已有改动。
-- 所有应入库改动均须归入提交。缓存、构建产物、临时文件和凭据不提交，保留并说明排除项；无法判断的重要改动先查清，必要时询问，不带着未整理的发布输入直接构建。
+- 所有应入库改动均须归入提交。缓存、构建产物、临时文件和凭据不提交，保留并说明排除项；无法判断的重要改动先查清，无法安全处理时保留并报告阻断，不带着未整理的发布输入直接构建。
 - 分类提交完成后，依据实际 diff 和提交记录更新仓库本地更新日志并单独提交。沿用已有日志路径和格式；没有独立本地日志时使用 `docs/guides/changelog.md`。先记入待发布条目，升版本时归入目标版本；内容覆盖本次改动，并核对上次发布以来已提交但未记录的变化。本地日志完成不等于官网已更新。
 - 随后同步目标版本与本地日志版本标题，单独提交版本变更，记录此时 HEAD 作为构建和清单的 `git_hash`。构建前确认发布输入均已提交；剩余 dirty 项仅可为已核对的非发布输入。构建期间若发布输入变化，重新提交并重建受影响产物。
 
@@ -40,7 +38,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 - 用户指定从 master 等发布分支工作、保留另一开发分支时，在独立 worktree 完成修改与构建，不切换或整理原开发目录。只纳入该发布分支需要的改动；收尾保留最终产物并清理本次临时 worktree，不擅自合并回开发分支。
 - 阅读项目 `AGENTS.md`、`docs/architecture/engineering-boundaries.md`、`docs/architecture/runtime-component-management.md`、`docs/architecture/module-invariants.md`。路径和命令以当前源码为准。
 - 核对 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`pyproject.toml` 的产品版本，以及 `src-tauri/Cargo.lock` 中本包版本。同步用户要求的版本，不全局替换依赖版本。WebUI 和 Office 子包的独立版本不要求同步。
-- 读取 `https://www.mona-ai.cn/updates/update.json` 并保存旧清单用于诊断。用户未指定版本且仓库产品版本一致、高于线上时，使用仓库版本；否则先完成独立检查，再询问目标版本。不要自行覆盖同版本的不同字节或降级；线上读取失败不代表没有已发布版本。
+- 读取 `https://www.mona-ai.cn/updates/update.json` 并保存旧清单用于诊断。用户未指定版本时，仓库产品版本一致且高于线上则沿用；仓库版本不高于线上时使用线上版本的下一 patch。仓库版本不一致时先核对，选择不低于已有仓库版本且高于线上的目标版本并同步。用户明确指定的版本与线上冲突时报告阻断，不自行覆盖同版本的不同字节或降级；线上读取失败不代表没有已发布版本。
 - 热更新只在线上版本严格高于当前客户端时触发。同版本重打只适用于手动重装、误发布修复或尚未安装的用户；要给已安装的同版本客户端推送修复，必须发布更高版本，不能把版本判断改回“不相等即更新”。
 - 检查项目 Python 环境、PyInstaller、Rust/Tauri、前端依赖和当前平台需要的签名工具。Windows 免费签名默认从 `%LOCALAPPDATA%\Mona\release-keys` 读取持久密钥；macOS 发布凭据使用 GitHub Secrets。只报告缺少的变量名，不输出值或文件内容。
 
@@ -57,7 +55,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 - 核对内置 Skill 的按路径执行脚本已作为真实文件进入 Gateway，至少覆盖 PPT 导出、PDF helpers、Office helpers、技能创建和视频脚本及子模块。不能仅检查 Python import 是否成功；普通模块源码、测试、缓存和开发依赖不要随之全量拷入。
 - Tauri 的 `beforeBuildCommand` 已运行 WebUI `build:tauri`，包括 Office 前端，不无理由重复完整构建。另行检查 `resources/office-editor/` 的清单、sidecar 平台/架构、大小及 SHA；前端构建不代表这些外置资源已生成。按需下载运行时不塞入安装包。
 - 使用已核对的 `src-tauri/build-windows-release.ps1` 构建 NSIS，再对最终安装包生成并真实验证 Ed25519 `.exe.sig`。Office sidecar 不做 Authenticode 变异，manifest 大小与 SHA 必须在打包前精确匹配。构建必须显式仅 NSIS，避免额外 MSI/WiX。
-- 使用独立 staging，把同次构建的 `mona-desktop.exe` 复制为根级 `Mona.exe`，把安装包内同一份 Gateway 复制为根级 `mona-gateway/`。Windows 免费签名覆盖最终 NSIS 安装包，不意味着主程序或 Gateway 获得 Authenticode 签名。不重命名原始构建产物。
+- 等待 Windows 构建和签名命令完整成功返回后，再使用独立 staging，把同次构建的最终 `mona-desktop.exe` 复制为根级 `Mona.exe`，把安装包内同一份 Gateway 复制为根级 `mona-gateway/`。不得复制 Tauri 打包过程中仍可能变化的中间主程序。Windows 免费签名覆盖最终 NSIS 安装包，不意味着主程序或 Gateway 获得 Authenticode 签名。不重命名原始构建产物。
 
 ### macOS 构建与发布
 
@@ -78,10 +76,10 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 
 本节的 `release_upload.py`、官网日志与 `update.json` 步骤只适用于 Windows 发布。macOS 的七牛上传和公共下载 SHA-256 校验按 [references/macos-release.md](references/macos-release.md) 执行，且不会改写 Windows 更新渠道。
 
-- 上传前说明具体版本、产物及检查结果。复用 `scripts/release_upload.py`。完整 CLI 依次覆盖 `Mona-latest.exe` 与 `Mona-latest.exe.sig`、上传版本包、发布官网日志、改写清单，不能试跑或用于部分失败后的整流程重试。
-- 两个对象上传成功且公共下载内容与本地一致后才更新清单。用参考文件的函数入口分阶段执行；它支持清单前验证和失败续跑，不必重写上传器。
+- 上传前说明具体版本、产物及检查结果。复用 `scripts/release_upload.py` 的函数入口分阶段执行；完整 CLI 会连续上传、发布官网日志并改写清单，不能在各阶段间验证，不用于正式发布或部分失败后的整流程重试。
+- 安装包、签名和热更新包三个对象上传成功且公共下载内容与本地一致后，发布并验证官网日志，最后更新清单。函数入口支持清单前验证和失败续跑，不必重写上传器。
 - 单次上传超时后先核对远端对象，跳过已成功对象，仅重试未完成对象。可设置七牛连接超时为 600 秒；一次针对性重试仍失败时报告阶段与原因并保留产物，不盲目循环。
-- 每次发布都必须从已完成的本地日志提炼面向用户的更新条目 JSON 文件，保持版本和事实一致。调用 `scripts/release_upload.py` 时传入 `--changelog-items-file`；它会更新 `official-site/public/changelog.json`、构建官网静态站点、备份并原子切换 VPS 站点。两个下载对象和官网更新日志成功后，才允许写入 `update.json`。官网日志在本地仓库产生的应入库变更单独提交为发布记录，不将这个构建后提交冒充产物的 `git_hash`。
+- 每次发布都必须从已完成的本地日志提炼面向用户的更新条目 JSON 文件，保持版本和事实一致。`scripts/release_upload.py` 使用的条目文件由 `--changelog-items-file` 指定；分阶段调用官网日志函数时传入同一份条目。它会更新 `official-site/public/changelog.json`、构建官网静态站点、备份并原子切换 VPS 站点。安装包、签名、热更新包和官网更新日志验证成功后，才允许写入 `update.json`。官网日志在本地仓库产生的应入库变更单独提交为发布记录，不将这个构建后提交冒充产物的 `git_hash`。
 - 清单写入失败或结果不确定时，先读线上清单，再补做必要阶段。不要自动回滚已上线版本，或通过重传大文件解决清单故障。
 - 最后 GET 公共清单，比对 `version`、`url`、`size`、`sha256`、`git_hash`；两条下载链接 HEAD 大小须匹配。下载最终公共 URL 的字节计算 SHA-256，尤其注意固定安装包 URL 或曾覆盖的同版本 URL。再获取 `/changelog` 的当前静态 bundle，确认页面包含本次版本；只看到 `changelog.json` 文件更新不足以证明用户页面已经更新。
 - CDN 返回旧内容时报告尚未生效；prefetch 成功不代表缓存刷新或内容验证通过。不得将“上传成功”写成“发布完成”。
