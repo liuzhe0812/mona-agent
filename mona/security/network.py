@@ -36,11 +36,25 @@ def configure_ssrf_whitelist(cidrs: list[str]) -> None:
     nets = []
     for cidr in cidrs:
         with suppress(ValueError):
-            nets.append(ipaddress.ip_network(cidr, strict=False))
+            network = ipaddress.ip_network(cidr, strict=False)
+            if isinstance(network, ipaddress.IPv6Network) and network.prefixlen >= 96:
+                mapped = network.network_address.ipv4_mapped
+                if mapped is not None:
+                    network = ipaddress.IPv4Network((mapped, network.prefixlen - 96))
+            nets.append(network)
     _allowed_networks = nets
 
 
+def _normalize_address(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    addr = _normalize_address(addr)
     if _allowed_networks and any(addr in net for net in _allowed_networks):
         return False
     return any(addr in net for net in _BLOCKED_NETWORKS)
@@ -49,6 +63,7 @@ def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 def _is_user_configurable_service_address(
     addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> bool:
+    addr = _normalize_address(addr)
     return any(addr in net for net in _USER_CONFIGURABLE_SERVICE_NETWORKS)
 
 
@@ -161,7 +176,7 @@ def validate_host(host: str, allow_loopback: bool = False) -> tuple[bool, str]:
 
     for info in infos:
         try:
-            addr = ipaddress.ip_address(info[4][0])
+            addr = _normalize_address(ipaddress.ip_address(info[4][0]))
         except ValueError:
             continue
         if _is_private(addr):
