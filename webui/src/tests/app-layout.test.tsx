@@ -369,57 +369,32 @@ describe("App layout", () => {
 
   // Legacy monolithic sidebar contracts below are superseded by focused
   // AppRail, ChatList, SessionListPanel and sidebar-state suites.
-  it.skip("switches to the next session when deleting the active chat", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "First chat",
-      },
-      {
-        key: "websocket:chat-b",
-        channel: "websocket",
-        chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Second chat",
-      },
-    ];
-
+  it("selects the undeleted neighbor after confirming deletion of the active chat", async () => {
+    mockSessions = ["First chat", "Second chat"].map((title, index) => ({
+      key: `websocket:chat-${index}`, channel: "websocket", chatId: `chat-${index}`,
+      createdAt: null, updatedAt: null, title, preview: "",
+    }));
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     render(<App />);
-
-    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = getSessionPanel();
-    await waitFor(() =>
-      expect(
-        within(sidebar).getByTitle("First chat"),
-      ).toBeInTheDocument(),
-    );
-
-    fireEvent.pointerDown(screen.getByLabelText("Chat actions for First chat"), {
-      button: 0,
-    });
+    const first = await screen.findByTitle("First chat");
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-current", "page");
+    fireEvent.contextMenu(first);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(screen.getByText("Delete this chat?")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(deleteChatSpy).toHaveBeenCalledWith("websocket:chat-a"),
-    );
-    await waitFor(() =>
-      expect(
-        within(sidebar).getByTitle("Second chat"),
-      ).toBeInTheDocument(),
-    );
-    expect(screen.queryByText("Delete this chat?")).not.toBeInTheDocument();
+    const confirmation = await screen.findByRole("alertdialog");
+    expect(confirmation).toHaveTextContent("Delete this chat?");
+    expect(deleteChatSpy).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete chat" }));
+    await waitFor(() => expect(deleteChatSpy).toHaveBeenCalledTimes(1));
+    expect(deleteChatSpy).toHaveBeenCalledWith("websocket:chat-0");
+    await waitFor(() => expect(screen.getByTitle("Second chat")).toHaveAttribute("aria-current", "page"));
+    expect(screen.queryByTitle("First chat")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(document.body.style.pointerEvents).not.toBe("none");
-  }, 15_000);
+    expect(createChatSpy).not.toHaveBeenCalled();
+  });
 
   it.skip("keeps the mobile session action menu inside the sidebar sheet", async () => {
     mockSessions = [
