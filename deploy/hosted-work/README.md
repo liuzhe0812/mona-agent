@@ -19,3 +19,5 @@ Auth 官网账号功能需要兼容迁移、网页会话和通用身份接口；
 平台模型 API 在独立 models 配置中填写 source=mona、api_base、api_key_env 和 model；api_key_env 必须使用 `MONA_WORK_MODEL_` 前缀，真实值放独立的受限平台环境文件，不能使用旧业务 /v1 账户网关或用户钱包。原生 Codex/WorkBuddy 使用平台专用 native_config_path 和认证目录。网页用户只能选择平台开放项，不能修改端点和凭据。
 
 只启动自己的用户级服务，无需再次安装 gVisor；不得重复运行历史 install/fix 脚本。没有模型时可启动待配置服务供健康和页面验收，但不会接受模型任务，也不能自动借用现有业务账户/额度。
+
+`tunnel.py` 是独立 Work 的 FRP provider/visitor 启动器，使用现有 FRP 客户端，经官网 WSS 并显式校验证书；访客端只监听 VPS 本机 18801。认证材料分别从 Ubuntu 用户密钥环和 VPS systemd 加密凭据读取，配置只存于匿名内存文件。两个 service 示例仅供审核运维使用，不修改或重启现有 Relay。用户密钥环在当前会话可用，但机器重启后能否自动解锁尚未验证，不能据此宣称隧道可无人值守恢复。

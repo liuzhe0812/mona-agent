@@ -1,0 +1,16 @@
+[Unit]
+Description=Mona Work dedicated tunnel visitor
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=work-tunnel:/opt/mona-hosted-work-tunnel-v1/work-tunnel.cred
+ExecStart=/usr/bin/python3 /opt/mona-hosted-work-tunnel-v1/tunnel.py visitor
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
