@@ -4,11 +4,11 @@
   "files": {
     "official-site/app/account/AccountNav.tsx": {
       "before_sha256": null,
-      "after_sha256": "dc573da3e35f59c531be34db3be2f090cbad80c525f06822b0a8af9f02feaa4e"
+      "after_sha256": "9d76f52e7ad47452683fa5367d90b00a47911781814261e5d8d0a02f54a933bd"
     },
     "official-site/app/account/account.css": {
       "before_sha256": null,
-      "after_sha256": "2142e3818c9160f614b7e18be99952d849cf5a21eff01e859d0a418bfd137b32"
+      "after_sha256": "71d268166c3bfc82cd358601aa010b222d850684331728900e3998b6a7f097ad"
     },
     "official-site/app/account/client.ts": {
       "before_sha256": null,
@@ -16,7 +16,7 @@
     },
     "official-site/app/account/page.tsx": {
       "before_sha256": null,
-      "after_sha256": "ab30480b41c33abeec5c32d20238e35d9854e74f9113ab505ac75a382d8a4c76"
+      "after_sha256": "7b1bfaa8ff4771d070733d02dce5c375c453bdadba396c91d1c9e37c7f05053d"
     },
     "official-site/app/account/wechat/page.tsx": {
       "before_sha256": null,
@@ -36,11 +36,15 @@
     },
     "official-site/tests/account-browser.test.mjs": {
       "before_sha256": null,
-      "after_sha256": "9db5aac54e90054b998a6c98953fa0fa90803ad3f18226f9184908cbf96f3afd"
+      "after_sha256": "f8af9415a27febade9ddbd198f2f6105539966403986944a65e02fb2be4d4de0"
     },
     "official-site/tests/browser.test.mjs": {
       "before_sha256": "a8f6039de0b90fe12106529d3cb27efae284b077edc379248e7f49ee06e0c0b7",
       "after_sha256": "591db4576fcaf0d258e958f34987517ea24c4600f6e2a33bfc67dc5a03c49b7b"
+    },
+    "official-site/app/account/AccountFeedback.tsx": {
+      "before_sha256": null,
+      "after_sha256": "ee5ec6341f0ae57e607681c65132de47eed4e37c68b5a221c46854931ebe0b77"
     }
   }
 }

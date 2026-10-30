@@ -1,76 +1,217 @@
+diff --git a/official-site/app/account/AccountFeedback.tsx b/official-site/app/account/AccountFeedback.tsx
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/AccountFeedback.tsx
+@@ -0,0 +1,12 @@
++"use client";
++import { useEffect, useId, useRef } from "react";
++
++export function AccountFeedback({ message, close }: { message: string; close: () => void }) {
++  const dialog = useRef<HTMLDialogElement>(null);
++  const title = useId();
++  useEffect(() => { if (message && !dialog.current?.open) dialog.current?.showModal(); }, [message]);
++  return <dialog className="account-feedback" ref={dialog} onClose={close} aria-labelledby={title}>
++    <h2 id={title}>操作未完成</h2><p>{message}</p>
++    <button className="account-button primary" autoFocus onClick={() => dialog.current?.close()}>知道了</button>
++  </dialog>;
++}
 diff --git a/official-site/app/account/AccountNav.tsx b/official-site/app/account/AccountNav.tsx
 new file mode 100644
 --- /dev/null
 +++ b/official-site/app/account/AccountNav.tsx
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,73 @@
 +"use client";
-+import { useEffect, useState } from "react";
-+import { readSession } from "./client";
++import { useEffect, useRef, useState } from "react";
++import { AccountError, logout, readSession, type AccountSession } from "./client";
++import { AccountFeedback } from "./AccountFeedback";
 +import "./account.css";
 +
-+export function AccountNav() {
-+  const [name, setName] = useState("");
++export function AccountNav({ disabled = false }: { disabled?: boolean }) {
++  const [session, setSession] = useState<AccountSession | null>(null);
++  const [open, setOpen] = useState(false);
++  const [workReady, setWorkReady] = useState<boolean | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState("");
++  const menu = useRef<HTMLDetailsElement>(null);
 +  useEffect(() => {
-+    const refresh = () => setName(readSession()?.user.display_name || "");
++    const refresh = () => setSession(readSession());
 +    refresh();
 +    window.addEventListener("mona-account-changed", refresh);
 +    window.addEventListener("pageshow", refresh);
 +    return () => { window.removeEventListener("mona-account-changed", refresh); window.removeEventListener("pageshow", refresh); };
 +  }, []);
-+  return <a className="account-nav-entry" href="/account" aria-label={name ? "账户信息" : "登录或注册"}><span>{name || "登录 / 注册"}</span></a>;
++  useEffect(() => {
++    if (menu.current) menu.current.open = false;
++    setOpen(false); setWorkReady(null);
++  }, [session?.token]);
++  useEffect(() => {
++    if (!open || !session) return;
++    const controller = new AbortController();
++    setWorkReady(null);
++    void fetch("/api/work/models", { headers: { Authorization: `Bearer ${session.token}`, Accept: "application/json" },
++      credentials: "omit", cache: "no-store", redirect: "error", signal: controller.signal }).then(async response => {
++      if (!response.ok || !response.headers.get("Content-Type")?.startsWith("application/json")) return false;
++      const value = await response.json();
++      return Array.isArray(value?.models) && value.models.length > 0;
++    }).then(value => { if (!controller.signal.aborted) setWorkReady(value); }).catch(() => {
++      if (!controller.signal.aborted) setWorkReady(false);
++    });
++    return () => controller.abort();
++  }, [open, session]);
++  useEffect(() => {
++    if (!open) return;
++    const outside = (event: PointerEvent) => { if (!menu.current?.contains(event.target as Node) && menu.current) menu.current.open = false; };
++    const escape = (event: KeyboardEvent) => {
++      if (event.key === "Escape" && menu.current) { menu.current.open = false; menu.current.querySelector("summary")?.focus(); }
++    };
++    document.addEventListener("pointerdown", outside);
++    document.addEventListener("keydown", escape);
++    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
++  }, [open]);
++  if (!session) return <a className="account-nav-entry" href="/account" aria-label="登录或注册">登录 / 注册</a>;
++  const name = session.user.display_name || "Mona 账号";
++  return <>
++    <details className="account-menu" ref={menu} onToggle={event => setOpen(event.currentTarget.open)}>
++      <summary className="account-nav-entry" aria-label={`${name}，账户菜单`} aria-expanded={open}>
++        <span className="account-nav-avatar" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
++        <span className="account-nav-name">{name}</span>
++        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
++      </summary>
++      <div className="account-menu-panel" aria-label="账户菜单">
++        <a href="/account">账户设置</a>
++        {workReady ? <a href="/work/">进入在线 Work</a>
++          : <span className="account-menu-unavailable">{workReady === null ? "正在检查在线 Work…" : "在线 Work 暂未开放"}</span>}
++        <button disabled={busy || disabled} onClick={async () => {
++          if (busy || disabled) return;
++          setBusy(true);
++          try { await logout(session.token); }
++          catch (value) { setError(value instanceof AccountError ? value.message : "退出未能确认，请稍后重试。"); }
++          finally { setBusy(false); }
++        }}>{busy ? "正在退出…" : "退出登录"}</button>
++      </div>
++    </details>
++    {error && <AccountFeedback message={error} close={() => setError("")} />}
++  </>;
 +}
 diff --git a/official-site/app/account/account.css b/official-site/app/account/account.css
 new file mode 100644
 --- /dev/null
 +++ b/official-site/app/account/account.css
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,114 @@
++.account-shell, .account-menu, .account-feedback {
++  --account-muted: color-mix(in srgb, var(--paper) 68%, transparent);
++  --account-line: color-mix(in srgb, var(--paper) 18%, transparent);
++  --account-surface: color-mix(in srgb, var(--paper) 4%, var(--ink));
++  --account-hover: color-mix(in srgb, var(--paper) 8%, var(--ink));
++}
++html:has(.account-shell) { scroll-snap-type: none; }
 +.account-shell { min-height: 100svh; background: var(--ink); color: var(--paper); font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
-+.account-topbar { max-width: 1120px; margin: auto; display: flex; align-items: center; justify-content: space-between; padding: 24px; border-bottom: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
-+.account-brand { display: inline-flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 800; letter-spacing: .08em; }
-+.account-brand img { width: 38px; height: 38px; border-radius: 10px; }
-+.account-back { font-size: 14px; opacity: .75; }
-+.account-layout { width: min(100% - 40px, 1040px); margin: auto; padding: 72px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 80px; align-items: start; }
++.account-topbar { max-width: 1120px; margin: auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px; border-bottom: 1px solid var(--account-line); }
++.account-brand { display: inline-flex; align-items: center; gap: 12px; flex: none; }
++.account-brand > img:first-child { width: 38px; height: 38px; border-radius: 10px; }
++.account-brand .mona-wordmark { width: 96px; height: auto; }
++.account-topbar-actions { display: flex; align-items: center; gap: 24px; }
++.account-back { font-size: 14px; color: var(--account-muted); white-space: nowrap; }
++.account-back:hover { color: var(--paper); }
++.account-layout { width: min(100% - 40px, 1000px); margin: auto; padding: 64px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 64px; align-items: start; }
 +.account-intro { padding-top: 32px; }
-+.account-kicker { color: var(--red); font-size: 13px; font-weight: 700; letter-spacing: .15em; }
-+.account-intro h1 { margin: 24px 0; font-size: clamp(32px, 4vw, 48px); line-height: 1.25; letter-spacing: -.03em; }
-+.account-intro p { max-width: 360px; font-size: 16px; line-height: 1.9; opacity: .72; }
-+.account-panel { padding: 32px; border: 1px solid color-mix(in srgb, var(--paper) 18%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--paper) 4%, var(--ink)); }
++.account-intro h1 { margin: 0 0 24px; font-size: clamp(32px, 4vw, 48px); font-weight: 700; line-height: 1.3; letter-spacing: -.03em; }
++.account-intro h1 span { display: block; white-space: nowrap; }
++.account-intro p { margin: 0; font-size: 16px; line-height: 1.9; color: var(--account-muted); }
++.account-panel { min-width: 0; padding: 32px; border: 1px solid var(--account-line); border-radius: 16px; background: var(--account-surface); }
 +.account-panel h2 { margin: 0 0 24px; font-size: 24px; }
-+.account-tabs { display: flex; gap: 22px; margin-bottom: 28px; border-bottom: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
-+.account-tabs button { background: none; color: inherit; border: 0; padding: 0 0 14px; cursor: pointer; opacity: .55; font-size: 18px; }
-+.account-tabs button[aria-selected="true"] { opacity: 1; box-shadow: 0 2px 0 var(--red); }
-+.account-form { display: grid; gap: 18px; }
-+.account-form fieldset { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
++.account-layout.is-settings { display: block; width: min(100% - 40px, 960px); padding-top: 40px; }
++.is-settings .account-intro { padding: 0; margin-bottom: 28px; }
++.is-settings .account-intro h1 { margin-bottom: 8px; font-size: 32px; }
++.is-settings .account-intro p { font-size: 14px; }
++.account-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; }
++.account-settings-grid h2 { font-size: 18px; }
++.account-tabs { display: flex; gap: 22px; margin-bottom: 28px; border-bottom: 1px solid var(--account-line); }
++.account-tabs button { background: none; color: var(--account-muted); border: 0; padding: 0 0 14px; cursor: pointer; font: inherit; font-size: 18px; }
++.account-tabs button[aria-selected="true"] { color: var(--paper); box-shadow: 0 2px 0 var(--red); }
++.account-form, .account-form fieldset { display: grid; gap: 18px; }
++.account-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 +.account-field { display: grid; gap: 8px; font-size: 14px; }
 +.account-field input { width: 100%; min-width: 0; height: 46px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; background: var(--ink); color: var(--paper); font: inherit; }
-+.account-field input:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
++.account-field input[aria-invalid="true"] { border-color: var(--red); }
++.account-field input:-webkit-autofill { -webkit-text-fill-color: var(--paper); caret-color: var(--paper); box-shadow: 0 0 0 1000px var(--ink) inset; }
++.account-field-error { margin: -8px 0 0; font-size: 13px; line-height: 1.7; color: var(--red); }
 +.account-code { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-+.account-button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; color: var(--paper); background: transparent; cursor: pointer; font-size: 14px; text-align: center; }
++.account-button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; color: var(--paper); background: transparent; cursor: pointer; font: inherit; font-size: 14px; text-align: center; transition: background-color .18s, border-color .18s; }
++.account-button:hover:not(:disabled) { background: var(--account-hover); border-color: var(--account-muted); }
 +.account-button.primary { border-color: var(--red); background: var(--red); color: var(--paper); font-weight: 700; }
-+.account-button:disabled, .account-tabs button:disabled { opacity: .4; cursor: not-allowed; }
-+.account-link { background: none; border: 0; color: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 4px; padding: 0; cursor: pointer; }
-+.account-link:disabled { opacity: .4; cursor: not-allowed; }
++.account-button.primary:hover:not(:disabled) { background: var(--red); border-color: var(--paper); }
++.account-button:disabled, .account-tabs button:disabled { color: var(--account-muted); background: var(--account-surface); border-color: var(--account-line); cursor: not-allowed; }
++.account-link { background: none; border: 0; color: inherit; font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 4px; padding: 0; cursor: pointer; }
++.account-link:disabled { color: var(--account-muted); cursor: not-allowed; }
 +.account-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-+.account-help { margin: 0; font-size: 13px; line-height: 1.7; opacity: .65; }
-+.account-provider { display: grid; gap: 12px; border-top: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); margin-top: 24px; padding-top: 24px; }
++.account-auth-footer { margin-top: 18px; }
++.account-help { margin: 0; font-size: 13px; line-height: 1.7; color: var(--account-muted); }
++.account-reset-help { margin: -8px 0 24px; }
++.account-provider { display: grid; gap: 10px; border-top: 1px solid var(--account-line); margin-top: 24px; padding-top: 20px; }
 +.account-provider svg { width: 22px; height: 22px; }
-+.account-success { font-size: 13px; line-height: 1.6; color: var(--paper); padding: 10px 0; }
++.account-provider .account-button:disabled { border-color: transparent; justify-content: flex-start; padding: 0; min-height: 32px; }
++.account-success { margin: 12px 0 0; font-size: 13px; line-height: 1.7; color: var(--paper); }
 +.account-radio { display: flex; gap: 16px; font-size: 14px; }
 +.account-radio label { display: flex; align-items: center; gap: 6px; }
-+.account-profile-summary { display: flex; gap: 14px; align-items: center; margin-bottom: 24px; }
-+.account-avatar { width: 48px; height: 48px; display: grid; place-items: center; background: var(--red); border-radius: 50%; font-weight: 700; font-size: 22px; }
++.account-profile-summary { display: flex; gap: 14px; align-items: center; margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--account-line); }
++.account-avatar { width: 48px; height: 48px; flex: none; display: grid; place-items: center; background: var(--red); border-radius: 50%; font-weight: 700; font-size: 22px; }
 +.account-profile-summary strong { display: block; margin-bottom: 4px; overflow-wrap: anywhere; }
-+.account-profile-summary span { font-size: 13px; opacity: .7; overflow-wrap: anywhere; }
-+.account-section { margin-top: 26px; padding-top: 24px; border-top: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
-+.account-section h3 { font-size: 16px; margin: 0 0 16px; }
-+.account-feedback { width: min(420px, calc(100% - 32px)); border: 1px solid color-mix(in srgb, var(--paper) 30%, transparent); border-radius: 12px; background: var(--ink); color: var(--paper); padding: 28px; font-family: "Microsoft YaHei", sans-serif; }
++.account-profile-summary span { font-size: 13px; color: var(--account-muted); overflow-wrap: anywhere; }
++.account-setting-row { display: flex; justify-content: space-between; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--account-line); }
++.account-setting-row:first-of-type { padding-top: 0; }
++.account-setting-row:last-child { border-bottom: 0; }
++.account-setting-row h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
++.account-setting-row p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--account-muted); overflow-wrap: anywhere; }
++.account-setting-row .account-link { flex: none; align-self: flex-start; margin-top: 2px; }
++.account-security > .account-form { padding: 20px 0; }
++.account-feedback { width: min(420px, calc(100% - 32px)); border: 1px solid var(--account-line); border-radius: 12px; background: var(--ink); color: var(--paper); padding: 28px; font-family: "Microsoft YaHei", sans-serif; }
 +.account-feedback::backdrop { background: color-mix(in srgb, var(--ink) 72%, transparent); }
 +.account-feedback h2 { margin: 0 0 14px; font-size: 20px; }
 +.account-feedback p { margin: 0 0 24px; line-height: 1.8; font-size: 14px; }
-+.account-nav-entry { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid currentColor; border-radius: 999px; padding: 7px 14px; font-family: "Microsoft YaHei", sans-serif; font-size: 13px; white-space: nowrap; }
-+.account-nav-entry span { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
-+@media (max-width: 800px) { .account-layout { grid-template-columns: 1fr; max-width: 480px; gap: 24px; padding-top: 32px; } .account-intro { padding: 0; } .account-intro h1 { margin: 12px 0; font-size: 32px; } .account-intro p { display: none; } .account-panel { padding: 24px; } }
-+@media (prefers-reduced-motion: reduce) { .account-shell *, .account-feedback { scroll-behavior: auto; } }
++.account-nav-entry { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid currentColor; border-radius: 999px; padding: 7px 14px; color: inherit; background: transparent; font-family: "Microsoft YaHei", sans-serif; font-size: 13px; white-space: nowrap; text-decoration: none; cursor: pointer; }
++.account-nav-entry:hover { background: color-mix(in srgb, var(--paper) 8%, transparent); }
++.account-menu { position: relative; }
++.account-menu summary { padding: 4px 9px 4px 5px; list-style: none; }
++.account-menu summary::-webkit-details-marker { display: none; }
++.account-nav-avatar { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--red); color: var(--paper); font-size: 13px; font-weight: 700; }
++.account-nav-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
++.account-nav-entry svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; transition: rotate .18s; }
++.account-menu[open] summary svg { rotate: 180deg; }
++.account-menu-panel { position: absolute; right: 0; top: calc(100% + 10px); z-index: 120; width: 232px; padding: 8px; border: 1px solid var(--account-line); border-radius: 12px; background: var(--account-surface); color: var(--paper); }
++.account-menu .account-menu-panel a, .account-menu-panel button { display: flex; align-items: center; min-height: 44px; width: 100%; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--paper); text-align: left; font: 400 14px/1.5 "Microsoft YaHei", sans-serif; text-decoration: none; cursor: pointer; }
++.account-menu-panel a:hover, .account-menu-panel button:hover:not(:disabled) { background: var(--account-hover); }
++.account-menu-panel button { border-top: 1px solid var(--account-line); border-radius: 0 0 8px 8px; margin-top: 4px; }
++.account-menu-panel button:disabled { color: var(--account-muted); cursor: wait; }
++.account-menu-unavailable { display: block; padding: 10px 12px; color: var(--account-muted); font: 400 13px/1.7 "Microsoft YaHei", sans-serif; }
++.account-shell :is(input, button, a):focus-visible, .account-menu :is(summary, button, a):focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
++@media (max-width: 800px) {
++  .account-layout { grid-template-columns: 1fr; max-width: 480px; gap: 24px; padding-top: 32px; }
++  .account-intro { padding: 0; }
++  .account-intro h1 { margin: 0; font-size: 32px; }
++  .account-intro p { display: none; }
++  .account-panel { padding: 24px; }
++  .account-layout.is-settings { padding-top: 28px; }
++  .is-settings .account-intro { margin-bottom: 24px; }
++  .is-settings .account-intro p { display: block; }
++  .account-settings-grid { grid-template-columns: 1fr; gap: 32px; }
++  .account-topbar { gap: 16px; padding: 20px; }
++  .account-topbar-actions { gap: 16px; }
++  .account-nav-name { max-width: 72px; }
++  .site-nav .account-menu { width: 100%; }
++  .site-nav .account-menu summary { display: flex; width: 100%; justify-content: flex-start; }
++  .site-nav .account-nav-name { flex: 1; max-width: none; }
++  .site-nav .account-menu summary svg { margin-left: auto; }
++  .site-nav .account-menu-panel { position: static; width: 100%; margin-top: 8px; border: 0; border-top: 1px solid var(--account-line); border-radius: 0; background: transparent; }
++  .final-direction .site-header .site-nav:has(.account-menu[open]) { max-height: calc(100svh - 96px); }
++}
++@media (max-width: 480px) {
++  .account-brand { gap: 8px; }
++  .account-brand > img:first-child { width: 34px; height: 34px; }
++  .account-brand .mona-wordmark { width: 80px; }
++  .account-topbar:has(.account-menu) .account-back { display: none; }
++}
++@media (prefers-reduced-motion: reduce) { .account-shell *, .account-menu * { transition: none; scroll-behavior: auto; } }
 diff --git a/official-site/app/account/client.ts b/official-site/app/account/client.ts
 new file mode 100644
 --- /dev/null
@@ -182,32 +323,33 @@ diff --git a/official-site/app/account/page.tsx b/official-site/app/account/page
 new file mode 100644
 --- /dev/null
 +++ b/official-site/app/account/page.tsx
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,327 @@
 +"use client";
-+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
++import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
++import { MonaWordmark } from "../brand-wordmark";
++import { AccountFeedback } from "./AccountFeedback";
++import { AccountNav } from "./AccountNav";
 +import { AccountError, accountRequest, acceptLogin, beginWeChat, clearSession, clearWeChatProof,
-+  logout, readSession, readWeChatProof, saveSession, type AccountProfile, type AccountSession,
++  readSession, readWeChatProof, saveSession, type AccountProfile, type AccountSession,
 +  type Capabilities, type EmailProof, type LoginReply, type WeChatProof } from "./client";
 +import "./account.css";
 +
 +type Mode = "login" | "register" | "reset";
-+type Run = (task: () => Promise<void>) => Promise<void>;
++type Run = (task: () => Promise<void>, action?: string, handleError?: (error: AccountError) => boolean) => Promise<void>;
++type FieldErrors = { email?: string; code?: string; password?: string; account?: string };
 +const blankProof = (): EmailProof => ({ email: "", challenge_id: "", code: "" });
 +
-+function Feedback({ message, close }: { message: string; close: () => void }) {
-+  const dialog = useRef<HTMLDialogElement>(null);
-+  useEffect(() => { if (message && !dialog.current?.open) dialog.current?.showModal(); }, [message]);
-+  return <dialog className="account-feedback" ref={dialog} onClose={close} aria-labelledby="account-error-title">
-+    <h2 id="account-error-title">操作未完成</h2><p>{message}</p>
-+    <button className="account-button primary" autoFocus onClick={() => dialog.current?.close()}>知道了</button>
-+  </dialog>;
++function FieldError({ message, id }: { message?: string; id: string }) {
++  return message ? <p className="account-field-error" id={id} role="alert">{message}</p> : null;
 +}
 +
-+function EmailVerification({ value, update, request, busy, run }: {
++function EmailVerification({ value, update, request, busy, pending, run, errors = {} }: {
 +  value: EmailProof; update: (value: EmailProof) => void; request: (email: string) => Promise<{ challenge_id: string; resend_after_seconds: number }>;
-+  busy: boolean; run: Run;
++  busy: boolean; pending: string; run: Run; errors?: FieldErrors;
 +}) {
 +  const [seconds, setSeconds] = useState(0);
++  const [sendError, setSendError] = useState("");
++  const errorId = useId();
 +  const input = useRef<HTMLInputElement>(null);
 +  useEffect(() => {
 +    if (seconds <= 0) return;
@@ -216,82 +358,106 @@ new file mode 100644
 +  }, [seconds]);
 +  return <>
 +    <label className="account-field">邮箱<input ref={input} type="email" autoComplete="email" required maxLength={255}
-+      value={value.email} disabled={busy} onChange={event => update({ email: event.target.value, challenge_id: "", code: "" })} /></label>
++      value={value.email} disabled={busy} aria-invalid={Boolean(errors.email || sendError)} aria-describedby={`${errorId}-email`}
++      onChange={event => { setSendError(""); update({ email: event.target.value, challenge_id: "", code: "" }); }} /></label>
++    <FieldError id={`${errorId}-email`} message={errors.email || sendError} />
 +    <div className="account-code"><label className="account-field">邮箱验证码<input inputMode="numeric" autoComplete="one-time-code" required
-+      pattern="[0-9]{6}" minLength={6} maxLength={6} disabled={busy} value={value.code}
++      pattern="[0-9]{6}" minLength={6} maxLength={6} disabled={busy} value={value.code} aria-invalid={Boolean(errors.code)} aria-describedby={`${errorId}-code`}
 +      onChange={event => update({ ...value, code: event.target.value.replace(/\D/g, "").slice(0, 6) })} /></label>
 +      <button className="account-button" type="button" disabled={busy || seconds > 0} onClick={() => {
 +        if (!input.current?.reportValidity()) return;
++        setSendError("");
 +        void run(async () => {
 +          const email = value.email.trim().toLowerCase();
 +          const reply = await request(email);
 +          update({ email, challenge_id: reply.challenge_id, code: "" });
 +          setSeconds(Math.min(Math.max(reply.resend_after_seconds, 1), 300));
++        }, "send-code", error => {
++          if (!["email_exists", "email_cooldown", "email_rate_limit", "password_required"].includes(error.code)) return false;
++          setSendError(error.message); return true;
 +        });
-+      }}>{seconds > 0 ? `${seconds} 秒后重发` : "获取验证码"}</button></div>
++      }}>{pending === "send-code" ? "正在发送…" : seconds > 0 ? `${seconds} 秒后重发` : "获取验证码"}</button></div>
++    <FieldError id={`${errorId}-code`} message={errors.code} />
 +    {value.challenge_id && <p className="account-help" role="status">验证码已发送，请检查收件箱和垃圾邮件。</p>}
 +  </>;
 +}
 +
-+function AuthForm({ mode, changeMode, busy, run, capabilities, authenticated, recovered, initialEmail }: {
-+  mode: Mode; changeMode: (mode: Mode) => void; busy: boolean; run: Run; capabilities: Capabilities | null;
-+  authenticated: (value: LoginReply) => void; recovered: () => void; initialEmail: string;
++function AuthForm({ mode, changeMode, busy, pending, run, capabilities, authenticated, recovered, initialEmail, signedIn }: {
++  mode: Mode; changeMode: (mode: Mode) => void; busy: boolean; pending: string; run: Run; capabilities: Capabilities | null;
++  authenticated: (value: LoginReply) => void; recovered: () => void; initialEmail: string; signedIn: boolean;
 +}) {
 +  const [account, setAccount] = useState(initialEmail);
 +  const [proof, setProof] = useState<EmailProof>(() => ({ ...blankProof(), email: initialEmail }));
 +  const [password, setPassword] = useState("");
 +  const [name, setName] = useState("");
++  const [errors, setErrors] = useState<FieldErrors>({});
++  const passwordErrorId = useId();
 +  const enabled = Boolean(capabilities?.enabled && (mode === "login" || capabilities.email_registration));
++  function switchMode(next: Mode) {
++    const email = mode === "login" ? (account.includes("@") ? account : proof.email) : proof.email;
++    if (mode !== "login" && email) setAccount(email);
++    setProof({ ...blankProof(), email }); setPassword(""); setErrors({}); changeMode(next);
++  }
 +  async function submit(event: FormEvent) {
 +    event.preventDefault();
++    setErrors({});
 +    await run(async () => {
 +      if (mode === "login") {
 +        const reply = await accountRequest<LoginReply>("login", { method: "POST", body: { account: account.trim(), password } });
 +        authenticated(reply);
 +      } else {
 +        if (!proof.challenge_id) throw new AccountError("请先获取并填写邮箱验证码。", 400, "code_required");
-+        if (new TextEncoder().encode(password).length > 72) throw new AccountError("密码过长，请控制在 72 个英文字符或 24 个中文字符以内。", 400);
++        if (new TextEncoder().encode(password).length > 72) throw new AccountError("密码过长，请控制在 72 个英文字符或 24 个中文字符以内。", 400, "password_invalid");
 +        if (mode === "register") {
 +          authenticated(await accountRequest<LoginReply>("register", { method: "POST", body: { ...proof, password, display_name: name.trim() } }));
 +        } else {
 +          await accountRequest("reset-password", { method: "POST", body: { ...proof, password } });
++          setAccount(proof.email);
 +          recovered();
 +        }
 +      }
 +      setPassword("");
++    }, mode, error => {
++      const field = ["code_required", "invalid_code"].includes(error.code) ? "code"
++        : ["email_exists", "account_conflict"].includes(error.code) ? "email"
++          : ["invalid_credentials", "password_invalid"].includes(error.code) ? "password" : null;
++      if (!field) return false;
++      setErrors({ [field]: error.message }); return true;
 +    });
 +  }
 +  return <>
-+    {mode !== "reset" ? <div className="account-tabs" role="tablist" aria-label="登录方式">
-+      <button role="tab" aria-selected={mode === "login"} disabled={busy} onClick={() => changeMode("login")}>登录</button>
-+      <button role="tab" aria-selected={mode === "register"} disabled={busy} onClick={() => changeMode("register")}>邮箱注册</button>
-+    </div> : <h2>重设密码</h2>}
++    {mode !== "reset" ? <div className="account-tabs" role="tablist" aria-label="账号操作">
++      <button role="tab" aria-selected={mode === "login"} disabled={busy} onClick={() => switchMode("login")}>登录</button>
++      <button role="tab" aria-selected={mode === "register"} disabled={busy} onClick={() => switchMode("register")}>邮箱注册</button>
++    </div> : <><h2>重设密码</h2><p className="account-help account-reset-help">通过邮箱验证码设置新密码，完成后所有已登录设备都需要重新登录。</p></>}
 +    <form className="account-form" onSubmit={submit}><fieldset disabled={busy || !enabled}>
-+      {mode === "login" ? <label className="account-field">邮箱或账号<input required maxLength={255} autoComplete="username" value={account} onChange={event => setAccount(event.target.value)} /></label>
-+        : <EmailVerification value={proof} update={setProof} busy={busy || !enabled} run={run}
++      {mode === "login" ? <label className="account-field">邮箱或账号<input required maxLength={255} autoComplete="username" value={account} onChange={event => { setAccount(event.target.value); setErrors({}); }} /></label>
++        : <EmailVerification key={mode} value={proof} update={value => { setProof(value); setErrors({}); }} busy={busy || !enabled} pending={pending} run={run} errors={errors}
 +          request={email => accountRequest(mode === "register" ? "register-code" : "reset-code", { method: "POST", body: { email } })} />}
 +      {mode === "register" && <label className="account-field">昵称<input required minLength={1} maxLength={64} autoComplete="nickname" value={name} onChange={event => setName(event.target.value)} /></label>}
 +      <label className="account-field">{mode === "reset" ? "新密码" : "密码"}<input type="password" required minLength={mode === "login" ? 1 : 8}
-+        maxLength={mode === "login" ? 128 : 72} autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={event => setPassword(event.target.value)} /></label>
++        maxLength={mode === "login" ? 128 : 72} autoComplete={mode === "login" ? "current-password" : "new-password"} value={password}
++        aria-invalid={Boolean(errors.password)} aria-describedby={passwordErrorId} onChange={event => { setPassword(event.target.value); setErrors({}); }} /></label>
++      <FieldError id={passwordErrorId} message={errors.password} />
 +      {mode !== "login" && <p className="account-help">至少 8 位。请勿使用其他网站的相同密码。</p>}
-+      <button className="account-button primary" type="submit">{busy ? "正在处理…" : mode === "login" ? "登录" : mode === "register" ? "注册并登录" : "保存新密码"}</button>
++      <button className="account-button primary" type="submit">{pending === mode ? (mode === "login" ? "正在登录…" : mode === "register" ? "正在注册…" : "正在保存…") : mode === "login" ? "登录" : mode === "register" ? "注册并登录" : "保存新密码"}</button>
 +    </fieldset></form>
-+    <div className="account-inline" style={{ marginTop: 18 }}>
-+      <button className="account-link" disabled={busy} onClick={() => changeMode(mode === "reset" ? "login" : "reset")}>{mode === "reset" ? "返回登录" : "忘记密码？"}</button>
++    <div className="account-inline account-auth-footer">
++      <button className="account-link" disabled={busy} onClick={() => switchMode(mode === "login" ? "reset" : "login")}>{mode === "reset" ? (signedIn ? "返回账户设置" : "返回登录") : mode === "register" ? "已有账号？去登录" : "忘记密码？"}</button>
 +      {mode !== "reset" && <span className="account-help">与 Mona 客户端共用账号</span>}
 +    </div>
 +    {capabilities && !enabled && <p className="account-help" style={{ marginTop: 18 }}>{capabilities.enabled ? "邮件验证暂未开放，已有账号仍可登录。" : "账号服务尚未开放，请稍后再试。"}</p>}
 +    {mode !== "reset" && <div className="account-provider">
-+      <button className="account-button" disabled={busy || !capabilities?.wechat_login} onClick={() => void run(beginWeChat)}>
++      <button className="account-button" disabled={busy || !capabilities?.wechat_login} onClick={() => void run(beginWeChat, "wechat")}>
 +        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3C5.6 3 2 5.7 2 9c0 1.9 1.1 3.6 2.8 4.7L4 16l3-1.5c.9.3 1.9.5 3 .5 4.4 0 8-2.7 8-6s-3.6-6-8-6Zm-3 5a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm6 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/><path d="M18.8 9.1c.1.3.2.6.2.9 0 3.6-3.6 6.5-8.2 6.9C12 18.2 13.9 19 16 19c.8 0 1.7-.1 2.4-.4l2.6 1.3-.7-2c1.1-.9 1.7-2 1.7-3.4 0-2.3-1.2-4.3-3.2-5.4Z"/></svg>
-+        微信扫码登录</button>
++        {pending === "wechat" ? "正在打开微信…" : "微信扫码登录"}</button>
 +      <p className="account-help">{capabilities?.wechat_login ? "首次扫码后验证并绑定邮箱，之后可直接扫码登录。" : "微信登录尚未开放，可先使用邮箱登录。"}</p>
 +    </div>}
 +  </>;
 +}
 +
-+function WeChatBinding({ proof: wechat, suggestedName, busy, run, authenticated, cancel }: {
-+  proof: WeChatProof; suggestedName: string; busy: boolean; run: Run; authenticated: (reply: LoginReply) => void; cancel: () => void;
++function WeChatBinding({ proof: wechat, suggestedName, busy, pending, run, authenticated, cancel }: {
++  proof: WeChatProof; suggestedName: string; busy: boolean; pending: string; run: Run; authenticated: (reply: LoginReply) => void; cancel: () => void;
 +}) {
 +  const [mode, setMode] = useState<"new" | "existing">("new");
 +  const [emailProof, setEmailProof] = useState<EmailProof>(blankProof);
@@ -303,21 +469,21 @@ new file mode 100644
 +      if (!emailProof.challenge_id) throw new AccountError("请先获取邮箱验证码。", 400);
 +      const reply = await accountRequest<LoginReply>("wechat/bind", { method: "POST", body: { ...identity, ...emailProof, mode, password, display_name: name.trim() } });
 +      clearWeChatProof(); authenticated(reply);
-+    }); }}><fieldset disabled={busy}>
++    }, "bind-wechat"); }}><fieldset disabled={busy}>
 +      <div className="account-radio"><label><input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />新账号</label>
 +        <label><input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />绑定已有账号</label></div>
-+      <EmailVerification value={emailProof} update={setEmailProof} busy={busy} run={run}
++      <EmailVerification value={emailProof} update={setEmailProof} busy={busy} pending={pending} run={run}
 +        request={email => accountRequest("wechat/email-code", { method: "POST", body: { ...identity, email } })} />
 +      {mode === "new" && <label className="account-field">昵称<input maxLength={64} value={name} onChange={event => setName(event.target.value)} /></label>}
 +      <label className="account-field">{mode === "new" ? "设置登录密码" : "已有账号密码"}<input type="password" required minLength={8} maxLength={72} autoComplete={mode === "new" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} /></label>
-+      <button className="account-button primary" type="submit">{busy ? "正在绑定…" : "验证并完成登录"}</button>
++      <button className="account-button primary" type="submit">{pending === "bind-wechat" ? "正在绑定…" : "验证并完成登录"}</button>
 +      <button className="account-link" type="button" onClick={cancel}>取消并返回登录</button>
 +    </fieldset></form></>;
 +}
 +
-+function Profile({ session, busy, run, updated, signedOut, resetPassword, capabilities }: {
-+  session: AccountSession; busy: boolean; run: Run; updated: (user: AccountProfile) => void;
-+  signedOut: () => void; resetPassword: () => void; capabilities: Capabilities | null;
++function Profile({ session, busy, pending, run, updated, resetPassword, capabilities }: {
++  session: AccountSession; busy: boolean; pending: string; run: Run; updated: (user: AccountProfile) => void;
++  resetPassword: () => void; capabilities: Capabilities | null;
 +}) {
 +  const [name, setName] = useState(session.user.display_name);
 +  const [account, setAccount] = useState(session.user.account || "");
@@ -325,40 +491,64 @@ new file mode 100644
 +  const [emailProof, setEmailProof] = useState<EmailProof>(blankProof);
 +  const [password, setPassword] = useState("");
 +  const [notice, setNotice] = useState("");
++  const [emailNotice, setEmailNotice] = useState("");
++  const [accountError, setAccountError] = useState("");
++  const [emailErrors, setEmailErrors] = useState<FieldErrors>({});
++  const errorId = useId();
++  const dirty = name.trim() !== session.user.display_name || Boolean(account.trim() && account.trim() !== (session.user.account || ""));
++  const handleEmailError = (error: AccountError) => {
++    const field = ["invalid_credentials", "password_required"].includes(error.code) ? "password"
++      : error.code === "invalid_code" || error.code === "code_required" ? "code"
++        : error.code === "email_exists" ? "email" : null;
++    if (!field) return false;
++    setEmailErrors({ [field]: error.message }); return true;
++  };
 +  return <>
 +    <div className="account-profile-summary"><div className="account-avatar" aria-hidden="true">{session.user.display_name.slice(0, 1).toUpperCase()}</div>
 +      <div><strong>{session.user.display_name}</strong><span>{session.user.email}</span></div></div>
-+    <form className="account-form" onSubmit={event => { event.preventDefault(); void run(async () => {
++    <div className="account-settings-grid"><section aria-labelledby="account-basic-title">
++    <h2 id="account-basic-title">基本资料</h2>
++    <form className="account-form" onSubmit={event => { event.preventDefault(); setAccountError(""); void run(async () => {
 +      const user = await accountRequest<AccountProfile>("profile", { method: "PATCH", token: session.token,
 +        body: { display_name: name.trim(), ...(account.trim() ? { account: account.trim() } : {}) } });
-+      updated(user); setNotice("账户信息已保存。");
-+    }); }}><fieldset disabled={busy}>
-+      <label className="account-field">昵称<input required maxLength={64} value={name} onChange={event => setName(event.target.value)} /></label>
-+      <label className="account-field">账号名<input minLength={2} maxLength={32} pattern="[\u4e00-\u9fa5a-zA-Z0-9_]+" value={account} onChange={event => setAccount(event.target.value)} /></label>
++      updated(user); setName(user.display_name); setAccount(user.account || ""); setNotice("账户信息已保存。");
++    }, "save-profile", error => { if (error.code !== "account_conflict") return false; setAccountError(error.message); return true; }); }}><fieldset disabled={busy}>
++      <label className="account-field">昵称<input required maxLength={64} value={name} onChange={event => { setName(event.target.value); setNotice(""); }} /></label>
++      <label className="account-field">账号名<input required={Boolean(session.user.account)} minLength={2} maxLength={32} pattern="[\u4e00-\u9fa5a-zA-Z0-9_]+" value={account}
++        aria-invalid={Boolean(accountError)} aria-describedby={`${errorId}-account`} onChange={event => { setAccount(event.target.value); setNotice(""); setAccountError(""); }} /></label>
++      <FieldError id={`${errorId}-account`} message={accountError} />
 +      <p className="account-help">支持中文、英文、数字和下划线，也可使用邮箱登录。</p>
-+      <button className="account-button primary" type="submit">保存账户信息</button>
++      <button className="account-button primary" type="submit" disabled={!dirty || busy}>{pending === "save-profile" ? "正在保存…" : "保存账户信息"}</button>
 +    </fieldset></form>
 +    {notice && <p role="status" className="account-success">{notice}</p>}
-+    <div className="account-section"><div className="account-inline"><h3>邮箱与登录安全</h3>
-+      <button className="account-link" disabled={busy || !capabilities?.email_registration} onClick={() => setEditingEmail(value => !value)}>{editingEmail ? "取消更换" : "更换邮箱"}</button></div>
++    </section><section className="account-security" aria-labelledby="account-security-title">
++    <h2 id="account-security-title">登录与安全</h2>
++    <div className="account-setting-row"><div><h3>绑定邮箱</h3><p>{session.user.email}</p></div>
++      <button className="account-link" disabled={busy || !capabilities?.email_registration} onClick={() => {
++        setEditingEmail(value => !value); setEmailErrors({}); setEmailNotice("");
++        if (editingEmail) { setPassword(""); setEmailProof(blankProof()); }
++      }}>{editingEmail ? "取消更换" : "更换邮箱"}</button></div>
 +      {editingEmail && <form className="account-form" onSubmit={event => { event.preventDefault(); void run(async () => {
-+        if (!emailProof.challenge_id) throw new AccountError("请先获取新邮箱验证码。", 400);
++        setEmailErrors({});
++        if (!emailProof.challenge_id) throw new AccountError("请先获取新邮箱验证码。", 400, "code_required");
 +        const user = await accountRequest<AccountProfile>("email", { method: "POST", token: session.token, body: { ...emailProof, password } });
-+        updated(user); setEditingEmail(false); setPassword(""); setEmailProof(blankProof()); setNotice("邮箱已更新。");
-+      }); }}><fieldset disabled={busy}>
-+        <label className="account-field">当前登录密码<input type="password" required autoComplete="current-password" maxLength={128} value={password} onChange={event => setPassword(event.target.value)} /></label>
-+        <EmailVerification value={emailProof} update={setEmailProof} busy={busy} run={run} request={email => {
-+          if (!password) return Promise.reject(new AccountError("请先输入当前登录密码。", 400));
++        updated(user); setEditingEmail(false); setPassword(""); setEmailProof(blankProof()); setEmailNotice("邮箱已更新。");
++      }, "save-email", handleEmailError); }}><fieldset disabled={busy}>
++        <label className="account-field">当前登录密码<input type="password" required autoComplete="current-password" maxLength={128} value={password}
++          aria-invalid={Boolean(emailErrors.password)} aria-describedby={`${errorId}-password`} onChange={event => { setPassword(event.target.value); setEmailErrors({}); }} /></label>
++        <FieldError id={`${errorId}-password`} message={emailErrors.password} />
++        <EmailVerification value={emailProof} update={value => { setEmailProof(value); setEmailErrors({}); }} busy={busy} pending={pending} errors={emailErrors}
++          run={(task, action, handler) => run(task, action, error => handleEmailError(error) || Boolean(handler?.(error)))} request={email => {
++          if (!password) return Promise.reject(new AccountError("请先输入当前登录密码。", 400, "password_required"));
 +          return accountRequest("email-code", { method: "POST", token: session.token, body: { email, password } });
-+        }} /><button className="account-button" type="submit">验证新邮箱并保存</button>
++        }} /><button className="account-button" type="submit">{pending === "save-email" ? "正在验证…" : "验证新邮箱并保存"}</button>
 +      </fieldset></form>}
-+      <div className="account-inline" style={{ marginTop: 16 }}><span className="account-help">微信：{session.user.wechat_bound ? "已绑定" : "未绑定"}</span>
-+        <button className="account-link" disabled={busy || !capabilities?.wechat_login} onClick={() => void run(beginWeChat)}>微信扫码登录</button></div>
-+      <button className="account-link" style={{ marginTop: 18 }} disabled={busy || !capabilities?.email_registration} onClick={resetPassword}>通过邮箱重设密码</button>
-+    </div>
-+    <div className="account-section account-form"><a className="account-button" href="/work/">进入在线 Work</a>
-+      <button className="account-button" disabled={busy} onClick={() => void run(async () => { await logout(session.token); signedOut(); })}>退出登录</button>
-+      <p className="account-help">退出会撤销当前网页登录，不影响其他已登录设备。</p></div>
++      {emailNotice && <p role="status" className="account-success">{emailNotice}</p>}
++      <div className="account-setting-row"><div><h3>微信登录</h3><p>微信：{session.user.wechat_bound ? "已绑定" : "未绑定"}</p>
++        <p className="account-help">{capabilities?.wechat_login ? "可通过微信登录关联已有账号。" : "微信登录尚未开放。"}</p></div></div>
++      <div className="account-setting-row"><div><h3>登录密码</h3><p className="account-help">通过邮箱验证重设，完成后需重新登录。</p></div>
++        <button className="account-link" disabled={busy || !capabilities?.email_registration} onClick={resetPassword}>重设密码</button></div>
++    </section></div>
 +  </>;
 +}
 +
@@ -369,7 +559,8 @@ new file mode 100644
 +  const [loadError, setLoadError] = useState(false);
 +  const [refresh, setRefresh] = useState(0);
 +  const [mode, setMode] = useState<Mode>("login");
-+  const [busy, setBusy] = useState(false);
++  const [pending, setPending] = useState("");
++  const busy = Boolean(pending);
 +  const [error, setError] = useState("");
 +  const [notice, setNotice] = useState("");
 +  const [binding, setBinding] = useState<{ proof: WeChatProof; name: string } | null>(null);
@@ -382,15 +573,23 @@ new file mode 100644
 +    }
 +    setError(value instanceof AccountError ? value.message : "操作未能完成，请检查网络后重试。");
 +  }, []);
-+  const run: Run = useCallback(async task => {
++  const run: Run = useCallback(async (task, action = "operation", handleError) => {
 +    if (mutation.current) return;
-+    mutation.current = true; setBusy(true); setNotice("");
-+    try { await task(); } catch (value) { report(value); }
-+    finally { mutation.current = false; setBusy(false); }
++    mutation.current = true; setPending(action); setNotice("");
++    try { await task(); } catch (value) {
++      if (!(value instanceof AccountError && handleError?.(value))) report(value);
++    }
++    finally { mutation.current = false; setPending(""); }
 +  }, [report]);
 +  const authenticated = useCallback((reply: LoginReply) => {
 +    setSession(acceptLogin(reply)); setBinding(null); setMode("login");
 +    if (window.location.pathname.endsWith("/wechat")) window.history.replaceState({}, "", "/account");
++  }, []);
++
++  useEffect(() => {
++    const refreshSession = () => setSession(readSession());
++    window.addEventListener("mona-account-changed", refreshSession);
++    return () => window.removeEventListener("mona-account-changed", refreshSession);
 +  }, []);
 +
 +  useEffect(() => {
@@ -430,23 +629,24 @@ new file mode 100644
 +
 +  function updated(user: AccountProfile) { if (session) { const value = { ...session, user }; saveSession(value); setSession(value); } }
 +  function cancelBinding() { clearWeChatProof(); setBinding(null); window.history.replaceState({}, "", "/account"); }
++  const settings = Boolean(session && mode !== "reset" && !binding);
 +  return <div className="account-shell"><header className="account-topbar">
-+    <a className="account-brand" href="/"><img src="/img/mona-brand/mona-app-icon.png?v=a829e97b8751" alt="" />MONA</a>
-+    <a className="account-back" href="/">返回官网 ↗</a></header>
-+    <main className="account-layout"><section className="account-intro"><span className="account-kicker">MONA ACCOUNT</span>
-+      <h1>{session ? "你的 MONA，\n与你保持连接。" : "一个账号，\n开始你的工作。"}</h1>
-+      <p>用邮箱或微信登录 Mona。官网与客户端共用账号，你的在线工作区依然独立、安全。</p></section>
++    <a className="account-brand" href="/" aria-label="Mona 首页"><img src="/img/mona-brand/mona-app-icon.png?v=a829e97b8751" alt="" /><MonaWordmark /></a>
++    <div className="account-topbar-actions"><a className="account-back" href="/">返回官网</a>{session && <AccountNav disabled={busy} />}</div></header>
++    <main className={`account-layout${settings ? " is-settings" : ""}`}><section className="account-intro">
++      {settings ? <><h1>账户设置</h1><p>管理个人资料和登录安全。</p></>
++        : <><h1><span>{mode === "register" ? "创建账号，" : mode === "reset" ? "重设密码，" : "登录 Mona，"}</span><span>{mode === "reset" ? "找回你的账号。" : "继续你的工作。"}</span></h1>
++          <p>官网与 Mona 客户端共用账号，<br />登录后即可管理你的账户。</p></>}</section>
 +      <section className="account-panel" aria-label="Mona 账号">
-+        {!ready ? <p role="status">正在读取登录状态…</p> : binding ? <WeChatBinding proof={binding.proof} suggestedName={binding.name} busy={busy} run={run} authenticated={authenticated} cancel={cancelBinding} />
-+          : session && mode !== "reset" ? <Profile key={session.token + session.user.email} session={session} busy={busy} run={run} updated={updated} capabilities={capabilities}
-+            signedOut={() => { setSession(null); setNotice("已安全退出登录。"); }} resetPassword={() => setMode("reset")} />
-+          : <AuthForm key={mode} mode={mode} changeMode={setMode} busy={busy} run={run} capabilities={capabilities} authenticated={authenticated}
-+            initialEmail={session?.user.email || ""} recovered={() => { clearSession(); setSession(null); setMode("login"); setNotice("密码已重设，请重新登录。"); }} />}
++        {!ready ? <p role="status">正在读取登录状态…</p> : binding ? <WeChatBinding proof={binding.proof} suggestedName={binding.name} busy={busy} pending={pending} run={run} authenticated={authenticated} cancel={cancelBinding} />
++          : session && mode !== "reset" ? <Profile key={session.token} session={session} busy={busy} pending={pending} run={run} updated={updated} capabilities={capabilities} resetPassword={() => setMode("reset")} />
++          : <AuthForm key={session?.token || "anonymous"} mode={mode} changeMode={setMode} busy={busy} pending={pending} run={run} capabilities={capabilities} authenticated={authenticated}
++            initialEmail={session?.user.email || ""} signedIn={Boolean(session)} recovered={() => { clearSession(); setSession(null); setMode("login"); setNotice("密码已重设，请重新登录。"); }} />}
 +        {notice && <p role="status" className="account-success">{notice}</p>}
 +        {loadError && <button className="account-button" disabled={busy} style={{ marginTop: 20 }} onClick={() => setRefresh(value => value + 1)}>重新加载账号服务</button>}
 +        {ready && windowSafeCallback() && !binding && !session && <button className="account-link" style={{ marginTop: 20 }} disabled={busy} onClick={cancelBinding}>返回邮箱登录</button>}
 +      </section></main>
-+    {error && <Feedback message={error} close={() => setError("")} />}
++    {error && <AccountFeedback message={error} close={() => setError("")} />}
 +  </div>;
 +}
 +
@@ -525,7 +725,7 @@ diff --git a/official-site/tests/account-browser.test.mjs b/official-site/tests/
 new file mode 100644
 --- /dev/null
 +++ b/official-site/tests/account-browser.test.mjs
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,295 @@
 +// Browser acceptance against production-built account UI and isolated synthetic API edges.
 +// No SMTP, WeChat account, production user or model request is used.
 +import assert from 'node:assert/strict';
@@ -582,6 +782,7 @@ new file mode 100644
 +test('website account production UI: register, edit, logout, recovery and OAuth binding', { timeout: 180000 }, async t => {
 +  let user = { id: '900001', email: 'browser@example.com', account: 'browser_fixture', display_name: '浏览器测试用户', wechat_bound: false };
 +  const tokens = new Set(); const calls = []; let serial = 0; let failLogout = false; let oauth = null;
++  let workModels = []; let holdProfile = false; let releaseProfile;
 +  const tokenReply = () => { const token = 'synthetic-browser-session-' + (++serial); tokens.add(token); return { access_token: token, expires_in_seconds: 600, user }; };
 +  const server = createServer(async (request, response) => {
 +    const url = new URL(request.url, 'http://localhost'); const route = url.pathname;
@@ -595,9 +796,13 @@ new file mode 100644
 +        if (name === 'capabilities') return json({ enabled: true, email_registration: true, wechat_login: true });
 +        if (['register-code', 'reset-code', 'email-code', 'wechat/email-code'].includes(name)) return json({ challenge_id: 'a'.repeat(32), resend_after_seconds: 1, expires_in_seconds: 600 });
 +        if (name === 'register') {
++          if (body.code !== '123456') return json({ error: 'invalid_code', message: '验证码错误，请重新输入。' }, 400);
 +          assert.equal(body.code, '123456'); user = { ...user, email: body.email, display_name: body.display_name }; return json(tokenReply());
 +        }
-+        if (name === 'login') return json(tokenReply());
++        if (name === 'login') {
++          if (body.password === 'incorrect-browser-password') return json({ error: 'invalid_credentials', message: '账号或密码错误。' }, 401);
++          return json(tokenReply());
++        }
 +        if (name === 'reset-password') { assert.equal(body.code, '123456'); tokens.clear(); return json({ message: 'reset' }); }
 +        if (name === 'wechat/start') {
 +          oauth = { state: 'b'.repeat(64), verifier: body.verifier };
@@ -613,7 +818,10 @@ new file mode 100644
 +        }
 +        if (!tokens.has(token)) return json({ error: 'website_session_revoked', message: '登录已失效。' }, 401);
 +        if (name === 'profile') {
-+          if (request.method === 'PATCH') user = { ...user, ...body };
++          if (request.method === 'PATCH') {
++            if (holdProfile) await new Promise(resolve => { releaseProfile = resolve; });
++            user = { ...user, ...body };
++          }
 +          return json(user);
 +        }
 +        if (name === 'email') { assert.equal(body.code, '123456'); user = { ...user, email: body.email }; return json(user); }
@@ -622,6 +830,11 @@ new file mode 100644
 +          tokens.delete(token); return json({ message: 'logged out' });
 +        }
 +        return json({ error: 'unknown_fixture_route' }, 404);
++      }
++      if (route === '/api/work/models') {
++        const token = request.headers.authorization?.replace(/^Bearer /, '');
++        calls.push({ name: 'work-models', authorized: tokens.has(token) });
++        return tokens.has(token) ? json({ models: workModels }) : json({ error: 'login_required' }, 401);
 +      }
 +      if (route === '/favicon.ico') { response.writeHead(204).end(); return; }
 +      if (route === '/config/pricing') return json({ plans: [] });
@@ -657,34 +870,125 @@ new file mode 100644
 +    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
 +    const nav = async route => { await cdp.send('Page.navigate',{url:origin+route}); await cdp.wait("document.querySelector('.account-panel') && document.readyState==='complete'"); };
 +    const capture = async name => {const image=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,name+'.png'),Buffer.from(image.data,'base64'));};
++    const field = label => `([...document.querySelectorAll('label')].find(e=>e.textContent.trim()===${JSON.stringify(label)})?.querySelector('input'))`;
++    const openMenu = async () => {
++      await cdp.wait("document.querySelector('.account-menu summary')!==null");
++      await cdp.eval("if(!document.querySelector('.account-menu').open) document.querySelector('.account-menu summary').click()");
++      await cdp.wait("document.querySelector('.account-menu')?.open===true");
++    };
++    const closeMenuWithEscape = async () => {
++      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
++      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
++      await cdp.wait("document.querySelector('.account-menu')?.open===false && document.querySelector('.account-menu summary').getAttribute('aria-expanded')==='false'");
++      assert.equal(await cdp.eval("document.activeElement===document.querySelector('.account-menu summary')"), true);
++    };
 +    await nav('/account');
 +    await cdp.wait("[...document.querySelectorAll('button')].some(e=>e.textContent==='微信扫码登录'&&!e.disabled)");
++    await cdp.wait("document.querySelector('.account-brand .mona-wordmark')?.naturalWidth>0");
 +    await capture('login-desktop');
++    await t.test('preserve email across forms and show login error beside password', async()=>{
++      await cdp.input('邮箱或账号','browser@example.com');await cdp.input('密码','incorrect-browser-password');
++      await cdp.eval("document.querySelector('.account-form button[type=submit]').click()");
++      await cdp.wait(`${field('密码')}?.getAttribute('aria-invalid')==='true'`);
++      assert.equal(await cdp.eval(`document.getElementById(${field('密码')}.getAttribute('aria-describedby'))?.textContent`),'账号或密码错误。');
++      assert.equal(await cdp.eval("document.querySelector('dialog[open]')"),null);
++      await cdp.click('邮箱注册');assert.equal(await cdp.eval(`${field('邮箱')}.value`),'browser@example.com');
++      await cdp.click('已有账号？去登录');assert.equal(await cdp.eval(`${field('邮箱或账号')}.value`),'browser@example.com');
++      await cdp.click('忘记密码？');assert.equal(await cdp.eval(`${field('邮箱')}.value`),'browser@example.com');
++      await cdp.click('返回登录');assert.equal(await cdp.eval(`${field('邮箱或账号')}.value`),'browser@example.com');
++      passed.push('email_mode_switch_and_login_error');
++    });
 +    await t.test('verified email registration', async()=>{
-+      await cdp.click('邮箱注册'); await cdp.input('邮箱','browser@example.com');await cdp.click('获取验证码');
++      await cdp.click('邮箱注册'); assert.equal(await cdp.eval(`${field('邮箱')}.value`),'browser@example.com');await cdp.click('获取验证码');
 +      await cdp.wait("document.body.innerText.includes('验证码已发送')");
-+      await cdp.input('邮箱验证码','123456');await cdp.input('昵称','浏览器新用户');await cdp.input('密码','synthetic-browser-password');
++      await cdp.input('邮箱验证码','654321');await cdp.input('昵称','浏览器新用户');await cdp.input('密码','synthetic-browser-password');
++      await cdp.click('注册并登录');await cdp.wait(`${field('邮箱验证码')}?.getAttribute('aria-invalid')==='true'`);
++      assert.equal(await cdp.eval(`document.getElementById(${field('邮箱验证码')}.getAttribute('aria-describedby'))?.textContent`),'验证码错误，请重新输入。');
++      assert.equal(await cdp.eval("document.querySelector('dialog[open]')"),null);
++      await cdp.input('邮箱验证码','123456');
 +      await capture('register-desktop'); await cdp.click('注册并登录');
 +      await cdp.wait("document.body.innerText.includes('保存账户信息')");
 +      assert.ok(await cdp.eval("JSON.parse(sessionStorage.getItem('mona-website-session-v1')).user.id"));
++      assert.equal(await cdp.eval("document.querySelector('.account-layout.is-settings')!==null"),true);
++      assert.equal(await cdp.eval("document.querySelector('.account-settings-grid').children.length"),2);
++      assert.equal(await cdp.eval("(() => {const [a,b]=[...document.querySelector('.account-settings-grid').children].map(e=>e.getBoundingClientRect());return b.left>a.right})()"),true);
 +      passed.push('email_registration');
 +    });
++    await t.test('account menu reflects Work availability and closes with Escape',async()=>{
++      await openMenu();await cdp.wait("document.querySelector('.account-menu-unavailable')?.textContent==='在线 Work 暂未开放'");
++      assert.equal(await cdp.eval("document.querySelector('.account-menu-panel a[href=\"/work/\"]')"),null);
++      assert.equal(calls.filter(call=>call.name==='work-models').at(-1)?.authorized,true);
++      await closeMenuWithEscape();workModels=[{id:'fixture-model',label:'测试模型',source:'mona'}];
++      await openMenu();await cdp.wait("document.querySelector('.account-menu-panel a[href=\"/work/\"]')!==null");
++      assert.equal(await cdp.eval("document.querySelector('.account-menu-panel a[href=\"/work/\"]').textContent.trim()"),'进入在线 Work');
++      await closeMenuWithEscape();workModels=[];passed.push('account_menu_and_work_availability');
++    });
++    await t.test('signed-in account navigation fits desktop and mobile',async()=>{
++      let desktop, mobile;
++      try {
++        await cdp.send('Page.navigate',{url:origin+'/'});
++        await cdp.wait("document.readyState==='complete' && document.querySelector('.site-nav .account-menu summary')!==null && Number(getComputedStyle(document.querySelector('.site-header')).opacity)>0.99");
++        await openMenu();await cdp.wait("document.querySelector('.account-menu-unavailable')?.textContent==='在线 Work 暂未开放'");
++        desktop=await cdp.eval(`(() => {
++          const panel=document.querySelector('.site-nav .account-menu-panel'), box=panel.getBoundingClientRect();
++          const visible=[...panel.querySelectorAll('a,button')].every(item=>{
++            const r=item.getBoundingClientRect(), hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
++            return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && item.contains(hit);
++          });
++          return {left:box.left,right:box.right,top:box.top,bottom:box.bottom,visible};
++        })()`);
++        await capture('account-menu-desktop');
++        await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
++        await cdp.eval("document.querySelector('.account-menu').open=false;document.querySelector('.mobile-nav-toggle').click()");
++        await cdp.wait("document.querySelector('.mobile-nav-toggle').getAttribute('aria-expanded')==='true' && document.querySelector('.site-nav.is-open')!==null");
++        await openMenu();await cdp.wait("document.querySelector('.account-menu-unavailable')?.textContent==='在线 Work 暂未开放'");
++        mobile=await cdp.eval(`(() => {
++          const panel=document.querySelector('.site-nav .account-menu-panel'), box=panel.getBoundingClientRect();
++          const nav=document.querySelector('.site-nav'), logout=panel.querySelector('button');
++          const item=logout.getBoundingClientRect(), clip=nav.getBoundingClientRect();
++          const hit=document.elementFromPoint((item.left+item.right)/2,(item.top+item.bottom)/2);
++          return {left:box.left,right:box.right,scrollWidth:document.documentElement.scrollWidth,width:innerWidth,
++            logoutVisible:item.top>=clip.top && item.bottom<=clip.bottom && item.bottom<=innerHeight && logout.contains(hit)};
++        })()`);
++        await capture('account-menu-mobile');
++        assert.ok(desktop.visible && desktop.left>=0 && desktop.right<=1440 && desktop.top>=0 && desktop.bottom<=1000,JSON.stringify(desktop));
++        assert.ok(mobile.left>=0 && mobile.right<=mobile.width && mobile.scrollWidth<=mobile.width+1,JSON.stringify(mobile));
++        assert.ok(mobile.logoutVisible,'mobile logout is not visible and clickable: '+JSON.stringify(mobile));
++        passed.push('signed_in_navigation_layout');
++      } finally {
++        await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
++        await nav('/account');await cdp.wait("document.body.innerText.includes('保存账户信息')");
++      }
++    });
 +    await t.test('profile and verified email editing',async()=>{
-+      await cdp.input('昵称','更新后的昵称');await cdp.input('账号名','updated_account');await cdp.click('保存账户信息');
++      assert.equal(await cdp.eval("[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='保存账户信息').disabled"),true);
++      await cdp.input('昵称','更新后的昵称');await cdp.input('账号名','updated_account');
++      assert.equal(await cdp.eval("[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='保存账户信息').disabled"),false);
++      holdProfile=true;
++      try {
++        await cdp.click('保存账户信息');await cdp.wait("document.body.innerText.includes('正在保存…')");
++        await openMenu();assert.equal(await cdp.eval("[...document.querySelectorAll('.account-menu-panel button')].find(e=>e.textContent.trim()==='退出登录').disabled"),true);
++        assert.equal(typeof releaseProfile,'function');
++      } finally { holdProfile=false;releaseProfile?.();releaseProfile=undefined; }
 +      await cdp.wait("document.body.innerText.includes('账户信息已保存')");assert.equal(user.display_name,'更新后的昵称');
++      assert.equal(await cdp.eval("[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='保存账户信息').disabled"),true);
++      await closeMenuWithEscape();
 +      await cdp.click('更换邮箱');await cdp.input('当前登录密码','synthetic-browser-password');await cdp.input('邮箱','updated@example.com');
++      await cdp.click('取消更换');await cdp.click('更换邮箱');
++      assert.equal(await cdp.eval(`${field('当前登录密码')}.value`),'');assert.equal(await cdp.eval(`${field('邮箱')}.value`),'');
++      await cdp.input('当前登录密码','synthetic-browser-password');await cdp.input('邮箱','updated@example.com');
 +      await cdp.click('获取验证码');await cdp.wait("document.body.innerText.includes('验证码已发送')");await cdp.input('邮箱验证码','123456');
 +      await cdp.click('验证新邮箱并保存');await cdp.wait("document.querySelector('.account-profile-summary').innerText.includes('updated@example.com')");
 +      await capture('profile-desktop');passed.push('profile_and_email_edit');
 +    });
 +    await t.test('failed logout retains session; confirmed logout revokes and clears',async()=>{
-+      failLogout=true;await cdp.click('退出登录');await cdp.wait("document.querySelector('dialog[open]')!==null");
++      await openMenu();failLogout=true;await cdp.click('退出登录');await cdp.wait("document.querySelector('dialog[open]')!==null");
 +      assert.ok(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"));await cdp.click('知道了');
-+      failLogout=false;await cdp.click('退出登录');await cdp.wait("document.body.innerText.includes('已安全退出登录')");
++      await openMenu();failLogout=false;await cdp.click('退出登录');await cdp.wait(`${field('邮箱或账号')}!==undefined`);
 +      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"),null);assert.equal(tokens.size,0);passed.push('server_logout');
 +    });
 +    await t.test('email password recovery',async()=>{
-+      await cdp.click('忘记密码？');await cdp.input('邮箱','updated@example.com');await cdp.click('获取验证码');
++      await cdp.input('邮箱或账号','updated@example.com');await cdp.click('忘记密码？');assert.equal(await cdp.eval(`${field('邮箱')}.value`),'updated@example.com');await cdp.click('获取验证码');
 +      await cdp.wait("document.body.innerText.includes('验证码已发送')");await cdp.input('邮箱验证码','123456');await cdp.input('新密码','new-browser-fixture-password');
 +      await cdp.click('保存新密码');await cdp.wait("document.body.innerText.includes('密码已重设')");passed.push('password_recovery');
 +    });
@@ -700,7 +1004,9 @@ new file mode 100644
 +    await t.test('mobile layout and invalid callback handling',async()=>{
 +      await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
 +      assert.ok(await cdp.eval('document.documentElement.scrollWidth<=window.innerWidth+1'));await capture('profile-mobile');
-+      await cdp.click('退出登录');await cdp.wait("document.body.innerText.includes('已安全退出登录')");
++      assert.equal(await cdp.eval("(() => {const [a,b]=[...document.querySelector('.account-settings-grid').children].map(e=>e.getBoundingClientRect());return b.top>=a.bottom})()"),true);
++      await openMenu();await cdp.click('退出登录');await cdp.wait(`${field('邮箱或账号')}!==undefined`);
++      assert.ok(await cdp.eval('document.documentElement.scrollWidth<=window.innerWidth+1'));await capture('login-mobile');
 +      const exchanges=calls.filter(c=>c.name==='wechat/exchange').length;
 +      await nav('/account/wechat?code=invalid&state='+ 'f'.repeat(64));await cdp.wait("document.querySelector('dialog[open]')!==null");
 +      await cdp.eval(`sessionStorage.setItem('mona-website-wechat-v1',JSON.stringify({state:'${'b'.repeat(64)}',verifier:'${'d'.repeat(64)}',expiresAt:Date.now()+600000}))`);
