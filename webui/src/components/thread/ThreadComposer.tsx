@@ -140,6 +140,7 @@ function ContextUsageIndicator({ usage }: { usage?: ThreadComposerProps["context
 
 interface ThreadComposerProps {
   chatId?: string | null;
+  draftScope?: string;
   onSend: (content: string, images?: SendImage[], options?: SendOptions) => void | boolean | Promise<void | boolean>;
   awaitSendResult?: boolean;
   documentDraft?: AttachedDocument[];
@@ -566,6 +567,7 @@ function RunElapsedStrip({
 
 export function ThreadComposer({
   chatId,
+  draftScope,
   onSend,
   awaitSendResult = false,
   documentDraft,
@@ -657,6 +659,21 @@ export function ThreadComposer({
   /** Inserted ``@DisplayName`` tokens → agent id. Stale tokens (user deleted
    * the text) are filtered out at submit time. */
   const mentionedRef = useRef(new Map<string, string>());
+  const mentionDraftsRef = useRef(new Map<string, Map<string, string>>());
+  if (draftScope !== undefined) {
+    let mentions = mentionDraftsRef.current.get(draftScope);
+    if (!mentions) {
+      mentions = new Map();
+      mentionDraftsRef.current.set(draftScope, mentions);
+    }
+    mentionedRef.current = mentions;
+  }
+  useEffect(() => {
+    if (draftScope === undefined) return;
+    setMention(null);
+    setSelectedMentionIndex(0);
+    setInlineError(null);
+  }, [draftScope]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!suggestedPrompt) return;
@@ -725,7 +742,7 @@ export function ThreadComposer({
   }, []);
 
   const { images, enqueue, remove, clear, encoding } =
-    useAttachedImages();
+    useAttachedImages(draftScope);
 
   const formatRejection = useCallback(
     (reason: AttachmentError): string => {

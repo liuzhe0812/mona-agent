@@ -2118,6 +2118,34 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
   });
 
+  it("keeps independent unsent text drafts while switching conversations and home", async () => {
+    const client = makeClient();
+    const view = (chatId?: string) => wrap(client, <ThreadShell
+      session={chatId ? session(chatId) : undefined} onToggleSidebar={() => {}}
+    />);
+    const ui = render(view("draft-a"));
+    await waitFor(() => expect(screen.getByLabelText("Message input")).not.toBeDisabled());
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "draft owned by A" } });
+    ui.rerender(view("draft-b"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "draft owned by B" } });
+    ui.rerender(view());
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "new chat draft" } });
+    ui.rerender(view("draft-a"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("draft owned by A");
+    ui.rerender(view("draft-b"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("draft owned by B");
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "draft-b", "draft owned by B", undefined, expect.anything(),
+    ));
+    ui.rerender(view("draft-a"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("draft owned by A");
+    ui.rerender(view());
+    expect(screen.getByLabelText("Message input")).toHaveValue("new chat draft");
+  });
+
   it("does not cache optimistic messages under the next chat during a session switch", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-b");

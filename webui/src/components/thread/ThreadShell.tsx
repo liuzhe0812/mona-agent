@@ -482,6 +482,17 @@ export function ThreadShell({
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const pendingQueue = usePendingQueue(chatId);
+  const draftScope = chatId ? `chat:${chatId}` : "new";
+  const [textDrafts, setTextDrafts] = useState<Map<string, string>>(new Map());
+  const textDraft = textDrafts.get(draftScope) ?? "";
+  const setTextDraft = useCallback((value: string) => {
+    setTextDrafts((current) => {
+      const next = new Map(current);
+      if (value) next.set(draftScope, value);
+      else next.delete(draftScope);
+      return next;
+    });
+  }, [draftScope]);
   const [documentDrafts, setDocumentDrafts] = useState<Map<string, AttachedDocument[]>>(new Map());
   const documentDraft = chatId ? documentDrafts.get(chatId) ?? EMPTY_DOCUMENT_DRAFT : EMPTY_DOCUMENT_DRAFT;
   const handleDocumentDraftChange = useCallback((documents: AttachedDocument[]) => {
@@ -1082,6 +1093,9 @@ export function ThreadShell({
       {session ? (
         <ThreadComposer
           chatId={chatId}
+          draftScope={draftScope}
+          value={textDraft}
+          onValueChange={setTextDraft}
           onSend={handleThreadSend}
           documentDraft={documentDraft}
           onDocumentDraftChange={handleDocumentDraftChange}
@@ -1127,6 +1141,9 @@ export function ThreadShell({
       ) : (
         <ThreadComposer
           onSend={handleWelcomeSend}
+          draftScope={draftScope}
+          value={textDraft}
+          onValueChange={setTextDraft}
           disabled={booting}
           isStreaming={isStreaming}
           computerUseActive={computerUseActive}

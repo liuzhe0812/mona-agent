@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
@@ -507,6 +508,29 @@ describe("ThreadComposer", () => {
     expect(input).toHaveValue("/history ");
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("keeps mention targets with their draft instead of applying them to another conversation", () => {
+    const onSend = vi.fn();
+    function Composer({ scope }: { scope: string }) {
+      const [drafts, setDrafts] = useState<Record<string, string>>({});
+      return <ThreadComposer chatId={scope} draftScope={scope} value={drafts[scope] ?? ""}
+        onValueChange={(value) => setDrafts((previous) => ({ ...previous, [scope]: value }))}
+        onSend={(...args) => onSend(scope, ...args)} mentionableAgents={MENTION_AGENTS} />;
+    }
+    const ui = render(<Composer scope="a" />);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "@review" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    expect(screen.getByLabelText("Message input")).toHaveValue("@Reviewer ");
+    ui.rerender(<Composer scope="b" />);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "please review @Reviewer " } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    expect(onSend).toHaveBeenLastCalledWith("b", "please review @Reviewer", undefined, undefined);
+    ui.rerender(<Composer scope="a" />);
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    expect(onSend).toHaveBeenLastCalledWith("a", "@Reviewer", undefined, {
+      targetAgentIds: ["com.mona.reviewer"],
+    });
   });
 
   it("filters @ candidates by name or stable id and keeps keyboard selection usable", () => {

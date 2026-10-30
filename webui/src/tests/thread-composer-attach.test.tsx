@@ -3,12 +3,14 @@ import {
   createEvent,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { useAttachedImages } from "@/hooks/useAttachedImages";
 import type { EncodeResponse } from "@/lib/imageEncode";
 import type { MonaClient } from "@/lib/mona-client";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -88,6 +90,57 @@ afterEach(() => {
 });
 
 describe("ThreadComposer — attachments", () => {
+  it("keeps late image encoding in its original draft and releases only consumed previews", async () => {
+    let finishA!: (value: EncodeResponse) => void;
+    encodeImage.mockImplementation((file) => file.name === "a.png"
+      ? new Promise((resolve) => { finishA = resolve; })
+      : Promise.resolve(resolveReady(file)));
+    let nextUrl = 0;
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:scope-${++nextUrl}`);
+    const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      const sendA = vi.fn();
+      const sendB = vi.fn();
+      const view = (scope: string) => <ThreadComposer chatId={scope} draftScope={scope} onSend={scope === "a" ? sendA : sendB} />;
+      const ui = render(view("a"));
+      pasteFiles(screen.getByLabelText("Message input"), [pngFile("a.png")]);
+      await waitFor(() => expect(finishA).toEqual(expect.any(Function)));
+      ui.rerender(view("b"));
+      expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+      pasteFiles(screen.getByLabelText("Message input"), [pngFile("b.png")]);
+      await act(async () => { finishA(resolveReady(pngFile("a.png"))); });
+      expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+      expect(screen.getByText("b.png")).toBeInTheDocument();
+      expect(revokeUrl).not.toHaveBeenCalled();
+      ui.rerender(view("a"));
+      expect(screen.getByText("a.png")).toBeInTheDocument();
+      expect(screen.queryByText("b.png")).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+      expect(sendA.mock.calls[0][1][0].media.name).toBe("a.png");
+      expect(sendB).not.toHaveBeenCalled();
+      expect(revokeUrl).toHaveBeenCalledTimes(1);
+      expect(revokeUrl).toHaveBeenCalledWith("blob:scope-1");
+      ui.rerender(view("b"));
+      expect(screen.getByText("b.png")).toBeInTheDocument();
+      ui.unmount();
+      expect(revokeUrl).toHaveBeenCalledTimes(2);
+      expect(revokeUrl).toHaveBeenLastCalledWith("blob:scope-2");
+    } finally { createUrl.mockRestore(); revokeUrl.mockRestore(); }
+  });
+
+  it("clears one inactive image draft without reviving it when encoding completes", async () => {
+    let finish!: (value: EncodeResponse) => void;
+    encodeImage.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const ui = renderHook(({ scope }) => useAttachedImages(scope), { initialProps: { scope: "a" } });
+    act(() => { ui.result.current.enqueue([pngFile()]); });
+    await waitFor(() => expect(finish).toEqual(expect.any(Function)));
+    ui.rerender({ scope: "b" });
+    act(() => { ui.result.current.clearScope("a"); });
+    await act(async () => { finish(resolveReady(pngFile())); });
+    ui.rerender({ scope: "a" });
+    expect(ui.result.current.images).toEqual([]);
+  });
+
   it("blocks file paste and drop when attachments are disabled but keeps the custom attach action", async () => {
     const client = attachmentClient();
     const onAttach = vi.fn();

@@ -88,6 +88,7 @@ export interface UseAttachedImagesApi {
    * successful submit — the optimistic bubble holds onto an independent
    * ``data:`` URL so tearing down blob previews here is safe. */
   clear: () => void;
+  clearScope: (scope: string) => void;
   /** ``true`` when at least one image is still encoding — Send should wait. */
   encoding: boolean;
   /** ``true`` when we've hit ``MAX_IMAGES_PER_MESSAGE``. */
@@ -102,27 +103,34 @@ export interface UseAttachedImagesApi {
  *   - Worker orchestration
  *   - focus bookkeeping so keyboard delete doesn't strand the user
  */
-export function useAttachedImages(): UseAttachedImagesApi {
-  const [images, setImages] = useState<AttachedImage[]>([]);
-  // Ref mirror so ``enqueue`` can see the authoritative length when invoked
-  // multiple times in a single tick (rapid file selection, drag of many
-  // files, paste storms). ``state`` is stale for that second + call.
-  const imagesRef = useRef<AttachedImage[]>([]);
-  imagesRef.current = images;
+export function useAttachedImages(scope?: string): UseAttachedImagesApi {
+  const key = scope ?? "";
+  const [drafts, setDrafts] = useState<Map<string, AttachedImage[]>>(new Map());
+  const draftsRef = useRef(drafts);
+  const images = drafts.get(key) ?? [];
+  const setImages = useCallback((update: AttachedImage[] | ((previous: AttachedImage[]) => AttachedImage[])) => {
+    const previous = draftsRef.current.get(key) ?? [];
+    const next = typeof update === "function" ? update(previous) : update;
+    if (next === previous) return;
+    const all = new Map(draftsRef.current);
+    if (next.length) all.set(key, next);
+    else all.delete(key);
+    draftsRef.current = all;
+    setDrafts(all);
+  }, [key]);
 
   const setEntry = useCallback((id: string, patch: Partial<AttachedImage>) => {
     setImages((prev) => {
-      const next = prev.map((img) => (img.id === id ? { ...img, ...patch } : img));
-      imagesRef.current = next;
-      return next;
+      if (!prev.some((image) => image.id === id)) return prev;
+      return prev.map((img) => (img.id === id ? { ...img, ...patch } : img));
     });
-  }, []);
+  }, [setImages]);
 
   const enqueue = useCallback(
     (files: Iterable<File>) => {
       const rejected: Array<{ file: File; reason: AttachmentError }> = [];
       const toAdd: AttachedImage[] = [];
-      let slot = MAX_IMAGES_PER_MESSAGE - imagesRef.current.length;
+      let slot = MAX_IMAGES_PER_MESSAGE - (draftsRef.current.get(key)?.length ?? 0);
 
       for (const file of files) {
         if (!isInlineImage(file)) {
@@ -143,9 +151,7 @@ export function useAttachedImages(): UseAttachedImagesApi {
       }
 
       if (toAdd.length > 0) {
-        const next = [...imagesRef.current, ...toAdd];
-        imagesRef.current = next;
-        setImages(next);
+        setImages((previous) => [...previous, ...toAdd]);
         // Fire the Worker after the commit so chips render first (good INP).
         for (const entry of toAdd) {
           queueMicrotask(() => {
@@ -177,7 +183,7 @@ export function useAttachedImages(): UseAttachedImagesApi {
       }
       return { rejected };
     },
-    [setEntry],
+    [key, setEntry, setImages],
   );
 
   const remove = useCallback((id: string) => {
@@ -192,46 +198,45 @@ export function useAttachedImages(): UseAttachedImagesApi {
         // No-op: previewUrl revocation is best-effort.
       }
       const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
-      imagesRef.current = next;
       // Prefer moving focus to the chip at the same index, else previous.
       const candidate = next[idx] ?? next[idx - 1];
       nextFocusId = candidate?.id ?? null;
       return next;
     });
     return { nextFocusId };
-  }, []);
+  }, [setImages]);
 
-  const clear = useCallback(() => {
-    setImages((prev) => {
-      for (const img of prev) {
-        try {
-          URL.revokeObjectURL(img.previewUrl);
-        } catch {
-          // revoke is best-effort
-        }
-      }
-      imagesRef.current = [];
-      return [];
-    });
+  const clearScope = useCallback((draftScope: string) => {
+    const previous = draftsRef.current.get(draftScope);
+    if (!previous) return;
+    for (const image of previous) {
+      try { URL.revokeObjectURL(image.previewUrl); } catch { /* Preview cleanup is best-effort. */ }
+    }
+    const next = new Map(draftsRef.current);
+    next.delete(draftScope);
+    draftsRef.current = next;
+    setDrafts(next);
   }, []);
+  const clear = useCallback(() => clearScope(key), [clearScope, key]);
 
   // Final safety net: revoke any outstanding blob URLs on unmount. Safe
   // under StrictMode double-invoke because revoked blob URLs are only
   // referenced from in-hook chip state, which is rebuilt on remount.
   useEffect(() => {
     return () => {
-      for (const img of imagesRef.current) {
+      for (const img of [...draftsRef.current.values()].flat()) {
         try {
           URL.revokeObjectURL(img.previewUrl);
         } catch {
           // best-effort cleanup on unmount
         }
       }
+      draftsRef.current = new Map();
     };
   }, []);
 
   const encoding = images.some((img) => img.status === "encoding");
   const full = images.length >= MAX_IMAGES_PER_MESSAGE;
 
-  return { images, enqueue, remove, clear, encoding, full };
+  return { images, enqueue, remove, clear, clearScope, encoding, full };
 }
