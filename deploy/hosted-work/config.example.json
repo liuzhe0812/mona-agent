@@ -1,0 +1,14 @@
+{
+  "hosted_work": {
+    "enabled": false,
+    "state_dir": "/var/lib/mona-hosted-work",
+    "auth_origin": "https://AUTH_HOST_REPLACE.invalid",
+    "public_origin": "https://WEBSITE_HOST_REPLACE.invalid",
+    "frontend_dir": "/opt/mona-hosted-work/app/webui/dist-hosted-work",
+    "port": 17175,
+    "sandbox_image": "",
+    "sandbox_runtime": "runsc",
+    "max_concurrent_runs": 2,
+    "models": {}
+  }
+}

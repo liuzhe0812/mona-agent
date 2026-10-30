@@ -774,6 +774,59 @@ class CloudSyncConfig(Base):
     excluded_session_keys: list[str] = Field(default_factory=list, max_length=10_000)
 
 
+class HostedWorkModel(Base):
+    """Operator-owned model selection; never accepted from a website request."""
+
+    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
+    label: str = Field(min_length=1, max_length=80)
+    source: Literal["mona", "codex", "workbuddy"] = "mona"
+    api_base: str = ""
+    api_key_env: str = Field(default="", pattern=r"^(?:MONA_WORK_MODEL_[A-Z0-9_]+)?$")
+    model: str = Field(min_length=1, max_length=200)
+    native_config_path: str = ""
+    context_window_tokens: int = Field(default=32768, ge=4096, le=2_000_000)
+    max_output_tokens: int = Field(default=4096, ge=256, le=32768)
+    reasoning_effort: str | None = None
+
+
+class HostedWorkConfig(Base):
+    """Independent hosted Work service. Desktop startup does not consume this config."""
+
+    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
+    enabled: bool = False
+    state_dir: str = ""
+    auth_origin: str = ""
+    public_origin: str = ""
+    frontend_dir: str = ""
+    bind_host: str = "127.0.0.1"
+    allow_insecure_lan_http: bool = False
+    port: int = Field(default=17175, ge=1024, le=65535)
+    models: dict[str, HostedWorkModel] = Field(default_factory=dict)
+    sandbox_image: str = ""
+    sandbox_runtime: Literal["runsc"] = "runsc"
+    max_concurrent_runs: int = Field(default=2, ge=1, le=16)
+    max_sessions_per_user: int = Field(default=100, ge=1, le=1000)
+    max_runs_per_session: int = Field(default=200, ge=1, le=2000)
+    run_timeout_seconds: int = Field(default=900, ge=30, le=3600)
+    tool_timeout_seconds: int = Field(default=120, ge=1, le=600)
+    max_iterations: int = Field(default=30, ge=1, le=100)
+    sandbox_memory_mb: int = Field(default=768, ge=256, le=8192)
+    sandbox_cpus: float = Field(default=1.0, ge=0.25, le=8)
+    workspace_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024, le=512 * 1024 * 1024)
+    max_file_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=32 * 1024 * 1024)
+    max_history_bytes: int = Field(default=4 * 1024 * 1024, ge=65536, le=16 * 1024 * 1024)
+
+    @field_validator("models")
+    @classmethod
+    def _valid_hosted_model_ids(cls, value: dict[str, HostedWorkModel]) -> dict[str, HostedWorkModel]:
+        if len(value) > 32 or any(
+            not key or len(key) > 64 or not all(c in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in key)
+            for key in value
+        ):
+            raise ValueError("hosted model ids must be short lowercase identifiers")
+        return value
+
+
 class Config(BaseSettings):
     """Root configuration for mona."""
 

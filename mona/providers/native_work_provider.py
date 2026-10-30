@@ -115,10 +115,11 @@ def native_history_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
 class NativeWorkProvider(LLMProvider):
     """One instance per Work runner; native tools cannot bypass Mona permissions."""
 
-    def __init__(self, config: Config, workspace: Path):
+    def __init__(self, config: Config, workspace: Path, *, native_home: Path | None = None):
         super().__init__()
         self.config = config
         self.workspace = workspace.resolve()
+        self._native_home = native_home.resolve() if native_home is not None else None
         self.executor = ExecutorId(config.agents.defaults.executor)
         self._host = None
         self._binding = None
@@ -155,7 +156,7 @@ class NativeWorkProvider(LLMProvider):
         return None
 
     def for_turn(self, workspace: Path | None):
-        provider = NativeWorkProvider(self.config, workspace or self.workspace)
+        provider = NativeWorkProvider(self.config, workspace or self.workspace, native_home=self._native_home)
         provider.generation = self.generation
         return provider
 
@@ -189,7 +190,7 @@ class NativeWorkProvider(LLMProvider):
         discovery = next((item for item in discover_executors(config) if item.executor == self.executor), None)
         if discovery is None or discovery.state != "detected" or not discovery.executable:
             raise RpcError("executor_unavailable", "未找到此模型的引擎程序，请在模型设置中检查连接。")
-        home = get_data_dir() / "development" / "native" / self.executor.value
+        home = self._native_home or get_data_dir() / "development" / "native" / self.executor.value
         if self.executor == ExecutorId.CODEX:
             profile, self._catalog_path = prepare_codex_work_profile(Path(discovery.executable), home, self.workspace)
             self._host = CodexExecutor(profile, tool_handler=self._host_tool)

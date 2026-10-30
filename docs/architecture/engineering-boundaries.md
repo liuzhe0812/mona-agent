@@ -84,7 +84,8 @@
 
 ## 5. Windows 与桌面端
 
-- Mona 的产品交付形态是纯桌面客户端。生产前端由 Tauri 的 `frontendDist` 嵌入主程序；Gateway 发布资源不包含 `mona/web/dist/` 的第二份网页前端。桌面内部 HTTP/WebSocket 通信不代表提供独立网页客户端。
+- Mona 桌面产品的前端继续由 Tauri 的 `frontendDist` 嵌入主程序；Gateway 发布资源不包含 `mona/web/dist/` 的第二份网页前端。桌面内部 HTTP/WebSocket 通信不等于公网多用户入口。
+- 用户批准的官网基本 Work 服务使用独立的 `mona.hosted_work` 入口和前端构建，复用执行循环但不加载桌面模块、桌面路由或用户自配 API。每用户工具与脚本进入强制隔离环境，平台模型凭据在可信宿主中保管；缺少隔离运行时不得降级。该服务默认关闭，不由桌面启动，详细边界见 `hosted-work.md`。
 - 正式产品不注册系统级 `mona` CLI，不提供独立终端聊天、配置向导或管理命令。桌面只启动安装包内的 Gateway/Services；源码开发手动运行后端时使用 `python -m mona gateway` 或 `python -m mona services`，入口同时保留 `--version` 和内部 SDK worker。
 - Python 打包不构建或携带网页前端，Gateway 不托管 SPA 静态文件；前端本地预览输出到 `webui/dist/`，桌面构建输出到 `src-tauri/dist/`。
 - 内置 Skill 按文件路径执行的 Python 脚本必须作为资源保留，包括其子目录模块；不能因 Python 代码已进入 PyInstaller import archive 就省略脚本文件。

@@ -1,0 +1,23 @@
+# Example only. Review paths, dedicated account, Docker access, credentials and
+# coexistence with the documented mona-worker workloads before installing.
+[Unit]
+Description=Mona isolated online Work host
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mona-hosted-work
+Group=mona-hosted-work
+WorkingDirectory=/opt/mona-hosted-work/app
+EnvironmentFile=/etc/mona-hosted-work/node.env
+ExecStart=/opt/mona-hosted-work/app/.venv/bin/python -m mona.hosted_work --config /etc/mona-hosted-work/config.json
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

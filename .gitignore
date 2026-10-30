@@ -327,6 +327,10 @@ design-assets/
 !/tests/cloud/
 /tests/cloud/*
 !/tests/cloud/*.py
+!/tests/hosted_work/
+/tests/hosted_work/*
+!/tests/hosted_work/*.py
+/webui/dist-hosted-work/
 hardware/
 
 # 项目文档仅在本地维护，不上传 GitHub。
@@ -346,6 +350,8 @@ docs/architecture/*
 !docs/architecture/browser-development-framework.md
 !docs/architecture/development-permissions.md
 !docs/architecture/pro-cloud-services.md
+!docs/architecture/hosted-work.md
+!docs/architecture/website-accounts.md
 !docs/architecture/runtime-component-management.md
 !docs/architecture/stock-vibe-integration.md
 !docs/architecture/stock-module-development-standard.md
