@@ -41,6 +41,7 @@ import {
 import { SidebarBrowserPanel, type SidebarBrowserController } from "@/components/deliver/SidebarBrowserPanel";
 import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
+import type { MessageAdmission } from "@/lib/mona-client";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import type { AttachedDocument } from "@/hooks/useAttachedDocuments";
 import {
@@ -332,7 +333,16 @@ function toModelBadgeLabel(modelName: string | null): string | null {
 }
 
 interface PendingFirstMessage {
+  inputId: string;
+  requestKey: string;
+  agentId: string | null;
+  workspace: string | null;
   targetChatId: string | null;
+  state: "creating" | "ready" | "preparing" | "sent" | MessageAdmission;
+  dispatched: boolean;
+  finish: (accepted: boolean) => void;
+  observe: (state: MessageAdmission) => void;
+  prepared?: { content: string; options?: SendOptions };
   content: string;
   images?: SendImage[];
   options?: SendOptions;
@@ -415,6 +425,10 @@ export function ThreadShell({
   const { client, modelName, token } = useClient();
   const conversation = session?.conversation ?? null;
   const [booting, setBooting] = useState(false);
+  const [firstMessageRejection, setFirstMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string } | null>(null);
+  const liveChatRef = useRef(chatId); liveChatRef.current = chatId;
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [providerOptions, setProviderOptions] = useState<ComposerModelOption[]>([]);
   const managedModelPricesRef = useRef<ManagedModelPrice[]>([]);
@@ -485,8 +499,10 @@ export function ThreadShell({
   const pendingQueue = usePendingQueue(chatId);
   const draftScope = chatId ? `chat:${chatId}` : "new";
   const [textDrafts, setTextDrafts] = useState<Map<string, string>>(new Map());
+  const textDraftVersions = useRef(new Map<string, number>());
   const textDraft = textDrafts.get(draftScope) ?? "";
   const setTextDraft = useCallback((value: string) => {
+    textDraftVersions.current.set(draftScope, (textDraftVersions.current.get(draftScope) ?? 0) + 1);
     setTextDrafts((current) => {
       const next = new Map(current);
       if (value) next.set(draftScope, value);
@@ -495,16 +511,33 @@ export function ThreadShell({
     });
   }, [draftScope]);
   const [documentDrafts, setDocumentDrafts] = useState<Map<string, AttachedDocument[]>>(new Map());
-  const documentDraft = chatId ? documentDrafts.get(chatId) ?? EMPTY_DOCUMENT_DRAFT : EMPTY_DOCUMENT_DRAFT;
+  const documentDraftKey = chatId ?? "";
+  const documentDraft = documentDrafts.get(documentDraftKey) ?? EMPTY_DOCUMENT_DRAFT;
   const handleDocumentDraftChange = useCallback((documents: AttachedDocument[]) => {
-    if (!chatId) return;
     setDocumentDrafts((previous) => {
       const next = new Map(previous);
-      if (documents.length > 0) next.set(chatId, documents);
-      else next.delete(chatId);
+      if (documents.length > 0) next.set(documentDraftKey, documents);
+      else next.delete(documentDraftKey);
       return next;
     });
-  }, [chatId]);
+  }, [documentDraftKey]);
+  const homeDraftVersion = textDraftVersions.current.get("new") ?? 0;
+  const consumeHomeDraft = useCallback((submitted: readonly AttachedDocument[]) => {
+    const unchanged = (textDraftVersions.current.get("new") ?? 0) === homeDraftVersion;
+    if (unchanged) {
+      textDraftVersions.current.set("new", homeDraftVersion + 1);
+      setTextDrafts((current) => { const next = new Map(current); next.delete("new"); return next; });
+    }
+    const paths = new Set(submitted.map((document) => document.path));
+    setDocumentDrafts((current) => {
+      const next = new Map(current);
+      const remaining = (next.get("") ?? []).filter((document) => !paths.has(document.path));
+      if (remaining.length) next.set("", remaining);
+      else next.delete("");
+      return next;
+    });
+    return unchanged;
+  }, [homeDraftVersion]);
   const [widgetPrompt, setWidgetPrompt] = useState<{ text: string; requestId: string }>();
   useEffect(() => setWidgetPrompt(undefined), [chatId]);
   const handleWidgetPrompt = useCallback((text: string) => {
@@ -717,40 +750,59 @@ export function ThreadShell({
   useEffect(() => {
     if (!chatId) return;
     const pending = pendingFirstRef.current;
-    if (!pending) return;
+    if (!pending || pending.dispatched) return;
     if (pending.targetChatId !== chatId) {
       pendingFirstRef.current = null;
+      pending.state = "cancelled";
+      pending.finish(false);
       setBooting(false);
       return;
     }
-    pendingFirstRef.current = null;
+    if (pending.state !== "ready") return;
+    pending.state = "preparing";
     pendingFirstWorkspaceRouteChatRef.current = chatId;
     setScrollToBottomSignal((value) => value + 1);
     let cancelled = false;
     void (async () => {
-      const routed = session?.conversation?.type === "room"
-        ? { content: pending.content }
-        : canvasRouteMessageRef.current(pending.content);
-      const canvasPath = routed.canvasPath
-        ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
-      if (cancelled) return;
-      const options = pending.options || routed.displayContent || routed.canvasId || canvasPath
-        ? {
+      if (!pending.prepared) {
+        const routed = session?.conversation?.type === "room"
+          ? { content: pending.content }
+          : canvasRouteMessageRef.current(pending.content);
+        const canvasPath = routed.canvasPath
+          ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
+        if (cancelled) return;
+        pending.prepared = {
+          content: routed.content,
+          options: {
             ...pending.options,
             displayContent: pending.options?.displayContent ?? routed.displayContent,
             canvasId: routed.canvasId ?? pending.options?.canvasId,
             canvasPath: canvasPath ?? pending.options?.canvasPath,
-          }
-        : undefined;
-      send(routed.content, pending.images, options);
+          },
+        };
+      }
+      if (cancelled) return;
+      pending.dispatched = true;
+      pending.state = "sent";
+      send(pending.prepared.content, pending.images, {
+        ...pending.prepared.options, inputId: pending.inputId, onAdmission: pending.observe,
+      });
       setBooting(false);
     })();
     return () => {
       cancelled = true;
+      if (!pending.dispatched) {
+        pending.state = "cancelled";
+        pending.finish(false);
+        if (pendingFirstRef.current === pending) pendingFirstRef.current = null;
+      }
       setBooting(false);
     };
   }, [chatId, send, session?.conversation?.type]);
-  useEffect(() => () => { pendingFirstRef.current = null; }, []);
+  useEffect(() => () => {
+    pendingFirstRef.current?.finish(false);
+    pendingFirstRef.current = null;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -918,30 +970,83 @@ export function ThreadShell({
   }, [session?.conversation, agentsById]);
 
   const handleWelcomeSend = useCallback(
-    async (content: string, images?: SendImage[], options?: SendOptions) => {
-      if (booting) return;
+    (content: string, images?: SendImage[], options?: SendOptions): Promise<boolean> => {
+      if (booting || ["creating", "ready", "preparing"].includes(pendingFirstRef.current?.state ?? "")) return Promise.resolve(false);
+      const requestKey = JSON.stringify([content, options?.docPaths, options?.documentNames, options?.targetAgentIds, options?.quote, options?.displayContent]);
+      const previous = pendingFirstRef.current;
+      const sameImages = (previous?.images?.length ?? 0) === (images?.length ?? 0)
+        && (images ?? []).every((image, index) => image.media.data_url === previous?.images?.[index].media.data_url
+          && image.preview.name === previous?.images?.[index].preview.name);
+      if (previous?.dispatched && previous.requestKey === requestKey && sameImages
+        && (!directAgentId || directAgentId === previous.agentId)
+        && (!selectedWorkspace || selectedWorkspace === previous.workspace)
+        && previous.state !== "accepted") {
+        if (previous.state === "rejected" && previous.targetChatId && onSelectSession) {
+          const completion = new Promise<boolean>((resolve) => { previous.finish = resolve; });
+          previous.options = { ...previous.options, onAdmission: options?.onAdmission };
+          previous.state = "ready";
+          previous.dispatched = false;
+          setBooting(true);
+          setFirstMessageRejection(null);
+          onSelectSession(`websocket:${previous.targetChatId}`);
+          return completion;
+        }
+        setFirstMessageRejection({ runActive: false, uncertain: true, inputId: previous.inputId });
+        return Promise.resolve(false);
+      }
+      let finish!: (accepted: boolean) => void;
+      const completion = new Promise<boolean>((resolve) => { finish = resolve; });
+      const pending: PendingFirstMessage = {
+        inputId: crypto.randomUUID(), requestKey,
+        agentId: directAgentId, workspace: selectedWorkspace,
+        targetChatId: null, state: "creating", dispatched: false, content, images, options, finish,
+        observe: (state) => {
+          if (pending.state === "accepted" && state !== "accepted") return;
+          pending.state = state;
+          pending.options?.onAdmission?.(state);
+          pending.finish(state === "accepted");
+          if (state === "accepted") {
+            pending.images = undefined;
+            pending.options = undefined;
+            pending.prepared = undefined;
+          }
+          if (aliveRef.current && state === "accepted") {
+            setFirstMessageRejection((current) => current?.inputId === pending.inputId ? null : current);
+          } else if (aliveRef.current && pendingFirstRef.current === pending && liveChatRef.current === null) {
+            setFirstMessageRejection({ runActive: false, uncertain: state !== "rejected", inputId: pending.inputId });
+          }
+        },
+      };
       setBooting(true);
-      const pending: PendingFirstMessage = { targetChatId: null, content, images, options };
+      setFirstMessageRejection(null);
       pendingFirstRef.current = pending;
       const beforeActivate = (nextChatId: string) => {
-        if (pendingFirstRef.current !== pending) return false;
+        if (pendingFirstRef.current !== pending || pending.state !== "creating") return false;
         pending.targetChatId = nextChatId;
+        pending.state = "ready";
         return true;
       };
-      const newId = directAgentId && directAgentId !== "mona"
-        ? await onCreateDirectChat?.(directAgentId, selectedWorkspace, beforeActivate)
-        : await onCreateChat?.(selectedWorkspace, beforeActivate);
-      if (!newId || pending.targetChatId !== newId) {
-        if (pendingFirstRef.current === pending) {
-          pendingFirstRef.current = null;
-          setBooting(false);
+      void (async () => {
+        try {
+          const newId = directAgentId && directAgentId !== "mona"
+            ? await onCreateDirectChat?.(directAgentId, selectedWorkspace, beforeActivate)
+            : await onCreateChat?.(selectedWorkspace, beforeActivate);
+          if (newId && pending.targetChatId === newId) {
+            if (aliveRef.current && pendingFirstRef.current === pending) setSelectedWorkspace(null);
+            return;
+          }
+        } catch {
+          // No model input was dispatched while its conversation was being created.
         }
-        return;
-      }
-      // Clear the transient workspace selection after creating the chat.
-      setSelectedWorkspace(null);
+        pending.finish(false);
+        if (!aliveRef.current || pendingFirstRef.current !== pending) return;
+        pendingFirstRef.current = null;
+        setBooting(false);
+        if (liveChatRef.current === null) setFirstMessageRejection({ runActive: false });
+      })();
+      return completion;
     },
-    [booting, directAgentId, onCreateChat, onCreateDirectChat, selectedWorkspace],
+    [booting, directAgentId, onCreateChat, onCreateDirectChat, onSelectSession, selectedWorkspace],
   );
 
   const handleThreadSend = useCallback(
@@ -1158,6 +1263,10 @@ export function ThreadShell({
       ) : (
         <ThreadComposer
           onSend={handleWelcomeSend}
+          awaitSendResult
+          onConsumeDraft={consumeHomeDraft}
+          documentDraft={documentDraft}
+          onDocumentDraftChange={handleDocumentDraftChange}
           draftScope={draftScope}
           value={textDraft}
           onValueChange={setTextDraft}
@@ -2312,7 +2421,10 @@ export function ThreadShell({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <MessageRejectionDialog rejection={messageRejection} onDismiss={dismissMessageRejection} />
+      <MessageRejectionDialog rejection={messageRejection ?? firstMessageRejection} onDismiss={() => {
+        dismissMessageRejection();
+        setFirstMessageRejection(null);
+      }} />
     </>
   );
 }

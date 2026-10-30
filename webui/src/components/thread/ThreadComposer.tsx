@@ -145,6 +145,7 @@ interface ThreadComposerProps {
   awaitSendResult?: boolean;
   documentDraft?: AttachedDocument[];
   onDocumentDraftChange?: (value: AttachedDocument[]) => void;
+  onConsumeDraft?: (documents: readonly AttachedDocument[]) => boolean;
   value?: string;
   onValueChange?: (value: string) => void;
   suggestedPrompt?: { text: string; requestId: string };
@@ -572,6 +573,7 @@ export function ThreadComposer({
   awaitSendResult = false,
   documentDraft,
   onDocumentDraftChange,
+  onConsumeDraft,
   value: controlledValue,
   onValueChange,
   clearOnSend = true,
@@ -630,6 +632,7 @@ export function ThreadComposer({
     clear: clearDocuments,
   } = useAttachedDocuments(chatId, documentDraft, onDocumentDraftChange);
   const submitting = useRef(false);
+  const scopedSubmissions = useRef(new Map<string, { token: object; consumer: ThreadComposerProps["onConsumeDraft"] }>());
   const submitScope = useRef(chatId); submitScope.current = chatId;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -1045,8 +1048,26 @@ export function ThreadComposer({
   );
 
   const submit = useCallback(async () => {
-    if (!canSend || submitting.current) return;
+    const inFlight = draftScope === undefined ? undefined : scopedSubmissions.current.get(draftScope);
+    if (!canSend || (draftScope === undefined ? submitting.current : inFlight && inFlight.consumer === onConsumeDraft)) return;
     const owner = chatId;
+    const scopedConsumption = awaitSendResult && draftScope !== undefined && onConsumeDraft;
+    const originalMentions = mentionedRef.current;
+    let consumed = false;
+    const consumeSubmitted = () => {
+      if (consumed || !mounted.current || !scopedConsumption) return;
+      consumed = true;
+      const textConsumed = scopedConsumption(documents);
+      if (textConsumed) originalMentions.clear();
+      for (const image of readyImages) remove(image.id);
+      if (textConsumed && submitScope.current === owner) {
+        setInlineError(null);
+        setSlashMenuDismissed(false);
+        setMention(null);
+        onClearQuote?.();
+        resizeTextarea();
+      }
+    };
     const trimmed = value.trim();
     // Share the same normalized ``data:`` URL with both the wire payload and
     // the optimistic bubble preview: data URLs are self-contained (no blob
@@ -1088,15 +1109,24 @@ export function ThreadComposer({
           } : {}),
         }
       : undefined;
-    submitting.current = true;
+    const sendOptions: SendOptions | undefined = scopedConsumption
+      ? { ...options, onAdmission: (state) => { if (state === "accepted") consumeSubmitted(); } }
+      : options;
+    const submission = {};
+    if (draftScope === undefined) submitting.current = true;
+    else scopedSubmissions.current.set(draftScope, { token: submission, consumer: onConsumeDraft });
     try {
-      const result = onSend(content, payload, options);
+      const result = onSend(content, payload, sendOptions);
       if (awaitSendResult && await result !== true) return;
+      if (scopedConsumption) { consumeSubmitted(); return; }
       if (!mounted.current || submitScope.current !== owner) return;
     } catch (cause) {
       if (mounted.current && submitScope.current === owner) setInlineError(cause instanceof Error ? cause.message : "发送失败，原输入已保留。");
       return;
-    } finally { submitting.current = false; }
+    } finally {
+      if (draftScope === undefined) submitting.current = false;
+      else if (scopedSubmissions.current.get(draftScope)?.token === submission) scopedSubmissions.current.delete(draftScope);
+    }
     mentionedRef.current.clear();
     if (clearOnSend) setValue("");
     setInlineError(null);
@@ -1109,7 +1139,7 @@ export function ThreadComposer({
     setMention(null);
     onClearQuote?.();
     resizeTextarea();
-  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, documents, onClearQuote, onSend, quote, readyImages, removeDocument, resizeTextarea, setValue, value]);
+  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, documents, draftScope, onClearQuote, onConsumeDraft, onSend, quote, readyImages, remove, removeDocument, resizeTextarea, setValue, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionMenu) {

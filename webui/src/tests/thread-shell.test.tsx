@@ -176,6 +176,9 @@ function makeClient() {
         sessionUpdateHandlers.delete(handler);
       };
     },
+    onSessionDeleted: () => () => {},
+    isChatDeleted: () => false,
+    forgetDeletedChat: () => {},
     onArtifactsChanged: (handler: () => void) => {
       artifactsChangedHandlers.add(handler);
       return () => {
@@ -375,6 +378,7 @@ function GuardedCreationHost({ create, direct = false }: {
     <button onClick={() => setActive(null)}>Return home</button>
     <span data-testid="selected-creation-chat">{active?.chatId ?? "home"}</span>
     <ThreadShell session={active} onToggleSidebar={() => {}}
+      onSelectSession={(key) => setActive(session(key.replace(/^websocket:/, "")))}
       pendingDirectAgentId={direct ? "com.mona.test" : undefined}
       onCreateChat={onCreate}
       onCreateDirectChat={(_agent, workspace, beforeActivate) => onCreate(workspace, beforeActivate)} />
@@ -1379,6 +1383,119 @@ describe("ThreadShell", () => {
     expect(
       screen.getByRole("textbox", { name: i18n.t("thread.composer.inputAria") }),
     ).toBeInTheDocument();
+  });
+
+  it.each(["null", "reject"])("retains the first draft and document when creation fails with %s", async (failure) => {
+    const client = makeClient();
+    const create = failure === "null" ? vi.fn().mockResolvedValue(null) : vi.fn().mockRejectedValue(new Error("synthetic creation error"));
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    const upload = await startDocumentUpload(client, "first.pdf");
+    finishDocumentUpload(client, upload, "first.pdf", `uploads/${upload}/first.pdf`);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "keep the first request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("common.dismiss") }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("keep the first request");
+    expect(screen.getByText("first.pdf")).toBeInTheDocument();
+    expect(screen.queryByText("synthetic creation error")).not.toBeInTheDocument();
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("retries a rejected first input in its original created chat and consumes only after acceptance", async () => {
+    const client = makeClient();
+    const create = vi.fn().mockResolvedValue("created-first");
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    const upload = await startDocumentUpload(client, "first.pdf");
+    const path = `uploads/${upload}/first.pdf`;
+    finishDocumentUpload(client, upload, "first.pdf", path);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "retry original input" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const first = client.sendMessage.mock.calls[0][3];
+    await act(async () => { first.onAdmission("rejected"); });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("common.dismiss") }));
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("retry original input");
+    expect(screen.getByText("first.pdf")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(2));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage.mock.calls[1][0]).toBe("created-first");
+    expect(client.sendMessage.mock.calls[1][3]).toEqual(expect.objectContaining({ inputId: first.inputId, docPaths: [path] }));
+    await act(async () => { client.sendMessage.mock.calls[1][3].onAdmission("accepted"); });
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    expect(screen.queryByText("first.pdf")).not.toBeInTheDocument();
+  });
+
+  it.each(["unknown", "cancelled"])("retains an unresolved first input without creating or sending again after %s", async (state) => {
+    const client = makeClient();
+    const create = vi.fn().mockResolvedValue("created-first");
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "unresolved first input" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    await act(async () => { client.sendMessage.mock.calls[0][3].onAdmission(state); });
+    const dismiss = screen.queryByRole("button", { name: i18n.t("common.dismiss") });
+    if (dismiss) fireEvent.click(dismiss);
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("unresolved first input");
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await screen.findByRole("alertdialog");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear another conversation's draft when the first input is accepted after navigation", async () => {
+    const client = makeClient();
+    const create = vi.fn().mockResolvedValue("created-first");
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    const upload = await startDocumentUpload(client, "home.pdf");
+    finishDocumentUpload(client, upload, "home.pdf", `uploads/${upload}/home.pdf`);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "home first request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const first = client.sendMessage.mock.calls[0][3];
+    fireEvent.click(screen.getByRole("button", { name: "Browse existing B" }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "B private draft" } });
+    const added = await startDocumentUpload(client, "b.pdf");
+    finishDocumentUpload(client, added, "b.pdf", `uploads/${added}/b.pdf`);
+    await act(async () => { first.onAdmission("accepted"); });
+    expect(screen.getByLabelText("Message input")).toHaveValue("B private draft");
+    expect(screen.getByText("b.pdf")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    expect(screen.queryByText("home.pdf")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Browse existing B" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("B private draft");
+    expect(screen.getByText("b.pdf")).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["new home draft", "old home request"])("consumes only the original home revision and document when acceptance arrives late: %s", async (nextDraft) => {
+    const client = makeClient();
+    const create = vi.fn().mockResolvedValue("created-first");
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    const upload = await startDocumentUpload(client, "old.pdf");
+    finishDocumentUpload(client, upload, "old.pdf", `uploads/${upload}/old.pdf`);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "old home request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const first = client.sendMessage.mock.calls[0][3];
+    await act(async () => { first.onAdmission("unknown"); });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("common.dismiss") }));
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "intermediate edit" } });
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: nextDraft } });
+    const added = await startDocumentUpload(client, "new.pdf");
+    finishDocumentUpload(client, added, "new.pdf", `uploads/${added}/new.pdf`);
+    await act(async () => { first.onAdmission("accepted"); });
+    expect(screen.getByLabelText("Message input")).toHaveValue(nextDraft);
+    expect(screen.queryByText("old.pdf")).not.toBeInTheDocument();
+    expect(screen.getByText("new.pdf")).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])("does not send or activate a late first creation after browsing another chat (direct=%s)", async (direct) => {

@@ -90,6 +90,43 @@ afterEach(() => {
 });
 
 describe("ThreadComposer — attachments", () => {
+  it("keeps submitted images after a failed scoped send and consumes only their IDs on late acceptance", async () => {
+    encodeImage.mockImplementation((file) => Promise.resolve(resolveReady(file)));
+    let nextUrl = 0;
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:receipt-${++nextUrl}`);
+    const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      const send = vi.fn().mockResolvedValue(false);
+      const consume = vi.fn(() => false);
+      const view = (scope: string) => <ThreadComposer chatId={scope} draftScope={scope} onSend={send}
+        awaitSendResult onConsumeDraft={consume} />;
+      const ui = render(view("a"));
+      pasteFiles(screen.getByLabelText("Message input"), [pngFile("submitted.png")]);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).not.toBeDisabled());
+      fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+      await act(async () => {});
+      expect(screen.getByText("submitted.png")).toBeInTheDocument();
+      expect(revokeUrl).not.toHaveBeenCalled();
+      const original = send.mock.calls[0][2];
+      pasteFiles(screen.getByLabelText("Message input"), [pngFile("new-a.png")]);
+      await act(async () => {});
+      ui.rerender(view("b"));
+      pasteFiles(screen.getByLabelText("Message input"), [pngFile("new-b.png")]);
+      await act(async () => { original.onAdmission("accepted"); });
+      expect(screen.getByText("new-b.png")).toBeInTheDocument();
+      expect(consume).toHaveBeenCalledTimes(1);
+      expect(revokeUrl).toHaveBeenCalledTimes(1);
+      expect(revokeUrl).toHaveBeenCalledWith("blob:receipt-1");
+      ui.rerender(view("a"));
+      expect(screen.queryByText("submitted.png")).not.toBeInTheDocument();
+      expect(screen.getByText("new-a.png")).toBeInTheDocument();
+      await act(async () => { original.onAdmission("accepted"); });
+      expect(consume).toHaveBeenCalledTimes(1);
+      expect(revokeUrl).toHaveBeenCalledTimes(1);
+      ui.unmount();
+    } finally { createUrl.mockRestore(); revokeUrl.mockRestore(); }
+  });
+
   it("keeps late image encoding in its original draft and releases only consumed previews", async () => {
     let finishA!: (value: EncodeResponse) => void;
     encodeImage.mockImplementation((file) => file.name === "a.png"
