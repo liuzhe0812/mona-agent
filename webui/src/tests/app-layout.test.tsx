@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
@@ -814,20 +815,26 @@ describe("App layout", () => {
     const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
     vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
     vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= 1280,
+      media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    })));
+    const user = userEvent.setup();
+    // happy-dom puts zero-sized resize handles at the default pointer origin.
+    const coords = { clientX: 200, clientY: 200 };
     render(<App />);
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    await act(async () => {
-      fireEvent.click(await screen.findByTitle("Existing chat"));
-    });
+    await user.pointer({ target: await screen.findByTitle("Existing chat"), coords, keys: "[MouseLeft]" });
     expect(screen.getByTitle("Existing chat")).toHaveAttribute("aria-current", "page");
     expect(createChatSpy).not.toHaveBeenCalled();
 
-    fireEvent.pointerDown(within(getSessionPanel()).getByRole("button", { name: "Create conversation" }), {
-      button: 0, ctrlKey: false,
-    });
+    const createTrigger = within(getSessionPanel()).getByRole("button", { name: "Create conversation" });
+    await user.pointer({ target: createTrigger, coords, keys: "[MouseLeft]" });
+    expect(createTrigger).toHaveAttribute("aria-expanded", "true");
     const mona = await screen.findByRole("menuitem", { name: "Mona" });
     expect(createChatSpy).not.toHaveBeenCalled();
-    await act(async () => { fireEvent.click(mona); });
+    await user.pointer({ target: mona, coords, keys: "[MouseLeft]" });
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(document.title).toBe("mona");
