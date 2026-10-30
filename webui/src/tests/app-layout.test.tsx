@@ -489,76 +489,81 @@ describe("App layout", () => {
     expect(createChatSpy).not.toHaveBeenCalled();
   });
 
-  it.skip("shows running and completed session indicators in the sidebar", async () => {
+  it("shows run status only on its session and clears it when the run ends", async () => {
     mockSessions = [
       {
         key: "websocket:chat-a",
         channel: "websocket",
         chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "Working chat",
+        createdAt: null,
+        updatedAt: null,
+        title: "Working chat",
+        preview: "",
       },
       {
         key: "websocket:chat-b",
         channel: "websocket",
         chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Quiet chat",
+        createdAt: null,
+        updatedAt: null,
+        title: "Quiet chat",
+        preview: "",
       },
     ];
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
 
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = getSessionPanel();
-    await waitFor(() =>
-      expect(
-        within(sidebar).getByTitle("Working chat"),
-      ).toBeInTheDocument(),
-    );
+    const working = await within(sidebar).findByTitle("Working chat");
+    const quiet = within(sidebar).getByTitle("Quiet chat");
+    expect(within(sidebar).queryByText("Agent running")).not.toBeInTheDocument();
 
     act(() => {
       for (const handler of runStatusHandlers) handler("chat-a", 12_345);
     });
-    expect(within(sidebar).getByTitle("Agent running")).toBeInTheDocument();
+    expect(within(working).getByText("Agent running")).toBeInTheDocument();
+    expect(within(quiet).queryByText("Agent running")).not.toBeInTheDocument();
 
     act(() => {
       for (const handler of runStatusHandlers) handler("chat-a", null);
     });
-    expect(within(sidebar).queryByTitle("Agent running")).not.toBeInTheDocument();
-    expect(within(sidebar).getByTitle("Agent finished")).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(within(sidebar).getByTitle("Working chat"));
-    });
+    expect(within(sidebar).queryByText("Agent running")).not.toBeInTheDocument();
+    expect(within(sidebar).queryByText("Agent finished")).not.toBeInTheDocument();
     expect(within(sidebar).queryByTitle("Agent finished")).not.toBeInTheDocument();
   });
 
-  it.skip("restores sidebar run indicators after a page reload", async () => {
+  it("restores server-reported runs after reload without reviving completed indicators", async () => {
     mockSessions = [
       {
         key: "websocket:chat-a",
         channel: "websocket",
         chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "Running after reload",
+        createdAt: null,
+        updatedAt: null,
+        title: "Running after reload",
+        preview: "",
         runStartedAt: 12_345,
       },
       {
         key: "websocket:chat-b",
         channel: "websocket",
         chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Completed after reload",
+        createdAt: null,
+        updatedAt: null,
+        title: "Completed after reload",
+        preview: "",
       },
     ];
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     localStorage.setItem(
       "mona-webui.sidebar.completed-runs.v1",
-      JSON.stringify(["chat-b"]),
+      JSON.stringify(["chat-a", "chat-b"]),
     );
 
     render(<App />);
@@ -566,9 +571,12 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = getSessionPanel();
     await waitFor(() =>
-      expect(within(sidebar).getByTitle("Agent running")).toBeInTheDocument(),
+      expect(within(within(sidebar).getByTitle("Running after reload")).getByText("Agent running")).toBeInTheDocument(),
     );
-    expect(within(sidebar).getByTitle("Agent finished")).toBeInTheDocument();
+    expect(within(within(sidebar).getByTitle("Completed after reload")).queryByText("Agent running")).not.toBeInTheDocument();
+    expect(within(sidebar).queryByText("Agent finished")).not.toBeInTheDocument();
+    expect(within(sidebar).queryByTitle("Agent finished")).not.toBeInTheDocument();
+    expect(attachSpy).toHaveBeenCalledTimes(1);
     expect(attachSpy).toHaveBeenCalledWith("chat-a");
   });
 
