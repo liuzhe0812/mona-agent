@@ -635,70 +635,45 @@ describe("App layout", () => {
     expect(attachSpy).not.toHaveBeenCalled();
   });
 
-  it.skip("filters sessions in the centered search dialog", async () => {
+  it("filters all search terms across titles and previews and selects the matched chat", async () => {
     mockSessions = [
-      {
-        key: "websocket:chat-alpha",
-        channel: "websocket",
-        chatId: "chat-alpha",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        title: "Q2 roadmap",
-        preview: "Project planning notes",
-      },
-      {
-        key: "websocket:chat-beta",
-        channel: "websocket",
-        chatId: "chat-beta",
-        createdAt: "2026-04-15T10:00:00Z",
-        updatedAt: "2026-04-15T10:00:00Z",
-        preview: "Travel ideas",
-      },
+      { key: "websocket:chat-alpha", channel: "websocket", chatId: "chat-alpha",
+        createdAt: null, updatedAt: null, title: "Q2 roadmap", preview: "Project planning notes" },
+      { key: "websocket:chat-beta", channel: "websocket", chatId: "chat-beta",
+        createdAt: null, updatedAt: null, title: "Q2 review", preview: "Budget notes" },
+      { key: "websocket:chat-gamma", channel: "websocket", chatId: "chat-gamma",
+        createdAt: null, updatedAt: null, title: "Trip planning", preview: "Travel ideas" },
     ];
-
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     render(<App />);
-
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation");
-    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
-    const newChatButton = within(sidebar).getByRole("button", { name: "New chat" });
-    const searchButton = within(sidebar).getByRole("button", { name: "Search" });
-    expect(
-      newChatButton.compareDocumentPosition(searchButton) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-
-    fireEvent.click(searchButton);
+    const sidebar = getSessionPanel();
+    await within(sidebar).findByTitle("Q2 roadmap");
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
     const dialog = await screen.findByRole("dialog", { name: "Search" });
-    expect(dialog).toHaveClass("origin-center");
-    expect(dialog.className).not.toContain("translate-x");
-    expect(dialog.className).not.toContain("translate-y");
-    expect(within(dialog).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(dialog).getByText("Travel ideas")).toBeInTheDocument();
-    expect(within(dialog).queryByText("websocket")).not.toBeInTheDocument();
-    expect(within(dialog).queryByText("#1")).not.toBeInTheDocument();
+    const textbox = within(dialog).getByRole("textbox", { name: "Search" });
 
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Search" }), {
-      target: { value: "planning" },
+    fireEvent.change(textbox, { target: { value: "  Q2   PLANNING  " } });
+    expect(within(dialog).getByText("Q2 roadmap")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Q2 review")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Trip planning")).not.toBeInTheDocument();
+    expect(within(sidebar).getByTitle("Q2 review")).toBeInTheDocument();
+    expect(within(sidebar).getByTitle("Trip planning")).toBeInTheDocument();
+
+    fireEvent.change(textbox, { target: { value: "q2 missing" } });
+    expect(within(dialog).queryByRole("button", { name: /Q2 roadmap/ })).not.toBeInTheDocument();
+    fireEvent.change(textbox, { target: { value: "road q2" } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: /Q2 roadmap/ }));
     });
 
-    expect(within(dialog).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(dialog).queryByText("Travel ideas")).not.toBeInTheDocument();
-    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
-
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Search" }), {
-      target: { value: "road q2" },
-    });
-
-    expect(within(dialog).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(dialog).queryByText("Travel ideas")).not.toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: /Q2 roadmap/ }));
-
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument(),
-    );
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+    expect(screen.getByTitle("Q2 roadmap")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTitle("Q2 review")).not.toHaveAttribute("aria-current", "page");
+    expect(document.title).toBe("Q2 roadmap · mona");
+    expect(createChatSpy).not.toHaveBeenCalled();
   });
 
   it("opens search from the keyboard shortcut", async () => {
@@ -736,36 +711,47 @@ describe("App layout", () => {
     expect(createChatSpy).not.toHaveBeenCalled();
   });
 
-  it.skip("keeps large sidebars light while search still covers every chat", async () => {
+  it("limits initial sidebar rows while global search can select a tail session", async () => {
     mockSessions = Array.from({ length: 170 }, (_, index) => {
       const chatId = `chat-${index}`;
       return {
         key: `websocket:${chatId}`,
         channel: "websocket" as const,
         chatId,
-        createdAt: new Date(Date.UTC(2026, 3, 16, 12, 0 - index)).toISOString(),
-        updatedAt: new Date(Date.UTC(2026, 3, 16, 12, 0 - index)).toISOString(),
+        createdAt: new Date(Date.UTC(2026, 3, 16, 12, -index)).toISOString(),
+        updatedAt: new Date(Date.UTC(2026, 3, 16, 12, -index)).toISOString(),
         title: index === 169 ? "Hidden target" : `Bulk chat ${index}`,
         preview: "",
       };
     });
 
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     render(<App />);
-
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation");
-    await waitFor(() =>
-      expect(within(sidebar).getByTitle("Bulk chat 0")).toBeInTheDocument(),
-    );
-    expect(within(sidebar).queryByText("Hidden target")).not.toBeInTheDocument();
+    const sidebar = getSessionPanel();
+    await within(sidebar).findByTitle("Bulk chat 0");
+    expect(within(sidebar).getAllByTitle(/^Bulk chat \d+$/)).toHaveLength(160);
+    expect(within(sidebar).getByTitle("Bulk chat 159")).toBeInTheDocument();
+    expect(within(sidebar).queryByTitle("Bulk chat 160")).not.toBeInTheDocument();
+    expect(within(sidebar).queryByTitle("Hidden target")).not.toBeInTheDocument();
     expect(within(sidebar).getByRole("button", { name: "Show 10 more" })).toBeInTheDocument();
 
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Search" }));
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     const dialog = await screen.findByRole("dialog", { name: "Search" });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Search" }), {
       target: { value: "hidden" },
     });
     expect(within(dialog).getByText("Hidden target")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Bulk chat 0")).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Hidden target" }));
+    });
+
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+    expect(document.title).toBe("Hidden target · mona");
+    expect(createChatSpy).not.toHaveBeenCalled();
   });
 
   it.skip("opens a blank start page without creating an empty chat", async () => {
