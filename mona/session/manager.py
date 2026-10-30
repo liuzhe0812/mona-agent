@@ -518,6 +518,10 @@ class SessionSaveError(OSError):
     """Conversation persistence failed; already completed tools must not be replayed."""
 
 
+class SessionLoadError(OSError):
+    """Existing history could not be recovered and must not be overwritten."""
+
+
 class SessionManager:
     """
     Manages conversation sessions.
@@ -669,6 +673,8 @@ class SessionManager:
 
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
+                        if not isinstance(metadata, dict):
+                            raise ValueError("Invalid session metadata")
                         created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
                         updated_at = datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None
                         last_consolidated = data.get("last_consolidated", 0)
@@ -691,6 +697,8 @@ class SessionManager:
             repaired = self._repair(key)
             if repaired is not None:
                 logger.info("Recovered session {} from corrupt file ({} messages)", key, len(repaired.messages))
+            elif path.exists():
+                raise SessionLoadError("Conversation history could not be read; the original file was preserved") from e
             return repaired
 
     def _repair(self, key: str) -> Session | None:
@@ -718,7 +726,13 @@ class SessionManager:
                         skipped += 1
                         continue
 
+                    if not isinstance(data, dict):
+                        skipped += 1
+                        continue
                     if data.get("_type") == "metadata":
+                        if not isinstance(data.get("metadata", {}), dict):
+                            skipped += 1
+                            continue
                         metadata = data.get("metadata", {})
                         if data.get("created_at"):
                             with suppress(ValueError, TypeError):
@@ -897,7 +911,7 @@ class SessionManager:
         """Load a session from disk without caching; intended for read-only HTTP endpoints.
 
         Returns ``{"key", "created_at", "updated_at", "metadata", "messages"}`` or
-        ``None`` when the session file does not exist or fails to parse.
+        ``None`` when the session file does not exist. Unrecoverable files raise.
         """
         path = self._get_session_path(key)
         if not path.exists():
@@ -916,6 +930,8 @@ class SessionManager:
                     data = json.loads(line)
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
+                        if not isinstance(metadata, dict):
+                            raise ValueError("Invalid session metadata")
                         created_at = data.get("created_at")
                         updated_at = data.get("updated_at")
                         stored_key = data.get("key")
@@ -939,6 +955,8 @@ class SessionManager:
             if repaired is not None:
                 logger.info("Recovered read-only session view {} from corrupt file", key)
                 return self._session_payload(repaired)
+            if path.exists():
+                raise SessionLoadError("Conversation history could not be read; the original file was preserved") from e
             return None
 
     def list_sessions(self) -> list[dict[str, Any]]:
