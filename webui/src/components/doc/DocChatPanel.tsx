@@ -37,7 +37,7 @@ export function DocChatPanel({
   const [quote, setQuote] = useState<MessageQuote | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const onStreamingChangeRef = useRef(onStreamingChange);
-  const pendingQueue = usePendingQueue();
+  const pendingQueue = usePendingQueue(chatId);
 
   useEffect(() => {
     onStreamingChangeRef.current = onStreamingChange;

@@ -1358,6 +1358,29 @@ describe("ThreadShell", () => {
     );
   });
 
+  it("keeps pending messages in their original chat when switching conversations", async () => {
+    const client = makeClient();
+    const view = (chatId: string) => wrap(client, <ThreadShell session={session(chatId)} title={chatId} onToggleSidebar={() => {}} />);
+    const { rerender } = render(view("queue-a"));
+    act(() => client._emitChat("queue-a", { event: "goal_status", chat_id: "queue-a", status: "running", started_at: 100 }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "A private pending input" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    expect(screen.getByText("A private pending input")).toBeInTheDocument();
+
+    rerender(view("queue-b"));
+    expect(screen.queryByText("A private pending input")).not.toBeInTheDocument();
+    act(() => client._emitChat("queue-b", { event: "goal_status", chat_id: "queue-b", status: "running", started_at: 100 }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "B private pending input" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+
+    rerender(view("queue-a"));
+    expect(screen.queryByText("B private pending input")).not.toBeInTheDocument();
+    expect(screen.getByText("A private pending input")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    expect(client.sendMessage).toHaveBeenCalledWith("queue-a", "A private pending input", undefined, expect.anything());
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a rejected-send dialog once, keeps the user input, and allows another send without stopping", async () => {
     const client = makeClient();
     const chatId = "chat-rejected-send";

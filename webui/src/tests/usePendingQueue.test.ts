@@ -9,6 +9,29 @@ describe("usePendingQueue", () => {
     expect(result.current.messages).toEqual([]);
   });
 
+  it("isolates queues and delayed updates by their owning conversation", () => {
+    const { result, rerender } = renderHook(({ chatId }) => usePendingQueue(chatId), {
+      initialProps: { chatId: "chat-a" },
+    });
+    act(() => result.current.enqueue("private to A", undefined, { officeSessionId: "office-a" }));
+    const item = result.current.messages[0];
+    const removeFromA = result.current.remove;
+
+    rerender({ chatId: "chat-b" });
+    expect(result.current.messages).toEqual([]);
+    act(() => result.current.enqueue("private to B"));
+    act(() => removeFromA(item.id));
+    expect(result.current.messages.map((message) => message.content)).toEqual(["private to B"]);
+
+    rerender({ chatId: "chat-a" });
+    expect(result.current.messages).toEqual([]);
+    act(() => result.current.enqueue("keep A"));
+    rerender({ chatId: "chat-b" });
+    act(() => result.current.clear());
+    rerender({ chatId: "chat-a" });
+    expect(result.current.messages.map((message) => message.content)).toEqual(["keep A"]);
+  });
+
   it("enqueues a message", () => {
     const { result } = renderHook(() => usePendingQueue());
     act(() => {

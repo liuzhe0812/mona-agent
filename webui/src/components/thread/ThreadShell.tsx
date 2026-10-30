@@ -479,7 +479,7 @@ export function ThreadShell({
     dismissMessageRejection,
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
-  const pendingQueue = usePendingQueue();
+  const pendingQueue = usePendingQueue(chatId);
   const [widgetPrompt, setWidgetPrompt] = useState<{ text: string; requestId: string }>();
   useEffect(() => setWidgetPrompt(undefined), [chatId]);
   const handleWidgetPrompt = useCallback((text: string) => {

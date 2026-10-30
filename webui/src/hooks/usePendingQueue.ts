@@ -12,8 +12,13 @@ export interface PendingMessage {
 
 const MAX_PENDING = 3;
 
-export function usePendingQueue() {
-  const [messages, setMessages] = useState<PendingMessage[]>([]);
+export function usePendingQueue(chatId: string | null = null) {
+  const [queues, setQueues] = useState<Record<string, PendingMessage[]>>({});
+  const scope = chatId ?? "";
+  const messages = queues[scope] ?? [];
+  const setMessages = useCallback((update: (previous: PendingMessage[]) => PendingMessage[]) => {
+    setQueues((previous) => ({ ...previous, [scope]: update(previous[scope] ?? []) }));
+  }, [scope]);
 
   const enqueue = useCallback((content: string, images?: SendImage[], options?: SendOptions): boolean => {
     let accepted = false;
@@ -33,21 +38,21 @@ export function usePendingQueue() {
       ];
     });
     return accepted;
-  }, []);
+  }, [setMessages]);
 
   const remove = useCallback((id: string) => {
     setMessages((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+  }, [setMessages]);
 
   const update = useCallback((id: string, content: string) => {
     setMessages((prev) =>
       prev.map((m) => (m.id === id ? { ...m, content } : m)),
     );
-  }, []);
+  }, [setMessages]);
 
   const clear = useCallback(() => {
-    setMessages([]);
-  }, []);
+    setMessages(() => []);
+  }, [setMessages]);
 
   return { messages, enqueue, remove, update, clear };
 }

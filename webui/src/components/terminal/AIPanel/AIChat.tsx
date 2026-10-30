@@ -51,7 +51,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   const pendingImagesRef = useRef<SendImage[] | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const pendingQueue = usePendingQueue();
+  const pendingQueue = usePendingQueue(chatId);
 
   // Bind this terminal session to a Mona chat. The binding survives panel
   // remounts and SSH reconnects, so the previous conversation is restored
