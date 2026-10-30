@@ -80,7 +80,7 @@ function SavedStyleCard({ token, item, selected, disabled, onSelect, onEdit, onC
       </DropdownMenuContent></DropdownMenu>
     </div>
     <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="max-w-4xl"><DialogHeader><DialogTitle>{item.name}</DialogTitle><DialogDescription>查看风格样片。</DialogDescription></DialogHeader>
-      <div className="aspect-video overflow-hidden bg-muted">{preview ? <iframe title={`${item.name}完整样片`} srcDoc={preview} sandbox="allow-scripts allow-same-origin" className="h-full w-full border-0" /> : <p className="p-4 text-caption text-muted-foreground">{failure ? "样片未能打开，请关闭后重试。" : "正在准备样片…"}</p>}</div>
+      <div className="aspect-video overflow-hidden bg-muted">{preview ? <iframe title={`${item.name}完整样片`} srcDoc={preview} sandbox="allow-scripts" className="h-full w-full border-0" /> : <p className="p-4 text-caption text-muted-foreground">{failure ? "样片未能打开，请关闭后重试。" : "正在准备样片…"}</p>}</div>
       <div className="flex justify-end"><Button size="sm" onClick={() => { onSelect(); setExpanded(false); }}>使用这个风格</Button></div>
     </DialogContent></Dialog>
   </div>;

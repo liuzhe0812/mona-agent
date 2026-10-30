@@ -324,7 +324,7 @@ export function CustomVideoStyleEditor({
                   <iframe
                     title="风格样片预览"
                     srcDoc={sample?.html}
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox="allow-scripts"
                     className="absolute inset-0 h-full w-full border-0"
                   />
                 </div>

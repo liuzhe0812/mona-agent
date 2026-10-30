@@ -2,7 +2,9 @@
 
 import asyncio
 import base64
+import html
 import importlib.util
+import io
 import json
 import re
 import subprocess
@@ -130,13 +132,18 @@ def test_export_renders_the_film_once_and_keeps_both_narration_segments(monkeypa
             assert frame.getpixel((160, 90))[:3] == color
 
 
-async def test_full_preview_seeks_the_continuous_runtime_in_one_iframe(monkeypatch, film, renderer):
+@pytest.mark.parametrize("embedded", [False, True])
+async def test_full_preview_seeks_the_continuous_runtime_in_one_iframe(monkeypatch, film, renderer, embedded):
     import websockets
 
     executable = VideoRuntime().get_chrome_path()
     if not executable:
         pytest.skip("The existing browser runtime is required")
     project, _meta = film
+    composition = project / "composition" / "index.html"
+    composition.write_text(composition.read_text(encoding="utf-8").replace(
+        "<body>", "<body><script>try{window.top.document.documentElement.dataset.sceneEscaped='yes'}catch{}</script>",
+    ).replace("window.lastSeek=seconds;", "window.lastSeek=seconds;window.top.postMessage({type:'preview-test-seek',seconds},'*');"), encoding="utf-8")
     monkeypatch.setattr(server, "_video_projects_dir", lambda: project.parent)
     response = await server.handle_video_project_preview_full(MagicMock(query={"name": "film"}))
     port = renderer._find_free_port()
@@ -146,7 +153,17 @@ async def test_full_preview_seeks_the_continuous_runtime_in_one_iframe(monkeypat
     try:
         socket_url = renderer._read_devtools_url(process, port)
         async with websockets.connect(socket_url, max_size=64 * 1024 * 1024) as socket:
-            page_url = "data:text/html;base64," + base64.b64encode(response.text.encode("utf-8")).decode("ascii")
+            await renderer._cdp_call(socket, "Emulation.setDeviceMetricsOverride", {
+                "width": 320, "height": 180, "deviceScaleFactor": 1, "mobile": False,
+            })
+            preview = response.text
+            reports = "<script>window.previewReports=[];window.addEventListener('message',event=>{if(event.data?.type==='preview-test-seek')window.previewReports.push(event.data.seconds)});</script>"
+            if embedded:
+                preview = preview.replace("</body>", "<script>try{window.top.document.documentElement.dataset.previewEscaped='yes'}catch{}</script></body>")
+                preview = '<html style="height:100%"><head>' + reports + '</head><body style="margin:0;height:100%"><iframe id="preview" sandbox="allow-scripts" style="border:0;width:100%;height:100%" srcdoc="' + html.escape(preview, quote=True) + '"></iframe></body></html>'
+            else:
+                preview = preview.replace("<head>", "<head>" + reports, 1)
+            page_url = "data:text/html;base64," + base64.b64encode(preview.encode("utf-8")).decode("ascii")
             await renderer._cdp_call(socket, "Page.navigate", {"url": page_url})
 
             async def evaluate(expression):
@@ -160,10 +177,17 @@ async def test_full_preview_seeks_the_continuous_runtime_in_one_iframe(monkeypat
                     await asyncio.sleep(.1)
                 raise AssertionError(f"Preview did not become ready: {expression}")
 
-            await wait_for("typeof frames!=='undefined' && frames[0]?.contentWindow.__monaReady===true")
-            assert await evaluate("document.querySelectorAll('.scene-frame').length") == 1
-            await evaluate("window.postMessage({type:'mona-video-seek',seconds:.75}, '*')")
-            await wait_for("frames[0].contentWindow.lastSeek===.75")
-            assert await evaluate("frames[0].contentWindow.document.body.style.background") == "rgb(0, 0, 240)"
+            await wait_for("window.previewReports?.includes(0)")
+            await evaluate("document.getElementById('preview').contentWindow.postMessage({type:'mona-video-seek',seconds:.75}, '*')" if embedded else "window.postMessage({type:'mona-video-seek',seconds:.75}, '*')")
+            await wait_for("window.previewReports.at(-1) === .75")
+            if embedded:
+                await evaluate("window.frames[0].frames[0].postMessage({type:'mona-video-seek',seconds:0}, '*')")
+                await asyncio.sleep(.1)
+                assert await evaluate("window.previewReports.at(-1)") == .75
+            assert await evaluate("document.documentElement.dataset.sceneEscaped") is None
+            assert await evaluate("document.documentElement.dataset.previewEscaped") is None
+            screenshot = await renderer._cdp_call(socket, "Page.captureScreenshot", {"format": "png"})
+            with Image.open(io.BytesIO(base64.b64decode(screenshot["data"]))) as image:
+                assert image.getpixel((160, 70))[:3] == (0, 0, 240)
     finally:
         renderer._terminate_process_tree(process)

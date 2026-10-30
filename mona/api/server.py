@@ -11122,8 +11122,9 @@ def _prepare_scene_html_for_preview(
   }}
   window.addEventListener('resize', fit);
   window.addEventListener('message', async (event) => {{
+    if (event.source !== window.parent) return;
     const data = event.data;
-    if (!data || data.type !== 'mona-video-seek') return;
+    if (!data || data.type !== 'mona-video-seek' || !Number.isFinite(Number(data.seconds))) return;
     const seconds = Math.max(0, Number(data.seconds) || 0);
     if (typeof window.__monaSeek === 'function') {{
       await window.__monaSeek(seconds);
@@ -11297,9 +11298,14 @@ def _build_video_preview_html(
       iframe.className = 'scene-frame';
       iframe.srcdoc = srcdoc;
       iframe.title = 'scene-' + num;
-      iframe.sandbox = 'allow-scripts allow-same-origin';
+      iframe.sandbox = 'allow-scripts';
       iframe.style.zIndex = index;
       if (index === 0) iframe.classList.add('active');
+      iframe.addEventListener('load', () => {{
+        renderAt(playing
+          ? Math.min(totalDuration, masterAudio ? masterAudio.currentTime : elapsedBeforePlay + (performance.now() - startedAt) / 1000)
+          : elapsedBeforePlay);
+      }});
       stage.appendChild(iframe);
       const audio = masterAudio || (audioUrl ? new Audio(audioUrl) : null);
       if (audio) audio.preload = 'auto';
@@ -11333,27 +11339,8 @@ def _build_video_preview_html(
     controls.addEventListener('pointermove', revealControls);
     document.addEventListener('keydown', revealControls);
 
-    async function seekFrame(frame, time) {{
-      try {{
-        const win = frame.contentWindow;
-        if (!win) return;
-        if (typeof win.__monaSeek === 'function') {{
-          await win.__monaSeek(time);
-          return;
-        }}
-        if (win.__timelines) {{
-          for (const key in win.__timelines) {{
-            const timeline = win.__timelines[key];
-            if (timeline && typeof timeline.seek === 'function') timeline.seek(time);
-            if (timeline && typeof timeline.pause === 'function') timeline.pause();
-          }}
-        }}
-        if (typeof win.__monaApplySubtitleTime === 'function') {{
-          win.__monaApplySubtitleTime(time);
-        }}
-      }} catch (_error) {{
-        // The next animation frame retries while the iframe finishes loading.
-      }}
+    function seekFrame(frame, time) {{
+      frame?.contentWindow?.postMessage({{type:'mona-video-seek',seconds:time}}, '*');
     }}
 
     function waitForAudio(audio) {{

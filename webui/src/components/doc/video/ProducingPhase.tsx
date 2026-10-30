@@ -2247,7 +2247,7 @@ export function ProducingPhase({
                     ]);
                   }}
                   className="h-full w-full border-0 bg-background"
-                  sandbox="allow-scripts allow-same-origin"
+                  sandbox="allow-scripts"
                 />
               ) : (
                 <div className="flex h-full items-center justify-center text-ui text-muted-foreground">

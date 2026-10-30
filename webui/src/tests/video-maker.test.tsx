@@ -868,6 +868,7 @@ describe("ProducingPhase", () => {
     expect(within(dialog).queryByTitle("proj 整片预览")).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "重试预览" }));
     expect(await within(dialog).findByTitle("proj 整片预览")).toHaveAttribute("srcdoc", expect.stringContaining("整片画面"));
+    expect(within(dialog).getByTitle("proj 整片预览")).toHaveAttribute("sandbox", "allow-scripts");
   });
 
   it("keeps project settings local until save and discards them on cancel", async () => {

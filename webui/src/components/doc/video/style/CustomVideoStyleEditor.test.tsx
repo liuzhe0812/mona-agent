@@ -107,7 +107,7 @@ describe("CustomVideoStyleEditor", () => {
     });
     render(<CustomVideoStyleEditor {...editorProps} />);
 
-    expect(screen.getByTitle("风格样片预览")).toBeInTheDocument();
+    expect(screen.getByTitle("风格样片预览")).toHaveAttribute("sandbox", "allow-scripts");
     expect(screen.getByText("正在更新样片…")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "停止" })).toHaveLength(1);
     fireEvent.mouseDown(screen.getByRole("tab", { name: "样式" }), { button: 0, ctrlKey: false });
