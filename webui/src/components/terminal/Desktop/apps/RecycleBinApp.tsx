@@ -8,6 +8,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { desktopExec } from "../../ipc";
+import { shellPath } from "./shellQuote";
 
 interface TrashItem {
   name: string;
@@ -58,7 +59,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
   const trashInfo = `${trashBase}/info`;
 
   const ensureTrashDir = useCallback(async () => {
-    await desktopExec(sessionId, `mkdir -p '${trashFiles}' '${trashInfo}'`);
+    await desktopExec(sessionId, `mkdir -p -- ${shellPath(trashFiles)} ${shellPath(trashInfo)}`);
   }, [sessionId, trashFiles, trashInfo]);
 
   const loadTrashItems = useCallback(async () => {
@@ -68,7 +69,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
       await ensureTrashDir();
       const listResult = await desktopExec(
         sessionId,
-        `ls -1 '${trashFiles}' 2>/dev/null`,
+        `ls -1 -- ${shellPath(trashFiles)} 2>/dev/null`,
       );
       const names = listResult
         .split("\n")
@@ -85,13 +86,13 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
         try {
           const infoContent = await desktopExec(
             sessionId,
-            `cat '${trashInfo}/${name}.trashinfo' 2>/dev/null`,
+            `cat -- ${shellPath(`${trashInfo}/${name}.trashinfo`)} 2>/dev/null`,
           );
           const { originalPath, deletedDate } = parseTrashInfo(infoContent);
 
           const typeResult = await desktopExec(
             sessionId,
-            `test -d '${trashFiles}/${name}' && echo "dir" || echo "file"`,
+            `test -d ${shellPath(`${trashFiles}/${name}`)} && echo "dir" || echo "file"`,
           );
           const isDir = typeResult.trim() === "dir";
 
@@ -100,7 +101,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
             try {
               const sizeResult = await desktopExec(
                 sessionId,
-                `stat -c %s '${trashFiles}/${name}' 2>/dev/null`,
+                `stat -c %s -- ${shellPath(`${trashFiles}/${name}`)} 2>/dev/null`,
               );
               const bytes = parseInt(sizeResult.trim());
               if (!isNaN(bytes)) {
@@ -151,7 +152,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
       const restorePath = item.originalPath || `~/${item.name}`;
       await desktopExec(
         sessionId,
-        `mkdir -p "$(dirname '${restorePath}')" && mv '${trashFiles}/${item.trashName}' '${restorePath}' && rm -f '${trashInfo}/${item.trashName}.trashinfo'`,
+        `mkdir -p -- "$(dirname -- ${shellPath(restorePath)})" && mv -- ${shellPath(`${trashFiles}/${item.trashName}`)} ${shellPath(restorePath)} && rm -f -- ${shellPath(`${trashInfo}/${item.trashName}.trashinfo`)}`,
       );
       loadTrashItems();
     } catch (err) {
@@ -164,11 +165,11 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
     if (!confirm(`确定要永久删除 "${item.name}" 吗？此操作不可恢复。`)) return;
     try {
       const rmCmd = item.isDir
-        ? `rm -rf '${trashFiles}/${item.trashName}'`
-        : `rm -f '${trashFiles}/${item.trashName}'`;
+        ? `rm -rf -- ${shellPath(`${trashFiles}/${item.trashName}`)}`
+        : `rm -f -- ${shellPath(`${trashFiles}/${item.trashName}`)}`;
       await desktopExec(
         sessionId,
-        `${rmCmd} && rm -f '${trashInfo}/${item.trashName}.trashinfo'`,
+        `${rmCmd} && rm -f -- ${shellPath(`${trashInfo}/${item.trashName}.trashinfo`)}`,
       );
       loadTrashItems();
     } catch (err) {
@@ -192,11 +193,11 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
     try {
       for (const item of selectedItems) {
         const rmCmd = item.isDir
-          ? `rm -rf '${trashFiles}/${item.trashName}'`
-          : `rm -f '${trashFiles}/${item.trashName}'`;
+          ? `rm -rf -- ${shellPath(`${trashFiles}/${item.trashName}`)}`
+          : `rm -f -- ${shellPath(`${trashFiles}/${item.trashName}`)}`;
         await desktopExec(
           sessionId,
-          `${rmCmd} && rm -f '${trashInfo}/${item.trashName}.trashinfo'`,
+          `${rmCmd} && rm -f -- ${shellPath(`${trashInfo}/${item.trashName}.trashinfo`)}`,
         );
       }
       setSelectedIds(new Set());
@@ -210,7 +211,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
     try {
       await desktopExec(
         sessionId,
-        `rm -rf '${trashFiles}'/* '${trashInfo}'/* 2>/dev/null; rm -rf '${trashFiles}'/.[!.]* '${trashInfo}'/.[!.]* 2>/dev/null`,
+        `rm -rf -- ${shellPath(trashFiles)}/* ${shellPath(trashInfo)}/* 2>/dev/null; rm -rf -- ${shellPath(trashFiles)}/.[!.]* ${shellPath(trashInfo)}/.[!.]* 2>/dev/null`,
       );
       setConfirmEmpty(false);
       loadTrashItems();

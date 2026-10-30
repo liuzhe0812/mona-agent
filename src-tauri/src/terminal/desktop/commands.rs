@@ -31,6 +31,21 @@ fn safe_parse_float(val: &str) -> f64 {
     val.trim().parse().unwrap_or(0.0)
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn quotes_remote_shell_arguments() {
+        assert_eq!(shell_quote("a'b;$(printf injected)"), "'a'\"'\"'b;$(printf injected)'");
+        assert_eq!(shell_quote("-file"), "'-file'");
+    }
+}
+
 async fn get_desktop_client(
     state: &State<'_, TerminalState>,
     session_id: &str,
@@ -153,7 +168,7 @@ pub async fn desktop_list_files(
     let cmd = if path == "/" || path.is_empty() {
         r#"ls -la --time-style=long-iso /"#.to_string()
     } else {
-        format!(r#"ls -la --time-style=long-iso '{}'"#, path)
+        format!(r#"ls -la --time-style=long-iso -- {}"#, shell_quote(&path))
     };
 
     let output = exec_command(&client, &cmd).await?;
@@ -248,7 +263,7 @@ pub async fn desktop_get_file_content(
     path: String,
 ) -> Result<DesktopFileContentResult, String> {
     let client = get_desktop_client(&state, &session_id).await?;
-    let cmd = format!("cat '{}'", path);
+    let cmd = format!("cat -- {}", shell_quote(&path));
     let content = exec_command(&client, &cmd).await?;
     Ok(DesktopFileContentResult { content })
 }
@@ -261,8 +276,7 @@ pub async fn desktop_save_file_content(
     content: String,
 ) -> Result<(), String> {
     let client = get_desktop_client(&state, &session_id).await?;
-    let escaped_content = content.replace('\\', "\\\\").replace("'", "'\"'\"'");
-    let cmd = format!("echo '{}' > '{}'", escaped_content, path);
+    let cmd = format!("printf '%s' {} > {}", shell_quote(&content), shell_quote(&path));
     exec_command(&client, &cmd).await?;
     Ok(())
 }

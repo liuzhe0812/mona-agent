@@ -28,6 +28,7 @@ import {
   desktopGetDisks,
 } from "../../ipc";
 import type { DesktopFileItem, DesktopDiskInfo } from "../../ipc";
+import { shellQuote } from "./shellQuote";
 
 interface FileManagerAppProps {
   sessionId: string;
@@ -192,7 +193,7 @@ export function FileManagerApp({
     if (!ids.length) return;
     if (!confirm(`确定要将 ${ids.length} 个项目移到回收站吗？`)) return;
     try {
-      await desktopExec(sessionId, `mkdir -p '${trashFilesPath}' '${trashInfoPath}'`);
+      await desktopExec(sessionId, `mkdir -p -- ${shellQuote(trashFilesPath)} ${shellQuote(trashInfoPath)}`);
       for (const id of ids) {
         const file = files.find((f) => f.path === id);
         if (!file) continue;
@@ -201,7 +202,7 @@ export function FileManagerApp({
         const date = new Date().toISOString();
         await desktopExec(
           sessionId,
-          `echo "[Trash Info]" > '${trashInfoPath}/${trashName}.trashinfo' && echo "Path=${file.path}" >> '${trashInfoPath}/${trashName}.trashinfo' && echo "DeletionDate=${date}" >> '${trashInfoPath}/${trashName}.trashinfo' && mv '${file.path}' '${trashFilesPath}/${trashName}'`,
+          `printf '%s\n' ${shellQuote("[Trash Info]")} ${shellQuote(`Path=${file.path}`)} ${shellQuote(`DeletionDate=${date}`)} > ${shellQuote(`${trashInfoPath}/${trashName}.trashinfo`)} && mv -- ${shellQuote(file.path)} ${shellQuote(`${trashFilesPath}/${trashName}`)}`,
         );
       }
       loadDirectory(currentPath);
@@ -214,7 +215,7 @@ export function FileManagerApp({
   const handleNewFolder = async () => {
     if (!newState) return;
     try {
-      await desktopExec(sessionId, `mkdir -p '${currentPath === "/" ? "" : currentPath}/${newState.name}'`);
+      await desktopExec(sessionId, `mkdir -p -- ${shellQuote(`${currentPath === "/" ? "" : currentPath}/${newState.name}`)}`);
       loadDirectory(currentPath);
     } catch (err) {
       setError(String(err));
@@ -225,7 +226,7 @@ export function FileManagerApp({
   const handleNewFile = async () => {
     if (!newState) return;
     try {
-      await desktopExec(sessionId, `touch '${currentPath === "/" ? "" : currentPath}/${newState.name}'`);
+      await desktopExec(sessionId, `touch -- ${shellQuote(`${currentPath === "/" ? "" : currentPath}/${newState.name}`)}`);
       loadDirectory(currentPath);
     } catch (err) {
       setError(String(err));
@@ -237,7 +238,7 @@ export function FileManagerApp({
     if (!renameState) return;
     try {
       const newPath = `${currentPath === "/" ? "" : currentPath}/${renameState.name}`;
-      await desktopExec(sessionId, `mv '${renameState.id}' '${newPath}'`);
+      await desktopExec(sessionId, `mv -- ${shellQuote(renameState.id)} ${shellQuote(newPath)}`);
       loadDirectory(currentPath);
     } catch (err) {
       setError(String(err));
@@ -249,8 +250,8 @@ export function FileManagerApp({
     if (!archiveState) return;
     try {
       const archiveName = `${archiveState.name}.tar.gz`;
-      const fileNames = archiveState.files.map((p) => `'${p.split("/").pop()}'`).join(" ");
-      await desktopExec(sessionId, `cd '${currentPath}' && tar -czf '${archiveName}' ${fileNames}`);
+      const fileNames = archiveState.files.map((p) => shellQuote(p.split("/").pop() || "")).join(" ");
+      await desktopExec(sessionId, `cd -- ${shellQuote(currentPath)} && tar -czf ${shellQuote(archiveName)} -- ${fileNames}`);
       loadDirectory(currentPath);
     } catch (err) {
       setError(String(err));
@@ -282,11 +283,11 @@ export function FileManagerApp({
       for (const file of clipboard.files) {
         const targetPath = `${currentPath === "/" ? "" : currentPath}/${file.name}`;
         if (clipboard.op === "cut") {
-          await desktopExec(sessionId, `mv '${file.path}' '${targetPath}'`);
+          await desktopExec(sessionId, `mv -- ${shellQuote(file.path)} ${shellQuote(targetPath)}`);
         } else {
           const cmd = file.isDir
-            ? `cp -r '${file.path}' '${targetPath}'`
-            : `cp '${file.path}' '${targetPath}'`;
+            ? `cp -r -- ${shellQuote(file.path)} ${shellQuote(targetPath)}`
+            : `cp -- ${shellQuote(file.path)} ${shellQuote(targetPath)}`;
           await desktopExec(sessionId, cmd);
         }
       }
