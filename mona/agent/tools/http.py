@@ -205,7 +205,7 @@ class HttpTool(Tool):
         try:
             async with httpx.AsyncClient(
                 proxy=self.config.proxy,
-                follow_redirects=True,
+                follow_redirects=False,
                 max_redirects=_MAX_REDIRECTS,
                 timeout=timeout_s,
             ) as client:
@@ -216,6 +216,26 @@ class HttpTool(Tool):
                     content=req_body,
                     params=params,
                 )
+                for _ in range(_MAX_REDIRECTS):
+                    redirect = response.next_request
+                    if redirect is None:
+                        break
+                    target = str(redirect.url)
+                    ok, err = _validate_url_safe(target)
+                    if not ok:
+                        return json.dumps(
+                            {"error": f"Redirect blocked: {err}", "url": url, "finalUrl": target},
+                            ensure_ascii=False,
+                        )
+                    source_url = response.request.url
+                    if (source_url.scheme, source_url.host, source_url.port) != (
+                        redirect.url.scheme, redirect.url.host, redirect.url.port,
+                    ):
+                        for name in ("authorization", "cookie", "x-api-key", "proxy-authorization"):
+                            redirect.headers.pop(name, None)
+                    response = await client.send(redirect, follow_redirects=False)
+                if response.next_request is not None:
+                    raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.", request=response.request)
         except httpx.TimeoutException:
             return json.dumps(
                 {"error": f"Request timed out after {timeout_s}s", "url": url},
@@ -228,16 +248,7 @@ class HttpTool(Tool):
                 ensure_ascii=False,
             )
 
-        # Validate the final resolved URL too (redirect target)
-        from mona.security.network import validate_resolved_url
-
         final_url = str(response.url)
-        redir_ok, redir_err = validate_resolved_url(final_url)
-        if not redir_ok:
-            return json.dumps(
-                {"error": f"Redirect blocked: {redir_err}", "url": url, "finalUrl": final_url},
-                ensure_ascii=False,
-            )
 
         content_type = response.headers.get("content-type", "")
         body_text, truncated = _format_body(
