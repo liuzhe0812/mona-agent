@@ -9,7 +9,6 @@ import { ClientProvider } from "@/providers/ClientProvider";
 
 const mocks = vi.hoisted(() => ({
   buildVideoDownloadUrl: vi.fn(() => "http://download/video.mp4"),
-  buildVideoPreviewFullUrl: vi.fn(() => "http://preview/full"),
   cancelVideoExport: vi.fn(),
   createVideoReview: vi.fn(),
   exportVideoProject: vi.fn(),
@@ -17,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   fetchScenePreviewHtml: vi.fn(),
   fetchVideoExportStatus: vi.fn(),
   fetchVideoExportPreflight: vi.fn(),
+  fetchVideoPreviewFullHtml: vi.fn(),
   fetchVideoProject: vi.fn(),
   fetchVideoProjectVersions: vi.fn(),
   fetchVideoReviews: vi.fn(),
@@ -122,7 +122,7 @@ function project(meta: VideoTtsConfig = { narrationEnabled: false }) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.buildVideoDownloadUrl.mockReturnValue("http://download/video.mp4");
-  mocks.buildVideoPreviewFullUrl.mockReturnValue("http://preview/full");
+  mocks.fetchVideoPreviewFullHtml.mockResolvedValue("<html><body>full preview</body></html>");
   mocks.getApiBase.mockResolvedValue("http://api");
   mocks.getServicesHttpBase.mockResolvedValue("http://services");
   mocks.fetchVideoProject.mockResolvedValue(project());
@@ -357,10 +357,11 @@ describe("ProducingPhase playback and narration settings", () => {
   });
 
   it("shows full-preview playback errors only from its own frame", async () => {
-    mocks.buildVideoPreviewFullUrl.mockReturnValue("data:text/html,preview");
     render(wrap(<ProducingPhase projectName="proj" />));
     fireEvent.click(await screen.findByRole("button", { name: "预览整片" }));
     const frame = await screen.findByTitle("proj 整片预览");
+    expect(mocks.fetchVideoPreviewFullHtml).toHaveBeenCalledWith("tok", "proj", expect.any(AbortSignal));
+    expect(frame).toHaveAttribute("srcdoc", "<html><body>full preview</body></html>");
 
     await act(async () => {
       window.dispatchEvent(
