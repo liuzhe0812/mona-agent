@@ -2061,6 +2061,7 @@ class WebSocketChannel(BaseChannel):
             HistoryRevisionChangedError,
             build_cached_thread_response,
         )
+        from mona.webui.transcript import ensure_transcript_owner
 
         started = time.perf_counter()
         if not self._check_api_token(request):
@@ -2072,6 +2073,9 @@ class WebSocketChannel(BaseChannel):
             return _http_error(404, "session not found")
         query = _parse_query(request.path)
         try:
+            if self._session_manager is not None:
+                session_path = self._session_manager._get_session_path(decoded_key)
+                ensure_transcript_owner(decoded_key, session_path)
             limit = int(_query_first(query, "limit")) if "limit" in query else None
             before = int(_query_first(query, "before")) if "before" in query else None
             data = build_cached_thread_response(

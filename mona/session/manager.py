@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -609,15 +610,68 @@ class SessionManager:
     @staticmethod
     def safe_key(key: str) -> str:
         """Public helper used by HTTP handlers to map an arbitrary key to a stable filename stem."""
+        if len(key) <= 180 and re.fullmatch(r"[a-z0-9-]+:[a-z0-9_.-]+", key):
+            return key.replace(":", "_")
+        return "~s-" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def legacy_safe_key(key: str) -> str:
         return safe_filename(key.replace(":", "_"))
 
+    @staticmethod
+    def _stored_session_key(path: Path) -> str | None:
+        try:
+            with open(path, encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(record, dict) and record.get("_type") == "metadata":
+                        return record.get("key")
+        except (OSError, UnicodeError) as exc:
+            raise SessionLoadError("Conversation history could not be read; the original file was preserved") from exc
+        return None
+
     def _get_session_path(self, key: str) -> Path:
-        """Get the file path for a session."""
-        return self.sessions_dir / f"{self.safe_key(key)}.jsonl"
+        """Resolve one session, migrating only legacy files with proven ownership."""
+        path = self.sessions_dir / f"{self.safe_key(key)}.jsonl"
+        if path.exists():
+            stored_key = self._stored_session_key(path)
+            if stored_key is not None and stored_key != key:
+                raise SessionLoadError("Conversation history belongs to a different session; the original file was preserved")
+            if stored_key is None and key.startswith("websocket:"):
+                from mona.webui.transcript import ensure_transcript_owner
+
+                ensure_transcript_owner(key, path)
+            return path
+        legacy_name = self.legacy_safe_key(key) + ".jsonl"
+        sources = (self.sessions_dir / legacy_name, self.legacy_sessions_dir / legacy_name) if len(legacy_name) <= 240 else ()
+        for source in sources:
+            if source == path or not source.exists():
+                continue
+            stored_key = self._stored_session_key(source)
+            if stored_key is None:
+                raise SessionLoadError("Legacy conversation ownership could not be verified; the original file was preserved")
+            if stored_key != key:
+                continue
+            from mona.webui.thread_disk import migrate_legacy_webui_thread
+
+            try:
+                migrate_legacy_webui_thread(key)
+                shutil.move(str(source), str(path))
+            except OSError as exc:
+                raise SessionLoadError("Conversation history could not be migrated; the original files were preserved") from exc
+            break
+        if key.startswith("websocket:"):
+            from mona.webui.transcript import ensure_transcript_owner
+
+            ensure_transcript_owner(key, path)
+        return path
 
     def _get_legacy_session_path(self, key: str) -> Path:
         """Legacy global session path (~/.mona/sessions/)."""
-        return self.legacy_sessions_dir / f"{self.safe_key(key)}.jsonl"
+        return self.legacy_sessions_dir / f"{self.legacy_safe_key(key)}.jsonl"
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -645,15 +699,6 @@ class SessionManager:
         """Load a session from disk."""
         path = self._get_session_path(key)
         if not path.exists():
-            legacy_path = self._get_legacy_session_path(key)
-            if legacy_path.exists():
-                try:
-                    shutil.move(str(legacy_path), str(path))
-                    logger.info("Migrated session {} from legacy path", key)
-                except Exception:
-                    logger.exception("Failed to migrate session {}", key)
-
-        if not path.exists():
             return None
 
         try:
@@ -672,6 +717,8 @@ class SessionManager:
                     data = json.loads(line)
 
                     if data.get("_type") == "metadata":
+                        if data.get("key") not in (None, key):
+                            raise SessionLoadError("Conversation history belongs to a different session")
                         metadata = data.get("metadata", {})
                         if not isinstance(metadata, dict):
                             raise ValueError("Invalid session metadata")
@@ -730,6 +777,8 @@ class SessionManager:
                         skipped += 1
                         continue
                     if data.get("_type") == "metadata":
+                        if data.get("key") not in (None, key):
+                            raise SessionLoadError("Conversation history belongs to a different session")
                         if not isinstance(data.get("metadata", {}), dict):
                             skipped += 1
                             continue
@@ -882,7 +931,7 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
-        self._list_summary_cache.pop(self._get_session_path(key), None)
+        self._list_summary_cache.pop(self.sessions_dir / f"{self.safe_key(key)}.jsonl", None)
         self._list_summary_generation = object()
 
     def delete_session(self, key: str, *, prevent_recreation: bool = False) -> bool:
@@ -929,6 +978,8 @@ class SessionManager:
                         continue
                     data = json.loads(line)
                     if data.get("_type") == "metadata":
+                        if data.get("key") not in (None, key):
+                            raise SessionLoadError("Conversation history belongs to a different session")
                         metadata = data.get("metadata", {})
                         if not isinstance(metadata, dict):
                             raise ValueError("Invalid session metadata")
@@ -980,6 +1031,7 @@ class SessionManager:
                         data = json.loads(first_line)
                         if data.get("_type") == "metadata":
                             key = data.get("key") or path.stem.replace("_", ":", 1)
+                            fallback_key = key
                             metadata = data.get("metadata", {})
                             if not isinstance(metadata, dict):
                                 metadata = {}

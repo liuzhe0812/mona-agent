@@ -13,7 +13,7 @@ from loguru import logger
 
 from mona.agent.partners import MONA_AGENT_ID
 from mona.config.paths import get_webui_dir
-from mona.session.manager import SessionManager
+from mona.session.manager import SessionLoadError, SessionManager
 
 WEBUI_TRANSCRIPT_SCHEMA_VERSION = 3
 _MAX_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
@@ -73,6 +73,41 @@ def _infer_media_kind(name: str, url: str) -> str:
 def webui_transcript_path(session_key: str) -> Path:
     stem = SessionManager.safe_key(session_key)
     return get_webui_dir() / f"{stem}.jsonl"
+
+
+def _stored_transcript_key(path: Path) -> str | None:
+    with open(path, encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                return record.get("_session_key")
+    return None
+
+
+def ensure_transcript_owner(session_key: str, session_path: Path) -> None:
+    path = webui_transcript_path(session_key)
+    if not path.is_file():
+        return
+    if session_path.is_file() and SessionManager._stored_session_key(session_path) == session_key:
+        return
+    stored_key = _stored_transcript_key(path)
+    if stored_key == session_key:
+        return
+    raise SessionLoadError("Display history ownership could not be verified; the original file was preserved")
+
+
+def migrate_legacy_transcript(session_key: str) -> None:
+    """Called only after the owning legacy session metadata was verified."""
+    source = get_webui_dir() / f"{SessionManager.legacy_safe_key(session_key)}.jsonl"
+    target = webui_transcript_path(session_key)
+    if source == target or not source.is_file():
+        return
+    if target.exists():
+        raise SessionLoadError("Both legacy and current display histories exist; the original files were preserved")
+    source.rename(target)
 
 
 def read_transcript_lines(
@@ -173,6 +208,7 @@ def compact_transcript_object(obj: dict[str, Any]) -> dict[str, Any]:
 
 def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
     persisted = dict(obj)
+    persisted["_session_key"] = session_key
     persisted.setdefault("_event_id", uuid.uuid4().hex)
     persisted.setdefault("_recorded_at", time.time())
     raw = json.dumps(compact_transcript_object(persisted), ensure_ascii=False, separators=(",", ":"))
@@ -193,6 +229,7 @@ def write_transcript_objects(session_key: str, objects: list[dict[str, Any]]) ->
     prepared: list[dict[str, Any]] = []
     for obj in objects:
         persisted = dict(obj)
+        persisted["_session_key"] = session_key
         persisted.setdefault("_event_id", uuid.uuid4().hex)
         persisted.setdefault("_recorded_at", time.time())
         prepared.append(persisted)
