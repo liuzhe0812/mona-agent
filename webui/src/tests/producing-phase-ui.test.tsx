@@ -226,26 +226,31 @@ describe("ProducingPhase playback and narration settings", () => {
     mocks.fetchVideoProject.mockResolvedValue(project({ narrationEnabled: true }));
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
-      scenes: [scene, { ...scene, index: 2, title: "第二幕" }],
+      scenes: [
+        { ...scene, htmlPath: "scene-1.html" },
+        { ...scene, index: 2, title: "第二幕", htmlPath: "scene-2.html" },
+      ],
     });
-    mocks.fetchSceneNarrationBytes.mockResolvedValue(
+    mocks.fetchSceneAudioMixBytes.mockResolvedValue(
       new Blob(["audio"], { type: "audio/mpeg" }),
     );
 
     try {
-      render(wrap(<ProducingPhase projectName="proj" />));
+      const { container } = render(wrap(<ProducingPhase projectName="proj" />));
       const playButton = await screen.findByRole("button", {
         name: "播放当前场景",
       });
-      await waitFor(() => expect(mocks.fetchSceneNarrationBytes).toHaveBeenCalledOnce());
+      await waitFor(() => expect(container.querySelector("audio")).toHaveAttribute("src", "blob:scene-1"));
+      expect(mocks.fetchSceneAudioMixBytes).toHaveBeenCalledWith("tok", "proj", 1, expect.any(AbortSignal));
       await waitFor(() => expect(playButton).toBeEnabled());
       fireEvent.click(playButton);
       await waitFor(() => expect(play).toHaveBeenCalledOnce());
 
       fireEvent.click(screen.getByRole("option", { name: /第二幕/ }));
       await waitFor(() =>
-        expect(mocks.fetchSceneNarrationBytes).toHaveBeenCalledTimes(2),
+        expect(container.querySelector("audio")).toHaveAttribute("src", "blob:scene-2"),
       );
+      expect(mocks.fetchSceneAudioMixBytes).toHaveBeenCalledWith("tok", "proj", 2, expect.any(AbortSignal));
       await waitFor(() =>
         expect(screen.getByRole("button", { name: "播放当前场景" })).toBeEnabled(),
       );
