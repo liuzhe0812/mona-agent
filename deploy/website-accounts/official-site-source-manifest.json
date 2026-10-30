@@ -1,0 +1,46 @@
+{
+  "scope": "Account additions only; preserve parent official-site ignore rule",
+  "hash_basis": "UTF-8 with LF line endings",
+  "files": {
+    "official-site/app/account/AccountNav.tsx": {
+      "before_sha256": null,
+      "after_sha256": "dc573da3e35f59c531be34db3be2f090cbad80c525f06822b0a8af9f02feaa4e"
+    },
+    "official-site/app/account/account.css": {
+      "before_sha256": null,
+      "after_sha256": "2142e3818c9160f614b7e18be99952d849cf5a21eff01e859d0a418bfd137b32"
+    },
+    "official-site/app/account/client.ts": {
+      "before_sha256": null,
+      "after_sha256": "d3a2b3b5329a61e53578ed5e7c8a3c11cec59fba0c328a1562c6efa100c78ec9"
+    },
+    "official-site/app/account/page.tsx": {
+      "before_sha256": null,
+      "after_sha256": "ab30480b41c33abeec5c32d20238e35d9854e74f9113ab505ac75a382d8a4c76"
+    },
+    "official-site/app/account/wechat/page.tsx": {
+      "before_sha256": null,
+      "after_sha256": "af2ff62cf97a8618f1856e1a64dd7ecd6efc824cd7bf15afd00bb254409f54b2"
+    },
+    "official-site/app/page.tsx": {
+      "before_sha256": "0818d09362e8c6f6e78ddce37aa5b8d40e0d5a28e4ebae29f898233c332461e2",
+      "after_sha256": "3b870933bddf9993b92be7da77978da75cbdbf9a2a4d4c014a6b7928346906fe"
+    },
+    "official-site/static-index.html": {
+      "before_sha256": "878f50b217d15957e952ba1cd5acc0f299c87fba3172bde3b6fea1c83f2f09cf",
+      "after_sha256": "37d2d101e2cd77daa2eff6f3baf935ef7de2d9b926e179a0acafb15690f6f48a"
+    },
+    "official-site/static-main.tsx": {
+      "before_sha256": "6c0357c93b1e4e3ca132ce48521c61a9677295cd265b06c79279718e4eceac88",
+      "after_sha256": "a243b87657986c364de1b45001cf8f76c5e1e3e150e4258c24ae6bb1820cfd8b"
+    },
+    "official-site/tests/account-browser.test.mjs": {
+      "before_sha256": null,
+      "after_sha256": "9db5aac54e90054b998a6c98953fa0fa90803ad3f18226f9184908cbf96f3afd"
+    },
+    "official-site/tests/browser.test.mjs": {
+      "before_sha256": "a8f6039de0b90fe12106529d3cb27efae284b077edc379248e7f49ee06e0c0b7",
+      "after_sha256": "591db4576fcaf0d258e958f34987517ea24c4600f6e2a33bfc67dc5a03c49b7b"
+    }
+  }
+}

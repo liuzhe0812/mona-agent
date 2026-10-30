@@ -1,0 +1,746 @@
+diff --git a/official-site/app/account/AccountNav.tsx b/official-site/app/account/AccountNav.tsx
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/AccountNav.tsx
+@@ -0,0 +1,16 @@
++"use client";
++import { useEffect, useState } from "react";
++import { readSession } from "./client";
++import "./account.css";
++
++export function AccountNav() {
++  const [name, setName] = useState("");
++  useEffect(() => {
++    const refresh = () => setName(readSession()?.user.display_name || "");
++    refresh();
++    window.addEventListener("mona-account-changed", refresh);
++    window.addEventListener("pageshow", refresh);
++    return () => { window.removeEventListener("mona-account-changed", refresh); window.removeEventListener("pageshow", refresh); };
++  }, []);
++  return <a className="account-nav-entry" href="/account" aria-label={name ? "账户信息" : "登录或注册"}><span>{name || "登录 / 注册"}</span></a>;
++}
+diff --git a/official-site/app/account/account.css b/official-site/app/account/account.css
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/account.css
+@@ -0,0 +1,47 @@
++.account-shell { min-height: 100svh; background: var(--ink); color: var(--paper); font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
++.account-topbar { max-width: 1120px; margin: auto; display: flex; align-items: center; justify-content: space-between; padding: 24px; border-bottom: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
++.account-brand { display: inline-flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 800; letter-spacing: .08em; }
++.account-brand img { width: 38px; height: 38px; border-radius: 10px; }
++.account-back { font-size: 14px; opacity: .75; }
++.account-layout { width: min(100% - 40px, 1040px); margin: auto; padding: 72px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 80px; align-items: start; }
++.account-intro { padding-top: 32px; }
++.account-kicker { color: var(--red); font-size: 13px; font-weight: 700; letter-spacing: .15em; }
++.account-intro h1 { margin: 24px 0; font-size: clamp(32px, 4vw, 48px); line-height: 1.25; letter-spacing: -.03em; }
++.account-intro p { max-width: 360px; font-size: 16px; line-height: 1.9; opacity: .72; }
++.account-panel { padding: 32px; border: 1px solid color-mix(in srgb, var(--paper) 18%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--paper) 4%, var(--ink)); }
++.account-panel h2 { margin: 0 0 24px; font-size: 24px; }
++.account-tabs { display: flex; gap: 22px; margin-bottom: 28px; border-bottom: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
++.account-tabs button { background: none; color: inherit; border: 0; padding: 0 0 14px; cursor: pointer; opacity: .55; font-size: 18px; }
++.account-tabs button[aria-selected="true"] { opacity: 1; box-shadow: 0 2px 0 var(--red); }
++.account-form { display: grid; gap: 18px; }
++.account-form fieldset { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
++.account-field { display: grid; gap: 8px; font-size: 14px; }
++.account-field input { width: 100%; min-width: 0; height: 46px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; background: var(--ink); color: var(--paper); font: inherit; }
++.account-field input:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
++.account-code { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
++.account-button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; color: var(--paper); background: transparent; cursor: pointer; font-size: 14px; text-align: center; }
++.account-button.primary { border-color: var(--red); background: var(--red); color: var(--paper); font-weight: 700; }
++.account-button:disabled, .account-tabs button:disabled { opacity: .4; cursor: not-allowed; }
++.account-link { background: none; border: 0; color: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 4px; padding: 0; cursor: pointer; }
++.account-link:disabled { opacity: .4; cursor: not-allowed; }
++.account-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
++.account-help { margin: 0; font-size: 13px; line-height: 1.7; opacity: .65; }
++.account-provider { display: grid; gap: 12px; border-top: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); margin-top: 24px; padding-top: 24px; }
++.account-provider svg { width: 22px; height: 22px; }
++.account-success { font-size: 13px; line-height: 1.6; color: var(--paper); padding: 10px 0; }
++.account-radio { display: flex; gap: 16px; font-size: 14px; }
++.account-radio label { display: flex; align-items: center; gap: 6px; }
++.account-profile-summary { display: flex; gap: 14px; align-items: center; margin-bottom: 24px; }
++.account-avatar { width: 48px; height: 48px; display: grid; place-items: center; background: var(--red); border-radius: 50%; font-weight: 700; font-size: 22px; }
++.account-profile-summary strong { display: block; margin-bottom: 4px; overflow-wrap: anywhere; }
++.account-profile-summary span { font-size: 13px; opacity: .7; overflow-wrap: anywhere; }
++.account-section { margin-top: 26px; padding-top: 24px; border-top: 1px solid color-mix(in srgb, var(--paper) 16%, transparent); }
++.account-section h3 { font-size: 16px; margin: 0 0 16px; }
++.account-feedback { width: min(420px, calc(100% - 32px)); border: 1px solid color-mix(in srgb, var(--paper) 30%, transparent); border-radius: 12px; background: var(--ink); color: var(--paper); padding: 28px; font-family: "Microsoft YaHei", sans-serif; }
++.account-feedback::backdrop { background: color-mix(in srgb, var(--ink) 72%, transparent); }
++.account-feedback h2 { margin: 0 0 14px; font-size: 20px; }
++.account-feedback p { margin: 0 0 24px; line-height: 1.8; font-size: 14px; }
++.account-nav-entry { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid currentColor; border-radius: 999px; padding: 7px 14px; font-family: "Microsoft YaHei", sans-serif; font-size: 13px; white-space: nowrap; }
++.account-nav-entry span { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
++@media (max-width: 800px) { .account-layout { grid-template-columns: 1fr; max-width: 480px; gap: 24px; padding-top: 32px; } .account-intro { padding: 0; } .account-intro h1 { margin: 12px 0; font-size: 32px; } .account-intro p { display: none; } .account-panel { padding: 24px; } }
++@media (prefers-reduced-motion: reduce) { .account-shell *, .account-feedback { scroll-behavior: auto; } }
+diff --git a/official-site/app/account/client.ts b/official-site/app/account/client.ts
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/client.ts
+@@ -0,0 +1,102 @@
++export type AccountProfile = { id: string; email: string; account: string | null; display_name: string; wechat_bound: boolean };
++export type AccountSession = { token: string; user: AccountProfile };
++export type LoginReply = { access_token: string; user: AccountProfile; expires_in_seconds: number };
++export type Capabilities = { enabled: boolean; email_registration: boolean; wechat_login: boolean };
++export type EmailProof = { email: string; challenge_id: string; code: string };
++export type WeChatProof = { state: string; verifier: string; expiresAt: number };
++export const ACCOUNT_SESSION_KEY = "mona-website-session-v1";
++const OAUTH_KEY = "mona-website-wechat-v1";
++
++export class AccountError extends Error {
++  constructor(message: string, readonly status = 0, readonly code = "network_error") { super(message); }
++}
++
++export async function accountRequest<T>(route: string, options: { method?: string; body?: unknown; token?: string; signal?: AbortSignal } = {}): Promise<T> {
++  const headers = new Headers({ Accept: "application/json" });
++  if (options.body !== undefined) headers.set("Content-Type", "application/json");
++  if (options.token) headers.set("Authorization", `Bearer ${options.token}`);
++  let response: Response;
++  try {
++    response = await fetch(`/auth/web/${route}`, { method: options.method || "GET", headers, credentials: "omit",
++      cache: "no-store", redirect: "error", signal: options.signal,
++      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}) });
++  } catch (error) {
++    if (error instanceof DOMException && error.name === "AbortError") throw error;
++    throw new AccountError("连接中断，操作结果未确认。请检查账户状态后重试，不要重复提交。");
++  }
++  if (!response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) {
++    throw new AccountError("账号服务暂不可用，请稍后重试。", 503, "service_unavailable");
++  }
++  const value = await response.json();
++  if (!response.ok) {
++    const fallback = response.status === 422 ? "请检查表单内容后重试。" : response.status === 429 ? "操作过于频繁，请稍后再试。" : "操作未完成，请稍后重试。";
++    throw new AccountError(typeof value?.message === "string" ? value.message : fallback, response.status,
++      typeof value?.error === "string" ? value.error : "request_failed");
++  }
++  return value as T;
++}
++
++export function readSession(): AccountSession | null {
++  if (typeof window === "undefined") return null;
++  try {
++    const value = JSON.parse(sessionStorage.getItem(ACCOUNT_SESSION_KEY) || "null");
++    return typeof value?.token === "string" && value.token.length > 0 && typeof value?.user?.id === "string" ? value : null;
++  } catch { return null; }
++}
++
++export function saveSession(value: AccountSession) {
++  try { sessionStorage.setItem(ACCOUNT_SESSION_KEY, JSON.stringify(value)); }
++  catch { throw new AccountError("浏览器无法保存登录状态，请允许此网站使用会话存储后重试。"); }
++  window.dispatchEvent(new Event("mona-account-changed"));
++}
++
++export function clearSession(token?: string) {
++  const current = readSession();
++  if (!token || current?.token === token) sessionStorage.removeItem(ACCOUNT_SESSION_KEY);
++  try {
++    const work = JSON.parse(sessionStorage.getItem("mona-hosted-work-v1") || "null");
++    if (!token || work?.token === token) sessionStorage.removeItem("mona-hosted-work-v1");
++  } catch { /* No valid Work login is available to remove. */ }
++  sessionStorage.removeItem(OAUTH_KEY);
++  window.dispatchEvent(new Event("mona-account-changed"));
++}
++
++export function acceptLogin(reply: LoginReply): AccountSession {
++  if (!reply || typeof reply.access_token !== "string" || !reply.access_token || typeof reply.user?.id !== "string") {
++    throw new AccountError("登录结果未能验证，请重新登录。", 503, "invalid_login");
++  }
++  const value = { token: reply.access_token, user: reply.user };
++  saveSession(value);
++  return value;
++}
++
++export async function logout(token: string): Promise<void> {
++  try { await accountRequest("logout", { method: "POST", token, body: {} }); }
++  catch (error) { if (!(error instanceof AccountError) || error.status !== 401) throw error; }
++  clearSession(token);
++}
++
++export async function beginWeChat(): Promise<void> {
++  const verifier = Array.from(crypto.getRandomValues(new Uint8Array(32)), value => value.toString(16).padStart(2, "0")).join("");
++  const reply = await accountRequest<{ state: string; authorization_url: string; expires_in_seconds: number }>("wechat/start", {
++    method: "POST", body: { verifier },
++  });
++  const target = new URL(reply.authorization_url);
++  if (!Number.isFinite(reply.expires_in_seconds) || reply.expires_in_seconds <= 0 || !/^[a-f0-9]{64}$/.test(reply.state) || target.origin !== "https://open.weixin.qq.com" || target.pathname !== "/connect/qrconnect"
++      || target.searchParams.get("state") !== reply.state || target.searchParams.get("scope") !== "snsapi_login"
++      || target.searchParams.get("redirect_uri") !== `${window.location.origin}/account/wechat`) {
++    throw new AccountError("微信授权地址未通过校验，请联系管理员。", 503, "invalid_oauth_url");
++  }
++  sessionStorage.setItem(OAUTH_KEY, JSON.stringify({ state: reply.state, verifier, expiresAt: Date.now() + Math.min(reply.expires_in_seconds, 600) * 1000 }));
++  window.location.assign(target.href);
++}
++
++export function readWeChatProof(): WeChatProof | null {
++  try {
++    const value = JSON.parse(sessionStorage.getItem(OAUTH_KEY) || "null");
++    if (/^[a-f0-9]{64}$/.test(value?.state) && /^[a-f0-9]{64}$/.test(value?.verifier) && value.expiresAt > Date.now()) return value;
++  } catch { /* A corrupt or expired attempt requires a new scan. */ }
++  return null;
++}
++
++export function clearWeChatProof() { sessionStorage.removeItem(OAUTH_KEY); }
+diff --git a/official-site/app/account/page.tsx b/official-site/app/account/page.tsx
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/page.tsx
+@@ -0,0 +1,268 @@
++"use client";
++import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
++import { AccountError, accountRequest, acceptLogin, beginWeChat, clearSession, clearWeChatProof,
++  logout, readSession, readWeChatProof, saveSession, type AccountProfile, type AccountSession,
++  type Capabilities, type EmailProof, type LoginReply, type WeChatProof } from "./client";
++import "./account.css";
++
++type Mode = "login" | "register" | "reset";
++type Run = (task: () => Promise<void>) => Promise<void>;
++const blankProof = (): EmailProof => ({ email: "", challenge_id: "", code: "" });
++
++function Feedback({ message, close }: { message: string; close: () => void }) {
++  const dialog = useRef<HTMLDialogElement>(null);
++  useEffect(() => { if (message && !dialog.current?.open) dialog.current?.showModal(); }, [message]);
++  return <dialog className="account-feedback" ref={dialog} onClose={close} aria-labelledby="account-error-title">
++    <h2 id="account-error-title">操作未完成</h2><p>{message}</p>
++    <button className="account-button primary" autoFocus onClick={() => dialog.current?.close()}>知道了</button>
++  </dialog>;
++}
++
++function EmailVerification({ value, update, request, busy, run }: {
++  value: EmailProof; update: (value: EmailProof) => void; request: (email: string) => Promise<{ challenge_id: string; resend_after_seconds: number }>;
++  busy: boolean; run: Run;
++}) {
++  const [seconds, setSeconds] = useState(0);
++  const input = useRef<HTMLInputElement>(null);
++  useEffect(() => {
++    if (seconds <= 0) return;
++    const timer = setTimeout(() => setSeconds(previous => Math.max(previous - 1, 0)), 1000);
++    return () => clearTimeout(timer);
++  }, [seconds]);
++  return <>
++    <label className="account-field">邮箱<input ref={input} type="email" autoComplete="email" required maxLength={255}
++      value={value.email} disabled={busy} onChange={event => update({ email: event.target.value, challenge_id: "", code: "" })} /></label>
++    <div className="account-code"><label className="account-field">邮箱验证码<input inputMode="numeric" autoComplete="one-time-code" required
++      pattern="[0-9]{6}" minLength={6} maxLength={6} disabled={busy} value={value.code}
++      onChange={event => update({ ...value, code: event.target.value.replace(/\D/g, "").slice(0, 6) })} /></label>
++      <button className="account-button" type="button" disabled={busy || seconds > 0} onClick={() => {
++        if (!input.current?.reportValidity()) return;
++        void run(async () => {
++          const email = value.email.trim().toLowerCase();
++          const reply = await request(email);
++          update({ email, challenge_id: reply.challenge_id, code: "" });
++          setSeconds(Math.min(Math.max(reply.resend_after_seconds, 1), 300));
++        });
++      }}>{seconds > 0 ? `${seconds} 秒后重发` : "获取验证码"}</button></div>
++    {value.challenge_id && <p className="account-help" role="status">验证码已发送，请检查收件箱和垃圾邮件。</p>}
++  </>;
++}
++
++function AuthForm({ mode, changeMode, busy, run, capabilities, authenticated, recovered, initialEmail }: {
++  mode: Mode; changeMode: (mode: Mode) => void; busy: boolean; run: Run; capabilities: Capabilities | null;
++  authenticated: (value: LoginReply) => void; recovered: () => void; initialEmail: string;
++}) {
++  const [account, setAccount] = useState(initialEmail);
++  const [proof, setProof] = useState<EmailProof>(() => ({ ...blankProof(), email: initialEmail }));
++  const [password, setPassword] = useState("");
++  const [name, setName] = useState("");
++  const enabled = Boolean(capabilities?.enabled && (mode === "login" || capabilities.email_registration));
++  async function submit(event: FormEvent) {
++    event.preventDefault();
++    await run(async () => {
++      if (mode === "login") {
++        const reply = await accountRequest<LoginReply>("login", { method: "POST", body: { account: account.trim(), password } });
++        authenticated(reply);
++      } else {
++        if (!proof.challenge_id) throw new AccountError("请先获取并填写邮箱验证码。", 400, "code_required");
++        if (new TextEncoder().encode(password).length > 72) throw new AccountError("密码过长，请控制在 72 个英文字符或 24 个中文字符以内。", 400);
++        if (mode === "register") {
++          authenticated(await accountRequest<LoginReply>("register", { method: "POST", body: { ...proof, password, display_name: name.trim() } }));
++        } else {
++          await accountRequest("reset-password", { method: "POST", body: { ...proof, password } });
++          recovered();
++        }
++      }
++      setPassword("");
++    });
++  }
++  return <>
++    {mode !== "reset" ? <div className="account-tabs" role="tablist" aria-label="登录方式">
++      <button role="tab" aria-selected={mode === "login"} disabled={busy} onClick={() => changeMode("login")}>登录</button>
++      <button role="tab" aria-selected={mode === "register"} disabled={busy} onClick={() => changeMode("register")}>邮箱注册</button>
++    </div> : <h2>重设密码</h2>}
++    <form className="account-form" onSubmit={submit}><fieldset disabled={busy || !enabled}>
++      {mode === "login" ? <label className="account-field">邮箱或账号<input required maxLength={255} autoComplete="username" value={account} onChange={event => setAccount(event.target.value)} /></label>
++        : <EmailVerification value={proof} update={setProof} busy={busy || !enabled} run={run}
++          request={email => accountRequest(mode === "register" ? "register-code" : "reset-code", { method: "POST", body: { email } })} />}
++      {mode === "register" && <label className="account-field">昵称<input required minLength={1} maxLength={64} autoComplete="nickname" value={name} onChange={event => setName(event.target.value)} /></label>}
++      <label className="account-field">{mode === "reset" ? "新密码" : "密码"}<input type="password" required minLength={mode === "login" ? 1 : 8}
++        maxLength={mode === "login" ? 128 : 72} autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={event => setPassword(event.target.value)} /></label>
++      {mode !== "login" && <p className="account-help">至少 8 位。请勿使用其他网站的相同密码。</p>}
++      <button className="account-button primary" type="submit">{busy ? "正在处理…" : mode === "login" ? "登录" : mode === "register" ? "注册并登录" : "保存新密码"}</button>
++    </fieldset></form>
++    <div className="account-inline" style={{ marginTop: 18 }}>
++      <button className="account-link" disabled={busy} onClick={() => changeMode(mode === "reset" ? "login" : "reset")}>{mode === "reset" ? "返回登录" : "忘记密码？"}</button>
++      {mode !== "reset" && <span className="account-help">与 Mona 客户端共用账号</span>}
++    </div>
++    {capabilities && !enabled && <p className="account-help" style={{ marginTop: 18 }}>{capabilities.enabled ? "邮件验证暂未开放，已有账号仍可登录。" : "账号服务尚未开放，请稍后再试。"}</p>}
++    {mode !== "reset" && <div className="account-provider">
++      <button className="account-button" disabled={busy || !capabilities?.wechat_login} onClick={() => void run(beginWeChat)}>
++        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3C5.6 3 2 5.7 2 9c0 1.9 1.1 3.6 2.8 4.7L4 16l3-1.5c.9.3 1.9.5 3 .5 4.4 0 8-2.7 8-6s-3.6-6-8-6Zm-3 5a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm6 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/><path d="M18.8 9.1c.1.3.2.6.2.9 0 3.6-3.6 6.5-8.2 6.9C12 18.2 13.9 19 16 19c.8 0 1.7-.1 2.4-.4l2.6 1.3-.7-2c1.1-.9 1.7-2 1.7-3.4 0-2.3-1.2-4.3-3.2-5.4Z"/></svg>
++        微信扫码登录</button>
++      <p className="account-help">{capabilities?.wechat_login ? "首次扫码后验证并绑定邮箱，之后可直接扫码登录。" : "微信登录尚未开放，可先使用邮箱登录。"}</p>
++    </div>}
++  </>;
++}
++
++function WeChatBinding({ proof: wechat, suggestedName, busy, run, authenticated, cancel }: {
++  proof: WeChatProof; suggestedName: string; busy: boolean; run: Run; authenticated: (reply: LoginReply) => void; cancel: () => void;
++}) {
++  const [mode, setMode] = useState<"new" | "existing">("new");
++  const [emailProof, setEmailProof] = useState<EmailProof>(blankProof);
++  const [password, setPassword] = useState("");
++  const [name, setName] = useState(suggestedName);
++  const identity = { state: wechat.state, verifier: wechat.verifier };
++  return <><h2>绑定邮箱</h2><p className="account-help" style={{ marginBottom: 20 }}>微信身份已验证。绑定邮箱后完成登录；已有 Mona 账号可在这里关联，不会新建重复账号。</p>
++    <form className="account-form" onSubmit={event => { event.preventDefault(); void run(async () => {
++      if (!emailProof.challenge_id) throw new AccountError("请先获取邮箱验证码。", 400);
++      const reply = await accountRequest<LoginReply>("wechat/bind", { method: "POST", body: { ...identity, ...emailProof, mode, password, display_name: name.trim() } });
++      clearWeChatProof(); authenticated(reply);
++    }); }}><fieldset disabled={busy}>
++      <div className="account-radio"><label><input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />新账号</label>
++        <label><input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />绑定已有账号</label></div>
++      <EmailVerification value={emailProof} update={setEmailProof} busy={busy} run={run}
++        request={email => accountRequest("wechat/email-code", { method: "POST", body: { ...identity, email } })} />
++      {mode === "new" && <label className="account-field">昵称<input maxLength={64} value={name} onChange={event => setName(event.target.value)} /></label>}
++      <label className="account-field">{mode === "new" ? "设置登录密码" : "已有账号密码"}<input type="password" required minLength={8} maxLength={72} autoComplete={mode === "new" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} /></label>
++      <button className="account-button primary" type="submit">{busy ? "正在绑定…" : "验证并完成登录"}</button>
++      <button className="account-link" type="button" onClick={cancel}>取消并返回登录</button>
++    </fieldset></form></>;
++}
++
++function Profile({ session, busy, run, updated, signedOut, resetPassword, capabilities }: {
++  session: AccountSession; busy: boolean; run: Run; updated: (user: AccountProfile) => void;
++  signedOut: () => void; resetPassword: () => void; capabilities: Capabilities | null;
++}) {
++  const [name, setName] = useState(session.user.display_name);
++  const [account, setAccount] = useState(session.user.account || "");
++  const [editingEmail, setEditingEmail] = useState(false);
++  const [emailProof, setEmailProof] = useState<EmailProof>(blankProof);
++  const [password, setPassword] = useState("");
++  const [notice, setNotice] = useState("");
++  return <>
++    <div className="account-profile-summary"><div className="account-avatar" aria-hidden="true">{session.user.display_name.slice(0, 1).toUpperCase()}</div>
++      <div><strong>{session.user.display_name}</strong><span>{session.user.email}</span></div></div>
++    <form className="account-form" onSubmit={event => { event.preventDefault(); void run(async () => {
++      const user = await accountRequest<AccountProfile>("profile", { method: "PATCH", token: session.token,
++        body: { display_name: name.trim(), ...(account.trim() ? { account: account.trim() } : {}) } });
++      updated(user); setNotice("账户信息已保存。");
++    }); }}><fieldset disabled={busy}>
++      <label className="account-field">昵称<input required maxLength={64} value={name} onChange={event => setName(event.target.value)} /></label>
++      <label className="account-field">账号名<input minLength={2} maxLength={32} pattern="[\u4e00-\u9fa5a-zA-Z0-9_]+" value={account} onChange={event => setAccount(event.target.value)} /></label>
++      <p className="account-help">支持中文、英文、数字和下划线，也可使用邮箱登录。</p>
++      <button className="account-button primary" type="submit">保存账户信息</button>
++    </fieldset></form>
++    {notice && <p role="status" className="account-success">{notice}</p>}
++    <div className="account-section"><div className="account-inline"><h3>邮箱与登录安全</h3>
++      <button className="account-link" disabled={busy || !capabilities?.email_registration} onClick={() => setEditingEmail(value => !value)}>{editingEmail ? "取消更换" : "更换邮箱"}</button></div>
++      {editingEmail && <form className="account-form" onSubmit={event => { event.preventDefault(); void run(async () => {
++        if (!emailProof.challenge_id) throw new AccountError("请先获取新邮箱验证码。", 400);
++        const user = await accountRequest<AccountProfile>("email", { method: "POST", token: session.token, body: { ...emailProof, password } });
++        updated(user); setEditingEmail(false); setPassword(""); setEmailProof(blankProof()); setNotice("邮箱已更新。");
++      }); }}><fieldset disabled={busy}>
++        <label className="account-field">当前登录密码<input type="password" required autoComplete="current-password" maxLength={128} value={password} onChange={event => setPassword(event.target.value)} /></label>
++        <EmailVerification value={emailProof} update={setEmailProof} busy={busy} run={run} request={email => {
++          if (!password) return Promise.reject(new AccountError("请先输入当前登录密码。", 400));
++          return accountRequest("email-code", { method: "POST", token: session.token, body: { email, password } });
++        }} /><button className="account-button" type="submit">验证新邮箱并保存</button>
++      </fieldset></form>}
++      <div className="account-inline" style={{ marginTop: 16 }}><span className="account-help">微信：{session.user.wechat_bound ? "已绑定" : "未绑定"}</span>
++        <button className="account-link" disabled={busy || !capabilities?.wechat_login} onClick={() => void run(beginWeChat)}>微信扫码登录</button></div>
++      <button className="account-link" style={{ marginTop: 18 }} disabled={busy || !capabilities?.email_registration} onClick={resetPassword}>通过邮箱重设密码</button>
++    </div>
++    <div className="account-section account-form"><a className="account-button" href="/work/">进入在线 Work</a>
++      <button className="account-button" disabled={busy} onClick={() => void run(async () => { await logout(session.token); signedOut(); })}>退出登录</button>
++      <p className="account-help">退出会撤销当前网页登录，不影响其他已登录设备。</p></div>
++  </>;
++}
++
++export default function AccountPage() {
++  const [session, setSession] = useState<AccountSession | null>(null);
++  const [ready, setReady] = useState(false);
++  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
++  const [loadError, setLoadError] = useState(false);
++  const [refresh, setRefresh] = useState(0);
++  const [mode, setMode] = useState<Mode>("login");
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState("");
++  const [notice, setNotice] = useState("");
++  const [binding, setBinding] = useState<{ proof: WeChatProof; name: string } | null>(null);
++  const mutation = useRef(false);
++  const oauthStarted = useRef(false);
++  const report = useCallback((value: unknown) => {
++    if (value instanceof DOMException && value.name === "AbortError") return;
++    if (value instanceof AccountError && ["website_session_revoked", "website_session_invalid", "website_login_required"].includes(value.code)) {
++      clearSession(); setSession(null);
++    }
++    setError(value instanceof AccountError ? value.message : "操作未能完成，请检查网络后重试。");
++  }, []);
++  const run: Run = useCallback(async task => {
++    if (mutation.current) return;
++    mutation.current = true; setBusy(true); setNotice("");
++    try { await task(); } catch (value) { report(value); }
++    finally { mutation.current = false; setBusy(false); }
++  }, [report]);
++  const authenticated = useCallback((reply: LoginReply) => {
++    setSession(acceptLogin(reply)); setBinding(null); setMode("login");
++    if (window.location.pathname.endsWith("/wechat")) window.history.replaceState({}, "", "/account");
++  }, []);
++
++  useEffect(() => {
++    const controller = new AbortController(); setLoadError(false);
++    const stored = readSession();
++    if (stored) setSession(stored);
++    void accountRequest<Capabilities>("capabilities", { signal: controller.signal }).then(setCapabilities).catch(value => {
++      if (!controller.signal.aborted) { setLoadError(true); report(value); }
++    });
++    if (stored) void accountRequest<AccountProfile>("profile", { token: stored.token, signal: controller.signal }).then(user => {
++      if (!controller.signal.aborted) { const next = { ...stored, user }; saveSession(next); setSession(next); }
++    }).catch(value => {
++      if (!controller.signal.aborted) {
++        if (value instanceof AccountError && value.status === 401) { clearSession(stored.token); setSession(null); }
++        else report(value);
++      }
++    });
++    setReady(true);
++    return () => controller.abort();
++  }, [refresh, report]);
++
++  useEffect(() => {
++    if (!ready || oauthStarted.current || window.location.pathname !== "/account/wechat") return;
++    oauthStarted.current = true;
++    const query = new URLSearchParams(window.location.search);
++    const code = query.get("code"), state = query.get("state"), saved = readWeChatProof();
++    window.history.replaceState({}, "", "/account/wechat");
++    void run(async () => {
++      if (!saved || (code ? state !== saved.state : state !== null && state !== saved.state)) throw new AccountError("本次微信登录已失效，请重新扫码。", 400);
++      const body = { state: saved.state, verifier: saved.verifier };
++      const result = await accountRequest<(LoginReply & { kind: "authenticated" }) | { kind: "bind_email"; display_name: string }>(
++        code ? "wechat/exchange" : "wechat/status", { method: "POST", body: { ...body, ...(code ? { code } : {}) } });
++      if (result.kind === "authenticated") { clearWeChatProof(); authenticated(result); }
++      else setBinding({ proof: saved, name: result.display_name });
++    });
++  }, [ready, run, authenticated]);
++
++  function updated(user: AccountProfile) { if (session) { const value = { ...session, user }; saveSession(value); setSession(value); } }
++  function cancelBinding() { clearWeChatProof(); setBinding(null); window.history.replaceState({}, "", "/account"); }
++  return <div className="account-shell"><header className="account-topbar">
++    <a className="account-brand" href="/"><img src="/img/mona-brand/mona-app-icon.png?v=a829e97b8751" alt="" />MONA</a>
++    <a className="account-back" href="/">返回官网 ↗</a></header>
++    <main className="account-layout"><section className="account-intro"><span className="account-kicker">MONA ACCOUNT</span>
++      <h1>{session ? "你的 MONA，\n与你保持连接。" : "一个账号，\n开始你的工作。"}</h1>
++      <p>用邮箱或微信登录 Mona。官网与客户端共用账号，你的在线工作区依然独立、安全。</p></section>
++      <section className="account-panel" aria-label="Mona 账号">
++        {!ready ? <p role="status">正在读取登录状态…</p> : binding ? <WeChatBinding proof={binding.proof} suggestedName={binding.name} busy={busy} run={run} authenticated={authenticated} cancel={cancelBinding} />
++          : session && mode !== "reset" ? <Profile key={session.token + session.user.email} session={session} busy={busy} run={run} updated={updated} capabilities={capabilities}
++            signedOut={() => { setSession(null); setNotice("已安全退出登录。"); }} resetPassword={() => setMode("reset")} />
++          : <AuthForm key={mode} mode={mode} changeMode={setMode} busy={busy} run={run} capabilities={capabilities} authenticated={authenticated}
++            initialEmail={session?.user.email || ""} recovered={() => { clearSession(); setSession(null); setMode("login"); setNotice("密码已重设，请重新登录。"); }} />}
++        {notice && <p role="status" className="account-success">{notice}</p>}
++        {loadError && <button className="account-button" disabled={busy} style={{ marginTop: 20 }} onClick={() => setRefresh(value => value + 1)}>重新加载账号服务</button>}
++        {ready && windowSafeCallback() && !binding && !session && <button className="account-link" style={{ marginTop: 20 }} disabled={busy} onClick={cancelBinding}>返回邮箱登录</button>}
++      </section></main>
++    {error && <Feedback message={error} close={() => setError("")} />}
++  </div>;
++}
++
++function windowSafeCallback() { return typeof window !== "undefined" && window.location.pathname === "/account/wechat"; }
+diff --git a/official-site/app/account/wechat/page.tsx b/official-site/app/account/wechat/page.tsx
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/account/wechat/page.tsx
+@@ -0,0 +1,2 @@
++"use client";
++export { default } from "../page";
+diff --git a/official-site/app/page.tsx b/official-site/app/page.tsx
+--- a/official-site/app/page.tsx
++++ b/official-site/app/page.tsx
+@@ -7,6 +7,7 @@
+ import { Icon, useSiteReducedMotion as useReducedMotion } from "./landing-brand";
+ import { HeroLayers } from "./landing-motion";
+ import { MonaWordmark } from "./brand-wordmark";
++import { AccountNav } from "./account/AccountNav";
+ import "./mona-prototype.css";
+ import "./final-motion.css";
+ 
+@@ -158,16 +159,17 @@
+                 {current && <motion.span className="nav-active-underline" layoutId="site-nav-active" initial={false} transition={{ type: "spring", stiffness: 400, damping: 34 }} aria-hidden="true"/>}
+               </motion.a>;
+             })}
++            <AccountNav />
+           </nav>
+         </LayoutGroup>
+       </motion.header>
+       <section id="home" className="landing-hero" aria-labelledby="hero-title" ref={heroRef} onPointerMove={trackPointer} onPointerLeave={() => { pointerX.set(0); pointerY.set(0); }}>
+         <div className="site-header-spacer" aria-hidden="true"/>
+         <motion.div className="hero-geometry" style={reduced ? undefined : { y: backY }} aria-hidden="true"><i/><i/><i/></motion.div>
+-        <motion.div className="hero-visual" style={reduced ? undefined : { x, y }}>
+-          <HeroLayers progress={heroScroll} x={x} reduced={reduced}/>
++        <div className="hero-visual">
++          <HeroLayers progress={heroScroll} x={x} y={y} reduced={reduced}/>
+           <span className="hero-handwriting" aria-hidden="true">Ideas<br/>into action.</span>
+-        </motion.div>
++        </div>
+         <div className="hero-copy">
+           <h1 id="hero-title" className="hero-brand-title">
+             <span className="visually-hidden">MONA</span>
+diff --git a/official-site/static-index.html b/official-site/static-index.html
+--- a/official-site/static-index.html
++++ b/official-site/static-index.html
+@@ -4,6 +4,7 @@
+     <meta charset="UTF-8" />
+     <link rel="icon" type="image/png" href="/img/mona-brand/mona-app-icon.png?v=a829e97b8751" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <meta name="referrer" content="no-referrer" />
+     <link rel="stylesheet" href="/mona-scrollbars.css" />
+     <meta
+       name="description"
+diff --git a/official-site/static-main.tsx b/official-site/static-main.tsx
+--- a/official-site/static-main.tsx
++++ b/official-site/static-main.tsx
+@@ -9,6 +9,7 @@
+ import Home from "./app/page";
+ import Changelog from "./app/changelog/page";
+ import Tutorial from "./app/tutorial/page";
++import AccountPage from "./app/account/page";
+ import "./app/globals.css";
+ 
+ // quick-start 在 Next.js 原生里是 redirect("/manual.html")
+@@ -27,6 +28,8 @@
+         <Route path="/" element={<Home />} />
+         <Route path="/changelog" element={<Changelog />} />
+         <Route path="/tutorial" element={<Tutorial />} />
++        <Route path="/account" element={<AccountPage />} />
++        <Route path="/account/wechat" element={<AccountPage />} />
+         <Route path="/quick-start" element={<QuickStartRedirect />} />
+         <Route path="*" element={<Home />} />
+       </Routes>
+diff --git a/official-site/tests/account-browser.test.mjs b/official-site/tests/account-browser.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/official-site/tests/account-browser.test.mjs
+@@ -0,0 +1,189 @@
++// Browser acceptance against production-built account UI and isolated synthetic API edges.
++// No SMTP, WeChat account, production user or model request is used.
++import assert from 'node:assert/strict';
++import { spawn } from 'node:child_process';
++import { createServer } from 'node:http';
++import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join, resolve, sep } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import test from 'node:test';
++
++const dist = fileURLToPath(new URL('../dist-static/', import.meta.url));
++const output = fileURLToPath(new URL('../../output/website-accounts-browser/', import.meta.url));
++const edge = process.env.CHROMIUM_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
++const delay = ms => new Promise(done => setTimeout(done, ms));
++
++class CDP {
++  constructor(socket) {
++    this.socket = socket; this.next = 0; this.pending = new Map(); this.events = new Map();
++    socket.addEventListener('message', ({ data }) => {
++      const value = JSON.parse(data);
++      if (value.id) {
++        const task = this.pending.get(value.id); if (!task) return;
++        this.pending.delete(value.id); clearTimeout(task.timer);
++        if (value.error) task.reject(new Error(value.error.message)); else task.resolve(value.result);
++      } else this.events.get(value.method)?.(value.params);
++    });
++  }
++  send(method, params = {}) {
++    const id = ++this.next;
++    return new Promise((resolve, reject) => {
++      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('CDP timeout: ' + method)); }, 12000);
++      this.pending.set(id, { resolve, reject, timer }); this.socket.send(JSON.stringify({ id, method, params }));
++    });
++  }
++  async eval(expression) {
++    const value = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
++    if (value.exceptionDetails) throw new Error(value.exceptionDetails.exception?.description || value.exceptionDetails.text);
++    return value.result.value;
++  }
++  async wait(expression) {
++    for (let i = 0; i < 150; i++) { if (await this.eval(expression)) return; await delay(80); }
++    throw new Error('Browser condition not met: ' + expression);
++  }
++  async click(text) {
++    await this.eval(`(() => {const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e||e.disabled)throw new Error('Unavailable button '+${JSON.stringify(text)});e.click();})()`);
++    await delay(80);
++  }
++  async input(label, value) {
++    await this.eval(`(() => {const label=[...document.querySelectorAll('label')].find(e=>e.textContent.trim()===${JSON.stringify(label)});const e=label?.querySelector('input');if(!e||e.disabled)throw new Error('Unavailable input '+${JSON.stringify(label)});Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
++  }
++}
++
++test('website account production UI: register, edit, logout, recovery and OAuth binding', { timeout: 180000 }, async t => {
++  let user = { id: '900001', email: 'browser@example.com', account: 'browser_fixture', display_name: '浏览器测试用户', wechat_bound: false };
++  const tokens = new Set(); const calls = []; let serial = 0; let failLogout = false; let oauth = null;
++  const tokenReply = () => { const token = 'synthetic-browser-session-' + (++serial); tokens.add(token); return { access_token: token, expires_in_seconds: 600, user }; };
++  const server = createServer(async (request, response) => {
++    const url = new URL(request.url, 'http://localhost'); const route = url.pathname;
++    const json = (value, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(value)); };
++    try {
++      if (route.startsWith('/auth/web/')) {
++        let raw = ''; for await (const chunk of request) { raw += chunk; if (raw.length > 8192) throw new Error('oversized test request'); }
++        const body = JSON.parse(raw || '{}'); const name = route.slice('/auth/web/'.length);
++        calls.push({ name, method: request.method, body });
++        const token = request.headers.authorization?.replace(/^Bearer /, '');
++        if (name === 'capabilities') return json({ enabled: true, email_registration: true, wechat_login: true });
++        if (['register-code', 'reset-code', 'email-code', 'wechat/email-code'].includes(name)) return json({ challenge_id: 'a'.repeat(32), resend_after_seconds: 1, expires_in_seconds: 600 });
++        if (name === 'register') {
++          assert.equal(body.code, '123456'); user = { ...user, email: body.email, display_name: body.display_name }; return json(tokenReply());
++        }
++        if (name === 'login') return json(tokenReply());
++        if (name === 'reset-password') { assert.equal(body.code, '123456'); tokens.clear(); return json({ message: 'reset' }); }
++        if (name === 'wechat/start') {
++          oauth = { state: 'b'.repeat(64), verifier: body.verifier };
++          return json({ state: oauth.state, expires_in_seconds: 600, authorization_url: 'https://open.weixin.qq.com/connect/qrconnect?' + new URLSearchParams({ state: oauth.state, scope: 'snsapi_login', redirect_uri: origin + '/account/wechat', appid: 'wx' + 'a'.repeat(16) }) });
++        }
++        if (name === 'wechat/exchange' || name === 'wechat/status') {
++          assert.equal(body.state, oauth.state); assert.equal(body.verifier, oauth.verifier);
++          return user.wechat_bound && name.endsWith('exchange') ? json({ kind: 'authenticated', ...tokenReply() }) : json({ kind: 'bind_email', display_name: '微信测试用户' });
++        }
++        if (name === 'wechat/bind') {
++          assert.equal(body.state, oauth.state); assert.equal(body.verifier, oauth.verifier); assert.equal(body.code, '123456');
++          assert.equal(body.mode, 'existing'); user = { ...user, wechat_bound: true }; return json(tokenReply());
++        }
++        if (!tokens.has(token)) return json({ error: 'website_session_revoked', message: '登录已失效。' }, 401);
++        if (name === 'profile') {
++          if (request.method === 'PATCH') user = { ...user, ...body };
++          return json(user);
++        }
++        if (name === 'email') { assert.equal(body.code, '123456'); user = { ...user, email: body.email }; return json(user); }
++        if (name === 'logout') {
++          if (failLogout) return json({ error: 'unconfirmed', message: '退出尚未确认，请重试。' }, 503);
++          tokens.delete(token); return json({ message: 'logged out' });
++        }
++        return json({ error: 'unknown_fixture_route' }, 404);
++      }
++      if (route === '/favicon.ico') { response.writeHead(204).end(); return; }
++      if (route === '/config/pricing') return json({ plans: [] });
++      const file = resolve(dist, ['/','/account','/account/wechat'].includes(route) ? 'static-index.html' : decodeURIComponent(route).slice(1));
++      if (!file.startsWith(resolve(dist) + sep)) { response.writeHead(403).end(); return; }
++      const bytes = await readFile(file);
++      const ext = file.split('.').at(-1);
++      response.writeHead(200, { 'Content-Type': ({ html: 'text/html', js: 'text/javascript', css: 'text/css', png: 'image/png', webp: 'image/webp', svg: 'image/svg+xml' })[ext] || 'application/octet-stream' });
++      response.end(bytes);
++    } catch (error) { json({ error: 'fixture_error', message: error.message }, 500); }
++  });
++  await new Promise(done => server.listen(0, '127.0.0.1', done));
++  const origin = `http://127.0.0.1:${server.address().port}`;
++  const profile = await mkdtemp(join(tmpdir(), 'mona-account-browser-'));
++  await mkdir(output, { recursive: true });
++  const browser = spawn(edge, ['--headless=new','--no-first-run','--disable-background-networking','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'], { stdio: 'ignore' });
++  let spawnError; browser.on('error', error => { spawnError = error; });
++  let cdp; const errors = []; const passed = [];
++  try {
++    let port;
++    for (let i=0;i<100;i++) { if(spawnError)throw spawnError;try{port=Number((await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]);break;}catch{await delay(100);} }
++    assert.ok(port, 'browser did not start');
++    const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
++    const socket = new WebSocket(pages.find(item=>item.type==='page').webSocketDebuggerUrl);
++    await new Promise((done,reject)=>{socket.addEventListener('open',done,{once:true});socket.addEventListener('error',reject,{once:true});});
++    cdp = new CDP(socket); cdp.events.set('Runtime.exceptionThrown', event=>errors.push(event.exceptionDetails.exception?.description||event.exceptionDetails.text));
++    cdp.events.set('Fetch.requestPaused', event => {
++      const target = new URL(event.request.url);
++      void cdp.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 302, responseHeaders: [{ name: 'Location', value: origin+'/account/wechat?'+new URLSearchParams({ code:'synthetic-oauth',state:target.searchParams.get('state') }) }], body: '' }).catch(error=>errors.push(error.message));
++    });
++    await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
++    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: 'https://open.weixin.qq.com/connect/qrconnect*' }] });
++    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
++    const nav = async route => { await cdp.send('Page.navigate',{url:origin+route}); await cdp.wait("document.querySelector('.account-panel') && document.readyState==='complete'"); };
++    const capture = async name => {const image=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,name+'.png'),Buffer.from(image.data,'base64'));};
++    await nav('/account');
++    await cdp.wait("[...document.querySelectorAll('button')].some(e=>e.textContent==='微信扫码登录'&&!e.disabled)");
++    await capture('login-desktop');
++    await t.test('verified email registration', async()=>{
++      await cdp.click('邮箱注册'); await cdp.input('邮箱','browser@example.com');await cdp.click('获取验证码');
++      await cdp.wait("document.body.innerText.includes('验证码已发送')");
++      await cdp.input('邮箱验证码','123456');await cdp.input('昵称','浏览器新用户');await cdp.input('密码','synthetic-browser-password');
++      await capture('register-desktop'); await cdp.click('注册并登录');
++      await cdp.wait("document.body.innerText.includes('保存账户信息')");
++      assert.ok(await cdp.eval("JSON.parse(sessionStorage.getItem('mona-website-session-v1')).user.id"));
++      passed.push('email_registration');
++    });
++    await t.test('profile and verified email editing',async()=>{
++      await cdp.input('昵称','更新后的昵称');await cdp.input('账号名','updated_account');await cdp.click('保存账户信息');
++      await cdp.wait("document.body.innerText.includes('账户信息已保存')");assert.equal(user.display_name,'更新后的昵称');
++      await cdp.click('更换邮箱');await cdp.input('当前登录密码','synthetic-browser-password');await cdp.input('邮箱','updated@example.com');
++      await cdp.click('获取验证码');await cdp.wait("document.body.innerText.includes('验证码已发送')");await cdp.input('邮箱验证码','123456');
++      await cdp.click('验证新邮箱并保存');await cdp.wait("document.querySelector('.account-profile-summary').innerText.includes('updated@example.com')");
++      await capture('profile-desktop');passed.push('profile_and_email_edit');
++    });
++    await t.test('failed logout retains session; confirmed logout revokes and clears',async()=>{
++      failLogout=true;await cdp.click('退出登录');await cdp.wait("document.querySelector('dialog[open]')!==null");
++      assert.ok(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"));await cdp.click('知道了');
++      failLogout=false;await cdp.click('退出登录');await cdp.wait("document.body.innerText.includes('已安全退出登录')");
++      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"),null);assert.equal(tokens.size,0);passed.push('server_logout');
++    });
++    await t.test('email password recovery',async()=>{
++      await cdp.click('忘记密码？');await cdp.input('邮箱','updated@example.com');await cdp.click('获取验证码');
++      await cdp.wait("document.body.innerText.includes('验证码已发送')");await cdp.input('邮箱验证码','123456');await cdp.input('新密码','new-browser-fixture-password');
++      await cdp.click('保存新密码');await cdp.wait("document.body.innerText.includes('密码已重设')");passed.push('password_recovery');
++    });
++    await t.test('WeChat callback then verified existing-account binding',async()=>{
++      await cdp.click('微信扫码登录');await cdp.wait("document.querySelector('h2')?.textContent==='绑定邮箱'");
++      assert.equal(await cdp.eval('window.location.search'),'');
++      await cdp.eval("[...document.querySelectorAll('label')].find(e=>e.textContent.trim()==='绑定已有账号').querySelector('input').click()");
++      await cdp.input('邮箱','updated@example.com');await cdp.click('获取验证码');await cdp.wait("document.body.innerText.includes('验证码已发送')");
++      await cdp.input('邮箱验证码','123456');await cdp.input('已有账号密码','new-browser-fixture-password');
++      await capture('wechat-bind-desktop');await cdp.click('验证并完成登录');await cdp.wait("document.body.innerText.includes('微信：已绑定')");
++      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-wechat-v1')"),null);passed.push('wechat_callback_verified_binding');
++    });
++    await t.test('mobile layout and invalid callback handling',async()=>{
++      await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
++      assert.ok(await cdp.eval('document.documentElement.scrollWidth<=window.innerWidth+1'));await capture('profile-mobile');
++      await cdp.click('退出登录');await cdp.wait("document.body.innerText.includes('已安全退出登录')");
++      const exchanges=calls.filter(c=>c.name==='wechat/exchange').length;
++      await nav('/account/wechat?code=invalid&state='+ 'f'.repeat(64));await cdp.wait("document.querySelector('dialog[open]')!==null");
++      await cdp.eval(`sessionStorage.setItem('mona-website-wechat-v1',JSON.stringify({state:'${'b'.repeat(64)}',verifier:'${'d'.repeat(64)}',expiresAt:Date.now()+600000}))`);
++      await nav('/account/wechat?code=invalid-without-state');await cdp.wait("document.querySelector('dialog[open]')!==null");
++      assert.equal(calls.filter(c=>c.name==='wechat/exchange').length,exchanges);passed.push('mobile_and_state_rejection');
++    });
++    assert.deepEqual(errors,[]);
++    await writeFile(join(output,'report.json'),JSON.stringify({passed,browserErrors:errors,apiBoundary:'synthetic local only',realSMTP:false,realWeChat:false},null,2));
++  } finally {
++    if(cdp){try{await cdp.send('Browser.close');}catch{}cdp.socket.close();}
++    browser.kill();await new Promise(done=>server.close(done));
++    await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:150}).catch(()=>{});
++  }
++});
+diff --git a/official-site/tests/browser.test.mjs b/official-site/tests/browser.test.mjs
+--- a/official-site/tests/browser.test.mjs
++++ b/official-site/tests/browser.test.mjs
+@@ -247,7 +247,8 @@
+       await cdp.wait("getComputedStyle(document.querySelector('.site-header')).opacity === '1'");
+       const initial = await cdp.evaluate(`(() => { const nav=document.querySelector('.site-nav'),header=document.querySelector('.site-header'),logo=document.querySelector('.site-brand'),h=header.getBoundingClientRect(),l=logo.getBoundingClientRect(),n=nav.getBoundingClientRect();return {position:getComputedStyle(header).position,background:getComputedStyle(header).backgroundColor,blur:getComputedStyle(header).backdropFilter,webkitBlur:getComputedStyle(header).webkitBackdropFilter,logoBackground:getComputedStyle(logo).backgroundColor,navBackground:getComputedStyle(nav).backgroundColor,links:[...nav.querySelectorAll('a')].map(a=>a.textContent.trim()),active:nav.querySelector('[aria-current=location]')?.hash ?? null,top:h.top,height:h.height,logoLeft:l.left,navGap:n.left-l.right,contained:l.left>=h.left-1&&n.right<=h.right+1}; })()`);
+       assert.equal(initial.position, "fixed");
+-      assert.deepEqual(initial.links, ["产品", "模型与额度", "Mona Pro", "帮助中心", "更新日志"]);
++      assert.deepEqual(initial.links, ["产品", "模型与额度", "Mona Pro", "帮助中心", "更新日志", "登录 / 注册"]);
++      assert.equal(await cdp.evaluate("document.querySelector('.account-nav-entry')?.getAttribute('href')"), "/account");
+       assert.ok(Number(initial.background.match(/([\d.]+)\)$/)?.[1] ?? 0) >= 0.85, "unified header needs a solid enough dark backdrop");
+       assert.ok(initial.blur.includes("blur(") || initial.webkitBlur?.includes("blur("), "unified header should blur artwork behind it");
+       assert.equal(initial.logoBackground, "rgba(0, 0, 0, 0)", "logo must share the same background with the menu");
+@@ -776,11 +777,13 @@
+       assert.equal(await cdp.evaluate("location.hash"), "#install");
+       await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+       await navigate("/changelog");
+-      await cdp.wait("document.querySelectorAll('.support-release-entry').length === 18");
++      const releaseFixture = JSON.parse(await readFile(join(dist, "changelog.json"), "utf8")).releases;
++      assert.ok(Array.isArray(releaseFixture) && releaseFixture.length > 0, "published release fixture must be nonempty");
++      await cdp.wait(`document.querySelectorAll('.support-release-entry').length === ${releaseFixture.length}`);
+       await cdp.wait("getComputedStyle(document.querySelector('.support-releases')).backgroundColor === 'rgb(243, 234, 217)'");
+       assert.match(await cdp.evaluate("document.body.innerText"), /v1\.8\.1/);
+       assert.equal(await cdp.evaluate("document.querySelector('.support-hero-art img').naturalWidth > 0"), true);
+-      assert.equal(await cdp.evaluate("document.querySelectorAll('.support-release-index a').length"), 18);
++      assert.equal(await cdp.evaluate("document.querySelectorAll('.support-release-index a').length"), releaseFixture.length);
+       assert.equal(await cdp.evaluate("document.querySelector('.support-legal').textContent.trim()"), "鄂ICP备2024056956号-3");
+       const logDesktop = await cdp.send("Page.captureScreenshot", { format: "jpeg", quality: 76, captureBeyondViewport: false });
+       await writeFile(join(output, "changelog-1440.jpg"), Buffer.from(logDesktop.data, "base64"));
