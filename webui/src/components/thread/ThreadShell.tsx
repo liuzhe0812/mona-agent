@@ -303,13 +303,13 @@ interface ThreadShellProps {
   onCreateNote?: () => void;
   recentSessions?: ChatSummary[];
   onSelectSession?: (key: string) => void;
-  onCreateChat?: (workspace?: string | null) => Promise<string | null>;
+  onCreateChat?: (workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => Promise<string | null>;
   onBranchChat?: (sourceChatId: string, assistantOrdinal: number, sourceTaskId?: string) => Promise<string | null>;
   /** Direct Agent selected before a chat exists; persisted on first send. */
   pendingDirectAgentId?: string | null;
   /** Display name carried from the summon panel while the agent list refreshes. */
   pendingDirectAgentName?: string | null;
-  onCreateDirectChat?: (agentId: string, workspace?: string | null) => Promise<string | null>;
+  onCreateDirectChat?: (agentId: string, workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => Promise<string | null>;
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
   onQueuedPromptConsumed?: (id: string) => void;
@@ -332,6 +332,7 @@ function toModelBadgeLabel(modelName: string | null): string | null {
 }
 
 interface PendingFirstMessage {
+  targetChatId: string | null;
   content: string;
   images?: SendImage[];
   options?: SendOptions;
@@ -717,6 +718,11 @@ export function ThreadShell({
     if (!chatId) return;
     const pending = pendingFirstRef.current;
     if (!pending) return;
+    if (pending.targetChatId !== chatId) {
+      pendingFirstRef.current = null;
+      setBooting(false);
+      return;
+    }
     pendingFirstRef.current = null;
     pendingFirstWorkspaceRouteChatRef.current = chatId;
     setScrollToBottomSignal((value) => value + 1);
@@ -741,8 +747,10 @@ export function ThreadShell({
     })();
     return () => {
       cancelled = true;
+      setBooting(false);
     };
   }, [chatId, send, session?.conversation?.type]);
+  useEffect(() => () => { pendingFirstRef.current = null; }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -913,13 +921,22 @@ export function ThreadShell({
     async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
       setBooting(true);
-      pendingFirstRef.current = { content, images, options };
+      const pending: PendingFirstMessage = { targetChatId: null, content, images, options };
+      pendingFirstRef.current = pending;
+      const beforeActivate = (nextChatId: string) => {
+        if (pendingFirstRef.current !== pending) return false;
+        pending.targetChatId = nextChatId;
+        return true;
+      };
       const newId = directAgentId && directAgentId !== "mona"
-        ? await onCreateDirectChat?.(directAgentId, selectedWorkspace)
-        : await onCreateChat?.(selectedWorkspace);
-      if (!newId) {
-        pendingFirstRef.current = null;
-        setBooting(false);
+        ? await onCreateDirectChat?.(directAgentId, selectedWorkspace, beforeActivate)
+        : await onCreateChat?.(selectedWorkspace, beforeActivate);
+      if (!newId || pending.targetChatId !== newId) {
+        if (pendingFirstRef.current === pending) {
+          pendingFirstRef.current = null;
+          setBooting(false);
+        }
+        return;
       }
       // Clear the transient workspace selection after creating the chat.
       setSelectedWorkspace(null);

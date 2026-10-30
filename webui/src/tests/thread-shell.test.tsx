@@ -335,9 +335,9 @@ function WelcomeSessionHost({
       onToggleSidebar={() => {}}
       onGoHome={() => {}}
       onNewChat={() => {}}
-      onCreateChat={async (workspace) => {
+      onCreateChat={async (workspace, beforeActivate) => {
         const chatId = await onCreateChat(workspace);
-        if (chatId) setActiveSession(session(chatId));
+        if (chatId && beforeActivate?.(chatId) !== false) setActiveSession(session(chatId));
         return chatId;
       }}
     />
@@ -358,6 +358,27 @@ async function expandWorkspaceSection(): Promise<void> {
   await chooseNewSidebarTab("工作区");
   const workspaceTab = await screen.findByRole("tab", { name: "工作区" });
   fireEvent.click(workspaceTab);
+}
+
+function GuardedCreationHost({ create, direct = false }: {
+  create: () => Promise<string | null>;
+  direct?: boolean;
+}) {
+  const [active, setActive] = useState<ReturnType<typeof session> | null>(null);
+  const onCreate = async (_workspace?: string | null, beforeActivate?: (id: string) => boolean) => {
+    const id = await create();
+    if (id && beforeActivate?.(id) !== false) setActive(session(id));
+    return id;
+  };
+  return <>
+    <button onClick={() => setActive(session("existing-b"))}>Browse existing B</button>
+    <button onClick={() => setActive(null)}>Return home</button>
+    <span data-testid="selected-creation-chat">{active?.chatId ?? "home"}</span>
+    <ThreadShell session={active} onToggleSidebar={() => {}}
+      pendingDirectAgentId={direct ? "com.mona.test" : undefined}
+      onCreateChat={onCreate}
+      onCreateDirectChat={(_agent, workspace, beforeActivate) => onCreate(workspace, beforeActivate)} />
+  </>;
 }
 
 async function chooseNewSidebarTab(label: string): Promise<void> {
@@ -1360,10 +1381,53 @@ describe("ThreadShell", () => {
     ).toBeInTheDocument();
   });
 
+  it.each([false, true])("does not send or activate a late first creation after browsing another chat (direct=%s)", async (direct) => {
+    const client = makeClient();
+    let finish!: (id: string) => void;
+    const create = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    render(wrap(client, <GuardedCreationHost create={create} direct={direct} />));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "private first request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Browse existing B" }));
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    await act(async () => { finish("late-created-a"); });
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByTestId("selected-creation-chat")).toHaveTextContent("existing-b");
+  });
+
+  it("keeps the newer first request when two creations finish out of order", async () => {
+    const client = makeClient();
+    let first!: (id: string) => void;
+    let second!: (id: string) => void;
+    const create = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { first = resolve; }))
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { second = resolve; }));
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "old request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Browse existing B" }));
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "new request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    await act(async () => { second("new-created-c"); });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "new-created-c", "new request", undefined, expect.anything(),
+    ));
+    await act(async () => { first("late-created-a"); });
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("selected-creation-chat")).toHaveTextContent("new-created-c");
+  });
+
   it("creates a chat only when the blank landing sends a first message", async () => {
     const client = makeClient();
     const onNewChat = vi.fn();
-    const onCreateChat = vi.fn().mockResolvedValue("chat-new");
+    const onCreateChat = vi.fn(async (_workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
+      beforeActivate?.("chat-new");
+      return "chat-new";
+    });
 
     render(
       wrap(
@@ -1622,7 +1686,10 @@ describe("ThreadShell", () => {
 
   it("keeps the first landing message when new chat history is still empty", async () => {
     const client = makeClient();
-    const onCreateChat = vi.fn().mockResolvedValue("chat-new");
+    const onCreateChat = vi.fn(async (_workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
+      beforeActivate?.("chat-new");
+      return "chat-new";
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
@@ -1911,7 +1978,7 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "帮我写一篇小红书文案" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    await waitFor(() => expect(onCreateDirectChat).toHaveBeenCalledWith("com.mona.xiaohongshu", null));
+    await waitFor(() => expect(onCreateDirectChat).toHaveBeenCalledWith("com.mona.xiaohongshu", null, expect.any(Function)));
   });
 
   it("uses the summoned display name while the agent list is refreshing", async () => {

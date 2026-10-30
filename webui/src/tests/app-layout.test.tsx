@@ -141,6 +141,26 @@ function getSessionPanel() {
 }
 
 describe("App layout", () => {
+  it.each(["session", "browser"])("does not activate a late Work creation after navigating to %s", async (target) => {
+    mockSessions = [{
+      key: "websocket:existing-b", channel: "websocket", chatId: "existing-b",
+      title: "Existing B", preview: "", createdAt: null, updatedAt: null,
+    }];
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue((await import("@/hooks/useSidebarState")).DEFAULT_SIDEBAR_STATE);
+    let finish!: (id: string) => void;
+    createChatSpy.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "first request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(createChatSpy).toHaveBeenCalledTimes(1));
+    if (target === "session") fireEvent.click(screen.getByTitle("Existing B"));
+    else fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+    await act(async () => { finish("late-created-a"); });
+    if (target === "session") expect(screen.getByTitle("Existing B")).toHaveAttribute("aria-pressed", "true");
+    else expect(screen.getByRole("tab", { name: "Mona" })).toHaveAttribute("aria-selected", "false");
+  });
+
   beforeEach(() => {
     mockSessions = [];
     connectSpy.mockClear();

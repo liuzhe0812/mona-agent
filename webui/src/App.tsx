@@ -606,6 +606,13 @@ function Shell({
     toggleDarkMode,
     openDevtools,
   } = useBrowserTabs();
+  const creationNavigationRef = useRef({ activeKey, view, tabId: activeBrowserTabId, pendingDirectAgentId });
+  if (creationNavigationRef.current.activeKey !== activeKey
+    || creationNavigationRef.current.view !== view
+    || creationNavigationRef.current.tabId !== activeBrowserTabId
+    || creationNavigationRef.current.pendingDirectAgentId !== pendingDirectAgentId) {
+    creationNavigationRef.current = { activeKey, view, tabId: activeBrowserTabId, pendingDirectAgentId };
+  }
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
@@ -1257,9 +1264,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
-  const onCreateChat = useCallback(async (workspace?: string | null) => {
+  const onCreateChat = useCallback(async (workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
+    const navigation = creationNavigationRef.current;
     try {
       const chatId = await createChat(workspace);
+      if (beforeActivate && (creationNavigationRef.current !== navigation || !beforeActivate(chatId))) return chatId;
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
       switchToMonaTab();
@@ -1365,13 +1374,15 @@ function Shell({
   );
 
   const onCreateDirectChat = useCallback(
-    async (agentId: string, workspace?: string | null) => {
+    async (agentId: string, workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
       if (creatingConversation || !client) return null;
       setCreatingConversation(true);
+      const navigation = creationNavigationRef.current;
       try {
         const chatId = await createChat(workspace);
         await client.createDirectConversation(chatId, agentId);
         await refresh();
+        if (beforeActivate && (creationNavigationRef.current !== navigation || !beforeActivate(chatId))) return chatId;
         setActiveKey(`websocket:${chatId}`);
         setView("chat");
         switchToMonaTab();
