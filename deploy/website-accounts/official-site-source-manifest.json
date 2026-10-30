@@ -16,7 +16,7 @@
     },
     "official-site/app/account/page.tsx": {
       "before_sha256": null,
-      "after_sha256": "7b1bfaa8ff4771d070733d02dce5c375c453bdadba396c91d1c9e37c7f05053d"
+      "after_sha256": "b459217bbea11bd81f4d5e1a351009a208e6a2c2cb34c0b020b7fac5ecfdc3c3"
     },
     "official-site/app/account/wechat/page.tsx": {
       "before_sha256": null,
@@ -36,7 +36,7 @@
     },
     "official-site/tests/account-browser.test.mjs": {
       "before_sha256": null,
-      "after_sha256": "0e1aa88cf274738dbfc23f97a0baf2121320c3a95907d72bcbd42b9e8517b3ff"
+      "after_sha256": "e3cddc60a33b2602c021551843cf2ee0bd09ba28cc6546c61324089f5a84f8fd"
     },
     "official-site/tests/browser.test.mjs": {
       "before_sha256": "a8f6039de0b90fe12106529d3cb27efae284b077edc379248e7f49ee06e0c0b7",

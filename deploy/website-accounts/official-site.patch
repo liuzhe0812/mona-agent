@@ -586,8 +586,8 @@ new file mode 100644
 +    finally { mutation.current = false; setPending(""); }
 +  }, [report]);
 +  const authenticated = useCallback((reply: LoginReply) => {
-+    setSession(acceptLogin(reply)); setBinding(null); setMode("login");
-+    if (window.location.pathname.endsWith("/wechat")) window.history.replaceState({}, "", "/account");
++    acceptLogin(reply);
++    window.location.replace("/");
 +  }, []);
 +
 +  useEffect(() => {
@@ -640,7 +640,7 @@ new file mode 100644
 +    <main className={`account-layout${settings ? " is-settings" : ""}`}><section className="account-intro">
 +      {settings ? <><h1>账户设置</h1><p>管理个人资料和登录安全。</p></>
 +        : <><h1><span>{mode === "register" ? "创建账号，" : mode === "reset" ? "重设密码，" : "登录 Mona，"}</span><span>{mode === "reset" ? "找回你的账号。" : "继续你的工作。"}</span></h1>
-+          <p>官网与 Mona 客户端共用账号，<br />登录后即可管理你的账户。</p></>}</section>
++          <p>官网与 Mona 客户端共用账号，<br />登录后可从右上角管理账户。</p></>}</section>
 +      <section className="account-panel" aria-label="Mona 账号">
 +        {!ready ? <p role="status">正在读取登录状态…</p> : binding ? <WeChatBinding proof={binding.proof} suggestedName={binding.name} busy={busy} pending={pending} run={run} authenticated={authenticated} cancel={cancelBinding} />
 +          : session && mode !== "reset" ? <Profile key={session.token} session={session} busy={busy} pending={pending} run={run} updated={updated} capabilities={capabilities} resetPassword={() => setMode("reset")} />
@@ -729,7 +729,7 @@ diff --git a/official-site/tests/account-browser.test.mjs b/official-site/tests/
 new file mode 100644
 --- /dev/null
 +++ b/official-site/tests/account-browser.test.mjs
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,338 @@
 +// Browser acceptance against production-built account UI and isolated synthetic API edges.
 +// No SMTP, WeChat account, production user or model request is used.
 +import assert from 'node:assert/strict';
@@ -786,7 +786,7 @@ new file mode 100644
 +test('website account production UI: register, edit, logout, recovery and OAuth binding', { timeout: 180000 }, async t => {
 +  let user = { id: '900001', email: 'browser@example.com', account: 'browser_fixture', display_name: '浏览器测试用户', wechat_bound: false };
 +  const tokens = new Set(); const calls = []; let serial = 0; let failLogout = false; let oauth = null;
-+  let workModels = []; let holdProfile = false; let releaseProfile;
++  let workModels = []; let holdProfile = false; let releaseProfile; let password = 'synthetic-browser-password';
 +  const tokenReply = () => { const token = 'synthetic-browser-session-' + (++serial); tokens.add(token); return { access_token: token, expires_in_seconds: 600, user }; };
 +  const server = createServer(async (request, response) => {
 +    const url = new URL(request.url, 'http://localhost'); const route = url.pathname;
@@ -801,13 +801,13 @@ new file mode 100644
 +        if (['register-code', 'reset-code', 'email-code', 'wechat/email-code'].includes(name)) return json({ challenge_id: 'a'.repeat(32), resend_after_seconds: 1, expires_in_seconds: 600 });
 +        if (name === 'register') {
 +          if (body.code !== '123456') return json({ error: 'invalid_code', message: '验证码错误，请重新输入。' }, 400);
-+          assert.equal(body.code, '123456'); user = { ...user, email: body.email, display_name: body.display_name }; return json(tokenReply());
++          assert.equal(body.code, '123456'); password = body.password; user = { ...user, email: body.email, display_name: body.display_name }; return json(tokenReply());
 +        }
 +        if (name === 'login') {
-+          if (body.password === 'incorrect-browser-password') return json({ error: 'invalid_credentials', message: '账号或密码错误。' }, 401);
++          if (![user.email,user.account].includes(body.account) || body.password !== password) return json({ error: 'invalid_credentials', message: '账号或密码错误。' }, 401);
 +          return json(tokenReply());
 +        }
-+        if (name === 'reset-password') { assert.equal(body.code, '123456'); tokens.clear(); return json({ message: 'reset' }); }
++        if (name === 'reset-password') { assert.equal(body.code, '123456'); password = body.password; tokens.clear(); return json({ message: 'reset' }); }
 +        if (name === 'wechat/start') {
 +          oauth = { state: 'b'.repeat(64), verifier: body.verifier };
 +          return json({ state: oauth.state, expires_in_seconds: 600, authorization_url: 'https://open.weixin.qq.com/connect/qrconnect?' + new URLSearchParams({ state: oauth.state, scope: 'snsapi_login', redirect_uri: origin + '/account/wechat', appid: 'wx' + 'a'.repeat(16) }) });
@@ -818,7 +818,7 @@ new file mode 100644
 +        }
 +        if (name === 'wechat/bind') {
 +          assert.equal(body.state, oauth.state); assert.equal(body.verifier, oauth.verifier); assert.equal(body.code, '123456');
-+          assert.equal(body.mode, 'existing'); user = { ...user, wechat_bound: true }; return json(tokenReply());
++          assert.equal(body.mode, 'existing'); assert.equal(body.password, password); user = { ...user, wechat_bound: true }; return json(tokenReply());
 +        }
 +        if (!tokens.has(token)) return json({ error: 'website_session_revoked', message: '登录已失效。' }, 401);
 +        if (name === 'profile') {
@@ -880,6 +880,15 @@ new file mode 100644
 +      await cdp.eval("if(!document.querySelector('.account-menu').open) document.querySelector('.account-menu summary').click()");
 +      await cdp.wait("document.querySelector('.account-menu')?.open===true");
 +    };
++    const waitForSignedInHome = async () => {
++      await cdp.wait("window.location.pathname==='/' && document.readyState==='complete' && document.querySelector('.site-nav .account-menu summary')!==null");
++      assert.equal(await cdp.eval("document.querySelector('.account-layout.is-settings')"),null);
++    };
++    const enterSettingsFromHome = async () => {
++      await waitForSignedInHome();await openMenu();
++      await cdp.eval("document.querySelector('.site-nav .account-menu-panel a[href=\"/account\"]').click()");
++      await cdp.wait("window.location.pathname==='/account' && document.querySelector('.account-layout.is-settings')!==null && document.body.innerText.includes('保存账户信息')");
++    };
 +    const closeMenuWithEscape = async () => {
 +      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
 +      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -932,8 +941,9 @@ new file mode 100644
 +      assert.equal(await cdp.eval("document.querySelector('dialog[open]')"),null);
 +      await cdp.input('邮箱验证码','123456');
 +      await capture('register-desktop'); await cdp.click('注册并登录');
-+      await cdp.wait("document.body.innerText.includes('保存账户信息')");
++      await waitForSignedInHome();
 +      assert.ok(await cdp.eval("JSON.parse(sessionStorage.getItem('mona-website-session-v1')).user.id"));
++      await enterSettingsFromHome();
 +      assert.equal(await cdp.eval("document.querySelector('.account-layout.is-settings')!==null"),true);
 +      assert.equal(await cdp.eval("document.querySelector('.account-settings-grid').children.length"),2);
 +      assert.equal(await cdp.eval("(() => {const [a,b]=[...document.querySelector('.account-settings-grid').children].map(e=>e.getBoundingClientRect());return b.left>a.right})()"),true);
@@ -982,7 +992,7 @@ new file mode 100644
 +        passed.push('signed_in_navigation_layout');
 +      } finally {
 +        await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
-+        await nav('/account');await cdp.wait("document.body.innerText.includes('保存账户信息')");
++        await enterSettingsFromHome();
 +      }
 +    });
 +    await t.test('profile and verified email editing',async()=>{
@@ -1012,6 +1022,17 @@ new file mode 100644
 +      await openMenu();failLogout=false;await cdp.click('退出登录');await cdp.wait(`${field('邮箱或账号')}!==undefined`);
 +      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"),null);assert.equal(tokens.size,0);passed.push('server_logout');
 +    });
++    await t.test('password login returns home and account settings require a menu choice',async()=>{
++      await cdp.input('邮箱或账号','updated@example.com');await cdp.input('密码','synthetic-browser-password');
++      await cdp.eval("document.querySelector('.account-form button[type=submit]').click()");
++      await waitForSignedInHome();
++      assert.deepEqual(calls.filter(call=>call.name==='login').at(-1)?.body,{account:'updated@example.com',password:'synthetic-browser-password'});
++      assert.ok(await cdp.eval("JSON.parse(sessionStorage.getItem('mona-website-session-v1')).user.id"));
++      await enterSettingsFromHome();await openMenu();await cdp.click('退出登录');
++      await cdp.wait(`${field('邮箱或账号')}!==undefined`);
++      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"),null);
++      passed.push('password_login_returns_home');
++    });
 +    await t.test('email password recovery',async()=>{
 +      await cdp.input('邮箱或账号','updated@example.com');await cdp.click('忘记密码？');assert.equal(await cdp.eval(`${field('邮箱')}.value`),'updated@example.com');await cdp.click('获取验证码');
 +      await cdp.wait("document.body.innerText.includes('验证码已发送')");await cdp.input('邮箱验证码','123456');await cdp.input('新密码','new-browser-fixture-password');
@@ -1023,8 +1044,9 @@ new file mode 100644
 +      await cdp.eval("[...document.querySelectorAll('label')].find(e=>e.textContent.trim()==='绑定已有账号').querySelector('input').click()");
 +      await cdp.input('邮箱','updated@example.com');await cdp.click('获取验证码');await cdp.wait("document.body.innerText.includes('验证码已发送')");
 +      await cdp.input('邮箱验证码','123456');await cdp.input('已有账号密码','new-browser-fixture-password');
-+      await capture('wechat-bind-desktop');await cdp.click('验证并完成登录');await cdp.wait("document.body.innerText.includes('微信：已绑定')");
-+      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-wechat-v1')"),null);passed.push('wechat_callback_verified_binding');
++      await capture('wechat-bind-desktop');await cdp.click('验证并完成登录');await waitForSignedInHome();
++      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-wechat-v1')"),null);
++      await enterSettingsFromHome();await cdp.wait("document.body.innerText.includes('微信：已绑定')");passed.push('wechat_callback_verified_binding');
 +    });
 +    await t.test('mobile layout and invalid callback handling',async()=>{
 +      await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
