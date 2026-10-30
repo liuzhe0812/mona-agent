@@ -1096,6 +1096,8 @@
   },
   "errors": {
     "messageRejected": {
+      "unknownTitle": "Delivery not confirmed",
+      "unknownBody": "We could not confirm whether this message was accepted. Your original input and attachments have been kept and will not be sent again automatically. Check this conversation before starting a new request.",
       "title": "Message not sent",
       "body": "This message was not accepted. Your text and attachments are still in the chat. Please send it again.",
       "runActiveBody": "This message was not accepted. Your text and attachments are still in the chat. The current task is still running; send it again after that task ends."

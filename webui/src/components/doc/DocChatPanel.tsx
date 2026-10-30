@@ -115,9 +115,12 @@ export function DocChatPanel({
 
   const handlePendingAppend = useCallback((id: string) => {
     const pending = pendingQueue.messages.find((message) => message.id === id);
-    if (!pending) return;
-    inject(pending.content, pending.images, pending.options);
-    pendingQueue.remove(id);
+    if (!pending || pending.locked) return;
+    pendingQueue.setDeliveryState(id, "pending");
+    inject(pending.content, pending.images, { ...pending.options, inputId: id, onAdmission: (state) => {
+      if (state === "accepted") pendingQueue.remove(id);
+      else pendingQueue.setDeliveryState(id, state === "unknown" ? "unknown" : undefined);
+    } });
   }, [inject, pendingQueue]);
 
   const handleQuote = useCallback((message: UIMessage, author: string) => {

@@ -111,6 +111,8 @@ export type StreamError =
   | { kind: "message_too_big" };
 
 type ErrorHandler = (error: StreamError) => void;
+export type MessageAdmission = "accepted" | "rejected" | "unknown";
+type AdmissionHandler = (state: MessageAdmission) => void;
 
 /** Rejection for failed room commands; ``code`` carries the wire-safe
  *  server error code (e.g. ``approval_expired``) when the failure came from
@@ -157,6 +159,9 @@ export interface MonaClientOptions {
  * per chat. Reconnects are transparent and re-attach every known chat_id.
  */
 export class MonaClient {
+  private messageAdmissions = new Map<string, {
+    state?: MessageAdmission; handlers: Set<AdmissionHandler>; timer?: ReturnType<typeof setTimeout>;
+  }>();
   private socket: WebSocket | null = null;
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
@@ -321,6 +326,10 @@ export class MonaClient {
   getRunStartedAt(chatId: string): number | null {
     const v = this.runStartedAtByChatId.get(chatId);
     return v === undefined ? null : v;
+  }
+
+  getMessageAdmission(chatId: string, inputId: string): MessageAdmission | undefined {
+    return this.messageAdmissions.get(JSON.stringify([chatId, inputId]))?.state;
   }
 
   /** Last ``goal_state`` payload for *chatId*, if any frame has arrived this connection. */
@@ -945,6 +954,8 @@ export class MonaClient {
     content: string,
     media?: OutboundMedia[],
     options?: {
+      inputId?: string;
+      onAdmission?: AdmissionHandler;
       /** IMPORTANT: Short display text persisted to server for history replay.
        *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
       displayContent?: string;
@@ -986,9 +997,20 @@ export class MonaClient {
     },
   ): void {
     this.knownChats.add(chatId);
+    if (options?.inputId) {
+      const key = JSON.stringify([chatId, options.inputId]);
+      const existing = this.messageAdmissions.get(key);
+      if (existing && existing.state !== "rejected") {
+        if (options.onAdmission) existing.handlers.add(options.onAdmission);
+        if (existing.state) options.onAdmission?.(existing.state);
+        return;
+      }
+      this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []) });
+    }
     if (options?.discussion) {
       const frame: Outbound = {
         type: "start_discussion",
+        ...(options.inputId ? { input_id: options.inputId } : {}),
         chat_id: chatId,
         content,
         target_agent_ids: options.discussion.participantIds,
@@ -1012,6 +1034,7 @@ export class MonaClient {
     }
     const frame: Outbound = {
       type: "message",
+      ...(options?.inputId ? { input_id: options.inputId } : {}),
       chat_id: chatId,
       content,
       ...(media && media.length > 0 ? { media } : {}),
@@ -1086,6 +1109,17 @@ export class MonaClient {
 
     if (wsInboundDebugEnabled()) {
       console.log("[mona ws inbound]", summarizeInboundWsPayload(parsed));
+    }
+
+    if (parsed.event === "message_accepted") {
+      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+      return;
+    }
+    if (parsed.event === "error" && parsed.message_rejected && parsed.chat_id && parsed.input_id) {
+      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "rejected");
+    }
+    if (parsed.event === "agent_mentions_routed" && "input_id" in parsed && typeof parsed.input_id === "string") {
+      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
     }
 
     if (parsed.event === "ready") {
@@ -1378,6 +1412,12 @@ export class MonaClient {
 
   private handleClose(event?: { code?: number }): void {
     this.socket = null;
+    for (const [key, receipt] of this.messageAdmissions) {
+      if (!receipt.state && receipt.timer) {
+        const [chatId, inputId] = JSON.parse(key) as [string, string];
+        this.setMessageAdmission(chatId, inputId, "unknown");
+      }
+    }
     if (this.pendingNewChat) {
       clearTimeout(this.pendingNewChat.timer);
       this.pendingNewChat.reject(new Error("socket closed"));
@@ -1438,11 +1478,38 @@ export class MonaClient {
     }
   }
 
+  private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission): void {
+    const key = JSON.stringify([chatId, inputId]);
+    const receipt = this.messageAdmissions.get(key);
+    if (!receipt || receipt.state === "accepted" || receipt.state === state) return;
+    clearTimeout(receipt.timer);
+    receipt.timer = undefined;
+    receipt.state = state;
+    for (const handler of receipt.handlers) handler(state);
+    if (state !== "unknown") receipt.handlers.clear();
+    if (this.messageAdmissions.size > 256) {
+      for (const [oldKey, old] of this.messageAdmissions) {
+        if (old.state === "accepted" || old.state === "rejected") this.messageAdmissions.delete(oldKey);
+        if (this.messageAdmissions.size <= 256) break;
+      }
+    }
+  }
+
   private rawSend(frame: Outbound): void {
     if (!this.socket) return;
     try {
       this.socket.send(JSON.stringify(frame));
+      if ("input_id" in frame && frame.input_id && "chat_id" in frame) {
+        const receipt = this.messageAdmissions.get(JSON.stringify([frame.chat_id, frame.input_id]));
+        if (receipt && !receipt.state && !receipt.timer) {
+          receipt.timer = setTimeout(() => this.setMessageAdmission(frame.chat_id, frame.input_id!, "unknown"), 15_000);
+        }
+      }
     } catch {
+      if ("input_id" in frame && frame.input_id && "chat_id" in frame) {
+        this.setMessageAdmission(frame.chat_id, frame.input_id, "unknown");
+        return;
+      }
       // Send failure will materialize as a close; queue the frame for retry.
       this.sendQueue.push(frame);
     }

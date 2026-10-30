@@ -4,7 +4,7 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
-import type { StreamError } from "@/lib/mona-client";
+import type { MessageAdmission, StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
   AgentModelBinding,
@@ -452,6 +452,8 @@ export interface SendImage {
 }
 
 export interface SendOptions {
+  inputId?: string;
+  onAdmission?: (state: MessageAdmission) => void;
   displayContent?: string;
   quote?: MessageQuote;
   origin?: "profile_advice";
@@ -611,7 +613,7 @@ export function useMonaStream(
   /** Clear the current ``streamError`` (e.g. after the user dismisses the
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
-  messageRejection: { runActive: boolean } | null;
+  messageRejection: { runActive: boolean; uncertain?: boolean; inputId?: string } | null;
   dismissMessageRejection: () => void;
 } {
   const { client } = useClientOptional();
@@ -632,7 +634,11 @@ export function useMonaStream(
   const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
-  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean } | null>(null);
+  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string } | null>(null);
+  const activeChatRef = useRef(chatId);
+  activeChatRef.current = chatId;
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   const pendingMessageRef = useRef<PendingMessage | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
@@ -660,7 +666,7 @@ export function useMonaStream(
 
   useEffect(() => {
     if (!client) return undefined;
-    return client.onError((err) => setStreamError(err));
+    return client.onError((err) => { setMessageRejection(null); setStreamError(err); });
   }, [client]);
 
   const dismissStreamError = useCallback(() => setStreamError(null), []);
@@ -967,10 +973,17 @@ export function useMonaStream(
   // ``initialMessages`` update: a brand-new chat can receive an empty/404
   // history response after the optimistic first message has already rendered.
   useEffect(() => {
-    setMessages(initialMessages);
+    const restoredMessages = initialMessages.map((message) => {
+      const admission = chatId && client?.getMessageAdmission?.(chatId, message.id);
+      return admission ? { ...message,
+        sendState: admission === "accepted" ? undefined : admission === "rejected" ? "rejected" as const : "pending" as const,
+        isInjected: admission === "accepted",
+      } : message;
+    });
+    setMessages(restoredMessages.some((message, index) => message !== initialMessages[index]) ? restoredMessages : initialMessages);
     const restoredRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
     const restoredTaskPlan = chatId && client ? client.getTaskPlan?.(chatId) : undefined;
-    const pending = initialMessages.slice().reverse().find((message) => message.sendState === "pending" && message.taskId);
+    const pending = initialMessages.slice().reverse().find((message) => message.sendState === "pending" && message.taskId && message.isInjected !== false);
     pendingMessageRef.current = pending?.taskId ? {
       taskId: pending.taskId,
       messageId: pending.id,
@@ -1013,6 +1026,7 @@ export function useMonaStream(
 
     const handle = (ev: InboundEvent) => {
       if (ev.event === "error") {
+        if (ev.input_id) return;
         const pending = pendingMessageRef.current;
         if (ev.message_rejected !== true || ev.chat_id !== chatId || !pending || ev.task_id !== pending.taskId) return;
         pendingMessageRef.current = null;
@@ -1777,15 +1791,17 @@ export function useMonaStream(
       }
 
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      const inputId = options?.inputId ?? crypto.randomUUID();
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((message) => message.id !== inputId),
         {
-          id: crypto.randomUUID(),
+          id: inputId,
           role: "user" as const,
           content,
           taskId,
           createdAt: Date.now(),
-          isInjected: true,
+          sendState: "pending",
+          isInjected: false,
           ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
           ...(previews ? { images: previews } : {}),
           ...(options?.documentNames?.length ? {
@@ -1794,7 +1810,19 @@ export function useMonaStream(
         },
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
-      client.sendMessage(chatId, content, wireMedia, options ? { ...options, taskId } : { taskId });
+      client.sendMessage(chatId, content, wireMedia, {
+        ...options, taskId, inputId,
+        onAdmission: (state) => {
+          options?.onAdmission?.(state);
+          if (!mountedRef.current || activeChatRef.current !== chatId) return;
+          setMessages((previous) => previous.map((message) => message.id === inputId ? {
+            ...message, sendState: state === "accepted" ? undefined : state === "rejected" ? "rejected" : "pending",
+            isInjected: state === "accepted",
+          } : message));
+          if (state !== "accepted") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId });
+          else setMessageRejection((current) => current?.inputId === inputId ? null : current);
+        },
+      });
     },
     [chatId, client],
   );

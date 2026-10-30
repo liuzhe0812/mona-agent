@@ -69,6 +69,53 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("dispatches an offline identified input for the first time after connecting", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const admission = vi.fn();
+    client.sendMessage("chat-a", "first dispatch", undefined, { inputId: "input-one", onAdmission: admission });
+    vi.advanceTimersByTime(20_000);
+    expect(admission).not.toHaveBeenCalled();
+    client.connect(); lastSocket().fakeOpen();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "message")).toHaveLength(1);
+    lastSocket().fakeMessage({ event: "message_accepted", chat_id: "chat-a", input_id: "input-one" });
+    expect(admission).toHaveBeenLastCalledWith("accepted");
+    client.close();
+  });
+
+  it("does not replay an identified input after send throws with an uncertain result", () => {
+    const client = new MonaClient({ url: "ws://test", socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const admission = vi.fn();
+    client.connect(); lastSocket().fakeOpen();
+    lastSocket().send = () => { throw new Error("write result unknown"); };
+    client.sendMessage("chat-a", "only once", undefined, { inputId: "input-one", onAdmission: admission });
+    expect(admission).toHaveBeenLastCalledWith("unknown");
+    lastSocket().fakeCloseWithCode(1006);
+    vi.advanceTimersByTime(500);
+    lastSocket().fakeOpen();
+    client.sendMessage("chat-a", "only once", undefined, { inputId: "input-one", onAdmission: admission });
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "message")).toEqual([]);
+    client.close();
+  });
+
+  it("preserves unknown input identity across reconnect without resending and accepts a late receipt", () => {
+    const client = new MonaClient({ url: "ws://test", socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const admission = vi.fn();
+    client.connect(); lastSocket().fakeOpen();
+    client.sendMessage("chat-a", "only once", undefined, { inputId: "input-one", onAdmission: admission });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).toMatchObject({ input_id: "input-one", content: "only once" });
+    lastSocket().fakeCloseWithCode(1006);
+    expect(admission).toHaveBeenLastCalledWith("unknown");
+    vi.advanceTimersByTime(500);
+    lastSocket().fakeOpen();
+    client.sendMessage("chat-a", "only once", undefined, { inputId: "input-one", onAdmission: admission });
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "message")).toEqual([]);
+    lastSocket().fakeMessage({ event: "message_accepted", chat_id: "other-chat", input_id: "input-one" });
+    expect(client.getMessageAdmission("chat-a", "input-one")).toBe("unknown");
+    lastSocket().fakeMessage({ event: "message_accepted", chat_id: "chat-a", input_id: "input-one" });
+    expect(admission).toHaveBeenLastCalledWith("accepted");
+    client.close();
+  });
+
   it("keeps question snapshots isolated and correlates structured answers and cancellation", async () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     client.connect(); lastSocket().fakeOpen();

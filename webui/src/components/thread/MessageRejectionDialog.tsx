@@ -14,7 +14,7 @@ export function MessageRejectionDialog({
   rejection,
   onDismiss,
 }: {
-  rejection: { runActive: boolean } | null;
+  rejection: { runActive: boolean; uncertain?: boolean } | null;
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
@@ -22,9 +22,9 @@ export function MessageRejectionDialog({
     <AlertDialog open={rejection !== null} onOpenChange={(open) => { if (!open) onDismiss(); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("errors.messageRejected.title")}</AlertDialogTitle>
+          <AlertDialogTitle>{t(rejection?.uncertain ? "errors.messageRejected.unknownTitle" : "errors.messageRejected.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            {t(rejection?.runActive ? "errors.messageRejected.runActiveBody" : "errors.messageRejected.body")}
+            {t(rejection?.uncertain ? "errors.messageRejected.unknownBody" : rejection?.runActive ? "errors.messageRejected.runActiveBody" : "errors.messageRejected.body")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

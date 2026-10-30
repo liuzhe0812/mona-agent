@@ -1381,6 +1381,30 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("retains a rejected append and removes it only after accepting the same input ID", async () => {
+    const client = makeClient();
+    const chatId = "queue-receipt";
+    render(wrap(client, <ThreadShell session={session(chatId)} title="Receipts" onToggleSidebar={() => {}} />));
+    act(() => client._emitChat(chatId, { event: "goal_status", chat_id: chatId, status: "running", started_at: 100 }));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "pending supplement" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    const first = client.sendMessage.mock.calls[0][3];
+    expect(first.inputId).toEqual(expect.any(String));
+    expect(screen.getByRole("button", { name: "Append to current task" })).toBeDisabled();
+    act(() => first.onAdmission("rejected"));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Message not sent");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByRole("button", { name: "Append to current task" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    const retry = client.sendMessage.mock.calls[1][3];
+    expect(retry.inputId).toBe(first.inputId);
+    act(() => retry.onAdmission("accepted"));
+    expect(screen.queryByRole("button", { name: "Append to current task" })).not.toBeInTheDocument();
+    expect(screen.getByText("pending supplement")).toBeInTheDocument();
+    expect(client.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("shows a rejected-send dialog once, keeps the user input, and allows another send without stopping", async () => {
     const client = makeClient();
     const chatId = "chat-rejected-send";

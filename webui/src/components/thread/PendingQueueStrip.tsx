@@ -56,6 +56,7 @@ export function PendingQueueStrip({
               <span className="min-w-0 flex-1 truncate text-caption text-foreground/75">
                 {msg.content || msg.options?.documentNames?.join("、") || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
               </span>
+              {msg.deliveryState === "unknown" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("errors.messageRejected.unknownTitle")}</span>}
               <div
                 className={cn(
                   "ml-1 flex shrink-0 items-center gap-0.5 transition-opacity",

@@ -2065,9 +2065,12 @@ describe("useMonaStream", () => {
       "chat-inject",
       "correction",
       undefined,
-      { taskId },
+        expect.objectContaining({ taskId, inputId: expect.any(String), onAdmission: expect.any(Function) }),
     );
     expect(result.current.isStreaming).toBe(true);
+      const admission = fake.client.sendMessage.mock.calls.at(-1)![3]!.onAdmission!;
+      expect(result.current.messages.at(-1)).toMatchObject({ sendState: "pending", isInjected: false });
+      act(() => admission("accepted"));
 
     const injectedBubble = result.current.messages.find(
       (m) => m.role === "user" && m.isInjected,
@@ -2123,7 +2126,7 @@ describe("useMonaStream", () => {
       "chat-inject-image",
       "look at this",
       [image.media],
-      { taskId: expect.any(String) },
+        expect.objectContaining({ taskId: expect.any(String), inputId: expect.any(String), onAdmission: expect.any(Function) }),
     );
     expect(result.current.messages.at(-1)?.images).toEqual([image.preview]);
   });

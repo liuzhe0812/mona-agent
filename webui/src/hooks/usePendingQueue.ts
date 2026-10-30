@@ -8,6 +8,7 @@ export interface PendingMessage {
   images?: SendImage[];
   options?: SendOptions;
   locked?: boolean;
+  deliveryState?: "pending" | "unknown";
 }
 
 const MAX_PENDING = 3;
@@ -54,5 +55,11 @@ export function usePendingQueue(chatId: string | null = null) {
     setMessages(() => []);
   }, [setMessages]);
 
-  return { messages, enqueue, remove, update, clear };
+  const setDeliveryState = useCallback((id: string, deliveryState?: PendingMessage["deliveryState"]) => {
+    setMessages((previous) => previous.map((message) => message.id === id
+      ? { ...message, deliveryState, locked: deliveryState !== undefined }
+      : message));
+  }, [setMessages]);
+
+  return { messages, enqueue, remove, update, clear, setDeliveryState };
 }

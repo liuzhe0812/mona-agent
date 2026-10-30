@@ -4612,12 +4612,18 @@ class WebSocketChannel(BaseChannel):
         chat_id = envelope.get("chat_id")
         content = envelope.get("content")
         if not _is_valid_chat_id(chat_id):
-            await self._send_event(connection, "error", detail="invalid chat_id")
+            await self._reject_chat_message(connection, envelope, "invalid chat_id")
             return
         if not isinstance(content, str) or not content.strip():
-            await self._send_event(connection, "error", detail="discussion topic is required")
+            await self._reject_chat_message(connection, envelope, "discussion topic is required")
             return
         metadata: dict[str, Any] = {"webui": envelope.get("webui") is True}
+        input_id = envelope.get("input_id")
+        if input_id is not None:
+            if not isinstance(input_id, str) or len(input_id) > 128 or not _API_KEY_RE.fullmatch(input_id):
+                await self._reject_chat_message(connection, envelope, "invalid input_id")
+                return
+            metadata["input_id"] = input_id
         task_id = envelope.get("task_id")
         if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip()):
             metadata["task_id"] = task_id.strip()
@@ -4638,11 +4644,7 @@ class WebSocketChannel(BaseChannel):
             raw_discussion=envelope.get("discussion"),
         )
         if not routed:
-            await self._send_event(
-                connection,
-                "error",
-                detail="discussion requires at least two room Agent participants",
-            )
+            await self._reject_chat_message(connection, envelope, "discussion requires at least two room Agent participants")
 
     async def _route_room_agent_mentions(
         self,
@@ -4666,20 +4668,27 @@ class WebSocketChannel(BaseChannel):
         from mona.agent.partners import MONA_AGENT_ID
         from mona.agent.room import RoomError, require_room_member, resolve_target_agents
 
+        input_id = metadata.get("input_id")
+        input_identity = {"input_id": input_id} if isinstance(input_id, str) else {}
+        rejection = {
+            "chat_id": chat_id, "message_rejected": True, **input_identity,
+            **({"task_id": metadata["task_id"]} if metadata.get("task_id") else {}),
+        } if input_identity else {}
+
         if not isinstance(raw_targets, list) or any(not isinstance(t, str) for t in raw_targets):
-            await self._send_event(connection, "error", detail="invalid target_agent_ids")
+            await self._send_event(connection, "error", **rejection, detail="invalid target_agent_ids")
             return True
         if not raw_targets:
             return False
         if self._session_manager is None:
-            await self._send_event(connection, "error", detail="session manager unavailable")
+            await self._send_event(connection, "error", **rejection, detail="session manager unavailable")
             return True
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         try:
             targets = resolve_target_agents(conversation, raw_targets)
         except RoomError as exc:
-            await self._send_event(connection, "error", detail=str(exc))
+            await self._send_event(connection, "error", **rejection, detail=str(exc))
             return True
         # Keep the structured target order stable even if a resolver or a
         # legacy caller returns duplicates.  The UI uses this order for
@@ -4696,11 +4705,12 @@ class WebSocketChannel(BaseChannel):
             if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip())
             else {}
         )
+        user_identity.update(input_identity)
         discussion_payload: dict[str, Any] | None = None
         discussion_mode: collaboration.DiscussionMode | None = None
         if raw_discussion is not None:
             if not isinstance(raw_discussion, dict):
-                await self._send_event(connection, "error", detail="discussion must be an object")
+                await self._send_event(connection, "error", **rejection, detail="discussion must be an object")
                 return True
             discussion_payload = raw_discussion
             try:
@@ -4708,7 +4718,7 @@ class WebSocketChannel(BaseChannel):
                     str(discussion_payload.get("mode", "discussion")).strip().lower()
                 )
             except ValueError as exc:
-                await self._send_event(connection, "error", detail=str(exc))
+                await self._send_event(connection, "error", **rejection, detail=str(exc))
                 return True
             collaboration_mode = collaboration.CollaborationMode.PARALLEL
         # A single direct mention keeps the legacy direct-job path.  Natural
@@ -4718,7 +4728,7 @@ class WebSocketChannel(BaseChannel):
             try:
                 collaboration_mode = collaboration.infer_collaboration_mode(content, targets)
             except ValueError as exc:
-                await self._send_event(connection, "error", detail=str(exc))
+                await self._send_event(connection, "error", **rejection, detail=str(exc))
                 return True
         else:
             collaboration_mode = collaboration.CollaborationMode.PARALLEL
@@ -4734,7 +4744,7 @@ class WebSocketChannel(BaseChannel):
             or collaboration_mode is not collaboration.CollaborationMode.PARALLEL
         ):
             if self._subagent_manager is None:
-                await self._send_event(connection, "error", detail="agent routing unavailable")
+                await self._send_event(connection, "error", **rejection, detail="agent routing unavailable")
                 return True
 
             # Collaboration workflows receive the same room message snapshot
@@ -4846,7 +4856,7 @@ class WebSocketChannel(BaseChannel):
                 # Startup validation/conflict is a handled routing result. Do
                 # not fall through to the legacy path, which would duplicate
                 # jobs or start Mona a second time.
-                await self._send_event(connection, "error", detail=str(exc))
+                await self._send_event(connection, "error", **rejection, detail=str(exc))
                 return True
 
             await self._send_event(
@@ -4857,6 +4867,7 @@ class WebSocketChannel(BaseChannel):
                 failures=None,
                 mode=routed_mode,
                 collaboration_id=launch_id,
+                **input_identity,
             )
             return True
 
@@ -4866,7 +4877,7 @@ class WebSocketChannel(BaseChannel):
         if not partner_targets:
             return False
         if self._subagent_manager is None:
-            await self._send_event(connection, "error", detail="agent routing unavailable")
+            await self._send_event(connection, "error", **(rejection if not mona_targeted else {}), detail="agent routing unavailable")
             # Mona can still answer its direct mention through the normal
             # flow; only partner dispatch is unavailable.
             return not mona_targeted
@@ -4967,7 +4978,7 @@ class WebSocketChannel(BaseChannel):
             metadata["_direct_target_agent_ids"] = list(targets)
             metadata["_partner_jobs_dispatched"] = list(delegated)
         if failures and not delegated:
-            await self._send_event(connection, "error", detail="; ".join(failures))
+            await self._send_event(connection, "error", **(rejection if not mona_targeted else {}), detail="; ".join(failures))
             return not mona_targeted
         await self._send_event(
             connection,
@@ -4975,6 +4986,7 @@ class WebSocketChannel(BaseChannel):
             chat_id=chat_id,
             agents=delegated,
             failures=failures or None,
+            **input_identity,
         )
         # When Mona is also a target the normal flow runs too, so she answers
         # alongside the delegated partner jobs.
@@ -6144,6 +6156,9 @@ class WebSocketChannel(BaseChannel):
         task_id = envelope.get("task_id")
         if isinstance(task_id, str) and task_id.strip() and len(task_id) <= 512:
             fields["task_id"] = task_id.strip()
+        input_id = envelope.get("input_id")
+        if isinstance(input_id, str) and len(input_id) <= 128:
+            fields["input_id"] = input_id
         await self._send_event(
             connection, "error", chat_id=envelope.get("chat_id"),
             message_rejected=True, detail=detail, **fields,
@@ -6326,6 +6341,15 @@ class WebSocketChannel(BaseChannel):
             if not isinstance(content, str):
                 await self._reject_chat_message(connection, envelope, "missing content")
                 return
+            input_id = envelope.get("input_id")
+            if input_id is not None and (
+                not isinstance(input_id, str) or len(input_id) > 128 or not _API_KEY_RE.fullmatch(input_id)
+            ):
+                await self._reject_chat_message(connection, envelope, "invalid input_id")
+                return
+            if input_id is not None and not self.is_allowed(client_id):
+                await self._reject_chat_message(connection, envelope, "message not allowed", code="access_denied")
+                return
             from mona.agent.document_loop import DOCUMENT_PROFILES
 
             message_agent_kind = envelope.get("agent_kind")
@@ -6448,6 +6472,8 @@ class WebSocketChannel(BaseChannel):
             self._attach(connection, cid)
             await self._hydrate_after_subscribe(cid)
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
+            if input_id is not None:
+                metadata["input_id"] = input_id
             if envelope.get("webui") is True:
                 metadata["webui"] = True
             if envelope.get("ui_theme") in ("dark", "light"):
@@ -6594,6 +6620,8 @@ class WebSocketChannel(BaseChannel):
                 metadata=metadata,
                 is_dm=False,
             )
+            if input_id is not None:
+                await self._send_event(connection, "message_accepted", chat_id=cid, input_id=input_id)
             return
         if t == "delete_chat":
             cid = envelope.get("chat_id")

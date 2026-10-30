@@ -1330,6 +1330,7 @@ export type InboundEvent =
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
   | { event: "artifact_task_started"; chat_id: string; task_id: string }
+  | { event: "message_accepted"; chat_id: string; input_id: string }
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
   | {
@@ -1340,6 +1341,7 @@ export type InboundEvent =
       code?: string;
       /** The identified message was not accepted; an earlier task may still be running. */
       message_rejected?: boolean;
+      input_id?: string;
       task_id?: string;
     }
   | {
@@ -1503,6 +1505,7 @@ export type Outbound =
   | { type: "attach"; chat_id: string }
   | {
       type: "start_discussion";
+      input_id?: string;
       chat_id: string;
       content: string;
       task_id?: string;
@@ -1521,6 +1524,7 @@ export type Outbound =
     }
   | {
       type: "message";
+      input_id?: string;
       chat_id: string;
       content: string;
       media?: OutboundMedia[];

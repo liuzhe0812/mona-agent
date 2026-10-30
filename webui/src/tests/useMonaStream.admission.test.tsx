@@ -226,4 +226,49 @@ describe("chat admission and runtime recovery", () => {
     expect(result.current.isAwaitingModelResponse).toBe(true);
     expect(result.current.messages[0]).toMatchObject({ content: "first input", sendState: "pending" });
   });
+
+  it("correlates append rejection and acceptance by input ID and retains attachments for an explicit retry", () => {
+    const { socket, wrapper } = setup();
+    const receipt = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "artifact_task_started", chat_id: "chat", task_id: "same-task" }));
+    const options = { inputId: "input-one", docPaths: ["uploads/brief.pdf"], documentNames: ["brief.pdf"], onAdmission: receipt };
+    act(() => result.current.inject("", undefined, options));
+    expect(socket.messages[0]).toMatchObject({ input_id: "input-one", task_id: "same-task", doc_paths: options.docPaths });
+    expect(result.current.messages.at(-1)).toMatchObject({ id: "input-one", sendState: "pending", isInjected: false });
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "same-task", input_id: "unrelated-input", message_rejected: true }));
+    expect(receipt).not.toHaveBeenCalled();
+    expect(result.current.messageRejection).toBeNull();
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "same-task", input_id: "input-one", message_rejected: true }));
+    expect(receipt).toHaveBeenLastCalledWith("rejected");
+    expect(result.current.messages.at(-1)).toMatchObject({ sendState: "rejected", media: [{ kind: "file", name: "brief.pdf" }] });
+    act(() => result.current.inject("", undefined, options));
+    expect(socket.messages[1]).toMatchObject({ input_id: "input-one", doc_paths: options.docPaths });
+    act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "input-one" }));
+    expect(receipt).toHaveBeenLastCalledWith("accepted");
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({ isInjected: true, sendState: undefined });
+    expect(result.current.messageRejection).toBeNull();
+  });
+
+  it("retains an unknown append without replay, and settles a late receipt in the original chat", () => {
+    vi.useFakeTimers();
+    try {
+      const { client, socket, wrapper } = setup();
+      const receipt = vi.fn();
+      const { result, rerender } = renderHook(({ chatId }) => useMonaStream(chatId, empty), { wrapper, initialProps: { chatId: "chat" } });
+      act(() => result.current.inject("do this once", undefined, { inputId: "input-one", onAdmission: receipt }));
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(receipt).toHaveBeenLastCalledWith("unknown");
+      expect(result.current.messageRejection?.uncertain).toBe(true);
+      act(() => result.current.inject("do this once", undefined, { inputId: "input-one", onAdmission: receipt }));
+      expect(socket.messages).toHaveLength(1);
+      rerender({ chatId: "other-chat" });
+      act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "input-one" }));
+      expect(receipt).toHaveBeenLastCalledWith("accepted");
+      expect(client.getMessageAdmission("chat", "input-one")).toBe("accepted");
+      expect(result.current.messages).toEqual([]);
+      expect(result.current.messageRejection).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
 });
