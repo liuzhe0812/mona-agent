@@ -433,99 +433,60 @@ describe("App layout", () => {
     expect(document.body.style.pointerEvents).not.toBe("none");
   });
 
-  it.skip("applies persisted sidebar workspace state from the gateway", async () => {
+  it("restores persisted conversation and project metadata and preserves it across sidebar updates", async () => {
+    const workspace = "D:/work/ProjectAlpha";
     mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "First chat",
-      },
-      {
-        key: "websocket:chat-b",
-        channel: "websocket",
-        chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Second chat",
-      },
-    ];
-    const initialState = {
-      schema_version: 1,
-      pinned_keys: ["websocket:chat-b"],
-      archived_keys: ["websocket:chat-a"],
-      title_overrides: { "websocket:chat-b": "Roadmap" },
-      tags_by_key: {},
-      collapsed_groups: {},
-      view: {
-        density: "comfortable",
-        show_previews: false,
-        show_timestamps: false,
-        show_archived: false,
-        sort: "updated_desc",
-      },
-      updated_at: null,
+      { id: "archived", title: "Archived chat" },
+      { id: "pinned", title: "Original title" },
+      { id: "project", title: "Project task", workspace },
+      { id: "regular", title: "Archive target" },
+    ].map(({ id, ...fields }) => ({
+      key: `websocket:${id}`, channel: "websocket", chatId: id,
+      createdAt: null, updatedAt: null, preview: "", ...fields,
+    }));
+    const { DEFAULT_SIDEBAR_STATE: defaults } = await import("@/hooks/useSidebarState");
+    let storedState: typeof defaults = {
+      ...defaults, view: { ...defaults.view },
+      pinned_keys: ["websocket:pinned"], archived_keys: ["websocket:archived"],
+      title_overrides: { "websocket:pinned": "Roadmap" },
+      project_names: { [workspace]: "Renamed project" },
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(async (
-        url: string | URL | Request,
-        init?: RequestInit,
-      ) => {
-        const href = String(url);
-        if (href === "/api/webui/sidebar-state") {
-          return {
-            ok: true,
-            headers: { get: () => "application/json" },
-            json: async () => initialState,
-          };
-        }
-        if (href === "/api/webui/sidebar-state/update") {
-          return {
-            ok: true,
-            headers: { get: () => "application/json" },
-            json: async () => JSON.parse(String(init?.body ?? "{}")),
-          };
-        }
-        return { ok: false, status: 404 };
-      }),
-    );
+    const load = vi.spyOn(api, "fetchSidebarState").mockImplementation(async () => storedState);
+    const save = vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => {
+      storedState = state;
+      return state;
+    });
+    const first = render(<App />);
+    const sidebar = await screen.findByRole("region", { name: "Sessions" });
+    const pinned = await within(sidebar).findByRole("region", { name: "Pinned" });
+    expect(within(pinned).getByTitle("Roadmap")).toBeInTheDocument();
+    expect(within(sidebar).queryByTitle("Archived chat")).not.toBeInTheDocument();
+    expect(within(sidebar).queryByTitle("Original title")).not.toBeInTheDocument();
+    expect(within(within(sidebar).getByRole("region", { name: "Renamed project" })).getByTitle("Project task"))
+      .toBeInTheDocument();
+    expect(load).toHaveBeenCalledWith("tok");
 
+    fireEvent.contextMenu(within(sidebar).getByTitle("Roadmap"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Unpin" }));
+    await waitFor(() => expect(save.mock.calls.at(-1)?.[1].pinned_keys).toEqual([]));
+    fireEvent.contextMenu(within(sidebar).getByTitle("Archive target"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(save.mock.calls.at(-1)?.[1].archived_keys).toEqual([
+      "websocket:archived", "websocket:regular",
+    ]));
+    expect(storedState.title_overrides).toEqual({ "websocket:pinned": "Roadmap" });
+    expect(storedState.project_names).toEqual({ [workspace]: "Renamed project" });
+    const loaded = load.mock.calls.length;
+    first.unmount();
     render(<App />);
-
-    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = getSessionPanel();
-    await waitFor(() =>
-      expect(within(sidebar).getByText("Pinned")).toBeInTheDocument(),
-    );
-    expect(within(sidebar).getByTitle("Roadmap")).toBeInTheDocument();
-    expect(within(sidebar).queryByTitle("First chat")).not.toBeInTheDocument();
-
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Show archived" }));
-    await waitFor(() =>
-      expect(within(sidebar).getByText("Archived")).toBeInTheDocument(),
-    );
-    expect(within(sidebar).getByTitle("First chat")).toBeInTheDocument();
-    const updateBodies = () => vi.mocked(fetch).mock.calls
-      .filter(([url]) => String(url) === "/api/webui/sidebar-state/update")
-      .map(([, init]) => JSON.parse(String(init?.body ?? "{}")));
-    expect(updateBodies().at(-1)?.view.show_archived).toBe(true);
-
-    fireEvent.pointerDown(within(sidebar).getByRole("button", { name: "View" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(await screen.findByText("Compact list"));
-    await waitFor(() => {
-      expect(updateBodies().at(-1)?.view.density).toBe("compact");
-    });
-
-    fireEvent.click(screen.getByText("Title A-Z"));
-    await waitFor(() => {
-      expect(updateBodies().at(-1)?.view.sort).toBe("title_asc");
-    });
+    await waitFor(() => expect(load.mock.calls.length).toBeGreaterThan(loaded));
+    const restored = await screen.findByRole("region", { name: "Sessions" });
+    await waitFor(() => expect(within(restored).queryByRole("region", { name: "Pinned" })).not.toBeInTheDocument());
+    expect(within(restored).getByTitle("Roadmap")).toBeInTheDocument();
+    expect(within(restored).getByRole("region", { name: "Renamed project" })).toBeInTheDocument();
+    expect(within(restored).queryByTitle("Archived chat")).not.toBeInTheDocument();
+    expect(within(restored).queryByTitle("Archive target")).not.toBeInTheDocument();
+    expect(createChatSpy).not.toHaveBeenCalled();
   });
 
   it.skip("sorts chats by displayed title when A-Z is persisted", async () => {
