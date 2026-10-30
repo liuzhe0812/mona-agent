@@ -967,6 +967,62 @@ describe("useMonaStream", () => {
     expect(fileEditSegments[0]).not.toBe(fileEditSegments[1]);
   });
 
+  it.each(["stream", "keyed", "legacy"] as const)("bounds the first oversized %s reasoning display while retaining its latest text", async (mode) => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("bounded-reasoning", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    const latest = "思".repeat(128_000);
+    act(() => {
+      fake.emit("bounded-reasoning", mode === "legacy"
+        ? { event: "message", chat_id: "bounded-reasoning", kind: "reasoning", text: `older content\n${latest}` }
+        : { event: "reasoning_delta", chat_id: "bounded-reasoning", text: `older content\n${latest}`,
+          ...(mode === "keyed" ? { author_id: "partner", job_id: "job-a" } : {}) });
+    });
+    await flushStreamFrame();
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].reasoning).toBe(`…\n${latest}`);
+    expect(result.current.messages[0].reasoningStreaming).toBe(mode !== "legacy");
+  });
+
+  it("uses the same reasoning display bound at the exact limit and on later appends", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("bounded-reasoning", EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    const exact = "x".repeat(128_000);
+    act(() => fake.emit("bounded-reasoning", { event: "reasoning_delta", chat_id: "bounded-reasoning", text: exact }));
+    await flushStreamFrame();
+    expect(result.current.messages[0].reasoning).toBe(exact);
+    act(() => fake.emit("bounded-reasoning", { event: "reasoning_delta", chat_id: "bounded-reasoning", text: "latest" }));
+    await flushStreamFrame();
+    expect(result.current.messages[0].reasoning).toBe(`…\n${exact.slice(6)}latest`);
+  });
+
+  it("bounds a first batch aggregated from multiple reasoning frames", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("bounded-reasoning", EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    act(() => {
+      for (let index = 0; index < 3; index++) {
+        fake.emit("bounded-reasoning", { event: "reasoning_delta", chat_id: "bounded-reasoning", text: String(index).repeat(64_000) });
+      }
+    });
+    await flushStreamFrame();
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].reasoning).toBe(`…\n${"1".repeat(64_000)}${"2".repeat(64_000)}`);
+  });
+
+  it("keeps another agent's reasoning separate when bounding an oversized first batch", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("bounded-reasoning", EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    act(() => {
+      fake.emit("bounded-reasoning", { event: "reasoning_delta", chat_id: "bounded-reasoning", job_id: "job-a", author_id: "alpha", text: "a".repeat(128_001) });
+      fake.emit("bounded-reasoning", { event: "reasoning_delta", chat_id: "bounded-reasoning", job_id: "job-b", author_id: "beta", text: "beta thought" });
+    });
+    await flushStreamFrame();
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0].reasoning).toBe(`…\n${"a".repeat(128_000)}`);
+    expect(result.current.messages[1].reasoning).toBe("beta thought");
+  });
+
   it("accumulates reasoning_delta chunks on a placeholder until reasoning_end", async () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-r", EMPTY_MESSAGES), {

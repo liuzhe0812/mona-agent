@@ -178,7 +178,7 @@ function attachReasoningChunk(
       const next = prev.slice();
       next[i] = {
         ...candidate,
-        reasoning: chunk,
+        reasoning: boundedReasoning(chunk),
         reasoningStreaming: true,
         ...(activitySegmentId ? { activitySegmentId } : {}),
       };
@@ -194,7 +194,7 @@ function attachReasoningChunk(
       role: "assistant",
       content: "",
       isStreaming: true,
-      reasoning: chunk,
+      reasoning: boundedReasoning(chunk),
       reasoningStreaming: true,
       ...(activitySegmentId ? { activitySegmentId } : {}),
       createdAt: Date.now(),
@@ -902,7 +902,7 @@ export function useMonaStream(
               if (!hasAnswer && candidate.isStreaming) {
                 draft[j] = {
                   ...candidate,
-                  reasoning: text,
+                  reasoning: boundedReasoning(text),
                   reasoningStreaming: true,
                   ...(activitySegmentId ? { activitySegmentId } : {}),
                 };
@@ -920,7 +920,7 @@ export function useMonaStream(
               role: "assistant",
               content: "",
               isStreaming: true,
-              reasoning: text,
+              reasoning: boundedReasoning(text),
               reasoningStreaming: true,
               ...(activitySegmentId ? { activitySegmentId } : {}),
               createdAt: Date.now(),
