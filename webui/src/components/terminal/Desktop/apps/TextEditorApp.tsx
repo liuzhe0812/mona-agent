@@ -1,6 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Save, Loader2, AlertCircle } from "lucide-react";
 import { desktopGetFileContent, desktopSaveFileContent } from "../../ipc";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface TextEditorAppProps {
   sessionId: string;
@@ -9,16 +18,18 @@ interface TextEditorAppProps {
 
 export function TextEditorApp({ sessionId, filePath }: TextEditorAppProps) {
   const [content, setContent] = useState("");
+  const contentRef = useRef(content);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     if (filePath) {
       loadContent();
     }
-  }, [filePath]);
+  }, [filePath, sessionId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -29,31 +40,32 @@ export function TextEditorApp({ sessionId, filePath }: TextEditorAppProps) {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [content, filePath]);
+  }, [content, filePath, sessionId, loading, loadError]);
 
   const loadContent = async () => {
     if (!filePath) return;
     setLoading(true);
-    setError(null);
+    setLoadError(false);
     try {
       const data = await desktopGetFileContent(sessionId, filePath);
+      contentRef.current = data;
       setContent(data);
       setIsDirty(false);
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
   };
 
   const saveContent = async () => {
-    if (!filePath) return;
+    if (!filePath || loading || loadError) return;
     setSaving(true);
     try {
       await desktopSaveFileContent(sessionId, filePath, content);
-      setIsDirty(false);
-    } catch (err) {
-      setError(String(err));
+      if (contentRef.current === content) setIsDirty(false);
+    } catch {
+      setSaveError(true);
     } finally {
       setSaving(false);
     }
@@ -76,11 +88,11 @@ export function TextEditorApp({ sessionId, filePath }: TextEditorAppProps) {
     );
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-red-400">
         <AlertCircle className="h-8 w-8" />
-        <p>{error}</p>
+        <p>读取文件失败，请检查路径、访问权限和连接后重试。</p>
         <button
           onClick={loadContent}
           className="mt-4 rounded bg-white/10 px-4 py-2 text-sm text-white transition-colors hover:bg-white/20"
@@ -120,6 +132,7 @@ export function TextEditorApp({ sessionId, filePath }: TextEditorAppProps) {
         <textarea
           value={content}
           onChange={(e) => {
+            contentRef.current = e.target.value;
             setContent(e.target.value);
             setIsDirty(true);
           }}
@@ -133,6 +146,20 @@ export function TextEditorApp({ sessionId, filePath }: TextEditorAppProps) {
         <span>UTF-8</span>
         <span>{content.split("\n").length} 行</span>
       </div>
+
+      <AlertDialog open={saveError} onOpenChange={setSaveError}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>保存失败</AlertDialogTitle>
+            <AlertDialogDescription>
+              无法确认文件的保存结果，草稿仍在编辑器中。请先检查远程文件、路径和访问权限后再重试。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

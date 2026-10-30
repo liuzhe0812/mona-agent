@@ -4,7 +4,7 @@ use crate::terminal::config::ConnectionConfig;
 use crate::terminal::credential_store;
 use crate::terminal::error::TerminalError;
 use crate::terminal::session::{Session, SessionHandle, SessionStatus, SessionType};
-use crate::terminal::ssh::client::SshClient;
+use crate::terminal::ssh::client::{ExecResult, SshClient};
 use crate::terminal::TerminalState;
 use tauri::{AppHandle, State};
 
@@ -37,12 +37,38 @@ fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::shell_quote;
+    use super::{desktop_exec_output, shell_quote, ExecResult};
 
     #[test]
     fn quotes_remote_shell_arguments() {
         assert_eq!(shell_quote("a'b;$(printf injected)"), "'a'\"'\"'b;$(printf injected)'");
         assert_eq!(shell_quote("-file"), "'-file'");
+    }
+
+    #[test]
+    fn desktop_exec_requires_a_successful_exit_status() {
+        let result = |exit_code, stdout: &str, stderr: &str| ExecResult {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            exit_code,
+        };
+
+        assert_eq!(
+            desktop_exec_output(result(Some(0), "content", "warning")),
+            Ok("content".into())
+        );
+        assert_eq!(
+            desktop_exec_output(result(Some(0), "", "warning")),
+            Ok(String::new())
+        );
+        assert_eq!(
+            desktop_exec_output(result(Some(1), "partial", "private content")),
+            Err("操作失败，请检查目标及访问权限后重试。".into()),
+        );
+        assert_eq!(
+            desktop_exec_output(result(None, "partial", "private content")),
+            Err("无法确认操作结果，请检查目标状态后再重试。".into()),
+        );
     }
 }
 
@@ -61,13 +87,24 @@ async fn get_desktop_client(
     }
 }
 
+fn desktop_exec_output(result: ExecResult) -> Result<String, String> {
+    match result.exit_code {
+        Some(0) => Ok(result.stdout),
+        Some(_) => Err("操作失败，请检查目标及访问权限后重试。".into()),
+        None => Err("无法确认操作结果，请检查目标状态后再重试。".into()),
+    }
+}
+
 async fn exec_command(client: &SshClient, cmd: &str) -> Result<String, String> {
     let result = client.exec_command(cmd).await.map_err(|e| e.to_string())?;
-    if result.stdout.is_empty() && !result.stderr.is_empty() {
-        Ok(result.stderr)
-    } else {
-        Ok(result.stdout)
+    if result.exit_code != Some(0) {
+        log::warn!(
+            "Desktop command failed: exit_code={:?}, stderr_bytes={}",
+            result.exit_code,
+            result.stderr.len()
+        );
     }
+    desktop_exec_output(result)
 }
 
 async fn safe_exec(client: &SshClient, cmd: &str) -> String {
