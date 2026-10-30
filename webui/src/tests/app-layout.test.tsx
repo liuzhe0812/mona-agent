@@ -314,6 +314,58 @@ describe("App layout", () => {
     expect(getSessionPanel()).toBeInTheDocument();
   });
 
+  it("keeps sidebar toggle states separate across viewport changes and closes the mobile sheet on desktop", async () => {
+    let viewportWidth = 1280;
+    const widthListeners = new Set<(event: MediaQueryListEvent) => void>();
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      get matches() { return Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= viewportWidth; },
+      media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => {
+        if (query === "(min-width: 768px)") widthListeners.add(handler);
+      },
+      removeEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => widthListeners.delete(handler),
+      dispatchEvent: vi.fn(),
+    })));
+    const resizeTo = (width: number) => act(() => {
+      viewportWidth = width;
+      widthListeners.forEach((handler) => handler({ matches: width >= 768 } as MediaQueryListEvent));
+    });
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+
+    expect(screen.getByRole("button", { name: "收起会话列表" })).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByRole("button", { name: "收起会话列表" }));
+    expect(screen.getByRole("button", { name: "展开会话列表" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "Sessions" })).not.toBeInTheDocument();
+
+    resizeTo(640);
+    const mobileToggle = screen.getByRole("button", { name: "展开会话列表" });
+    expect(mobileToggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(mobileToggle);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(mobileToggle).toHaveAttribute("aria-label", "收起会话列表");
+    expect(mobileToggle).toHaveAttribute("aria-expanded", "true");
+
+    resizeTo(1280);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.body.style.pointerEvents).not.toBe("none");
+    expect(screen.getByRole("button", { name: "展开会话列表" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "Sessions" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开会话列表" }));
+    expect(screen.getByRole("button", { name: "收起会话列表" })).toHaveAttribute("aria-expanded", "true");
+    expect(getSessionPanel()).toBeInTheDocument();
+
+    resizeTo(640);
+    expect(screen.getByRole("button", { name: "展开会话列表" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    resizeTo(1280);
+    expect(screen.getByRole("button", { name: "收起会话列表" })).toHaveAttribute("aria-expanded", "true");
+    expect(getSessionPanel()).toBeInTheDocument();
+  });
+
   it("keeps the session list available at 768px and allows manual toggling", async () => {
     vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
       matches: Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= 768,
@@ -409,7 +461,9 @@ describe("App layout", () => {
     })));
     render(<App />);
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: /会话列表$/ }));
+    const toggle = screen.getByRole("button", { name: "展开会话列表" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
     const sheet = await screen.findByRole("dialog");
     const sidebar = within(sheet).getByRole("region", { name: "Sessions" });
     fireEvent.contextMenu(await within(sidebar).findByTitle("Mobile chat"));

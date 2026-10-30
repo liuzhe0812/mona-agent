@@ -721,6 +721,9 @@ function Shell({
   }, [browserTabs]);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches,
+  );
   const [mobileSidebarContainer, setMobileSidebarContainer] = useState<HTMLElement | null>(null);
   const [rightWorkspaceMaximized, setRightWorkspaceMaximized] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
@@ -1125,6 +1128,17 @@ function Shell({
       return changed ? next : current;
     });
   }, [client, loading, sessions]);
+
+  useEffect(() => {
+    const viewport = window.matchMedia("(min-width: 768px)");
+    const updateViewport = () => {
+      setIsDesktopViewport(viewport.matches);
+      if (viewport.matches) setMobileSidebarOpen(false);
+    };
+    viewport.addEventListener("change", updateViewport);
+    updateViewport();
+    return () => viewport.removeEventListener("change", updateViewport);
+  }, []);
 
   const toggleSidebar = useCallback(() => {
     const isDesktop =
@@ -2254,7 +2268,7 @@ function Shell({
                     title={headerTitle}
                     onToggleSidebar={toggleSidebar}
                     onCollapseSessionList={() => setDesktopSidebarOpen(false)}
-                    sessionListOpen={desktopSidebarOpen || mobileSidebarOpen}
+                    sessionListOpen={isDesktopViewport ? desktopSidebarOpen : mobileSidebarOpen}
                     onOpenSSH={onOpenSSHAndNew}
                     onOpenDb={onOpenDbAndNew}
                     onCreateNote={onCreateNote}
