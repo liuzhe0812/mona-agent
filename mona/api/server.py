@@ -41,7 +41,7 @@ from mona.api.hoard_handlers import (
 )
 from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
-from mona.email.imap_pool import ImapOperationDeferred, imap_pool_manager
+from mona.email.imap_pool import ImapOperationDeferred, ImapOutcomeUnknown, imap_pool_manager
 from mona.materials.api import (
     handle_materials_create_directory,
     handle_materials_create_library,
@@ -256,7 +256,7 @@ def _is_retryable_error(e: Exception) -> bool:
     # SMTP 认证/权限错误是永久性业务错误，重试只会加剧邮箱风控。
     if isinstance(e, smtplib.SMTPResponseException):
         return False
-    if isinstance(e, ImapOperationDeferred):
+    if isinstance(e, (ImapOperationDeferred, ImapOutcomeUnknown)):
         return False
     if isinstance(e, imaplib.IMAP4.readonly):
         return False
@@ -2577,7 +2577,7 @@ def _imap_rename_folder(body: dict[str, Any]) -> None:
             detail = f" server: {server_msg}" if server_msg else ""
             raise RuntimeError(f"Rename folder failed: {status} ({old_name} -> {new_name}){detail}")
 
-    imap_pool_manager.run(body, op)
+    imap_pool_manager.run(body, op, retry_on_disconnect=False)
 
 
 def _imap_delete_folder(body: dict[str, Any]) -> None:
@@ -2612,7 +2612,7 @@ def _imap_delete_folder(body: dict[str, Any]) -> None:
             detail = f" server: {server_msg}" if server_msg else ""
             raise RuntimeError(f"Delete folder failed: {status} ({folder_name}){detail}")
 
-    imap_pool_manager.run(body, op)
+    imap_pool_manager.run(body, op, retry_on_disconnect=False)
 
 
 async def handle_email_create_folder(request: web.Request) -> web.Response:
@@ -2910,7 +2910,7 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
         )
 
     try:
-        imap_pool_manager.run(body, op)
+        imap_pool_manager.run(body, op, retry_on_disconnect=False)
     except Exception:
         logger.warning("保存已发送邮件副本失败", exc_info=True)
 
@@ -3285,7 +3285,7 @@ def _imap_save_draft(body: dict[str, Any]) -> dict[str, str]:
 
         raise RuntimeError("未找到可用的 Drafts 文件夹，请确认邮箱已创建草稿箱")
 
-    return imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op, retry_on_disconnect=False)
 
 
 async def handle_email_save_draft(request: web.Request) -> web.Response:
@@ -4540,7 +4540,7 @@ def _imap_delete_message(body: dict[str, Any]) -> dict[str, Any]:
 
     # 注意：MOVE/EXPUNGE 后部分服务器会立即关闭连接，
     # 连接池会自动重连，不影响下次操作
-    imap_pool_manager.run(body, op)
+    imap_pool_manager.run(body, op, retry_on_disconnect=False)
     return result
 
 
@@ -4794,7 +4794,7 @@ def _imap_empty_folder(body: dict[str, Any]) -> int:
         client.expunge()
         return len(uids)
 
-    return imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op, retry_on_disconnect=False)
 
 
 async def handle_email_empty_folder(request: web.Request) -> web.Response:
@@ -4908,7 +4908,7 @@ def _imap_move_message(body: dict[str, Any]) -> dict[str, Any]:
 
     # 注意：MOVE/EXPUNGE 后部分服务器会立即关闭连接，
     # 连接池会自动重连，不影响下次操作
-    return imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op, retry_on_disconnect=False)
 
 
 async def handle_email_move(request: web.Request) -> web.Response:

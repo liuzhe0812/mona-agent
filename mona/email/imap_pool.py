@@ -41,6 +41,10 @@ class ImapOperationDeferred(RuntimeError):  # noqa: N818
     """A background read was interrupted to make room for a foreground operation."""
 
 
+class ImapOutcomeUnknown(RuntimeError):  # noqa: N818
+    """A write lost its reply and must not be replayed by either retry layer."""
+
+
 # 腾讯邮箱（exmail.qq.com / imap.qq.com）在 IMAP 响应中插入 X-QQ-FEAT 行
 # 作为 feature 广告，不以 * / + / tag 开头，imaplib 的 _get_response 无法解析，
 # 直接抛 abort 异常，导致 FETCH 失败、连接被废弃。
@@ -70,7 +74,7 @@ _RETRYABLE_EXC: tuple[type[BaseException], ...] = (
 
 
 def _is_retryable(e: Exception) -> bool:
-    if isinstance(e, ImapOperationDeferred):
+    if isinstance(e, (ImapOperationDeferred, ImapOutcomeUnknown)):
         return False
     if isinstance(e, imaplib.IMAP4.readonly):
         return False
@@ -152,7 +156,8 @@ class _AccountImapPool:
         """检测配置是否变更（密码修改等）。"""
         return self._compute_fingerprint(body) != self._config_fingerprint
 
-    def run(self, op: Callable[[imaplib.IMAP4], _T], *, background: bool = False) -> _T:
+    def run(self, op: Callable[[imaplib.IMAP4], _T], *, background: bool = False,
+            retry_on_disconnect: bool = True) -> _T:
         """执行 IMAP 操作，自动管理连接生命周期。
 
         `background=True` 仅用于允许让出连接的纯读操作。
@@ -164,7 +169,7 @@ class _AccountImapPool:
         if not self._operation_lock.acquire(timeout=self._operation_lock_timeout):
             raise RuntimeError("邮箱正忙，请稍后重试。")
         try:
-            return self._run_locked(op, background=background)
+            return self._run_locked(op, background=background, retry_on_disconnect=retry_on_disconnect)
         finally:
             self._operation_lock.release()
 
@@ -173,6 +178,7 @@ class _AccountImapPool:
         op: Callable[[imaplib.IMAP4], _T],
         *,
         background: bool = False,
+        retry_on_disconnect: bool = True,
     ) -> _T:
         # 检查永久失败状态
         if self._failed_until > 0:
@@ -188,10 +194,12 @@ class _AccountImapPool:
 
         last_error: Exception | None = None
         for attempt in range(2):  # 最多 2 次：原始 + 重连后重试
+            dispatched = False
             try:
                 client = self._get_or_reconnect()
                 if background:
                     self._begin_background()
+                dispatched = True
                 result = op(client)
             except Exception as e:
                 interrupted = self._finish_background() if background else False
@@ -210,6 +218,10 @@ class _AccountImapPool:
                 # 可重试的连接错误：失效连接，重连后重试一次
                 if _is_retryable(e):
                     self._invalidate()
+                    if dispatched and not retry_on_disconnect:
+                        raise ImapOutcomeUnknown(
+                            "邮件操作结果尚未确认，请刷新相关文件夹核对；未自动重复执行。"
+                        ) from e
                     if attempt == 0:
                         logger.debug(
                             f"[imap-pool] connection lost, will reconnect and retry: {e}"
@@ -393,9 +405,10 @@ class ImapPoolManager:
         op: Callable[[imaplib.IMAP4], _T],
         *,
         background: bool = False,
+        retry_on_disconnect: bool = True,
     ) -> _T:
         """获取池并执行操作；background 仅用于允许让出连接的纯读调用。"""
-        return self.get_pool(body).run(op, background=background)
+        return self.get_pool(body).run(op, background=background, retry_on_disconnect=retry_on_disconnect)
 
     def interrupt_background(self, body: dict[str, Any]) -> bool:
         """Interrupt an existing pool's read without creating a pool or waiting for a socket close."""
