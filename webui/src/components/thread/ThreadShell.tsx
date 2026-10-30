@@ -1027,10 +1027,12 @@ export function ThreadShell({
         return true;
       };
       void (async () => {
+        let created = false;
         try {
           const newId = directAgentId && directAgentId !== "mona"
             ? await onCreateDirectChat?.(directAgentId, selectedWorkspace, beforeActivate)
             : await onCreateChat?.(selectedWorkspace, beforeActivate);
+          created = Boolean(newId);
           if (newId && pending.targetChatId === newId) {
             if (aliveRef.current && pendingFirstRef.current === pending) setSelectedWorkspace(null);
             return;
@@ -1042,7 +1044,7 @@ export function ThreadShell({
         if (!aliveRef.current || pendingFirstRef.current !== pending) return;
         pendingFirstRef.current = null;
         setBooting(false);
-        if (liveChatRef.current === null) setFirstMessageRejection({ runActive: false });
+        if (!created && liveChatRef.current === null) setFirstMessageRejection({ runActive: false });
       })();
       return completion;
     },
@@ -2421,7 +2423,7 @@ export function ThreadShell({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <MessageRejectionDialog rejection={messageRejection ?? firstMessageRejection} onDismiss={() => {
+      <MessageRejectionDialog rejection={messageRejection ?? (browserHostVisible && !chatId ? firstMessageRejection : null)} onDismiss={() => {
         dismissMessageRejection();
         setFirstMessageRejection(null);
       }} />

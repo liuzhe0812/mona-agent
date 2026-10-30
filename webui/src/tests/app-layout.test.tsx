@@ -157,8 +157,29 @@ describe("App layout", () => {
     if (target === "session") fireEvent.click(screen.getByTitle("Existing B"));
     else fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
     await act(async () => { finish("late-created-a"); });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     if (target === "session") expect(screen.getByTitle("Existing B")).toHaveAttribute("aria-pressed", "true");
     else expect(screen.getByRole("tab", { name: "Mona" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it.each(["null", "reject"])("keeps a hidden first draft after %s creation failure and shows the error only on returning home", async (failure) => {
+    let finish!: (id: string | null) => void;
+    let fail!: (error: Error) => void;
+    createChatSpy.mockImplementationOnce(() => new Promise<string | null>((resolve, reject) => { finish = resolve; fail = reject; }));
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "retained home input" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(createChatSpy).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+    await act(async () => { if (failure === "null") finish(null); else fail(new Error("synthetic creation failure")); });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Mona" })).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(screen.getByRole("tab", { name: "Mona" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("Message not sent");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue("retained home input");
+    expect(createChatSpy).toHaveBeenCalledTimes(1);
   });
 
   beforeEach(() => {
