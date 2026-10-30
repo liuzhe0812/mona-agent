@@ -46,7 +46,8 @@ pub struct SshClientHandler {
     host: String,
     port: u16,
     known_hosts: Arc<KnownHostsStore>,
-    verification_result: Arc<Mutex<Option<HostKeyVerification>>>,
+    accept_new_host_key: bool,
+    verification_result: Arc<Mutex<Option<Result<HostKeyVerification, TerminalError>>>>,
 }
 
 impl client::Handler for SshClientHandler {
@@ -56,9 +57,12 @@ impl client::Handler for SshClientHandler {
         &mut self,
         server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        let result = self
-            .known_hosts
-            .verify(&self.host, self.port, server_public_key);
+        let result = self.known_hosts.verify_or_trust_new(
+            &self.host,
+            self.port,
+            server_public_key,
+            self.accept_new_host_key,
+        );
         *self.verification_result.lock().await = Some(result);
         Ok(true)
     }
@@ -98,13 +102,13 @@ impl SshClient {
         Self::connect_with_verify(host, port, username, auth, known_hosts, false).await
     }
 
-    async fn connect_with_verify(
+    pub(crate) async fn connect_with_verify(
         host: &str,
         port: u16,
         username: &str,
         auth: &AuthConfig,
         known_hosts: Arc<KnownHostsStore>,
-        skip_verify: bool,
+        accept_new_host_key: bool,
     ) -> Result<Self, TerminalError> {
         let verification_result = Arc::new(Mutex::new(None));
 
@@ -118,6 +122,7 @@ impl SshClient {
             host: host.to_string(),
             port,
             known_hosts: known_hosts.clone(),
+            accept_new_host_key,
             verification_result: verification_result.clone(),
         };
 
@@ -146,53 +151,31 @@ impl SshClient {
             TerminalError::SshConnection(e.to_string())
         })?;
 
-        let verification = verification_result.lock().await;
-        match verification.as_ref() {
-            Some(HostKeyVerification::Trusted) => {}
-            Some(HostKeyVerification::Unknown { fingerprint }) => {
-                if skip_verify {
-                    log::debug!(
-                        "[batch] Skipping host key verification for {}:{} (fingerprint: {})",
-                        host,
-                        port,
-                        fingerprint
-                    );
-                } else {
-                    let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
-                    return Err(TerminalError::HostKeyUnknown(fingerprint.clone()));
-                }
+        match verification_result.lock().await.take() {
+            Some(Ok(HostKeyVerification::Trusted)) => {}
+            Some(Ok(HostKeyVerification::Unknown { fingerprint })) => {
+                let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+                return Err(TerminalError::HostKeyUnknown(fingerprint));
             }
-            Some(HostKeyVerification::Changed {
+            Some(Ok(HostKeyVerification::Changed {
                 expected_fingerprint,
                 actual_fingerprint,
-            }) => {
-                if skip_verify {
-                    log::warn!(
-                        "[batch] Host key changed for {}:{}, skipping verification",
-                        host,
-                        port
-                    );
-                } else {
-                    let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
-                    return Err(TerminalError::HostKeyChanged {
-                        expected: expected_fingerprint.clone(),
-                        actual: actual_fingerprint.clone(),
-                    });
-                }
+            })) => {
+                let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+                return Err(TerminalError::HostKeyChanged {
+                    expected: expected_fingerprint,
+                    actual: actual_fingerprint,
+                });
+            }
+            Some(Err(error)) => {
+                let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+                return Err(error);
             }
             None => {
-                if skip_verify {
-                    log::debug!(
-                        "[batch] No host key verification performed for {}:{}, continuing",
-                        host,
-                        port
-                    );
-                } else {
-                    let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
-                    return Err(TerminalError::SshConnection(
-                        "Host key verification not performed".into(),
-                    ));
-                }
+                let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+                return Err(TerminalError::SshConnection(
+                    "Host key verification not performed".into(),
+                ));
             }
         }
 
@@ -722,7 +705,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the local verify SSH server"]
     async fn live_cancel_unblocks_the_exec_wait() {
-        let known_hosts = Arc::new(KnownHostsStore::new_in_memory());
+        let temp = tempfile::tempdir().unwrap();
+        let known_hosts = Arc::new(KnownHostsStore::with_test_path(
+            temp.path().join("known_hosts.json"),
+        ));
         let client = SshClient::connect_with_verify(
             "127.0.0.1",
             2223,

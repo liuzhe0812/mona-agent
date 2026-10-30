@@ -8,8 +8,10 @@ export interface BatchSession {
   port: number;
   username: string;
   password?: string;
-  status: "disconnected" | "connecting" | "connected" | "error";
+  status: "disconnected" | "connecting" | "connected" | "error" | "untrusted";
   error?: string;
+  errorDetails?: string;
+  hostKey?: { type: "unknown" | "changed"; fingerprint: string; expectedFingerprint?: string };
   connectedAt?: number;
   selected: boolean;
 }
@@ -149,14 +151,16 @@ export const useBatchStore = create<BatchState>()(
       updateSession: (id, updates) =>
         set((state) => ({
           sessions: state.sessions.map((s) =>
-            s.id === id ? { ...s, ...updates } : s,
+            s.id === id ? { ...s, ...updates,
+              ...(updates.status && updates.status !== "connected" ? { selected: false } : {}),
+            } : s,
           ),
         })),
 
       toggleSessionSelection: (id) =>
         set((state) => ({
           sessions: state.sessions.map((s) =>
-            s.id === id ? { ...s, selected: !s.selected } : s,
+            s.id === id && s.status === "connected" ? { ...s, selected: !s.selected } : s,
           ),
         })),
 

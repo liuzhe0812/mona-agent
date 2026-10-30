@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { PanelImperativeHandle } from "react-resizable-panels";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider, Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -41,15 +43,24 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
   const connections = useDbStore((s) => s.activeConnections);
   const [agentOpen, setAgentOpen] = useState(false);
   const [terminalActive, setTerminalActive] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(true);
+  const connectionsPanel = useRef<PanelImperativeHandle | null>(null);
   const terminalId = useTerminalStore((s) => s.activeSessionId);
   const terminalAgentOpen = useTerminalStore((s) => s.aiPanelVisible);
   const activeTerminal = useTerminalStore((s) => s.sessions.find((session) => session.id === s.activeSessionId));
+  const batchActive = terminalActive && activeTerminal?.type === "batch";
   const terminalAgentAvailable = !!activeTerminal && !["batch", "desktop", "docker"].includes(activeTerminal.type);
   const currentAgentOpen = terminalActive ? terminalAgentOpen : agentOpen;
   const selectedDatabaseConnected = !!objectScope && connections.some((connection) => connection.id === objectScope.connectionId);
   const [closeTab, setCloseTab] = useState<QueryTab | null>(null);
   const initialized = useRef(false);
   const tabBar = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setConnectionsOpen(!batchActive); }, [batchActive]);
+  useEffect(() => {
+    if (connectionsOpen) connectionsPanel.current?.expand();
+    else connectionsPanel.current?.collapse();
+  }, [connectionsOpen]);
 
   useEffect(() => {
     if (!initialized.current) {
@@ -94,13 +105,22 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
   return <TooltipProvider delayDuration={250}>
     <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
       <ResizablePanelGroup direction="horizontal">
-        <ResizablePanel id="db-connections" defaultSize="240px" minSize="180px" maxSize="420px">
-          <ConnectionTree terminalActive={terminalActive} onOpenTerminal={() => setTerminalActive(true)} onActivateDatabase={() => setTerminalActive(false)} />
+        <ResizablePanel id="db-connections" panelRef={connectionsPanel} collapsible collapsedSize="0px" defaultSize="240px" minSize="180px" maxSize="420px">
+          <div className="h-full overflow-hidden" aria-hidden={!connectionsOpen} inert={!connectionsOpen}>
+            <ConnectionTree terminalActive={terminalActive} onOpenTerminal={() => setTerminalActive(true)} onActivateDatabase={() => setTerminalActive(false)} />
+          </div>
         </ResizablePanel>
-        <ResizableHandle />
+        <ResizableHandle disabled={!connectionsOpen} className={cn(!connectionsOpen && "invisible pointer-events-none")} />
         <ResizablePanel id="db-content" minSize="400px" className="min-h-0 min-w-0 overflow-hidden">
           <div className="flex h-full min-h-0 min-w-0 flex-col">
             <div className="flex h-8 shrink-0 items-center border-b border-border">
+              {batchActive && <Tooltip><TooltipTrigger asChild>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+                  aria-label={connectionsOpen ? "收起连接列表" : "展开连接列表"} aria-expanded={connectionsOpen} aria-controls="db-connections"
+                  onClick={() => setConnectionsOpen(!connectionsOpen)}>
+                  {connectionsOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+                </Button>
+              </TooltipTrigger><TooltipContent>{connectionsOpen ? "收起连接列表" : "展开连接列表"}</TooltipContent></Tooltip>}
               <div ref={tabBar} role="tablist" aria-label="运维工作标签" className="flex min-w-0 flex-1 overflow-x-auto scrollbar-none">
                 <Button role="tab" aria-selected={!terminalActive && currentView === "objects"} variant="ghost"
                   className={cn("h-8 shrink-0 gap-2 rounded-none border-b-2 px-3 text-caption", !terminalActive && currentView === "objects" ? "border-info bg-muted/20" : "border-transparent")}

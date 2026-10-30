@@ -12,6 +12,7 @@ import {
   onTerminalOutput,
   shellSpawn,
   sshConnectWithId,
+  sshTrustHostKey,
   terminalDeleteSavedConnection,
   terminalLoadConnections,
   terminalUpsertConnection,
@@ -63,6 +64,39 @@ describe("local shell startup", () => {
       cols: 100,
       rows: 30,
       cwd: "D:\\workspace\\project",
+    });
+  });
+});
+
+describe("SSH host key IPC", () => {
+  const connection: ConnectionConfig = { id: "", name: "Fixture", protocol: "ssh", host: "192.0.2.20", port: 22,
+    username: "test", auth: { type: "agent" } };
+
+  beforeEach(() => {
+    mocks.invoke.mockReset().mockResolvedValue("session-1");
+  });
+
+  it("includes automatic trust only when explicitly enabled", async () => {
+    await sshConnectWithId("session-1", connection);
+    await sshConnectWithId("session-2", connection, undefined, undefined, false);
+    await sshConnectWithId("session-3", connection, undefined, undefined, true);
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "ssh_connect_with_id", {
+      sessionId: "session-1", config: connection, cols: 80, rows: 24,
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "ssh_connect_with_id", {
+      sessionId: "session-2", config: connection, cols: 80, rows: 24,
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "ssh_connect_with_id", {
+      sessionId: "session-3", config: connection, cols: 80, rows: 24, acceptNewHostKey: true,
+    });
+  });
+
+  it("passes the specific host, port and displayed fingerprint when trusting", async () => {
+    await sshTrustHostKey("192.0.2.20", 2222, "SHA256:fixture-key");
+
+    expect(mocks.invoke).toHaveBeenCalledWith("ssh_trust_host_key", {
+      host: "192.0.2.20", port: 2222, fingerprint: "SHA256:fixture-key",
     });
   });
 });

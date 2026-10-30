@@ -35,7 +35,7 @@ export function HostKeyConfirmDialog() {
     setTrusting(true);
     setError("");
     try {
-      await sshTrustHostKey(dialog.host, dialog.port);
+      await sshTrustHostKey(dialog.host, dialog.port, dialog.fingerprint);
 
       const doConnect = async (connConfig: ConnectionConfig, sid: string) => {
         addConnection(connConfig);

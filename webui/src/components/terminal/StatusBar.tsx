@@ -7,6 +7,7 @@ import {
   Server,
 } from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
+import { useBatchStore } from "./store/batchStore";
 
 interface Props {
   sessionId: string | null;
@@ -16,6 +17,8 @@ export function StatusBar({ sessionId }: Props) {
   const session = useTerminalStore((s) =>
     sessionId ? s.sessions.find((ss) => ss.id === sessionId) : null,
   );
+  const batchSessions = useBatchStore((s) => session?.type === "batch" ? s.sessions : null);
+  const batchIsConnecting = useBatchStore((s) => session?.type === "batch" && s.isConnecting);
 
   if (!session) {
     return (
@@ -26,23 +29,30 @@ export function StatusBar({ sessionId }: Props) {
     );
   }
 
+  const connectedCount = batchSessions?.filter((s) => s.status === "connected").length ?? 0;
+  const status = session.type === "batch"
+    ? batchIsConnecting || batchSessions?.some((s) => s.status === "connecting")
+      ? "connecting"
+      : connectedCount > 0 ? "connected" : "disconnected"
+    : session.status;
+
   const statusIcon =
-    session.status === "connected" ? (
+    status === "connected" ? (
       <Wifi className="h-3 w-3 text-success-indicator" />
-    ) : session.status === "connecting" ? (
+    ) : status === "connecting" ? (
       <Loader2 className="h-3 w-3 animate-spin text-warning" />
-    ) : session.status === "error" ? (
+    ) : status === "error" ? (
       <AlertTriangle className="h-3 w-3 text-destructive" />
     ) : (
       <WifiOff className="h-3 w-3" />
     );
 
   const statusText =
-    session.status === "connected"
-      ? "已连接"
-      : session.status === "connecting"
-        ? "连接中"
-        : session.status === "error"
+    status === "connected"
+      ? session.type === "batch" ? `已连接 ${connectedCount}/${batchSessions?.length ?? 0}` : "已连接"
+      : status === "connecting"
+        ? session.type === "batch" ? `正在连接 ${connectedCount}/${batchSessions?.length ?? 0}` : "连接中"
+        : status === "error"
           ? "连接错误"
           : "未连接";
 

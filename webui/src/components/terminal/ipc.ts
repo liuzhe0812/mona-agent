@@ -82,8 +82,11 @@ export async function sshConnectWithId(
   config: ConnectionConfig,
   cols?: number,
   rows?: number,
+  acceptNewHostKey = false,
 ): Promise<string> {
-  return invoke<string>("ssh_connect_with_id", { sessionId, config: nativeConnectionConfig(config), cols: cols || 80, rows: rows || 24 });
+  return invoke<string>("ssh_connect_with_id", { sessionId, config: nativeConnectionConfig(config), cols: cols || 80, rows: rows || 24,
+    ...(acceptNewHostKey ? { acceptNewHostKey } : {}),
+  });
 }
 
 export async function sshSendInput(sessionId: string, data: string): Promise<void> {
@@ -430,8 +433,8 @@ export async function terminalDeleteSavedConnection(
   return attachStorageRevision(state);
 }
 
-export async function sshTrustHostKey(host: string, port: number): Promise<void> {
-  return invoke("ssh_trust_host_key", { host, port });
+export async function sshTrustHostKey(host: string, port: number, fingerprint?: string): Promise<void> {
+  return invoke("ssh_trust_host_key", { host, port, ...(fingerprint ? { fingerprint } : {}) });
 }
 
 export type UnlistenFn = () => void;

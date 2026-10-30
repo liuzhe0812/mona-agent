@@ -22,6 +22,8 @@ import "@xterm/xterm/css/xterm.css";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   sshConnectWithId,
+  sshTrustHostKey,
+  onTerminalSessionStatus,
   sshDisconnect,
   sshSendInput,
   sftpList,
@@ -43,7 +45,6 @@ import type { BatchSession, TransferSessionNode } from "../store/batchStore";
 import { useTerminalStore } from "../store/terminalStore";
 import {
   Play,
-  Square,
   Send,
   Terminal as TerminalIcon,
   FolderOpen,
@@ -71,9 +72,11 @@ import {
   Copy,
   Scissors,
   ClipboardPaste,
+  ShieldAlert,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { memo } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const TransferFileItem = memo(function TransferFileItem({
   status,
@@ -94,15 +97,29 @@ const TransferFileItem = memo(function TransferFileItem({
 });
 
 function generateIps(start: string, count: number): string[] {
-  const ips: string[] = [];
-  const parts = start.split(".");
-  if (parts.length !== 4) return ips;
-  const base = parts.slice(0, 3).join(".");
-  const startNum = parseInt(parts[3]);
-  for (let i = 0; i < count; i++) {
-    ips.push(`${base}.${startNum + i}`);
-  }
-  return ips;
+  const parts = start.trim().split(".");
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return [];
+  if (!Number.isInteger(count) || count < 1 || count > 100 || Number(parts[3]) + count > 256) return [];
+  const base = parts.slice(0, 3).map(Number).join(".");
+  return Array.from({ length: count }, (_, i) => `${base}.${Number(parts[3]) + i}`);
+}
+
+function connectionFailure(error: unknown): Partial<BatchSession> {
+  const details = error instanceof Error ? error.message : String(error);
+  const unknown = details.match(/Host key unknown:\s*(SHA256:\S+)/);
+  const changed = details.match(/Host key changed: expected\s*(SHA256:\S+),\s*got\s*(SHA256:\S+)/);
+  if (unknown || changed) return {
+    status: "untrusted",
+    error: changed ? "服务器的主机密钥与之前记录的不同，请核实后再连接。" : "首次连接，请核实服务器身份后继续。",
+    hostKey: { type: changed ? "changed" : "unknown", fingerprint: changed?.[2] ?? unknown![1], expectedFingerprint: changed?.[1] },
+  };
+  return {
+    status: "error", errorDetails: details,
+    error: /authentication|auth failed|身份验证/i.test(details) ? "登录验证失败，请检查用户名和密码后重试。"
+      : /timeout|timed out|超时/i.test(details) ? "连接超时，请检查主机地址、端口和网络后重试。"
+      : /Config save failed/i.test(details) ? "无法保存主机信任记录，请检查本地存储权限后重试。"
+      : "无法连接到这台主机，请检查地址、端口和网络后重试。",
+  };
 }
 
 function formatSize(bytes: number | null): string {
@@ -164,6 +181,11 @@ export function BatchModeView() {
   const uploadLockRef = useRef(false);
   const progressQueueRef = useRef<BatchTransferProgress[]>([]);
   const rafRef = useRef<number | null>(null);
+  const [connectionActionError, setConnectionActionError] = useState<string | null>(null);
+  const [acceptNewHostKey, setAcceptNewHostKey] = useState(true);
+  const [trustSessionId, setTrustSessionId] = useState<string | null>(null);
+  const [trusting, setTrusting] = useState(false);
+  const [trustError, setTrustError] = useState("");
 
   const terminalStoreActiveId = useTerminalStore((s) => s.activeSessionId);
   const terminalStoreSessions = useTerminalStore((s) => s.sessions);
@@ -199,8 +221,27 @@ export function BatchModeView() {
   const settingUpListenersRef = useRef<Set<string>>(new Set());
 
   const connectedCount = sessions.filter((s) => s.status === "connected").length;
-  const selectedCount = sessions.filter((s) => s.selected).length;
+  const selectedCount = sessions.filter((s) => s.selected && s.status === "connected").length;
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const trustSession = sessions.find((s) => s.id === trustSessionId);
+  const ips = generateIps(startIp, count);
+  const ipError = generateIps(startIp, 1).length ? "" : "请输入有效的 IPv4 地址。";
+  const countError = !Number.isInteger(count) || count < 1 || count > 100 ? "数量须为 1–100 的整数。"
+    : !ipError && !ips.length ? "地址末段不能超过 255，请减少数量。" : "";
+  const portError = !Number.isInteger(port) || port < 1 || port > 65535 ? "端口须为 1–65535 的整数。" : "";
+  const usernameError = username.trim() ? "" : "请输入用户名。";
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onTerminalSessionStatus(({ sessionId, status }) => {
+      const session = useBatchStore.getState().sessions.find((item) => item.id === sessionId);
+      if (session?.status !== "connected" || (status !== "disconnected" && status !== "error")) return;
+      updateSession(sessionId, { status, error: status === "error" ? "连接已中断，请检查网络后重新连接。" : undefined });
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => setConnectionActionError("无法更新连接状态，请重新打开批量管理页面。"));
+    return () => { disposed = true; unlisten?.(); };
+  }, [updateSession]);
 
   const cleanupTerminal = useCallback((sessionId: string) => {
     const ro = resizeObserversRef.current.get(sessionId);
@@ -392,70 +433,47 @@ export function BatchModeView() {
     }
   }, [activeSessionId]);
 
+  const connectSession = async (session: BatchSession) => {
+    updateSession(session.id, { status: "connecting", error: undefined, errorDetails: undefined, hostKey: undefined });
+    try {
+      await sshConnectWithId(session.id, {
+        id: "", name: session.host, protocol: "ssh", host: session.host,
+        port: session.port, username: session.username,
+        auth: { type: "password", password: session.password || "" },
+      }, undefined, undefined, acceptNewHostKey);
+      updateSession(session.id, { status: "connected", selected: true, connectedAt: Date.now() });
+    } catch (error) {
+      updateSession(session.id, connectionFailure(error));
+    }
+  };
+
   const handleBatchConnect = async () => {
+    if (isConnecting || connectedCount > 0 || !ips.length || portError || usernameError) return;
     setIsConnecting(true);
-    const ips = generateIps(startIp, count);
 
     const newSessions: BatchSession[] = ips.map((ip, index) => ({
       id: `batch-${Date.now()}-${index}`,
       host: ip,
       port,
-      username,
+      username: username.trim(),
       password: password || undefined,
       status: "connecting",
-      selected: true,
+      selected: false,
     }));
 
-    console.log("[batch] Starting batch connect, sessions:", newSessions.map((s) => `${s.id} -> ${s.host}`));
     setSessions(newSessions);
+    setActiveSessionId(newSessions[0].id);
+    setActiveTab("terminal");
 
     const maxConc = 3;
     for (let i = 0; i < newSessions.length; i += maxConc) {
       const batch = newSessions.slice(i, i + maxConc);
-      console.log(`[batch] Connecting batch ${Math.floor(i / maxConc) + 1}, hosts:`, batch.map((s) => s.host));
-      const results = await Promise.allSettled(
-        batch.map(async (session) => {
-          console.log(`[batch] Connecting ${session.host} (id=${session.id}, pwdLen=${(session.password || "").length})...`);
-          try {
-            const result = await sshConnectWithId(session.id, {
-              id: "",
-              name: session.host,
-              protocol: "ssh",
-              host: session.host,
-              port: session.port,
-              username: session.username,
-              auth: { type: "password", password: session.password || "" },
-            });
-            console.log(`[batch] Connected ${session.host} (id=${session.id}), result:`, result);
-            useBatchStore.getState().updateSession(session.id, {
-              status: "connected",
-              connectedAt: Date.now(),
-            });
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : (typeof err === "string" ? err : JSON.stringify(err));
-            console.error(`[batch] Failed to connect ${session.host} (id=${session.id}):`, errMsg);
-            useBatchStore.getState().updateSession(session.id, {
-              status: "error",
-              error: errMsg,
-            });
-          }
-        }),
-      );
-      results.forEach((r, idx) => {
-        if (r.status === "rejected") {
-          console.error(`[batch] Unexpected rejection for ${batch[idx].host}:`, r.reason);
-        }
-      });
+      await Promise.all(batch.map(connectSession));
     }
 
     setIsConnecting(false);
 
     const currentSessions = useBatchStore.getState().sessions;
-    const connectedSessions = currentSessions.filter((s) => s.status === "connected");
-    const errorSessions = currentSessions.filter((s) => s.status === "error");
-    console.log(`[batch] Batch connect complete: ${connectedSessions.length} connected, ${errorSessions.length} errors`);
-    errorSessions.forEach((s) => console.error(`[batch]   Error: ${s.host} - ${s.error}`));
-
     const firstConnected = currentSessions.find((s) => s.status === "connected");
     if (firstConnected) {
       setActiveSessionId(firstConnected.id);
@@ -463,39 +481,24 @@ export function BatchModeView() {
     }
   };
 
-  const handleDisconnectAll = async () => {
-    for (const session of sessions) {
-      if (session.status === "connected") {
-        try {
-          await sshDisconnect(session.id);
-        } catch {}
-        cleanupTerminal(session.id);
-      }
-    }
-    setSessions(sessions.map((s) => ({ ...s, status: "disconnected" as const })));
-    setActiveSessionId(null);
-  };
-
   const handleReconnectSession = async (sessionId: string) => {
     const session = sessions.find((s) => s.id === sessionId);
-    if (!session) return;
+    if (!session || session.status === "connecting") return;
+    await connectSession(session);
+  };
 
-    updateSession(sessionId, { status: "connecting", error: undefined });
-
+  const handleTrustSession = async () => {
+    if (!trustSession?.hostKey || trusting) return;
+    setTrusting(true);
+    setTrustError("");
     try {
-      await sshConnectWithId(sessionId, {
-        id: "",
-        name: session.host,
-        protocol: "ssh",
-        host: session.host,
-        port: session.port,
-        username: session.username,
-        auth: { type: "password", password: session.password || "" },
-      });
-      updateSession(sessionId, { status: "connected", connectedAt: Date.now() });
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : (typeof err === "string" ? err : JSON.stringify(err));
-      updateSession(sessionId, { status: "error", error: errMsg });
+      await sshTrustHostKey(trustSession.host, trustSession.port, trustSession.hostKey.fingerprint);
+      setTrustSessionId(null);
+      await connectSession(trustSession);
+    } catch {
+      setTrustError("无法保存该主机的信任记录，请重新连接以获取最新指纹后重试。");
+    } finally {
+      setTrusting(false);
     }
   };
 
@@ -507,30 +510,35 @@ export function BatchModeView() {
       cleanupTerminal(sessionId);
       updateSession(sessionId, { status: "disconnected" });
       if (activeSessionId === sessionId) setActiveSessionId(null);
-    } catch {}
+    } catch {
+      setConnectionActionError("未能确认断开连接，请查看该主机的终端状态后重试。");
+    }
   };
 
   const handleDeleteSession = (sessionId: string) => {
     const session = sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    if (session.status === "connected") return;
+    if (session.status === "connected" || session.status === "connecting") return;
     cleanupTerminal(sessionId);
     setSessions(sessions.filter((s) => s.id !== sessionId));
     if (activeSessionId === sessionId) setActiveSessionId(null);
   };
 
   const handleDisconnectAllSessions = async () => {
+    if (isConnecting) return;
     const connected = sessions.filter((s) => s.status === "connected");
+    let failed = 0;
     for (const session of connected) {
       try {
         await sshDisconnect(session.id);
         cleanupTerminal(session.id);
         updateSession(session.id, { status: "disconnected" });
-      } catch {}
+      } catch { failed++; }
     }
-    if (connected.some((s) => s.id === activeSessionId)) {
+    if (!useBatchStore.getState().sessions.some((s) => s.id === activeSessionId && s.status === "connected")) {
       setActiveSessionId(null);
     }
+    if (failed) setConnectionActionError(`${failed} 台主机未能确认断开，请查看对应终端状态后重试。`);
   };
 
   const handleDeleteDisconnectedSessions = () => {
@@ -562,6 +570,7 @@ export function BatchModeView() {
     switch (status) {
       case "connected": return "bg-success-indicator";
       case "connecting": return "bg-warning animate-pulse";
+      case "untrusted": return "bg-warning";
       case "error": return "bg-destructive";
       default: return "bg-muted-foreground/40";
     }
@@ -922,7 +931,7 @@ export function BatchModeView() {
 
   return (
     <div className="flex h-full">
-      <div className="flex flex-col border-r bg-secondary/30" style={{ width: 240 }}>
+      <div className="flex w-64 shrink-0 flex-col border-r bg-secondary/30">
         <div
           className={cn(
             "border-b transition-all",
@@ -947,6 +956,8 @@ export function BatchModeView() {
             </Button>
           </div>
           <div
+            aria-hidden={configCollapsed}
+            inert={configCollapsed}
             className={cn(
               "space-y-2 overflow-hidden transition-all",
               configCollapsed ? "h-0 opacity-0 mt-0" : "h-auto opacity-100 mt-2",
@@ -954,35 +965,43 @@ export function BatchModeView() {
           >
             <div className="grid grid-cols-[1fr_70px] gap-2">
               <div>
-                <Label className="text-caption">起始IP</Label>
-                <Input value={startIp} onChange={(e) => setStartIp(e.target.value)} className="h-7 text-caption" />
+                <Label htmlFor="batch-start-ip" className="text-caption">起始 IP</Label>
+                <Input id="batch-start-ip" value={startIp} onChange={(e) => setStartIp(e.target.value)} disabled={isConnecting} aria-invalid={!!ipError} aria-describedby={ipError ? "batch-ip-error" : undefined} className="h-7 text-caption" />
+                {ipError && <p id="batch-ip-error" className="mt-1 text-caption text-destructive">{ipError}</p>}
               </div>
               <div>
-                <Label className="text-caption">数量</Label>
-                <Input type="number" min={1} max={100} value={count} onChange={(e) => setCount(parseInt(e.target.value) || 1)} className="h-7 text-caption px-2" />
+                <Label htmlFor="batch-count" className="text-caption">数量</Label>
+                <Input id="batch-count" type="number" min={1} max={100} step={1} value={count || ""} onChange={(e) => setCount(Number(e.target.value))} disabled={isConnecting} aria-invalid={!!countError} aria-describedby={countError ? "batch-count-error" : undefined} className="h-7 text-caption px-2" />
+                {countError && <p id="batch-count-error" className="mt-1 text-caption text-destructive">{countError}</p>}
               </div>
             </div>
             <div className="grid grid-cols-[1fr_70px] gap-2">
               <div>
-                <Label className="text-caption">用户名</Label>
-                <Input value={username} onChange={(e) => setUsername(e.target.value)} className="h-7 text-caption" />
+                <Label htmlFor="batch-username" className="text-caption">用户名</Label>
+                <Input id="batch-username" value={username} onChange={(e) => setUsername(e.target.value)} disabled={isConnecting} aria-invalid={!!usernameError} aria-describedby={usernameError ? "batch-username-error" : undefined} className="h-7 text-caption" />
+                {usernameError && <p id="batch-username-error" className="mt-1 text-caption text-destructive">{usernameError}</p>}
               </div>
               <div>
-                <Label className="text-caption">端口</Label>
-                <Input type="number" value={port} onChange={(e) => setPort(parseInt(e.target.value) || 22)} className="h-7 text-caption px-2" />
+                <Label htmlFor="batch-port" className="text-caption">端口</Label>
+                <Input id="batch-port" type="number" min={1} max={65535} step={1} value={port || ""} onChange={(e) => setPort(Number(e.target.value))} disabled={isConnecting} aria-invalid={!!portError} aria-describedby={portError ? "batch-port-error" : undefined} className="h-7 text-caption px-2" />
+                {portError && <p id="batch-port-error" className="mt-1 text-caption text-destructive">{portError}</p>}
               </div>
             </div>
             <div>
-              <Label className="text-caption">密码</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-7 text-caption" />
+              <Label htmlFor="batch-password" className="text-caption">密码</Label>
+              <Input id="batch-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={isConnecting} className="h-7 text-caption" />
+            </div>
+            <div className="flex items-start gap-2">
+              <Checkbox id="batch-accept-new" checked={acceptNewHostKey} onCheckedChange={(checked) => setAcceptNewHostKey(checked === true)} disabled={isConnecting} />
+              <Label htmlFor="batch-accept-new" className="text-caption leading-normal">自动信任首次连接的主机</Label>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" className="flex-1 h-7 text-caption" onClick={handleBatchConnect} disabled={isConnecting || connectedCount > 0}>
+              <Button size="sm" className="flex-1 h-7 text-caption" onClick={handleBatchConnect} disabled={isConnecting || connectedCount > 0 || !!ipError || !!countError || !!portError || !!usernameError}>
                 <Play className="mr-1 h-3 w-3" />
                 {isConnecting ? "连接中..." : "开始连接"}
               </Button>
-              <Button size="sm" variant="destructive" className="h-7 text-caption" onClick={handleDisconnectAll} disabled={connectedCount === 0}>
-                <Square className="h-3 w-3" />
+              <Button size="sm" variant="outline" className="h-7 text-caption" onClick={handleDisconnectAllSessions} disabled={isConnecting || connectedCount === 0}>
+                <Unplug className="mr-1 h-3 w-3" />断开全部
               </Button>
             </div>
           </div>
@@ -991,12 +1010,12 @@ export function BatchModeView() {
         <div className="flex-1 overflow-hidden">
           <div className="flex items-center justify-between border-b px-2 py-1.5">
             <span className="text-caption font-medium text-muted-foreground">
-              会话 ({connectedCount}/{sessions.length})
+              已连接 {connectedCount}/{sessions.length}
             </span>
             <div className="flex gap-1">
               <Button variant="link" size="xs" onClick={selectAllSessions} className="h-auto px-1 py-0">全选</Button>
               <span className="text-caption text-muted-foreground">|</span>
-              <Button variant="link" size="xs" onClick={deselectAllSessions} className="h-auto px-1 py-0">取消</Button>
+              <Button variant="link" size="xs" onClick={deselectAllSessions} className="h-auto px-1 py-0">取消选择</Button>
             </div>
           </div>
           <ScrollArea className="h-[calc(100%-32px)]">
@@ -1012,25 +1031,28 @@ export function BatchModeView() {
                       onClick={() => setActiveSessionId(session.id)}
                     >
                       <Checkbox
-                        checked={session.selected}
+                        checked={session.selected && session.status === "connected"}
+                        aria-label={`将 ${session.host} 加入批量发送`}
                         onCheckedChange={() => toggleSessionSelection(session.id)}
                         disabled={session.status !== "connected"}
                         className="h-3 w-3"
                         onClick={(e) => e.stopPropagation()}
                       />
                       <div className={cn("h-1.5 w-1.5 rounded-full shrink-0", getStatusColor(session.status))} />
-                      <span className="truncate flex-1" title={session.error || session.host}>{session.host}</span>
-                      {session.status === "error" && session.error && (
-                        <span className="truncate max-w-[80px] text-destructive text-micro" title={session.error}>
-                          {session.error.length > 20 ? session.error.slice(0, 20) + "..." : session.error}
-                        </span>
-                      )}
+                      <span className="truncate flex-1" title={session.host}>{session.host}</span>
+                      {session.status === "untrusted" && <span className="shrink-0 text-warning text-caption">{session.hostKey?.type === "changed" ? "密钥变更" : "待确认"}</span>}
+                      {session.status === "error" && <span className="shrink-0 text-destructive text-caption">连接失败</span>}
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-36">
-                    {(session.status === "error" || session.status === "disconnected") && (
+                    {session.status === "untrusted" && (
+                      <ContextMenuItem onClick={() => { setTrustError(""); setTrustSessionId(session.id); }}>
+                        <ShieldAlert className="mr-2 h-3 w-3" /> 确认主机身份
+                      </ContextMenuItem>
+                    )}
+                    {(session.status === "error" || session.status === "disconnected" || session.status === "untrusted") && (
                       <ContextMenuItem onClick={() => handleReconnectSession(session.id)}>
-                        <RefreshCw className="mr-2 h-3 w-3" /> 重连
+                        <RefreshCw className="mr-2 h-3 w-3" /> {session.hostKey ? "重新获取指纹" : "重连"}
                       </ContextMenuItem>
                     )}
                     {session.status === "connected" && (
@@ -1041,13 +1063,13 @@ export function BatchModeView() {
                     <ContextMenuSeparator />
                     <ContextMenuItem
                       onClick={() => handleDeleteSession(session.id)}
-                      disabled={session.status === "connected"}
+                      disabled={session.status === "connected" || session.status === "connecting"}
                       className={session.status !== "connected" ? "text-destructive" : "text-muted-foreground"}
                     >
                       <Trash2 className="mr-2 h-3 w-3" /> 删除
                     </ContextMenuItem>
                     <ContextMenuSeparator />
-                    <ContextMenuItem onClick={() => handleDisconnectAllSessions()}>
+                    <ContextMenuItem disabled={isConnecting || connectedCount === 0} onClick={() => handleDisconnectAllSessions()}>
                       <Unplug className="mr-2 h-3 w-3" /> 断开全部会话
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => handleDeleteDisconnectedSessions()}>
@@ -1068,15 +1090,15 @@ export function BatchModeView() {
 
       <div className="flex flex-1 flex-col min-w-0">
         <div className="border-b bg-card px-3 py-1">
-          <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
+          <div className="flex items-center gap-1">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={() => setActiveTab("terminal")}
               className={cn(
-                "h-7 gap-1 rounded-md px-2.5 text-caption font-medium",
-                activeTab === "terminal" ? "bg-background text-foreground shadow-sm hover:bg-background" : "text-muted-foreground",
+                "h-7 gap-1 px-2.5 text-caption font-medium",
+                activeTab === "terminal" ? "bg-accent text-foreground" : "text-muted-foreground",
               )}
             >
               <TerminalIcon className="w-3 h-3" /> 终端
@@ -1087,8 +1109,8 @@ export function BatchModeView() {
               size="sm"
               onClick={() => setActiveTab("sftp")}
               className={cn(
-                "h-7 gap-1 rounded-md px-2.5 text-caption font-medium",
-                activeTab === "sftp" ? "bg-background text-foreground shadow-sm hover:bg-background" : "text-muted-foreground",
+                "h-7 gap-1 px-2.5 text-caption font-medium",
+                activeTab === "sftp" ? "bg-accent text-foreground" : "text-muted-foreground",
               )}
             >
               <FolderOpen className="w-3 h-3" /> 文件传输
@@ -1124,22 +1146,26 @@ export function BatchModeView() {
                         activeSessionId === session.id ? "opacity-100 pointer-events-auto z-10" : "opacity-0 pointer-events-none z-0",
                       )}
                     >
-                      {session.status === "error" && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d]/80">
-                          <div className="text-center max-w-sm">
-                            <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-                            <p className="text-body text-red-400 font-medium mb-1">连接失败</p>
+                      {activeSessionId === session.id && (session.status === "error" || session.status === "untrusted") && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/95 text-foreground">
+                          <div className="text-center max-w-sm p-4">
+                            {session.hostKey ? <ShieldAlert className="h-10 w-10 text-warning mx-auto mb-3" /> : <XCircle className="h-10 w-10 text-destructive mx-auto mb-3" />}
+                            <p className="text-body font-medium mb-1">{session.hostKey?.type === "changed" ? "主机密钥已变更" : session.hostKey ? "等待信任主机" : "连接失败"}</p>
                             <p className="text-caption text-muted-foreground mb-3">{session.host}</p>
-                            <p className="text-caption text-red-400/80 bg-red-500/10 rounded px-3 py-2 font-mono break-all">
-                              {session.error || "未知错误"}
+                            <p className="text-caption text-muted-foreground">
+                              {session.error || "请检查主机地址和网络后重试。"}
                             </p>
+                            {session.errorDetails && <details className="mt-2 text-left text-caption text-muted-foreground"><summary className="cursor-pointer">诊断详情</summary><p className="mt-1 break-all font-mono">{session.errorDetails}</p></details>}
                             <Button
                               size="sm"
                               variant="outline"
                               className="mt-3 h-7 text-caption"
-                              onClick={() => handleReconnectSession(session.id)}
+                              onClick={() => {
+                                if (session.hostKey) { setTrustError(""); setTrustSessionId(session.id); }
+                                else void handleReconnectSession(session.id);
+                              }}
                             >
-                              <RefreshCw className="mr-1 h-3 w-3" /> 重新连接
+                              <RefreshCw className="mr-1 h-3 w-3" /> {session.hostKey?.type === "changed" ? "核实主机身份" : session.hostKey ? "信任并连接" : "重新连接"}
                             </Button>
                           </div>
                         </div>
@@ -1169,7 +1195,7 @@ export function BatchModeView() {
               <div className="border-t bg-card p-3">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="text-caption font-medium">批量发送</span>
-                  <span className="text-caption text-muted-foreground">(已选择 {selectedCount} 个会话)</span>
+                  <span className="text-caption text-muted-foreground">发送至 {selectedCount} 台主机</span>
                 </div>
                 <div className="flex gap-2">
                   <Textarea
@@ -1510,6 +1536,34 @@ export function BatchModeView() {
         </div>
       </div>
 
+      <Dialog open={!!trustSession?.hostKey} onOpenChange={(value) => { if (!value && !trusting) setTrustSessionId(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{trustSession?.hostKey?.type === "changed" ? "确认主机密钥变更" : "确认主机身份"}</DialogTitle>
+            <DialogDescription>{trustSession?.hostKey?.type === "changed"
+              ? "服务器身份与之前记录的不同。请确认服务器确实已更换或重装，再信任新密钥。"
+              : "请通过可信渠道核对服务器指纹。信任后会记住该主机，后续密钥变更仍需确认。"}</DialogDescription>
+          </DialogHeader>
+          <dl className="space-y-2 text-body">
+            <div><dt className="text-muted-foreground">主机</dt><dd>{trustSession?.host}:{trustSession?.port}</dd></div>
+            {trustSession?.hostKey?.expectedFingerprint && <div><dt className="text-muted-foreground">原指纹</dt><dd className="break-all font-mono text-caption">{trustSession.hostKey.expectedFingerprint}</dd></div>}
+            <div><dt className="text-muted-foreground">{trustSession?.hostKey?.type === "changed" ? "新指纹" : "密钥指纹"}</dt><dd className="break-all font-mono text-caption">{trustSession?.hostKey?.fingerprint}</dd></div>
+          </dl>
+          {trustError && <p role="alert" className="text-caption text-destructive">{trustError}</p>}
+          <DialogFooter>
+            <Button variant="outline" disabled={trusting} onClick={() => setTrustSessionId(null)}>取消</Button>
+            <Button variant={trustSession?.hostKey?.type === "changed" ? "destructive" : "default"} disabled={trusting} onClick={handleTrustSession}>
+              {trusting ? "连接中…" : trustSession?.hostKey?.type === "changed" ? "确认更换并连接" : "信任并连接"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!connectionActionError} onOpenChange={(value) => { if (!value) setConnectionActionError(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>操作未完成</DialogTitle><DialogDescription>{connectionActionError}</DialogDescription></DialogHeader>
+          <DialogFooter><Button onClick={() => setConnectionActionError(null)}>知道了</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

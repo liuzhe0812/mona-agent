@@ -132,6 +132,7 @@ pub async fn ssh_connect_with_id(
     config: ConnectionConfig,
     cols: u32,
     rows: u32,
+    accept_new_host_key: Option<bool>,
 ) -> Result<String, String> {
     log::debug!(
         "[batch] ssh_connect_with_id called: session_id={}, host={}:{}",
@@ -142,7 +143,15 @@ pub async fn ssh_connect_with_id(
 
     let connect_result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        ssh_connect_with_id_inner(app_handle, state, session_id.clone(), config, cols, rows),
+        ssh_connect_with_id_inner(
+            app_handle,
+            state,
+            session_id.clone(),
+            config,
+            cols,
+            rows,
+            accept_new_host_key.unwrap_or(false),
+        ),
     )
     .await
     .map_err(|_| {
@@ -163,6 +172,7 @@ async fn ssh_connect_with_id_inner(
     config: ConnectionConfig,
     cols: u32,
     rows: u32,
+    accept_new_host_key: bool,
 ) -> Result<String, String> {
     log::debug!(
         "[batch] ssh_connect_with_id_inner: session_id={}, host={}:{}, username={}, auth_type={}",
@@ -237,12 +247,13 @@ async fn ssh_connect_with_id_inner(
     }
 
     let client =
-        SshClient::connect(
+        SshClient::connect_with_verify(
             &config.host,
             config.port,
             &config.username,
             &config.auth,
             state.known_hosts.clone(),
+            accept_new_host_key,
         )
         .await
         .map_err(|e| {
@@ -676,10 +687,11 @@ pub async fn ssh_trust_host_key(
     state: State<'_, TerminalState>,
     host: String,
     port: u16,
+    fingerprint: Option<String>,
 ) -> Result<(), String> {
     state
         .known_hosts
-        .trust_last_unknown(&host, port)
+        .trust_pending(&host, port, fingerprint.as_deref())
         .map_err(|e| e.to_string())
 }
 

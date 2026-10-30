@@ -401,6 +401,7 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
       await sshTrustHostKey(
         pendingHostKey.config.host,
         pendingHostKey.config.port,
+        pendingHostKey.fingerprint,
       );
       await connectDesktop(pendingHostKey.config);
       setPendingHostKey(null);
