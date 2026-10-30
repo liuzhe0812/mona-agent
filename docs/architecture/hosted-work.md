@@ -110,4 +110,4 @@ Auth 测试必须使用临时 cwd、临时 SQLite、随机测试 JWT secret、�
 
 以明确提交 `6a0ca489a4fcb593159e3570a07bc562b7be49bd` 的后端源码构建了独立候选，未带入当时其他任务未提交的云同步源码。归档 SHA256 为 `2d543e074457c9b4b685c0df759b1d0db25d58f8e10c91bd36cc6e3afc3f570b`，已在 Ubuntu 新目录核对 manifest 并通过 104 项测试，包括真实 gVisor 文件、网络与用户隔离。
 
-这只是候选验证：运行中的 Work 未切换，模型列表仍为空；生产 Auth 的网站登录与 identity 接口尚未上线，公网 Work 专用通道和真实联合验收尚未完成。仓库仍有并行提交，正式发布前须再次核对最新源码与候选差异。
+该包现已切换到 Ubuntu 用户级服务，状态备份在 `/home/liuzhe/mona-hosted-work/backups/20261030-accounts-v2`；真实账号的 Work 登录和退出接口已验证。模型列表仍为空，不能执行模型任务。专用 WSS/STCP 通道到 VPS 本机 `127.0.0.1:18801` 的健康检查已通过，但官网路由和 HTTPS `public_origin` 尚未接通，生产浏览器联合验收尚未完成。Ubuntu 用户密钥环无登录开机解锁尚未验证，不能宣称服务已经具备无人值守开机恢复能力。

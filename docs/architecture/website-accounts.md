@@ -1,6 +1,6 @@
 # 官网账户与在线 Work 身份共享
 
-更新：2026-10-30。状态：本地账号前后端和兼容候选已准备，未切换线上服务。旧候选存在网站令牌可管理设备或走旧模型过渡通道的问题，已在新版本地候选修复；VPS 暂存的仍是旧候选，不得上线。生产备份/发布前检查此前遭执行平台安全拦截；不能把候选目录存在当成发布成功。
+更新：2026-10-30。状态：Auth v2 和官网账号页面已切到生产，真实邮箱注册、资料修改、邮箱变更、退出及 Work 登录接口已验证。微信尚未配置，生产浏览器联合验收尚未完成。旧候选存在网站令牌可管理设备或走旧模型过渡通道的问题，不得启用。
 
 ## 目标边界
 
@@ -53,18 +53,18 @@ Work 的 `auth_client.py` 使用 `/auth/web/login` 和 `/auth/web/logout`，用�
 
 ## 已核实的生产差异与候选包
 
-VPS 实际运行的 Auth 并不是 `/opt/mona-auth/app`，而是 PM2 的 `/opt/mona-auth-releases/20261014-account-keys-c14f258`。部署前读取进程 cwd 和 PM2 元数据，不能按旧目录覆盖代码。
+本次发布前，VPS 实际运行的 Auth 是 PM2 的 `/opt/mona-auth-releases/20261014-account-keys-c14f258`，不是 `/opt/mona-auth/app`。当前已切换到 `/opt/mona-auth-releases/20261030-website-accounts-v2/content`；以后发布前仍需读取实际进程 cwd 和 PM2 元数据。
 
-该生产版本的数据库 revision 为 cloud_account_keys，没有 credential_version；保留旧 device/trial 注册路由。直接上传本地整个 Auth 会错误地混入其他未完成业务改动。因此 `deploy/website-accounts/build-auth-candidate.py` 基于实际线上源码摘要生成兼容版本：只添加账号字段/检查、网站模块和通用 identity；为旧网页登录/桌面令牌签发传入当前凭据版本，保留原有注册设备试用、订阅、支付、计费和云同步路由。
+发布前的数据库 revision 为 cloud_account_keys，没有 credential_version；保留旧 device/trial 注册路由。直接上传本地整个 Auth 会错误地混入其他未完成业务改动。因此 `deploy/website-accounts/build-auth-candidate.py` 基于当时线上源码摘要生成兼容版本：添加账号字段/检查、网站模块和通用 identity；为旧网页登录/桌面令牌签发传入当前凭据版本，保留原有注册设备试用、订阅、支付、计费和云同步路由。当前生产 revision 已为 website_accounts。
 
 新版本地候选目录：`output/website-accounts/auth-candidate-20261030-device-boundary-v2`。
 新版候选归档：`output/website-accounts/auth-candidate-20261030-device-boundary-v2.tar.gz`。
 新版归档 SHA256：`2cae5def6f83af08e59fbb0abd88f43167e2692b490398d08897b614fdde2a0a`。
 服务器暂存目录 `/opt/mona-auth-releases/20261030-website-accounts` 是存在上述缺陷的旧候选，不得启用。私有运行配置及加密云配置只在原服务器保存，没有进入归档。
 
-旧候选曾在 VPS 临时 SQLite 验证 9 项接口，但其测试未覆盖网站令牌越界，不能作为上线依据。新版候选在本地隔离 SQLite 通过 65 项账号、旧设备、桌面和身份兼容回归；尚未上传或在 VPS 测试。生产备份/检查调用此前被平台安全检查屏蔽；本轮只读复核确认旧 release 仍在运行，线上 `/auth/identity` 和 `/auth/web/capabilities` 仍是 404。
+旧候选曾在 VPS 临时 SQLite 验证 9 项接口，但其测试未覆盖网站令牌越界，不能作为上线依据。新版候选在本地隔离 SQLite 通过 65 项账号、旧设备、桌面和身份兼容回归；在 VPS 的隔离环境完成兼容烟测和 MariaDB 迁移演练后已上线。数据库及旧版本备份位于 `/opt/mona-auth-backups/website-accounts-20261030-v2`，恢复已验证。
 
-后续发布必须先完成数据库备份与迁移权限核验，再应用 account_token_version 和 website_accounts 两个增量迁移。先在网站开关关闭时验证原客户端路由、旧 token、identity 和 SMTP，再打开账号入口。发布只切换 Auth 指定 PM2 进程及网站账户静态产物，不重启其他服务。
+本次依次完成数据库备份、account_token_version 与 website_accounts 增量迁移、关闭网站开关的兼容检查和账号入口启用。后续发布仍须重做对应备份与兼容核验，只切换 Auth 指定 PM2 进程及网站账户静态产物。
 
 回退不能在已签发 wsid 令牌后退回不识别 wsid 的旧鉴权代码，否则被撤销的令牌可能重新有效。应先关闭网站开关并保留会话撤销校验，再按审查过的兼容版本回退；不要直接删除认证表、恢复整库或清空用户数据。
 
@@ -72,4 +72,4 @@ VPS 实际运行的 Auth 并不是 `/opt/mona-auth/app`，而是 PM2 的 `/opt/m
 
 新版生产源码兼容候选的账号和旧设备回归 65 项通过；真实 Edge 账户界面 7 项通过（模拟 SMTP/微信网络边界）。本轮指定 Work 包已在目标 Ubuntu 通过 104 项测试，包括真实 gVisor 隔离；上线时应重新核对该包与最新源码、配置和生产状态，不能把其他包的测试记录冒充本版本验收。
 
-官网、Auth、Work 的源码和测试已补齐，不代表已经上线。真实 WeChat 配置、真实邮件收取、独立平台模型和正式路由联调仍需分别核验。
+真实邮件收取、注册、更换邮箱、资料修改、网站退出、旧账号登录以及内网 Work 登录/退出已通过接口联调。真实 WeChat 配置、独立平台模型、官网 Work 路由及生产浏览器联合验收仍需分别完成。
