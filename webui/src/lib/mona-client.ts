@@ -138,6 +138,7 @@ interface PendingNewChat {
   resolve: (chatId: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  dispatchAttempted: boolean;
 }
 
 interface PendingRoomCommand {
@@ -961,10 +962,15 @@ export class MonaClient {
     const requestId = `chat_${Date.now().toString(36)}_${(this.newChatRequestSeq++).toString(36)}`;
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const pending = this.pendingNewChat;
+        if (pending?.requestId !== requestId) return;
         this.pendingNewChat = null;
+        if (!pending.dispatchAttempted) {
+          this.sendQueue = this.sendQueue.filter((frame) => !("request_id" in frame && frame.request_id === requestId));
+        }
         reject(new Error("newChat timed out"));
       }, timeoutMs);
-      this.pendingNewChat = { requestId, resolve, reject, timer };
+      this.pendingNewChat = { requestId, resolve, reject, timer, dispatchAttempted: false };
       const payload: Record<string, unknown> = { type: "new_chat", request_id: requestId };
       if (ephemeral) payload.ephemeral = true;
       if (workspace) payload.workspace = workspace;
@@ -987,10 +993,15 @@ export class MonaClient {
     const requestId = `chat_${Date.now().toString(36)}_${(this.newChatRequestSeq++).toString(36)}`;
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const pending = this.pendingNewChat;
+        if (pending?.requestId !== requestId) return;
         this.pendingNewChat = null;
+        if (!pending.dispatchAttempted) {
+          this.sendQueue = this.sendQueue.filter((frame) => !("request_id" in frame && frame.request_id === requestId));
+        }
         reject(new Error("branchChat timed out"));
       }, timeoutMs);
-      this.pendingNewChat = { requestId, resolve, reject, timer };
+      this.pendingNewChat = { requestId, resolve, reject, timer, dispatchAttempted: false };
       this.queueSend({
         type: "branch_chat",
         source_chat_id: sourceChatId,
@@ -1519,9 +1530,13 @@ export class MonaClient {
       }
     }
     if (this.pendingNewChat) {
-      clearTimeout(this.pendingNewChat.timer);
-      this.pendingNewChat.reject(new Error("socket closed"));
+      const pending = this.pendingNewChat;
+      clearTimeout(pending.timer);
       this.pendingNewChat = null;
+      if (!pending.dispatchAttempted) {
+        this.sendQueue = this.sendQueue.filter((frame) => !("request_id" in frame && frame.request_id === pending.requestId));
+      }
+      pending.reject(new Error("socket closed"));
     }
     // Surface structured reasons *before* reconnect logic so the UI can
     // display the error even while the client transparently reconnects.
@@ -1602,6 +1617,7 @@ export class MonaClient {
       if ("request_id" in frame && frame.request_id) {
         const pending = this.pendingRoomCommands.get(frame.request_id);
         if (pending) pending.dispatchAttempted = true;
+        if (this.pendingNewChat?.requestId === frame.request_id) this.pendingNewChat.dispatchAttempted = true;
       }
       if ("input_id" in frame && frame.input_id && "chat_id" in frame) {
         const receipt = this.messageAdmissions.get(JSON.stringify([frame.chat_id, frame.input_id]));
