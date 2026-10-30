@@ -977,14 +977,14 @@ export function useMonaStream(
     const restoredMessages = initialMessages.map((message) => {
       const admission = chatId && client?.getMessageAdmission?.(chatId, message.id);
       return admission ? { ...message,
-        sendState: admission === "accepted" ? undefined : admission === "rejected" ? "rejected" as const : "pending" as const,
-        isInjected: admission === "accepted",
+        sendState: admission === "accepted" ? undefined : admission === "rejected" || admission === "cancelled" ? "rejected" as const : "pending" as const,
+        ...(message.isInjected !== undefined ? { isInjected: admission === "accepted" } : {}),
       } : message;
     });
     setMessages(restoredMessages.some((message, index) => message !== initialMessages[index]) ? restoredMessages : initialMessages);
     const restoredRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
     const restoredTaskPlan = chatId && client ? client.getTaskPlan?.(chatId) : undefined;
-    const pending = initialMessages.slice().reverse().find((message) => message.sendState === "pending" && message.taskId && message.isInjected !== false);
+    const pending = restoredMessages.slice().reverse().find((message) => message.sendState === "pending" && message.taskId && message.isInjected !== false);
     pendingMessageRef.current = pending?.taskId ? {
       taskId: pending.taskId,
       messageId: pending.id,
@@ -1681,6 +1681,13 @@ export function useMonaStream(
       // Text is optional when images are attached — the agent will still see
       // the image blocks via ``media`` paths.
       if (!hasImages && !hasDocuments && !content.trim()) return;
+      if (options?.inputId) {
+        const known = client.getMessageAdmission?.(chatId, options.inputId);
+        if (known && known !== "rejected") {
+          options.onAdmission?.(known);
+          return;
+        }
+      }
 
       let taskId = options?.taskId;
       const previousTaskId = currentTaskIdRef.current;
@@ -1699,7 +1706,7 @@ export function useMonaStream(
         setCurrentTaskId(taskId);
         setTaskPlan(undefined);
       }
-      const messageId = crypto.randomUUID();
+      const messageId = options?.inputId ?? crypto.randomUUID();
       pendingMessageRef.current = {
         taskId,
         messageId,
@@ -1724,7 +1731,7 @@ export function useMonaStream(
         pendingDeliveredMediaRef.current = [];
         clearActivitySegment();
         return [
-          ...pruneReasoningOnlyPlaceholders(prev),
+          ...pruneReasoningOnlyPlaceholders(prev.filter((message) => message.id !== messageId)),
           {
             id: messageId,
             role: "user",
@@ -1746,8 +1753,37 @@ export function useMonaStream(
       setIsCompacting(false);
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      const onAdmission = (state: MessageAdmission) => {
+        options?.onAdmission?.(state);
+        if (!mountedRef.current || activeChatRef.current !== chatId) return;
+        const pending = pendingMessageRef.current;
+        if (!pending || pending.messageId !== messageId) return;
+        if (state === "accepted") {
+          setMessages((previous) => previous.map((message) => message.id === messageId ? { ...message, sendState: undefined } : message));
+          setMessageRejection((current) => current?.inputId === messageId ? null : current);
+          return;
+        }
+        if (state === "unknown") {
+          setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: true, inputId: messageId });
+          return;
+        }
+        pendingMessageRef.current = null;
+        setMessages((previous) => previous.map((message) => message.id === messageId ? { ...message, sendState: "rejected" } : message));
+        const started = client.getRunStartedAt(chatId);
+        setIsStreaming(started !== null);
+        setRunStartedAt(started);
+        setIsAwaitingModelResponse(false);
+        if (currentTaskIdRef.current === pending.taskId) {
+          currentTaskIdRef.current = client.getArtifactTaskId?.(chatId) ?? pending.previousTaskId;
+          setCurrentTaskId(currentTaskIdRef.current);
+          setTaskPlan(client.getTaskPlan?.(chatId) ?? pending.previousTaskPlan);
+        }
+        if (state !== "cancelled") setMessageRejection({ runActive: started !== null, inputId: messageId });
+      };
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
+          inputId: messageId,
+          onAdmission,
           // IMPORTANT: displayContent is persisted to the server so that
           // history replay also shows the short label. DO NOT remove.
           displayContent: options.displayContent,
@@ -1779,7 +1815,7 @@ export function useMonaStream(
           profileAdviceId: options.profileAdviceId,
         });
       } else {
-        client.sendMessage(chatId, content, wireMedia, { taskId });
+        client.sendMessage(chatId, content, wireMedia, { taskId, inputId: messageId, onAdmission });
       }
     },
     [chatId, clearActivitySegment, client, flushPendingStreamEvents, goalState?.active],
@@ -1837,7 +1873,10 @@ export function useMonaStream(
 
   const stop = useCallback(() => {
     if (!chatId || !client || stoppingRef.current || !isStreaming) return;
-    const request = { turnId: client.getWorkTurn?.(chatId)?.turnId };
+    const pending = pendingMessageRef.current;
+    if (pending?.awaitingAdmission && client.cancelUnsentInput?.(chatId, pending.messageId)) return;
+    const turn = client.getWorkTurn?.(chatId);
+    const request = { turnId: pending?.awaitingAdmission && turn?.inputId !== pending.messageId ? undefined : turn?.turnId };
     stopRequestRef.current = request;
     stoppingRef.current = true;
     setStopping(true);

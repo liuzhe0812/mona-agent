@@ -69,6 +69,37 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("withdraws only the original undispatched input and never revives it on reconnect", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const admission = vi.fn();
+    client.sendMessage("chat-a", "withdraw me", undefined, { inputId: "input-a", onAdmission: admission });
+    client.sendMessage("chat-b", "keep me", undefined, { inputId: "input-b" });
+    expect(client.cancelUnsentInput("chat-a", "input-a")).toBe(true);
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledWith("cancelled");
+    client.connect(); lastSocket().fakeOpen();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "message"))
+      .toEqual([expect.objectContaining({ chat_id: "chat-b", input_id: "input-b", content: "keep me" })]);
+    lastSocket().fakeMessage({ event: "message_accepted", chat_id: "chat-a", input_id: "input-a" });
+    expect(client.getMessageAdmission("chat-a", "input-a")).toBe("cancelled");
+    expect(client.cancelUnsentInput("chat-b", "input-b")).toBe(false);
+    client.close();
+  });
+
+  it("does not withdraw or replay an input whose send outcome is unknown", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const original = lastSocket();
+    vi.spyOn(original, "send").mockImplementationOnce(() => { throw new Error("synthetic interruption"); });
+    client.sendMessage("chat", "unknown outcome", undefined, { inputId: "input-a" });
+    expect(client.getMessageAdmission("chat", "input-a")).toBe("unknown");
+    expect(client.cancelUnsentInput("chat", "input-a")).toBe(false);
+    original.fakeCloseWithCode(1006);
+    client.connect(); lastSocket().fakeOpen();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).some((frame) => frame.type === "message")).toBe(false);
+    client.close();
+  });
+
   it("stops only the confirmed Work turn and never sends a slash command", async () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     client.connect(); lastSocket().fakeOpen();

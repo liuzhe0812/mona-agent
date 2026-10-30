@@ -1499,7 +1499,6 @@ describe("useMonaStream", () => {
 
   it("stops the confirmed turn without adding or sending a user slash command", async () => {
     const fake = fakeClient();
-    fake.client.getWorkTurn.mockReturnValue({ turnId: "original-turn" });
     const { result } = renderHook(() => useMonaStream("chat-stop", EMPTY_MESSAGES), {
       wrapper: wrap(fake.client),
     });
@@ -1507,6 +1506,7 @@ describe("useMonaStream", () => {
     act(() => {
       result.current.send("long task");
     });
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "original-turn", inputId: result.current.messages[0].id });
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.isStreaming).toBe(true);
 
@@ -1992,7 +1992,7 @@ describe("useMonaStream", () => {
       "chat-task",
       "second request",
       undefined,
-      { taskId: secondTask },
+      expect.objectContaining({ taskId: secondTask }),
     );
   });
 
@@ -2048,7 +2048,7 @@ describe("useMonaStream", () => {
       "chat-inject",
       "start",
       undefined,
-      { taskId },
+      expect.objectContaining({ taskId }),
     );
 
     act(() => {

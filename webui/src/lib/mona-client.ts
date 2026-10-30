@@ -112,7 +112,7 @@ export type StreamError =
   | { kind: "message_too_big" };
 
 type ErrorHandler = (error: StreamError) => void;
-export type MessageAdmission = "accepted" | "rejected" | "unknown";
+export type MessageAdmission = "accepted" | "rejected" | "unknown" | "cancelled";
 type AdmissionHandler = (state: MessageAdmission) => void;
 
 export interface WorkTurnSnapshot {
@@ -167,7 +167,7 @@ export interface MonaClientOptions {
  */
 export class MonaClient {
   private messageAdmissions = new Map<string, {
-    state?: MessageAdmission; handlers: Set<AdmissionHandler>; timer?: ReturnType<typeof setTimeout>;
+    state?: MessageAdmission; handlers: Set<AdmissionHandler>; timer?: ReturnType<typeof setTimeout>; dispatchAttempted: boolean;
   }>();
   private socket: WebSocket | null = null;
   private statusHandlers = new Set<StatusHandler>();
@@ -343,6 +343,21 @@ export class MonaClient {
 
   getWorkTurn(chatId: string): WorkTurnSnapshot | undefined {
     return this.workTurnsByChatId.get(chatId);
+  }
+
+  getArtifactTaskId(chatId: string): string | undefined {
+    return this.artifactTaskIdByChatId.get(chatId);
+  }
+
+  cancelUnsentInput(chatId: string, inputId: string): boolean {
+    const receipt = this.messageAdmissions.get(JSON.stringify([chatId, inputId]));
+    if (!receipt || receipt.dispatchAttempted || receipt.state === "accepted") return false;
+    const matches = (frame: Outbound) => "input_id" in frame && frame.input_id === inputId
+      && "chat_id" in frame && frame.chat_id === chatId;
+    if (!this.sendQueue.some(matches)) return false;
+    this.sendQueue = this.sendQueue.filter((frame) => !matches(frame));
+    this.setMessageAdmission(chatId, inputId, "cancelled");
+    return true;
   }
 
   async stopWorkTurn(chatId: string, expectedTurnId?: string): Promise<WorkTurnStopOutcome> {
@@ -1059,7 +1074,7 @@ export class MonaClient {
         if (existing.state) options.onAdmission?.(existing.state);
         return;
       }
-      this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []) });
+      this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []), dispatchAttempted: false });
     }
     if (options?.discussion) {
       const frame: Outbound = {
@@ -1541,7 +1556,7 @@ export class MonaClient {
   private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission): void {
     const key = JSON.stringify([chatId, inputId]);
     const receipt = this.messageAdmissions.get(key);
-    if (!receipt || receipt.state === "accepted" || receipt.state === state) return;
+    if (!receipt || receipt.state === "accepted" || receipt.state === "cancelled" || receipt.state === state) return;
     clearTimeout(receipt.timer);
     receipt.timer = undefined;
     receipt.state = state;
@@ -1549,7 +1564,7 @@ export class MonaClient {
     if (state !== "unknown") receipt.handlers.clear();
     if (this.messageAdmissions.size > 256) {
       for (const [oldKey, old] of this.messageAdmissions) {
-        if (old.state === "accepted" || old.state === "rejected") this.messageAdmissions.delete(oldKey);
+        if (old.state === "accepted" || old.state === "rejected" || old.state === "cancelled") this.messageAdmissions.delete(oldKey);
         if (this.messageAdmissions.size <= 256) break;
       }
     }
@@ -1562,6 +1577,10 @@ export class MonaClient {
       if ("request_id" in frame && frame.request_id) {
         const pending = this.pendingRoomCommands.get(frame.request_id);
         if (pending) pending.dispatchAttempted = true;
+      }
+      if ("input_id" in frame && frame.input_id && "chat_id" in frame) {
+        const receipt = this.messageAdmissions.get(JSON.stringify([frame.chat_id, frame.input_id]));
+        if (receipt) receipt.dispatchAttempted = true;
       }
       this.socket.send(serialized);
       if ("input_id" in frame && frame.input_id && "chat_id" in frame) {

@@ -40,6 +40,88 @@ function setup() {
 afterEach(() => clients.splice(0).forEach((client) => client.close()));
 
 describe("chat admission and runtime recovery", () => {
+  it("observes an unknown original send without new task identity, duplicate bubbles or replay", () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    vi.spyOn(socket, "send").mockImplementationOnce(() => { throw new Error("synthetic send interruption"); });
+    act(() => result.current.send("original input", undefined, { inputId: "same-input" }));
+    const originalTask = result.current.currentTaskId;
+    const observer = vi.fn();
+    act(() => result.current.send("original input", undefined, { inputId: "same-input", onAdmission: observer }));
+    expect(observer).toHaveBeenCalledWith("unknown");
+    expect(result.current.currentTaskId).toBe(originalTask);
+    expect(result.current.messages).toHaveLength(1);
+    expect(socket.messages).toEqual([]);
+  });
+
+  it("reports explicit admission for a stable normal input without treating it as model output", () => {
+    const { socket, wrapper } = setup();
+    const admission = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("normal request", undefined, { inputId: "normal-input", onAdmission: admission }));
+    expect(socket.messages[0]).toMatchObject({ input_id: "normal-input", content: "normal request" });
+    expect(admission).not.toHaveBeenCalled();
+    act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "normal-input" }));
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledWith("accepted");
+    expect(result.current.messages[0]).toMatchObject({ id: "normal-input", sendState: undefined });
+    expect(result.current.messages[0].isInjected).toBeUndefined();
+    expect(result.current.isAwaitingModelResponse).toBe(true);
+  });
+
+  it.each(["accepted", "cancelled"] as const)("restores a normal %s input without a guide badge or pending execution", (state) => {
+    const { client, socket, wrapper } = setup();
+    if (state === "cancelled") socket.close();
+    client.sendMessage("chat", "normal input", undefined, { inputId: "normal-input" });
+    if (state === "accepted") socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "normal-input" });
+    else expect(client.cancelUnsentInput("chat", "normal-input")).toBe(true);
+    const initial: UIMessage[] = [{ id: "normal-input", role: "user", content: "normal input", taskId: "normal-task", sendState: "pending", createdAt: 1 }];
+    const { result } = renderHook(() => useMonaStream("chat", initial), { wrapper });
+    expect(result.current.messages[0].sendState).toBe(state === "accepted" ? undefined : "rejected");
+    expect(result.current.messages[0].isInjected).toBeUndefined();
+    expect(result.current.currentTaskId).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("withdraws an offline original input without dispatching it or a stop command", async () => {
+    const { socket, wrapper, client } = setup();
+    socket.close();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    const admission = vi.fn();
+    act(() => result.current.send("original draft", undefined, { docPaths: ["uploads/a.pdf"], documentNames: ["a.pdf"], onAdmission: admission }));
+    const inputId = result.current.messages[0].id;
+    expect(result.current.isStreaming).toBe(true);
+    await act(async () => result.current.stop());
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.isAwaitingModelResponse).toBe(false);
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.messages[0]).toMatchObject({ id: inputId, content: "original draft", sendState: "rejected", media: [{ kind: "file", name: "a.pdf" }] });
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledWith("cancelled");
+    client.connect(); socket.readyState = 1; socket.onopen?.();
+    expect(socket.messages).toEqual([]);
+    expect(socket.sent.map((frame) => JSON.parse(frame)).some((frame) => frame.type === "stop_work_turn")).toBe(false);
+  });
+
+  it("keeps a dispatched original input unknown until its exact turn can be stopped", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("original request"));
+    const inputId = result.current.messages[0].id;
+    expect(socket.messages[0].input_id).toBe(inputId);
+    await act(async () => result.current.stop());
+    expect(result.current.messageRejection?.stopOutcome).toBe("unsupported");
+    expect(result.current.isStreaming).toBe(true);
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "original-turn", input_id: inputId }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    expect(stop.expected_turn_id).toBe("original-turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id,
+      ok: true, chat_id: "chat", turn_id: "original-turn", outcome: "stopped" }));
+    expect(result.current.isStreaming).toBe(false);
+    expect(socket.messages).toHaveLength(1);
+  });
+
   it("keeps the newer turn running when an older stop finishes", async () => {
     const { socket, wrapper } = setup();
     const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
