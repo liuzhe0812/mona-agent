@@ -500,6 +500,9 @@ mod local_http_auth_tests {
         assert!(needs_services_token("/api/development/projects"));
         assert!(needs_services_token("/api/development/sessions/id/send"));
         assert!(!needs_services_token("/api/development-other"));
+        assert!(needs_services_token("/api/mcp/servers"));
+        assert!(needs_services_token("/api/mcp/reload"));
+        assert!(!needs_services_token("/api/mcp-other"));
         assert!(needs_services_token("/api/cloud-sync/status"));
         assert!(needs_services_token("/api/cloud-sync/enable"));
         assert!(!needs_services_token("/api/cloud-sync-other"));
@@ -536,6 +539,8 @@ fn local_http_client() -> Result<&'static reqwest::Client, String> {
 
 fn needs_services_token(path: &str) -> bool {
     path.starts_with("/api/materials")
+        || path == "/api/mcp"
+        || path.starts_with("/api/mcp/")
         || path == "/api/development"
         || path.starts_with("/api/development/")
         || path == "/api/cloud-sync"

@@ -38,8 +38,10 @@ _PROTECTED_PREFIXES = (
     "/api/profile",
     "/api/office",
     "/api/video/agent",
+    "/api/mcp/",
 )
 _PROTECTED_EXACT_PATHS = {
+    "/api/mcp",
     "/api/video/voice-preview",
     "/api/video/project/audio-preview",
 }

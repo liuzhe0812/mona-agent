@@ -11545,6 +11545,8 @@ def _cors_allow_origin(request_origin: str | None) -> str | None:
 async def _cors_middleware(request: web.Request, handler: Callable) -> web.StreamResponse:
     """Add CORS headers for the Tauri webview / loopback dev origins only."""
     allow_origin = _cors_allow_origin(request.headers.get("Origin"))
+    if request.headers.get("Origin") and allow_origin is None:
+        raise web.HTTPForbidden(reason="untrusted local API origin")
     if request.method == "OPTIONS":
         resp = web.Response(status=204)
     else:
@@ -11571,7 +11573,13 @@ def create_app(
     hoard, url2note) are served by the services process — see
     ``mona.services.server.create_services_app``.
     """
-    app = web.Application(client_max_size=20 * 1024 * 1024, middlewares=[_cors_middleware])
+    from mona.materials.auth import get_services_token, materials_auth_middleware
+
+    get_services_token()
+    app = web.Application(
+        client_max_size=20 * 1024 * 1024,
+        middlewares=[_cors_middleware, materials_auth_middleware],
+    )
     app["agent_loop"] = agent_loop
     app["model_name"] = model_name
     app["request_timeout"] = request_timeout
