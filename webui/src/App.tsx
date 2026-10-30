@@ -721,6 +721,7 @@ function Shell({
   }, [browserTabs]);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileSidebarContainer, setMobileSidebarContainer] = useState<HTMLElement | null>(null);
   const [rightWorkspaceMaximized, setRightWorkspaceMaximized] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
@@ -2201,13 +2202,14 @@ function Shell({
               onOpenChange={(open) => setMobileSidebarOpen(open)}
             >
               <SheetContent
+                ref={setMobileSidebarContainer}
                 side="left"
                 showCloseButton={false}
                 aria-describedby={undefined}
                 className="w-[min(320px,100vw)] max-w-[100vw] p-0 md:hidden"
               >
                 <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
-                <SessionListPanel {...sessionListProps} className="w-full border-r-0" />
+                <SessionListPanel {...sessionListProps} actionMenuPortalContainer={mobileSidebarContainer} className="w-full border-r-0" />
               </SheetContent>
             </Sheet>
           ) : null}

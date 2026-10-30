@@ -396,59 +396,42 @@ describe("App layout", () => {
     expect(createChatSpy).not.toHaveBeenCalled();
   });
 
-  it.skip("keeps the mobile session action menu inside the sidebar sheet", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "Existing chat",
-      },
-    ];
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockImplementation((query: string) => ({
-        matches: !query.includes("768px"),
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    );
-
+  it("keeps mobile chat actions accessible through the sidebar sheet lifecycle", async () => {
+    mockSessions = [{
+      key: "websocket:mobile-a", channel: "websocket", chatId: "mobile-a",
+      createdAt: null, updatedAt: null, title: "Mobile chat", preview: "",
+    }];
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= 640,
+      media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    })));
     render(<App />);
-
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
-
+    fireEvent.click(screen.getByRole("button", { name: /会话列表$/ }));
     const sheet = await screen.findByRole("dialog");
-    const mobileSidebar = within(sheet).getByRole("region", { name: "Sessions" });
-    await waitFor(() =>
-      expect(
-        within(mobileSidebar).getByTitle("Existing chat"),
-      ).toBeInTheDocument(),
-    );
-
-    fireEvent.pointerDown(
-      within(mobileSidebar).getByLabelText("Chat actions for Existing chat"),
-      { button: 0 },
-    );
-
-    const deleteItem = await within(sheet).findByRole("menuitem", {
-      name: "Delete",
-    });
-    expect(deleteItem).toBeInTheDocument();
-
-    fireEvent.click(deleteItem);
-    await waitFor(() =>
-      expect(screen.getByText("Delete this chat?")).toBeInTheDocument(),
-    );
-  }, 15_000);
+    const sidebar = within(sheet).getByRole("region", { name: "Sessions" });
+    fireEvent.contextMenu(await within(sidebar).findByTitle("Mobile chat"));
+    const menu = await screen.findByRole("menu");
+    const remove = within(menu).getByRole("menuitem", { name: "Delete" });
+    expect(sheet).toContainElement(menu);
+    await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+    fireEvent.click(remove);
+    const confirmation = await screen.findByRole("alertdialog");
+    expect(confirmation).toHaveTextContent("Delete this chat?");
+    expect(deleteChatSpy).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog")).toBe(sheet);
+    expect(within(sidebar).getByTitle("Mobile chat")).toBeInTheDocument();
+    expect(deleteChatSpy).not.toHaveBeenCalled();
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.body.style.pointerEvents).not.toBe("none");
+  });
 
   it.skip("applies persisted sidebar workspace state from the gateway", async () => {
     mockSessions = [

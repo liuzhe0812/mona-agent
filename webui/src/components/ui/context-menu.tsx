@@ -49,9 +49,11 @@ ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 
 const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
->(({ className, ...props }, ref) => (
-  <ContextMenuPrimitive.Portal>
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content> & {
+    portalContainer?: HTMLElement | null;
+  }
+>(({ className, portalContainer, ...props }, ref) => (
+  <ContextMenuPrimitive.Portal container={portalContainer ?? undefined}>
     <ContextMenuPrimitive.Content
       ref={ref}
       className={cn(

@@ -31,6 +31,7 @@ import { useClientContextOrNull } from "@/providers/ClientProvider";
  */
 interface SessionListPanelProps {
   className?: string;
+  actionMenuPortalContainer?: HTMLElement | null;
   sessions: ChatSummary[];
   activeKey: string | null;
   loading: boolean;
@@ -288,6 +289,7 @@ export function SessionListPanel(props: SessionListPanelProps) {
           runningChatIds={props.runningChatIds}
           unreadKeys={props.unreadKeys}
           showArchived={props.showArchived}
+          actionMenuPortalContainer={props.actionMenuPortalContainer}
           onCreateTask={props.onCreateTask}
           onRemoveProject={props.onRemoveProject}
           projectNames={props.projectNames}

@@ -122,6 +122,7 @@ export const ChatList = memo(function ChatList({
   runningChatIds = [],
   unreadKeys = [],
   showArchived = false,
+  actionMenuPortalContainer,
   defaultProjectExpanded = true,
   loading,
   error,
@@ -379,7 +380,7 @@ export const ChatList = memo(function ChatList({
             </div>
               </ContextMenuTrigger>
               {group.kind === "project" && group.workspace ? (
-                <ContextMenuContent className="w-52" onCloseAutoFocus={(event) => event.preventDefault()}>
+                <ContextMenuContent portalContainer={actionMenuPortalContainer} className="w-52" onCloseAutoFocus={(event) => event.preventDefault()}>
                   <ContextMenuItem onSelect={() => {
                     const shouldPin = !allProjectPinned;
                     for (const session of group.sessions) {
@@ -539,6 +540,7 @@ export const ChatList = memo(function ChatList({
                         </button>
                       </ContextMenuTrigger>
                     <ContextMenuContent
+                      portalContainer={actionMenuPortalContainer}
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
                       {onMarkAllRead ? (
