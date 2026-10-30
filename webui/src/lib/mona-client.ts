@@ -138,6 +138,7 @@ interface PendingRoomCommand {
   resolve: (result: AnyRoomCommandResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  dispatchAttempted: boolean;
 }
 
 export interface MonaClientOptions {
@@ -1337,10 +1338,14 @@ export class MonaClient {
     const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
     return new Promise<AnyRoomCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const pending = this.pendingRoomCommands.get(requestId);
         this.pendingRoomCommands.delete(requestId);
+        if (pending && !pending.dispatchAttempted) {
+          this.sendQueue = this.sendQueue.filter((frame) => !("request_id" in frame && frame.request_id === requestId));
+        }
         reject(new Error(`${resultEvent} timed out`));
       }, timeoutMs);
-      this.pendingRoomCommands.set(requestId, { resolve, reject, timer });
+      this.pendingRoomCommands.set(requestId, { resolve, reject, timer, dispatchAttempted: false });
       this.queueSend(build(requestId));
     });
   }
@@ -1498,7 +1503,12 @@ export class MonaClient {
   private rawSend(frame: Outbound): void {
     if (!this.socket) return;
     try {
-      this.socket.send(JSON.stringify(frame));
+      const serialized = JSON.stringify(frame);
+      if ("request_id" in frame && frame.request_id) {
+        const pending = this.pendingRoomCommands.get(frame.request_id);
+        if (pending) pending.dispatchAttempted = true;
+      }
+      this.socket.send(serialized);
       if ("input_id" in frame && frame.input_id && "chat_id" in frame) {
         const receipt = this.messageAdmissions.get(JSON.stringify([frame.chat_id, frame.input_id]));
         if (receipt && !receipt.state && !receipt.timer) {

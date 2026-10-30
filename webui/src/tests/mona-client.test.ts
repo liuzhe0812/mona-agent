@@ -69,6 +69,68 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("drops only expired control commands that have never been dispatched", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const expired = client.answerUserQuestion("chat-a", "question-old", null);
+    const rejected = expect(expired).rejects.toThrow("answer_user_question_result timed out");
+    vi.advanceTimersByTime(5_000);
+    const current = client.answerUserQuestion("chat-b", "question-current", null);
+    client.sendMessage("chat-c", "keep this queued message");
+    vi.advanceTimersByTime(5_000);
+    await rejected;
+
+    client.connect(); lastSocket().fakeOpen();
+    const frames = lastSocket().sent.map((frame) => JSON.parse(frame));
+    const answers = frames.filter((frame) => frame.type === "answer_user_question");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ chat_id: "chat-b", question_id: "question-current" });
+    expect(frames).toContainEqual(expect.objectContaining({ type: "message", chat_id: "chat-c", content: "keep this queued message" }));
+    lastSocket().fakeMessage({ event: "answer_user_question_result", request_id: answers[0].request_id, ok: true });
+    await expect(current).resolves.toBeUndefined();
+    client.close();
+  });
+
+  it("does not revive an expired offline control command on later connections", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const answer = client.answerUserQuestion("chat-a", "question-old", null);
+    const rejected = expect(answer).rejects.toThrow("answer_user_question_result timed out");
+    vi.advanceTimersByTime(10_000);
+    await rejected;
+    for (let connection = 0; connection < 2; connection++) {
+      client.connect(); lastSocket().fakeOpen();
+      expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "answer_user_question")).toEqual([]);
+      client.close();
+    }
+  });
+
+  it("keeps the timeout result for an already-dispatched command when its reply arrives late", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const answer = client.answerUserQuestion("chat-a", "question-sent", null);
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    const rejected = expect(answer).rejects.toThrow("answer_user_question_result timed out");
+    vi.advanceTimersByTime(10_000);
+    await rejected;
+    expect(() => lastSocket().fakeMessage({ event: "answer_user_question_result", request_id: request.request_id, ok: true })).not.toThrow();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "answer_user_question")).toHaveLength(1);
+    client.close();
+  });
+
+  it("expires a control command whose local serialization failed before socket.send", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const config: Record<string, unknown> = {};
+    config.self = config;
+    const update = client.updateAgentConfig("agent.fixture", config);
+    const rejected = expect(update).rejects.toThrow("agent_config_update_result timed out");
+    vi.advanceTimersByTime(10_000);
+    await rejected;
+    config.self = null;
+    client.close(); client.connect(); lastSocket().fakeOpen();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "agent_config_update")).toEqual([]);
+    client.close();
+  });
+
   it("dispatches an offline identified input for the first time after connecting", () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     const admission = vi.fn();
