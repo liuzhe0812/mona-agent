@@ -976,6 +976,8 @@
         "io": "Couldn't read this file"
       },
       "pendingQueue": {
+        "accepted": "Received, waiting to be applied",
+        "paused": "Paused",
         "append": "Append",
         "appendAria": "Append to current task",
         "editAria": "Edit message",

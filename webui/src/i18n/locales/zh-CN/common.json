@@ -991,6 +991,8 @@
       },
       "goalStateCloseAria": "关闭目标",
       "pendingQueue": {
+        "accepted": "已接收，等待处理",
+        "paused": "已暂停",
         "append": "追加",
         "appendAria": "追加到当前任务",
         "editAria": "编辑消息",

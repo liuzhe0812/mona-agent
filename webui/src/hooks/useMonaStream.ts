@@ -452,6 +452,8 @@ export interface SendImage {
 }
 
 export interface SendOptions {
+  resumeInput?: boolean;
+  awaitConsumption?: boolean;
   inputId?: string;
   onAdmission?: (state: MessageAdmission) => void;
   displayContent?: string;
@@ -977,8 +979,9 @@ export function useMonaStream(
     const restoredMessages = initialMessages.map((message) => {
       const admission = chatId && client?.getMessageAdmission?.(chatId, message.id);
       return admission ? { ...message,
-        sendState: admission === "accepted" ? undefined : admission === "rejected" || admission === "cancelled" ? "rejected" as const : "pending" as const,
-        ...(message.isInjected !== undefined ? { isInjected: admission === "accepted" } : {}),
+        sendState: admission === "accepted" || admission === "consumed" ? undefined
+          : admission === "rejected" || admission === "cancelled" || admission === "paused" ? "rejected" as const : "pending" as const,
+        ...(message.isInjected !== undefined ? { isInjected: admission === "consumed" } : {}),
       } : message;
     });
     setMessages(restoredMessages.some((message, index) => message !== initialMessages[index]) ? restoredMessages : initialMessages);
@@ -1683,8 +1686,9 @@ export function useMonaStream(
       if (!hasImages && !hasDocuments && !content.trim()) return;
       if (options?.inputId) {
         const known = client.getMessageAdmission?.(chatId, options.inputId);
-        if (known && known !== "rejected") {
-          options.onAdmission?.(known);
+        if (known && known !== "rejected" && !(known === "paused" && options.resumeInput)) {
+          options.onAdmission?.(known === "consumed" ? "accepted" : known);
+          if (known === "consumed" && options.awaitConsumption) options.onAdmission?.("consumed");
           return;
         }
       }
@@ -1753,12 +1757,18 @@ export function useMonaStream(
       setIsCompacting(false);
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      let acceptedReported = false;
       const onAdmission = (state: MessageAdmission) => {
-        options?.onAdmission?.(state);
+        if (state === "accepted" || state === "consumed") {
+          if (!acceptedReported) options?.onAdmission?.("accepted");
+          acceptedReported = true;
+          if (state === "consumed" && options?.awaitConsumption) options.onAdmission?.("consumed");
+        } else if (!acceptedReported || options?.awaitConsumption) options?.onAdmission?.(state);
         if (!mountedRef.current || activeChatRef.current !== chatId) return;
         const pending = pendingMessageRef.current;
         if (!pending || pending.messageId !== messageId) return;
-        if (state === "accepted") {
+        if (state === "accepted" || state === "consumed") {
+          if (state === "consumed") pendingMessageRef.current = null;
           setMessages((previous) => previous.map((message) => message.id === messageId ? { ...message, sendState: undefined } : message));
           setMessageRejection((current) => current?.inputId === messageId ? null : current);
           return;
@@ -1778,12 +1788,13 @@ export function useMonaStream(
           setCurrentTaskId(currentTaskIdRef.current);
           setTaskPlan(client.getTaskPlan?.(chatId) ?? pending.previousTaskPlan);
         }
-        if (state !== "cancelled") setMessageRejection({ runActive: started !== null, inputId: messageId });
+        if (state !== "cancelled" && state !== "paused") setMessageRejection({ runActive: started !== null, inputId: messageId });
       };
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
           inputId: messageId,
           onAdmission,
+          resumeInput: options.resumeInput,
           // IMPORTANT: displayContent is persisted to the server so that
           // history replay also shows the short label. DO NOT remove.
           displayContent: options.displayContent,
@@ -1826,6 +1837,16 @@ export function useMonaStream(
       if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
       if (!hasImages && !options?.docPaths?.length && !content.trim()) return;
+      const targetTurnId = client.getWorkTurn?.(chatId)?.turnId;
+      if (!targetTurnId) {
+        if (!isStreaming) {
+          send(content, images, { ...options, awaitConsumption: true });
+        } else {
+          options?.onAdmission?.("rejected");
+          setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null });
+        }
+        return;
+      }
 
       let taskId = currentTaskIdRef.current;
       if (!taskId) {
@@ -1855,20 +1876,21 @@ export function useMonaStream(
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       client.sendMessage(chatId, content, wireMedia, {
-        ...options, taskId, inputId,
+        ...options, taskId, inputId, targetTurnId,
         onAdmission: (state) => {
           options?.onAdmission?.(state);
           if (!mountedRef.current || activeChatRef.current !== chatId) return;
           setMessages((previous) => previous.map((message) => message.id === inputId ? {
-            ...message, sendState: state === "accepted" ? undefined : state === "rejected" ? "rejected" : "pending",
-            isInjected: state === "accepted",
+            ...message, sendState: state === "consumed" ? undefined
+              : state === "rejected" || state === "paused" || state === "cancelled" ? "rejected" : "pending",
+            isInjected: state === "consumed",
           } : message));
-          if (state !== "accepted") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId });
+          if (state === "unknown" || state === "rejected") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId });
           else setMessageRejection((current) => current?.inputId === inputId ? null : current);
         },
       });
     },
-    [chatId, client],
+    [chatId, client, isStreaming, send],
   );
 
   const stop = useCallback(() => {

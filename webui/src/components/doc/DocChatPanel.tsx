@@ -117,9 +117,9 @@ export function DocChatPanel({
     const pending = pendingQueue.messages.find((message) => message.id === id);
     if (!pending || pending.locked) return;
     pendingQueue.setDeliveryState(id, "pending");
-    inject(pending.content, pending.images, { ...pending.options, inputId: id, onAdmission: (state) => {
-      if (state === "accepted") pendingQueue.remove(id);
-      else pendingQueue.setDeliveryState(id, state === "unknown" ? "unknown" : undefined);
+    inject(pending.content, pending.images, { ...pending.options, inputId: id, resumeInput: pending.deliveryState === "paused", onAdmission: (state) => {
+      if (state === "consumed") pendingQueue.remove(id);
+      else pendingQueue.setDeliveryState(id, state === "accepted" ? "accepted" : state === "unknown" ? "unknown" : state === "paused" || state === "cancelled" ? "paused" : undefined);
     } });
   }, [inject, pendingQueue]);
 

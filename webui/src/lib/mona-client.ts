@@ -112,7 +112,7 @@ export type StreamError =
   | { kind: "message_too_big" };
 
 type ErrorHandler = (error: StreamError) => void;
-export type MessageAdmission = "accepted" | "rejected" | "unknown" | "cancelled";
+export type MessageAdmission = "accepted" | "consumed" | "paused" | "rejected" | "unknown" | "cancelled";
 type AdmissionHandler = (state: MessageAdmission) => void;
 
 export interface WorkTurnSnapshot {
@@ -168,6 +168,7 @@ export interface MonaClientOptions {
 export class MonaClient {
   private messageAdmissions = new Map<string, {
     state?: MessageAdmission; handlers: Set<AdmissionHandler>; timer?: ReturnType<typeof setTimeout>; dispatchAttempted: boolean;
+    targetTurnId?: string; lifecycle: boolean;
   }>();
   private socket: WebSocket | null = null;
   private statusHandlers = new Set<StatusHandler>();
@@ -1025,6 +1026,8 @@ export class MonaClient {
     options?: {
       inputId?: string;
       onAdmission?: AdmissionHandler;
+      targetTurnId?: string;
+      resumeInput?: boolean;
       /** IMPORTANT: Short display text persisted to server for history replay.
        *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
       displayContent?: string;
@@ -1069,17 +1072,20 @@ export class MonaClient {
     if (options?.inputId) {
       const key = JSON.stringify([chatId, options.inputId]);
       const existing = this.messageAdmissions.get(key);
-      if (existing && existing.state !== "rejected") {
+      if (existing && existing.state !== "rejected" && !(existing.state === "paused" && options.resumeInput)) {
         if (options.onAdmission) existing.handlers.add(options.onAdmission);
         if (existing.state) options.onAdmission?.(existing.state);
         return;
       }
-      this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []), dispatchAttempted: false });
+      this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []), dispatchAttempted: false,
+        targetTurnId: options.targetTurnId, lifecycle: !!options.targetTurnId || options.resumeInput === true });
     }
     if (options?.discussion) {
       const frame: Outbound = {
         type: "start_discussion",
         ...(options.inputId ? { input_id: options.inputId } : {}),
+        ...(options.targetTurnId ? { target_turn_id: options.targetTurnId } : {}),
+        ...(options.resumeInput ? { resume_input: true } : {}),
         chat_id: chatId,
         content,
         target_agent_ids: options.discussion.participantIds,
@@ -1104,6 +1110,8 @@ export class MonaClient {
     const frame: Outbound = {
       type: "message",
       ...(options?.inputId ? { input_id: options.inputId } : {}),
+      ...(options?.targetTurnId ? { target_turn_id: options.targetTurnId } : {}),
+      ...(options?.resumeInput ? { resume_input: true } : {}),
       chat_id: chatId,
       content,
       ...(media && media.length > 0 ? { media } : {}),
@@ -1181,14 +1189,31 @@ export class MonaClient {
     }
 
     if (parsed.event === "message_accepted") {
-      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+      if (!this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]))?.lifecycle) {
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+      }
+      return;
+    }
+    if (parsed.event === "work_input_state") {
+      const receipt = this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]));
+      if (!receipt || receipt.targetTurnId !== parsed.turn_id) return;
+      if (parsed.state === "consumed" && receipt.state !== "accepted") {
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+      }
+      this.setMessageAdmission(parsed.chat_id, parsed.input_id, parsed.state);
       return;
     }
     if (parsed.event === "error" && parsed.message_rejected && parsed.chat_id && parsed.input_id) {
-      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "rejected");
+      const receipt = this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]));
+      if (!receipt?.lifecycle || receipt.targetTurnId === parsed.target_turn_id) {
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "rejected");
+      }
     }
     if (parsed.event === "agent_mentions_routed" && "input_id" in parsed && typeof parsed.input_id === "string") {
-      this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+      if (!this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]))?.lifecycle) {
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "accepted");
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "consumed");
+      }
     }
 
     if (parsed.event === "ready") {
@@ -1488,7 +1513,7 @@ export class MonaClient {
   private handleClose(event?: { code?: number }): void {
     this.socket = null;
     for (const [key, receipt] of this.messageAdmissions) {
-      if (!receipt.state && receipt.timer) {
+      if (receipt.state === "accepted" || (!receipt.state && receipt.timer)) {
         const [chatId, inputId] = JSON.parse(key) as [string, string];
         this.setMessageAdmission(chatId, inputId, "unknown");
       }
@@ -1556,15 +1581,15 @@ export class MonaClient {
   private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission): void {
     const key = JSON.stringify([chatId, inputId]);
     const receipt = this.messageAdmissions.get(key);
-    if (!receipt || receipt.state === "accepted" || receipt.state === "cancelled" || receipt.state === state) return;
+    if (!receipt || receipt.state === "consumed" || receipt.state === "paused" || receipt.state === "cancelled" || receipt.state === state) return;
     clearTimeout(receipt.timer);
     receipt.timer = undefined;
     receipt.state = state;
     for (const handler of receipt.handlers) handler(state);
-    if (state !== "unknown") receipt.handlers.clear();
+    if (state === "consumed" || state === "rejected" || state === "cancelled" || state === "paused") receipt.handlers.clear();
     if (this.messageAdmissions.size > 256) {
       for (const [oldKey, old] of this.messageAdmissions) {
-        if (old.state === "accepted" || old.state === "rejected" || old.state === "cancelled") this.messageAdmissions.delete(oldKey);
+        if (old.state === "consumed" || old.state === "rejected" || old.state === "cancelled") this.messageAdmissions.delete(oldKey);
         if (this.messageAdmissions.size <= 256) break;
       }
     }

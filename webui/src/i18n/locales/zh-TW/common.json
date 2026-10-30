@@ -824,6 +824,10 @@
       "toggleSidebar": "切換側邊欄"
     },
     "composer": {
+      "pendingQueue": {
+        "accepted": "已接收，等待處理",
+        "paused": "已暫停"
+      },
       "placeholderThread": "輸入訊息…",
       "placeholderHero": "你在想什麼？",
       "placeholderOpening": "正在開啟新對話…",

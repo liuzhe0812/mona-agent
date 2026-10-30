@@ -1341,6 +1341,8 @@ export type InboundEvent =
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
   | { event: "artifact_task_started"; chat_id: string; task_id: string }
   | { event: "message_accepted"; chat_id: string; input_id: string }
+  | { event: "work_input_state"; chat_id: string; input_id: string; turn_id?: string;
+      state: "accepted" | "consumed" | "paused" | "rejected"; reason?: string }
   | ({ event: "work_turn_stop_result" } & RoomCommandResult)
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
@@ -1353,6 +1355,7 @@ export type InboundEvent =
       /** The identified message was not accepted; an earlier task may still be running. */
       message_rejected?: boolean;
       input_id?: string;
+      target_turn_id?: string;
       task_id?: string;
     }
   | {
@@ -1518,6 +1521,8 @@ export type Outbound =
   | {
       type: "start_discussion";
       input_id?: string;
+      target_turn_id?: string;
+      resume_input?: boolean;
       chat_id: string;
       content: string;
       task_id?: string;
@@ -1537,6 +1542,8 @@ export type Outbound =
   | {
       type: "message";
       input_id?: string;
+      target_turn_id?: string;
+      resume_input?: boolean;
       chat_id: string;
       content: string;
       media?: OutboundMedia[];

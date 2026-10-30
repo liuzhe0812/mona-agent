@@ -8,7 +8,7 @@ export interface PendingMessage {
   images?: SendImage[];
   options?: SendOptions;
   locked?: boolean;
-  deliveryState?: "pending" | "unknown";
+  deliveryState?: "pending" | "accepted" | "paused" | "unknown";
 }
 
 const MAX_PENDING = 3;
@@ -57,7 +57,7 @@ export function usePendingQueue(chatId: string | null = null) {
 
   const setDeliveryState = useCallback((id: string, deliveryState?: PendingMessage["deliveryState"]) => {
     setMessages((previous) => previous.map((message) => message.id === id
-      ? { ...message, deliveryState, locked: deliveryState !== undefined }
+      ? { ...message, deliveryState, locked: deliveryState !== undefined && deliveryState !== "paused" }
       : message));
   }, [setMessages]);
 

@@ -354,25 +354,31 @@ describe("chat admission and runtime recovery", () => {
     expect(result.current.messages[0]).toMatchObject({ content: "first input", sendState: "pending" });
   });
 
-  it("correlates append rejection and acceptance by input ID and retains attachments for an explicit retry", () => {
+  it("keeps an accepted guide pending until consumption and retains attachments for an explicit retry", () => {
     const { socket, wrapper } = setup();
     const receipt = vi.fn();
     const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
     act(() => socket.emit({ event: "artifact_task_started", chat_id: "chat", task_id: "same-task" }));
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a" }));
     const options = { inputId: "input-one", docPaths: ["uploads/brief.pdf"], documentNames: ["brief.pdf"], onAdmission: receipt };
     act(() => result.current.inject("", undefined, options));
-    expect(socket.messages[0]).toMatchObject({ input_id: "input-one", task_id: "same-task", doc_paths: options.docPaths });
+    expect(socket.messages[0]).toMatchObject({ input_id: "input-one", task_id: "same-task", target_turn_id: "turn-a", doc_paths: options.docPaths });
     expect(result.current.messages.at(-1)).toMatchObject({ id: "input-one", sendState: "pending", isInjected: false });
     act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "same-task", input_id: "unrelated-input", message_rejected: true }));
     expect(receipt).not.toHaveBeenCalled();
     expect(result.current.messageRejection).toBeNull();
-    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "same-task", input_id: "input-one", message_rejected: true }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "same-task", input_id: "input-one", target_turn_id: "turn-a", message_rejected: true }));
     expect(receipt).toHaveBeenLastCalledWith("rejected");
     expect(result.current.messages.at(-1)).toMatchObject({ sendState: "rejected", media: [{ kind: "file", name: "brief.pdf" }] });
     act(() => result.current.inject("", undefined, options));
     expect(socket.messages[1]).toMatchObject({ input_id: "input-one", doc_paths: options.docPaths });
     act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "input-one" }));
+    expect(receipt).toHaveBeenLastCalledWith("rejected");
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "input-one", turn_id: "turn-a", state: "accepted" }));
     expect(receipt).toHaveBeenLastCalledWith("accepted");
+    expect(result.current.messages[0]).toMatchObject({ isInjected: false, sendState: "pending" });
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "input-one", turn_id: "turn-a", state: "consumed" }));
+    expect(receipt).toHaveBeenLastCalledWith("consumed");
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0]).toMatchObject({ isInjected: true, sendState: undefined });
     expect(result.current.messageRejection).toBeNull();
@@ -384,6 +390,7 @@ describe("chat admission and runtime recovery", () => {
       const { client, socket, wrapper } = setup();
       const receipt = vi.fn();
       const { result, rerender } = renderHook(({ chatId }) => useMonaStream(chatId, empty), { wrapper, initialProps: { chatId: "chat" } });
+      act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a" }));
       act(() => result.current.inject("do this once", undefined, { inputId: "input-one", onAdmission: receipt }));
       act(() => vi.advanceTimersByTime(15_000));
       expect(receipt).toHaveBeenLastCalledWith("unknown");
@@ -391,11 +398,59 @@ describe("chat admission and runtime recovery", () => {
       act(() => result.current.inject("do this once", undefined, { inputId: "input-one", onAdmission: receipt }));
       expect(socket.messages).toHaveLength(1);
       rerender({ chatId: "other-chat" });
-      act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "input-one" }));
-      expect(receipt).toHaveBeenLastCalledWith("accepted");
-      expect(client.getMessageAdmission("chat", "input-one")).toBe("accepted");
+      act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "input-one", turn_id: "turn-a", state: "consumed" }));
+      expect(receipt).toHaveBeenLastCalledWith("consumed");
+      expect(client.getMessageAdmission("chat", "input-one")).toBe("consumed");
       expect(result.current.messages).toEqual([]);
       expect(result.current.messageRejection).toBeNull();
     } finally { vi.useRealTimers(); }
+  });
+
+  it("preserves an unconsumed guide on stop and resumes it once under the user's selected new turn", () => {
+    const { socket, wrapper } = setup();
+    const receipt = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a" }));
+    const options = { inputId: "paused-input", docPaths: ["uploads/brief.pdf"], documentNames: ["brief.pdf"], onAdmission: receipt };
+    act(() => result.current.inject("supplement", undefined, options));
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "paused-input", turn_id: "turn-a", state: "accepted" }));
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "paused-input", turn_id: "turn-a", state: "paused" }));
+    expect(result.current.messages[0]).toMatchObject({ isInjected: false, sendState: "rejected", media: [{ name: "brief.pdf" }] });
+    expect(result.current.messageRejection).toBeNull();
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-b" }));
+    act(() => result.current.inject("supplement", undefined, { ...options, resumeInput: true }));
+    expect(socket.messages).toHaveLength(2);
+    expect(socket.messages[1]).toMatchObject({ input_id: "paused-input", target_turn_id: "turn-b", resume_input: true, doc_paths: options.docPaths });
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "paused-input", turn_id: "turn-a", state: "consumed" }));
+    expect(result.current.messages[0].isInjected).toBe(false);
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "paused-input", turn_id: "turn-b", state: "consumed" }));
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({ isInjected: true, sendState: undefined });
+    expect(receipt).toHaveBeenLastCalledWith("consumed");
+  });
+
+  it("rejects a guide when a running task has no confirmed turn instead of starting another task", () => {
+    const { socket, wrapper } = setup();
+    const receipt = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running" }));
+    act(() => result.current.inject("keep this supplement", undefined, { inputId: "input-a", onAdmission: receipt }));
+    expect(receipt).toHaveBeenCalledWith("rejected");
+    expect(socket.messages).toEqual([]);
+    expect(result.current.isStreaming).toBe(true);
+  });
+
+  it("starts an explicitly selected idle queued input and waits for consumption before clearing it", () => {
+    const { socket, wrapper } = setup();
+    const receipt = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.inject("queued input", undefined, { inputId: "idle-input", onAdmission: receipt }));
+    expect(socket.messages[0]).toMatchObject({ input_id: "idle-input", content: "queued input" });
+    expect(socket.messages[0]).not.toHaveProperty("target_turn_id");
+    act(() => socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "idle-input" }));
+    expect(receipt.mock.calls).toEqual([["accepted"]]);
+    act(() => socket.emit({ event: "work_input_state", chat_id: "chat", input_id: "idle-input", state: "consumed" }));
+    expect(receipt.mock.calls).toEqual([["accepted"], ["consumed"]]);
+    expect(result.current.messages[0].isInjected).toBeUndefined();
   });
 });

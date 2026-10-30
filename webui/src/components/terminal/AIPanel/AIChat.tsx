@@ -211,9 +211,9 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
       const msg = pendingQueue.messages.find((m) => m.id === id);
       if (!msg || msg.locked) return;
       pendingQueue.setDeliveryState(id, "pending");
-      inject(msg.content, msg.images, { ...msg.options, inputId: id, onAdmission: (state) => {
-        if (state === "accepted") pendingQueue.remove(id);
-        else pendingQueue.setDeliveryState(id, state === "unknown" ? "unknown" : undefined);
+      inject(msg.content, msg.images, { ...msg.options, inputId: id, resumeInput: msg.deliveryState === "paused", onAdmission: (state) => {
+        if (state === "consumed") pendingQueue.remove(id);
+        else pendingQueue.setDeliveryState(id, state === "accepted" ? "accepted" : state === "unknown" ? "unknown" : state === "paused" || state === "cancelled" ? "paused" : undefined);
       } });
     },
     [inject, pendingQueue],

@@ -1456,6 +1456,14 @@ class AgentLoop:
         dispatch_fn: Callable[[CommandContext], Awaitable[OutboundMessage | None]],
     ) -> None:
         """Dispatch a command directly from the run() loop and publish the result."""
+        controller = getattr(self.bus, "work_turns", None)
+        input_id = msg.metadata.get("input_id") if msg.channel == "websocket" else None
+        if input_id and isinstance(controller, WorkTurnController):
+            owner = controller.current_for_session(key)
+            if owner is not None:
+                controller.bind_input(msg.chat_id, input_id, owner.turn_id)
+            if not controller.consume_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id")):
+                return
         ctx = CommandContext(msg=msg, session=None, key=key, raw=raw, loop=self)
         result = await dispatch_fn(ctx)
         if result:
@@ -1482,6 +1490,10 @@ class AgentLoop:
 
         Returns the total number of cancelled tasks + subagents.
         """
+        controller = getattr(self.bus, "work_turns", None)
+        if isinstance(controller, WorkTurnController):
+            controller.pause_session_inputs(key)
+
         from mona.computer_use.session import (
             mark_computer_turn_stopped,
             stop_computer_turns,
@@ -1685,6 +1697,29 @@ class AgentLoop:
                     message["source_kind"] = "runtime"
                 return message
 
+            async def _consume_pending(pending_msg: InboundMessage) -> dict[str, Any] | None:
+                controller = getattr(self.bus, "work_turns", None)
+                input_id = pending_msg.metadata.get("input_id") if pending_msg.channel == "websocket" else None
+                tracked = bool(input_id and isinstance(controller, WorkTurnController))
+                target = pending_msg.metadata.get("target_turn_id")
+                if tracked:
+                    if not controller.can_dispatch_input(pending_msg.chat_id, input_id, target):
+                        controller.emit_input(pending_msg.chat_id, input_id)
+                        return None
+                    if (metadata or {}).get("turn_id"):
+                        controller.bind_input(pending_msg.chat_id, input_id, metadata["turn_id"])
+                try:
+                    prepared = await _to_user_message(pending_msg)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    if tracked:
+                        controller.reject_input(pending_msg.chat_id, input_id, target, "输入准备失败，本次未加入执行。")
+                    raise
+                if tracked and not controller.consume_input(pending_msg.chat_id, input_id, target):
+                    return None
+                return prepared
+
             items: list[dict[str, Any]] = []
             model_boundary = False
             while len(items) < limit:
@@ -1696,7 +1731,9 @@ class AgentLoop:
                     _restore_pending_head(pending)
                     model_boundary = True
                     break
-                items.append(await _to_user_message(pending))
+                prepared = await _consume_pending(pending)
+                if prepared is not None:
+                    items.append(prepared)
 
             # Block if nothing drained but sub-agents spawned in this dispatch
             # are still running.  Direct @Agent jobs post their own room result
@@ -1725,7 +1762,9 @@ class AgentLoop:
                     if _different_video_model(msg):
                         _restore_pending_head(msg)
                         break
-                    items.append(await _to_user_message(msg))
+                    prepared = await _consume_pending(msg)
+                    if prepared is not None:
+                        items.append(prepared)
                     while len(items) < limit:
                         try:
                             pending = pending_queue.get_nowait()
@@ -1734,7 +1773,9 @@ class AgentLoop:
                         if _different_video_model(pending):
                             _restore_pending_head(pending)
                             break
-                        items.append(await _to_user_message(pending))
+                        prepared = await _consume_pending(pending)
+                        if prepared is not None:
+                            items.append(prepared)
                     break
 
             return items
@@ -1863,6 +1904,16 @@ class AgentLoop:
                 continue
 
             raw = msg.content.strip()
+            controller = getattr(self.bus, "work_turns", None)
+            input_id = msg.metadata.get("input_id") if msg.channel == "websocket" else None
+            if input_id and isinstance(controller, WorkTurnController):
+                if not controller.can_dispatch_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id")):
+                    if controller.input_state(msg.chat_id, input_id) is not None:
+                        controller.emit_input(msg.chat_id, input_id)
+                    else:
+                        controller.reject_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id"),
+                                                "原任务仍在停止或等待核对，本次输入未开始执行。")
+                    continue
             if self.commands.is_priority(raw):
                 priority_key = self._effective_session_key(msg)
                 await self._dispatch_command_inline(
@@ -1873,6 +1924,10 @@ class AgentLoop:
                 )
                 continue
             effective_key = self._effective_session_key(msg)
+            if input_id and isinstance(controller, WorkTurnController) and controller.session_blocked(effective_key):
+                controller.reject_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id"),
+                                        "原任务仍在停止或等待核对，本次输入未开始执行。")
+                continue
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
             # injection instead of creating a competing task.
@@ -1893,6 +1948,10 @@ class AgentLoop:
                         msg,
                         session_key_override=effective_key,
                     )
+                if input_id and isinstance(controller, WorkTurnController):
+                    owner = controller.current_for_session(effective_key)
+                    if owner is not None:
+                        controller.bind_input(msg.chat_id, input_id, owner.turn_id)
                 try:
                     self._pending_queues[effective_key].put_nowait(pending_msg)
                 except asyncio.QueueFull:
@@ -1938,6 +1997,11 @@ class AgentLoop:
             async with lock, gate:
                 try:
                     if isinstance(work_turns, WorkTurnController):
+                        input_id = msg.metadata.get("input_id") if msg.channel == "websocket" else None
+                        controlled = "target_turn_id" in msg.metadata or work_turns.input_state(msg.chat_id, input_id) is not None
+                        if input_id and controlled and not work_turns.can_dispatch_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id")):
+                            work_turns.emit_input(msg.chat_id, input_id)
+                            return
                         await work_turns.wait_ready(session_key)
                         if msg.channel == "websocket":
                             task = asyncio.current_task()
@@ -1950,6 +2014,10 @@ class AgentLoop:
                                 on_closed=lambda turn: notify_work_turn_closed(self.bus, turn),
                             )
                             msg = dataclasses.replace(msg, metadata={**msg.metadata, "turn_id": work_turn.turn_id})
+                            if input_id:
+                                work_turns.bind_input(msg.chat_id, input_id, work_turn.turn_id)
+                                if not work_turns.consume_input(msg.chat_id, input_id, msg.metadata.get("target_turn_id")):
+                                    return
                     self._pending_queues[session_key] = pending
                     registered = True
                     on_stream = on_stream_end = None

@@ -2033,6 +2033,7 @@ describe("useMonaStream", () => {
 
   it("inject() sends a message without resetting streaming state", async () => {
     const fake = fakeClient();
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "active-turn" });
     const { result } = renderHook(
       () => useMonaStream("chat-inject", EMPTY_MESSAGES),
       { wrapper: wrap(fake.client) },
@@ -2064,12 +2065,14 @@ describe("useMonaStream", () => {
       "chat-inject",
       "correction",
       undefined,
-        expect.objectContaining({ taskId, inputId: expect.any(String), onAdmission: expect.any(Function) }),
+      expect.objectContaining({ taskId, targetTurnId: "active-turn", inputId: expect.any(String), onAdmission: expect.any(Function) }),
     );
     expect(result.current.isStreaming).toBe(true);
-      const admission = fake.client.sendMessage.mock.calls.at(-1)![3]!.onAdmission!;
-      expect(result.current.messages.at(-1)).toMatchObject({ sendState: "pending", isInjected: false });
-      act(() => admission("accepted"));
+    const admission = fake.client.sendMessage.mock.calls.at(-1)![3]!.onAdmission!;
+    expect(result.current.messages.at(-1)).toMatchObject({ sendState: "pending", isInjected: false });
+    act(() => admission("accepted"));
+    expect(result.current.messages.at(-1)).toMatchObject({ sendState: "pending", isInjected: false });
+    act(() => admission("consumed"));
 
     const injectedBubble = result.current.messages.find(
       (m) => m.role === "user" && m.isInjected,
@@ -2080,6 +2083,7 @@ describe("useMonaStream", () => {
 
   it("inject() keeps the active Office context on the current task", () => {
     const fake = fakeClient();
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "office-turn" });
     const { result } = renderHook(
       () => useMonaStream("chat-office-inject", EMPTY_MESSAGES),
       { wrapper: wrap(fake.client) },
@@ -2108,6 +2112,7 @@ describe("useMonaStream", () => {
 
   it("inject() forwards attached images to the active task", () => {
     const fake = fakeClient();
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "image-turn" });
     const { result } = renderHook(
       () => useMonaStream("chat-inject-image", EMPTY_MESSAGES),
       { wrapper: wrap(fake.client) },
@@ -2132,6 +2137,7 @@ describe("useMonaStream", () => {
 
   it("inject() does not clear the active assistant stream buffer", async () => {
     const fake = fakeClient();
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "buffer-turn" });
     const { result } = renderHook(
       () => useMonaStream("chat-inject-buffer", EMPTY_MESSAGES),
       { wrapper: wrap(fake.client) },

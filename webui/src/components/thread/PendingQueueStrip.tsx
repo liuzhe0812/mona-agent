@@ -57,6 +57,8 @@ export function PendingQueueStrip({
                 {msg.content || msg.options?.documentNames?.join("、") || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
               </span>
               {msg.deliveryState === "unknown" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("errors.messageRejected.unknownTitle")}</span>}
+              {msg.deliveryState === "accepted" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("thread.composer.pendingQueue.accepted")}</span>}
+              {msg.deliveryState === "paused" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("thread.composer.pendingQueue.paused")}</span>}
               <div
                 className={cn(
                   "ml-1 flex shrink-0 items-center gap-0.5 transition-opacity",

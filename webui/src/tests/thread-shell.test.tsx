@@ -140,6 +140,7 @@ function makeClient() {
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
   const artifactsChangedHandlers = new Set<() => void>();
   const goalStateByChatId = new Map<string, import("@/lib/types").GoalStateWsPayload>();
+  const workTurns = new Map<string, { turnId: string }>();
   return {
     status: "open" as const,
     defaultChatId: null as string | null,
@@ -150,6 +151,8 @@ function makeClient() {
     onApprovalRequested: () => () => {},
     onRoomUpdated: () => () => {},
     getRunStartedAt: () => null,
+    getWorkTurn: (chatId: string) => workTurns.get(chatId),
+    stopWorkTurn: vi.fn(() => new Promise<never>(() => {})),
     getRoomState: () => new Promise<never>(() => {}),
     getWorkflow: async () => ({ draft: null, active: null, activeRevision: null }),
     getGoalState: (chatId: string) => goalStateByChatId.get(chatId),
@@ -196,6 +199,10 @@ function makeClient() {
       for (const h of errorHandlers) h(err);
     },
     _emitChat(chatId: string, ev: import("@/lib/types").InboundEvent) {
+      if (ev.event === "goal_status") {
+        if (ev.status === "running" && ev.turn_id) workTurns.set(chatId, { turnId: ev.turn_id });
+        else if (ev.status !== "running") workTurns.delete(chatId);
+      }
       if (ev.event === "goal_state") {
         goalStateByChatId.set(chatId, ev.goal_state);
       }
@@ -586,6 +593,7 @@ describe("ThreadShell", () => {
       client._emitChat(chatId, {
         event: "goal_status",
         chat_id: chatId,
+        turn_id: "current-turn",
         status: "running",
         started_at: Date.now() / 1000,
       });
@@ -616,12 +624,8 @@ describe("ThreadShell", () => {
       "AI is controlling the computer. Please avoid using the mouse and keyboard for now.",
     )).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Stop and take over" }));
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      chatId,
-      "/stop",
-      undefined,
-      { taskId: "task-current" },
-    );
+    expect(client.stopWorkTurn).toHaveBeenCalledWith(chatId, "current-turn");
+    expect(client.sendMessage).not.toHaveBeenCalled();
     expect(screen.getByText("Stopping computer control. Please wait before taking over.")).toBeInTheDocument();
 
     act(() => {
@@ -1708,7 +1712,7 @@ describe("ThreadShell", () => {
     const chatId = "chat-attachments";
     render(wrap(client, <ThreadShell session={session(chatId)} title="Attachments" onToggleSidebar={() => {}} />));
     act(() => client._emitChat(chatId, {
-      event: "goal_status", chat_id: chatId, status: "running", started_at: Date.now() / 1000,
+      event: "goal_status", chat_id: chatId, status: "running", started_at: Date.now() / 1000, turn_id: "attachment-turn",
     }));
     const textarea = screen.getByLabelText("Message input");
     const input = textarea.closest("form")!.querySelector('input[type="file"]')!;
@@ -1734,7 +1738,7 @@ describe("ThreadShell", () => {
     const client = makeClient();
     const view = (chatId: string) => wrap(client, <ThreadShell session={session(chatId)} title={chatId} onToggleSidebar={() => {}} />);
     const { rerender } = render(view("queue-a"));
-    act(() => client._emitChat("queue-a", { event: "goal_status", chat_id: "queue-a", status: "running", started_at: 100 }));
+    act(() => client._emitChat("queue-a", { event: "goal_status", chat_id: "queue-a", status: "running", started_at: 100, turn_id: "queue-turn-a" }));
     fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "A private pending input" } });
     fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
     expect(screen.getByText("A private pending input")).toBeInTheDocument();
@@ -1753,11 +1757,11 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("retains a rejected append and removes it only after accepting the same input ID", async () => {
+  it("retains a rejected append and removes it only after consuming the same input ID", async () => {
     const client = makeClient();
     const chatId = "queue-receipt";
     render(wrap(client, <ThreadShell session={session(chatId)} title="Receipts" onToggleSidebar={() => {}} />));
-    act(() => client._emitChat(chatId, { event: "goal_status", chat_id: chatId, status: "running", started_at: 100 }));
+    act(() => client._emitChat(chatId, { event: "goal_status", chat_id: chatId, status: "running", started_at: 100, turn_id: "queue-turn" }));
     fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "pending supplement" } });
     fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
@@ -1772,9 +1776,18 @@ describe("ThreadShell", () => {
     const retry = client.sendMessage.mock.calls[1][3];
     expect(retry.inputId).toBe(first.inputId);
     act(() => retry.onAdmission("accepted"));
+    expect(screen.getByRole("button", { name: "Append to current task" })).toBeDisabled();
+    expect(screen.getByText("Received, waiting to be applied")).toBeInTheDocument();
+    act(() => retry.onAdmission("paused"));
+    expect(screen.getByRole("button", { name: "Append to current task" })).toBeEnabled();
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    const resumed = client.sendMessage.mock.calls[2][3];
+    expect(resumed).toMatchObject({ inputId: first.inputId, resumeInput: true, targetTurnId: "queue-turn" });
+    act(() => resumed.onAdmission("consumed"));
     expect(screen.queryByRole("button", { name: "Append to current task" })).not.toBeInTheDocument();
     expect(screen.getByText("pending supplement")).toBeInTheDocument();
-    expect(client.sendMessage).toHaveBeenCalledTimes(2);
+    expect(client.sendMessage).toHaveBeenCalledTimes(3);
   });
 
   it("shows a rejected-send dialog once, keeps the user input, and allows another send without stopping", async () => {

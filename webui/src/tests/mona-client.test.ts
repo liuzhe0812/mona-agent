@@ -69,6 +69,66 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("keeps an accepted guide observable through pause and resumes the same ID against a new turn", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const firstReceipt = vi.fn();
+    client.sendMessage("chat", "original guide", undefined, { inputId: "guide", targetTurnId: "turn-a", onAdmission: firstReceipt });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).toMatchObject({ input_id: "guide", target_turn_id: "turn-a" });
+    lastSocket().fakeMessage({ event: "message_accepted", chat_id: "chat", input_id: "guide" });
+    expect(firstReceipt).not.toHaveBeenCalled();
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-a", state: "accepted" });
+    expect(firstReceipt).toHaveBeenLastCalledWith("accepted");
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-a", state: "paused" });
+    expect(firstReceipt).toHaveBeenLastCalledWith("paused");
+    const sentBefore = lastSocket().sent.length;
+    client.sendMessage("chat", "original guide", undefined, { inputId: "guide", targetTurnId: "turn-b" });
+    expect(lastSocket().sent).toHaveLength(sentBefore);
+    const resumedReceipt = vi.fn();
+    client.sendMessage("chat", "original guide", undefined, { inputId: "guide", targetTurnId: "turn-b", resumeInput: true, onAdmission: resumedReceipt });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).toMatchObject({ input_id: "guide", target_turn_id: "turn-b", resume_input: true });
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-a", state: "consumed" });
+    lastSocket().fakeMessage({ event: "error", chat_id: "chat", input_id: "guide", target_turn_id: "turn-a", message_rejected: true });
+    lastSocket().fakeMessage({ event: "agent_mentions_routed", chat_id: "chat", input_id: "guide", job_ids: [] });
+    expect(resumedReceipt).not.toHaveBeenCalled();
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-b", state: "consumed" });
+    expect(resumedReceipt.mock.calls).toEqual([["accepted"], ["consumed"]]);
+    expect(firstReceipt).toHaveBeenCalledTimes(2);
+    expect(client.getMessageAdmission("chat", "guide")).toBe("consumed");
+    client.sendMessage("chat", "original guide", undefined, { inputId: "guide", targetTurnId: "turn-b", resumeInput: true });
+    expect(lastSocket().sent).toHaveLength(sentBefore + 1);
+    client.close();
+  });
+
+  it.each(["consumed", "paused"] as const)("settles a lost %s receipt after reconnect without resending the guide", (state) => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const receipt = vi.fn();
+    client.sendMessage("chat", "guide", undefined, { inputId: "guide", targetTurnId: "turn-a", onAdmission: receipt });
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-a", state: "accepted" });
+    lastSocket().fakeCloseWithCode(1006);
+    expect(receipt).toHaveBeenLastCalledWith("unknown");
+    client.connect(); lastSocket().fakeOpen();
+    expect(lastSocket().sent.map((frame) => JSON.parse(frame)).some((frame) => frame.type === "message")).toBe(false);
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "other", input_id: "guide", turn_id: "turn-a", state });
+    expect(receipt).toHaveBeenLastCalledWith("unknown");
+    lastSocket().fakeMessage({ event: "work_input_state", chat_id: "chat", input_id: "guide", turn_id: "turn-a", state });
+    expect(receipt).toHaveBeenLastCalledWith(state);
+    client.close();
+  });
+
+  it("preserves guide identity when a discussion payload must be rejected by the server", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const receipt = vi.fn();
+    client.sendMessage("chat", "topic", undefined, { inputId: "guide", targetTurnId: "turn-a", resumeInput: true,
+      discussion: { participantIds: ["mona", "partner"], mode: "brainstorm", maxRounds: 1 }, onAdmission: receipt });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).toMatchObject({ type: "start_discussion", input_id: "guide", target_turn_id: "turn-a", resume_input: true });
+    lastSocket().fakeMessage({ event: "error", chat_id: "chat", input_id: "guide", target_turn_id: "turn-a", message_rejected: true });
+    expect(receipt).toHaveBeenLastCalledWith("rejected");
+    client.close();
+  });
+
   it("withdraws only the original undispatched input and never revives it on reconnect", () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     const admission = vi.fn();

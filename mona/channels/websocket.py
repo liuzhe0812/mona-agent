@@ -782,6 +782,15 @@ class WebSocketChannel(BaseChannel):
         for connection in list(self._subs.get(chat_id, ())):
             await self._safe_send_to(connection, raw, label="user_questions")
 
+    async def _send_work_input_states(self, chat_id: str) -> None:
+        controller = getattr(self.bus, "work_turns", None)
+        if not isinstance(controller, WorkTurnController):
+            return
+        for state in controller.input_snapshots(chat_id):
+            raw = json.dumps({"event": "work_input_state", **state}, ensure_ascii=False)
+            for connection in list(self._subs.get(chat_id, ())):
+                await self._safe_send_to(connection, raw, label=" work_input_state ")
+
     async def _handle_answer_user_question(self, connection: Any, envelope: dict[str, Any]) -> None:
         chat_id = envelope.get("chat_id")
         question_id = envelope.get("question_id")
@@ -2185,8 +2194,16 @@ class WebSocketChannel(BaseChannel):
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         is_dm: bool = False,
-    ) -> None:
+    ) -> bool:
         meta = dict(metadata or {})
+        if not self.is_allowed(sender_id):
+            return False
+        input_id = meta.get("input_id")
+        controller = getattr(self.bus, "work_turns", None)
+        if (input_id and isinstance(controller, WorkTurnController)
+                and not controller.can_dispatch_input(chat_id, input_id, meta.get("target_turn_id"))):
+            controller.emit_input(chat_id, input_id)
+            return False
         task_started = False
         if meta.get("webui"):
             raw_task_id = meta.get("task_id")
@@ -2219,7 +2236,7 @@ class WebSocketChannel(BaseChannel):
             await self.send_artifact_task_started(chat_id, meta["task_id"])
             await self._maybe_push_task_plan(chat_id)
             await self.send_artifacts_changed(chat_id=chat_id)
-        await super()._handle_message(
+        return await super()._handle_message(
             sender_id,
             chat_id,
             content,
@@ -4664,6 +4681,9 @@ class WebSocketChannel(BaseChannel):
         envelope: dict[str, Any],
     ) -> None:
         """Start a topic discussion through its dedicated wire command."""
+        if "target_turn_id" in envelope or envelope.get("resume_input") is True:
+            await self._reject_chat_message(connection, envelope, "讨论不能作为原主轮次的引导派发。")
+            return
         chat_id = envelope.get("chat_id")
         content = envelope.get("content")
         if not _is_valid_chat_id(chat_id):
@@ -6214,6 +6234,15 @@ class WebSocketChannel(BaseChannel):
         input_id = envelope.get("input_id")
         if isinstance(input_id, str) and len(input_id) <= 128:
             fields["input_id"] = input_id
+        target = envelope.get("target_turn_id")
+        if isinstance(target, str) and len(target) <= 128 and _API_KEY_RE.fullmatch(target):
+            fields["target_turn_id"] = target
+            controller = getattr(self.bus, "work_turns", None)
+            if (isinstance(controller, WorkTurnController) and fields.get("code") != "access_denied"
+                    and envelope.get("chat_id") in self._conn_chats.get(connection, ())
+                    and isinstance(input_id, str) and len(input_id) <= 128 and _API_KEY_RE.fullmatch(input_id)
+                    and controller.input_state(envelope["chat_id"], input_id) is None):
+                controller.reject_input(envelope["chat_id"], input_id, target, detail)
         await self._send_event(
             connection, "error", chat_id=envelope.get("chat_id"),
             message_rejected=True, detail=detail, **fields,
@@ -6307,6 +6336,7 @@ class WebSocketChannel(BaseChannel):
                 attached_fields["model_binding"] = stored.get("model_binding")
             await self._send_event(connection, "attached", **attached_fields)
             await self._hydrate_after_subscribe(cid)
+            await self._send_work_input_states(cid)
             return
         if t == "doc_upload":
             await self._handle_doc_upload_envelope(connection, envelope)
@@ -6407,6 +6437,17 @@ class WebSocketChannel(BaseChannel):
                 return
             if input_id is not None and not self.is_allowed(client_id):
                 await self._reject_chat_message(connection, envelope, "message not allowed", code="access_denied")
+                return
+            target_present = "target_turn_id" in envelope
+            target_turn_id = envelope.get("target_turn_id")
+            resume_input = envelope.get("resume_input", False)
+            if (not isinstance(resume_input, bool) or (resume_input and input_id is None)
+                    or (target_present and (input_id is None or not isinstance(target_turn_id, str)
+                        or len(target_turn_id) > 128 or not _API_KEY_RE.fullmatch(target_turn_id)))):
+                await self._reject_chat_message(connection, envelope, "无法核对本次引导的原轮次或输入身份。")
+                return
+            if target_present and envelope.get("target_agent_ids"):
+                await self._reject_chat_message(connection, envelope, "引导只加入原主轮次，请在对应智能体任务中继续。")
                 return
             from mona.agent.document_loop import DOCUMENT_PROFILES
 
@@ -6532,6 +6573,10 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if input_id is not None:
                 metadata["input_id"] = input_id
+            if target_present:
+                metadata["target_turn_id"] = target_turn_id
+            if resume_input:
+                metadata["resume_input"] = True
             if envelope.get("webui") is True:
                 metadata["webui"] = True
             if envelope.get("ui_theme") in ("dark", "light"):
@@ -6670,7 +6715,19 @@ class WebSocketChannel(BaseChannel):
                 )
                 if routed:
                     return
-            await self._handle_message(
+            controller = getattr(self.bus, "work_turns", None)
+            if input_id is not None and isinstance(controller, WorkTurnController):
+                admission, should_publish = controller.accept_input(cid, input_id, target_turn_id, resume=resume_input)
+                if not should_publish:
+                    if admission.state == "rejected":
+                        await self._reject_chat_message(connection, envelope, admission.reason or "本次输入未开始执行。")
+                    elif admission.state == "accepted" and admission.published:
+                        await self._send_event(connection, "message_accepted", chat_id=cid, input_id=input_id)
+                    return
+            elif target_present or resume_input:
+                await self._reject_chat_message(connection, envelope, "当前执行者无法核对引导输入，未重新派发。")
+                return
+            published = await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,
                 content=content,
@@ -6678,6 +6735,11 @@ class WebSocketChannel(BaseChannel):
                 metadata=metadata,
                 is_dm=False,
             )
+            if published is False:
+                if input_id is not None and (not isinstance(controller, WorkTurnController)
+                        or controller.input_state(cid, input_id) is None):
+                    await self._reject_chat_message(connection, envelope, "原任务仍在停止或等待核对，本次输入未开始执行。")
+                return
             if input_id is not None:
                 await self._send_event(connection, "message_accepted", chat_id=cid, input_id=input_id)
             return
@@ -6867,6 +6929,11 @@ class WebSocketChannel(BaseChannel):
 
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
+        if msg.metadata.get("_work_input_state"):
+            raw = json.dumps({"event": "work_input_state", **msg.metadata["_work_input_state"]}, ensure_ascii=False)
+            for connection in conns:
+                await self._safe_send_to(connection, raw, label=" work_input_state ")
+            return
         if msg.metadata.get("_widget_events"):
             for widget in msg.metadata["_widget_events"]:
                 payload = {
