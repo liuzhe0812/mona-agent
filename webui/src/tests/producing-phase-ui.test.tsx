@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cancelVideoExport: vi.fn(),
   createVideoReview: vi.fn(),
   exportVideoProject: vi.fn(),
+  fetchSceneAudioMixBytes: vi.fn(),
   fetchSceneNarrationBytes: vi.fn(),
   fetchScenePreviewHtml: vi.fn(),
   fetchVideoExportStatus: vi.fn(),
@@ -142,6 +143,7 @@ beforeEach(() => {
     chrome: { ok: true },
   });
   mocks.fetchSceneNarrationBytes.mockResolvedValue(null);
+  mocks.fetchSceneAudioMixBytes.mockResolvedValue(null);
   globalThis.ResizeObserver =
     globalThis.ResizeObserver ??
     (class {
@@ -174,8 +176,11 @@ describe("ProducingPhase playback and narration settings", () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "暂停当前场景" }));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(screen.getByRole("button", { name: "显示字幕与动画位置" }));
-    expect(screen.getByText("画面节拍")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "视频设置" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "显示辅助线和时间轴详情" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存设置" }));
+    expect(await screen.findByText("画面节拍")).toBeInTheDocument();
+    expect(mocks.updateVideoProjectSettings).not.toHaveBeenCalled();
 
   });
 
@@ -276,6 +281,7 @@ describe("ProducingPhase playback and narration settings", () => {
       subtitleMode: "burned",
     };
     mocks.fetchVideoProject.mockImplementation(async () => project(serverMeta));
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [{ ...scene, htmlPath: "scene-1.html" }] });
     mocks.updateVideoProjectSettings.mockImplementation(
       async (_token: string, _name: string, settings: VideoTtsConfig) => {
         serverMeta = { ...settings };
@@ -286,9 +292,13 @@ describe("ProducingPhase playback and narration settings", () => {
 
     render(wrap(<ProducingPhase projectName="proj" />));
     await screen.findByRole("button", { name: "播放当前场景" });
+    await waitFor(() => expect(mocks.fetchSceneAudioMixBytes).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(screen.getByRole("button", { name: "配音设置" }));
-    await screen.findByRole("dialog");
+    await screen.findByRole("dialog", { name: "视频设置" });
+    const projectsBeforeSave = mocks.fetchVideoProject.mock.calls.length;
+    const scenesBeforeSave = mocks.fetchVideoStoryboard.mock.calls.length;
+    const timelinesBeforeSave = mocks.fetchVideoSceneTimeline.mock.calls.length;
+    const mixesBeforeSave = mocks.fetchSceneAudioMixBytes.mock.calls.length;
     fireEvent.click(screen.getByRole("checkbox", { name: "启用旁白配音" }));
 
     await user.click(screen.getByRole("button", { name: "配音来源" }));
@@ -318,19 +328,22 @@ describe("ProducingPhase playback and narration settings", () => {
         },
       ),
     );
-    await waitFor(() => expect(mocks.fetchVideoProject).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(mocks.fetchVideoStoryboard).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.fetchVideoProject.mock.calls.length).toBeGreaterThan(projectsBeforeSave));
+    await waitFor(() => expect(mocks.fetchVideoStoryboard.mock.calls.length).toBeGreaterThan(scenesBeforeSave));
     await waitFor(() =>
-      expect(mocks.fetchVideoSceneTimeline).toHaveBeenCalledTimes(2),
+      expect(mocks.fetchVideoSceneTimeline.mock.calls.length).toBeGreaterThan(timelinesBeforeSave),
     );
     await waitFor(() =>
-      expect(mocks.fetchSceneNarrationBytes).toHaveBeenCalledOnce(),
+      expect(mocks.fetchSceneAudioMixBytes.mock.calls.length).toBeGreaterThan(mixesBeforeSave),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(screen.getByRole("button", { name: "显示字幕与动画位置" }));
+    const dialog = await screen.findByRole("dialog", { name: "视频设置" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "显示辅助线和时间轴详情" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存设置" }));
     expect(await screen.findByText("字幕已刷新")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mocks.updateVideoProjectSettings).toHaveBeenCalledOnce();
   });
 
   it("does not retry a narration settings write after an unknown failure", async () => {
@@ -340,7 +353,8 @@ describe("ProducingPhase playback and narration settings", () => {
     render(wrap(<ProducingPhase projectName="proj" />));
     await screen.findByRole("button", { name: "播放当前场景" });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(screen.getByRole("button", { name: "配音设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "视频设置" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "启用旁白配音" }));
     fireEvent.click(await screen.findByRole("button", { name: "保存设置" }));
 
     await waitFor(() =>
@@ -348,10 +362,11 @@ describe("ProducingPhase playback and narration settings", () => {
     );
     await waitFor(() =>
       expect(screen.getByRole("dialog")).toHaveTextContent(
-        "配音设置保存失败，请检查后重试。",
+        "设置保存结果未确认，当前修改已保留，可重试保存。",
       ),
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "启用旁白配音" })).toBeChecked();
     await act(async () => new Promise((resolve) => setTimeout(resolve, 750)));
     expect(mocks.updateVideoProjectSettings).toHaveBeenCalledOnce();
   });
