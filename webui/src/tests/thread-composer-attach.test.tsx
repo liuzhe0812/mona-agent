@@ -51,7 +51,18 @@ function pasteFiles(element: HTMLElement, files: File[]) {
 
 function attachmentClient() {
   const handlers = new Set<Parameters<MonaClient["onDocUploadResult"]>[0]>();
+  const deletedHandlers = new Set<(chatId: string) => void>();
+  const deleted = new Set<string>();
   return {
+    onSessionDeleted(handler: (chatId: string) => void) {
+      deletedHandlers.add(handler);
+      return () => deletedHandlers.delete(handler);
+    },
+    isChatDeleted: (chatId: string) => deleted.has(chatId),
+    forgetDeletedChat(chatId: string) {
+      deleted.add(chatId);
+      for (const handler of deletedHandlers) handler(chatId);
+    },
     onDocUploadResult(handler: Parameters<MonaClient["onDocUploadResult"]>[0]) {
       handlers.add(handler);
       return () => { handlers.delete(handler); };
@@ -90,6 +101,42 @@ afterEach(() => {
 });
 
 describe("ThreadComposer — attachments", () => {
+  it("releases a deleted draft and ignores late image encoding and document upload results", async () => {
+    const client = attachmentClient();
+    let finishImage!: (response: EncodeResponse) => void;
+    encodeImage.mockImplementation((file) => file.name === "deleted.png"
+      ? new Promise((resolve) => { finishImage = resolve; }) : Promise.resolve(resolveReady(file)));
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const view = (chatId: string) => withClient(client, <ThreadComposer chatId={chatId}
+      draftScope={`chat:${chatId}`} onSend={vi.fn()} />);
+    const ui = render(view("a"));
+    pasteFiles(screen.getByLabelText("Message input"), [pngFile("deleted.png")]);
+    await waitFor(() => expect(finishImage).toEqual(expect.any(Function)));
+    const file = new File(["document"], "deleted.pdf");
+    Object.defineProperty(file, "path", { value: "D:/input/deleted.pdf" });
+    fireEvent.change(ui.container.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [file] } });
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(1));
+    const uploadId = client.sendDocUpload.mock.calls[0][0];
+    act(() => client.forgetDeletedChat("a"));
+    expect(revoke).toHaveBeenCalledTimes(1);
+    await act(async () => { finishImage(resolveReady(pngFile("deleted.png"))); });
+    act(() => client.complete(uploadId, [{ name: "deleted.pdf", path: "uploads/deleted.pdf" }]));
+    expect(screen.queryByText("deleted.png")).not.toBeInTheDocument();
+    expect(screen.queryByText("deleted.pdf")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Message input")).toBeDisabled();
+    ui.rerender(view("b"));
+    pasteFiles(screen.getByLabelText("Message input"), [pngFile("keep-b.png")]);
+    await waitFor(() => expect(screen.getByText("keep-b.png")).toBeInTheDocument());
+    expect(screen.getByLabelText("Message input")).not.toBeDisabled();
+    ui.rerender(view("a"));
+    expect(screen.queryByText("deleted.png")).not.toBeInTheDocument();
+    expect(screen.queryByText("deleted.pdf")).not.toBeInTheDocument();
+    ui.rerender(view("b"));
+    expect(screen.getByText("keep-b.png")).toBeInTheDocument();
+    ui.unmount();
+    revoke.mockRestore();
+  });
+
   it("keeps submitted images after a failed scoped send and consumes only their IDs on late acceptance", async () => {
     encodeImage.mockImplementation((file) => Promise.resolve(resolveReady(file)));
     let nextUrl = 0;

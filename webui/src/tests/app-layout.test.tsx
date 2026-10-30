@@ -12,6 +12,13 @@ const updateUrlSpy = vi.fn();
 const attachSpy = vi.fn();
 const warmNativeProviderConnectionsSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const runStatusHandlers = new Set<(chatId: string, startedAt: number | null) => void>();
+const sessionDeletedHandlers = new Set<(chatId: string) => void>();
+const deletedChatIds = new Set<string>();
+function confirmSessionDeleted(chatId: string) {
+  if (deletedChatIds.has(chatId)) return;
+  deletedChatIds.add(chatId);
+  for (const handler of sessionDeletedHandlers) handler(chatId);
+}
 let observedSessionTokens: string[] = [];
 let reauthHandler: (() => Promise<string | null>) | null = null;
 let mockSessions: ChatSummary[] = [];
@@ -23,7 +30,8 @@ vi.mock("@/hooks/useSessions", async (importOriginal) => {
   return {
     ...actual,
     useSessions: () => {
-      observedSessionTokens.push(provider.useClientOptional().token);
+      const { client, token } = provider.useClientOptional();
+      observedSessionTokens.push(token);
       const [sessions, setSessions] = React.useState(mockSessions);
       return {
         sessions,
@@ -34,6 +42,7 @@ vi.mock("@/hooks/useSessions", async (importOriginal) => {
         createChat: createChatSpy,
         deleteChat: async (key: string) => {
           await deleteChatSpy(key);
+          client?.forgetDeletedChat(key.slice("websocket:".length));
           setSessions((prev: ChatSummary[]) => prev.filter((s) => s.key !== key));
         },
       };
@@ -94,6 +103,12 @@ vi.mock("@/lib/mona-client", () => {
     onError = () => () => {};
     onChat = () => () => {};
     onSessionUpdate = () => () => {};
+    onSessionDeleted = (handler: (chatId: string) => void) => {
+      sessionDeletedHandlers.add(handler);
+      return () => sessionDeletedHandlers.delete(handler);
+    };
+    isChatDeleted = (chatId: string) => deletedChatIds.has(chatId);
+    forgetDeletedChat = confirmSessionDeleted;
     onArtifactsChanged = () => () => {};
     onDocUploadResult = () => () => {};
     onAgentsUpdated = () => () => {};
@@ -193,6 +208,8 @@ describe("App layout", () => {
     attachSpy.mockReset();
     warmNativeProviderConnectionsSpy.mockClear();
     runStatusHandlers.clear();
+    sessionDeletedHandlers.clear();
+    deletedChatIds.clear();
     observedSessionTokens = [];
     reauthHandler = null;
     localStorage.removeItem("mona-webui.sidebar.completed-runs.v1");
@@ -219,6 +236,36 @@ describe("App layout", () => {
   it("warms native provider connection state after bootstrap without opening settings", async () => {
     render(<App />);
     await waitFor(() => expect(warmNativeProviderConnectionsSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("clears confirmed-deleted run state and selects an undeleted neighbor while a stale list remains", async () => {
+    mockSessions = ["Alpha", "Beta"].map((title, index) => ({
+      key: `websocket:${index}`, channel: "websocket", chatId: String(index),
+      createdAt: null, updatedAt: null, title, preview: "",
+    }));
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue((await import("@/hooks/useSidebarState")).DEFAULT_SIDEBAR_STATE);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+    render(<App />);
+    fireEvent.click(await screen.findByTitle("Alpha"));
+    act(() => {
+      for (const handler of runStatusHandlers) {
+        handler("0", 10);
+        handler("1", 20);
+        handler("1", null);
+      }
+    });
+    expect(within(screen.getByTitle("Alpha")).getByText("Agent running")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mona-webui.sidebar.completed-runs.v1") ?? "[]")).toEqual(["1"]);
+
+    act(() => confirmSessionDeleted("0"));
+    expect(screen.getByTitle("Beta")).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByTitle("Alpha")).queryByText("Agent running")).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mona-webui.sidebar.completed-runs.v1") ?? "[]")).toEqual(["1"]);
+
+    act(() => confirmSessionDeleted("1"));
+    expect(screen.getByTitle("Alpha")).not.toHaveAttribute("aria-current", "page");
+    expect(screen.getByTitle("Beta")).not.toHaveAttribute("aria-current", "page");
+    expect(JSON.parse(localStorage.getItem("mona-webui.sidebar.completed-runs.v1") ?? "[]")).toEqual([]);
   });
 
   it("keeps sidebar layout out of the main thread width contract", async () => {

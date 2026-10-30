@@ -138,6 +138,7 @@ interface PendingNewChat {
   resolve: (chatId: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  sourceChatId?: string;
   dispatchAttempted: boolean;
 }
 
@@ -146,6 +147,7 @@ interface PendingRoomCommand {
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   dispatchAttempted: boolean;
+  chatId?: string;
 }
 
 export interface MonaClientOptions {
@@ -175,6 +177,8 @@ export class MonaClient {
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
+  private sessionDeletedHandlers = new Set<(chatId: string) => void>();
+  private deletedChats = new Set<string>();
   private artifactsChangedHandlers = new Set<(chatId?: string) => void>();
   private videoProjectChangedHandlers = new Set<(payload: { projectName: string; hint: string }) => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
@@ -268,6 +272,65 @@ export class MonaClient {
     return () => {
       this.sessionUpdateHandlers.delete(handler);
     };
+  }
+
+  onSessionDeleted(handler: (chatId: string) => void): Unsubscribe {
+    this.sessionDeletedHandlers.add(handler);
+    return () => { this.sessionDeletedHandlers.delete(handler); };
+  }
+
+  isChatDeleted(chatId: string): boolean {
+    return this.deletedChats.has(chatId);
+  }
+
+  /** Release local state only after the server has confirmed deletion. */
+  forgetDeletedChat(chatId: string): void {
+    if (this.isChatDeleted(chatId)) return;
+    this.deletedChats.add(chatId);
+    this.knownChats.delete(chatId);
+    if (this.readyChatId === chatId) this.readyChatId = null;
+    this.chatHandlers.get(chatId)?.clear();
+    this.chatHandlers.delete(chatId);
+    this.pendingInboundByChat.delete(chatId);
+    this.pendingChatReplayScheduled.delete(chatId);
+    this.runStartedAtByChatId.delete(chatId);
+    this.workTurnsByChatId.delete(chatId);
+    for (const key of this.retiredWorkTurns) {
+      if (JSON.parse(key)[0] === chatId) this.retiredWorkTurns.delete(key);
+    }
+    this.goalStateByChatId.delete(chatId);
+    this.taskPlanByChatId.delete(chatId);
+    this.artifactTaskIdByChatId.delete(chatId);
+    this.userQuestionsByChat.delete(chatId);
+    for (const [key, receipt] of this.messageAdmissions) {
+      if (JSON.parse(key)[0] !== chatId) continue;
+      clearTimeout(receipt.timer);
+      receipt.handlers.clear();
+      this.messageAdmissions.delete(key);
+    }
+    this.sendQueue = this.sendQueue.filter((frame) => this.outboundChatId(frame) !== chatId);
+    for (const [requestId, pending] of this.pendingRoomCommands) {
+      if (pending.chatId !== chatId) continue;
+      clearTimeout(pending.timer);
+      this.pendingRoomCommands.delete(requestId);
+      pending.reject(new RoomCommandError(
+        pending.dispatchAttempted ? "会话已删除，已发送请求的结果请核对原操作。" : "会话已删除，请求未再发送。",
+        "session_deleted",
+      ));
+    }
+    if (this.pendingNewChat?.sourceChatId === chatId) {
+      const pending = this.pendingNewChat;
+      this.pendingNewChat = null;
+      clearTimeout(pending.timer);
+      pending.reject(new RoomCommandError(
+        pending.dispatchAttempted ? "会话已删除，分支创建结果尚未确认。" : "会话已删除，未创建分支。", "session_deleted",
+      ));
+    }
+    for (const handler of this.sessionDeletedHandlers) {
+      try { handler(chatId); } catch (error) {
+        console.warn("Session cleanup subscriber failed", error instanceof Error ? error.name : "unknown");
+      }
+    }
   }
 
   /** Subscribe to artifact change hints. ``chatId`` is present for an
@@ -452,6 +515,7 @@ export class MonaClient {
 
   /** Subscribe to events for a given chat_id. Auto-attaches on the next open. */
   onChat(chatId: string, handler: EventHandler): Unsubscribe {
+    if (this.isChatDeleted(chatId)) return () => {};
     let handlers = this.chatHandlers.get(chatId);
     if (!handlers) {
       handlers = new Set();
@@ -987,6 +1051,9 @@ export class MonaClient {
     sourceTaskId?: string,
     timeoutMs: number = 5_000,
   ): Promise<string> {
+    if (this.isChatDeleted(sourceChatId)) {
+      return Promise.reject(new RoomCommandError("会话已删除，未创建分支。", "session_deleted"));
+    }
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
     }
@@ -1001,7 +1068,7 @@ export class MonaClient {
         }
         reject(new Error("branchChat timed out"));
       }, timeoutMs);
-      this.pendingNewChat = { requestId, resolve, reject, timer, dispatchAttempted: false };
+      this.pendingNewChat = { requestId, resolve, reject, timer, sourceChatId, dispatchAttempted: false };
       this.queueSend({
         type: "branch_chat",
         source_chat_id: sourceChatId,
@@ -1013,6 +1080,7 @@ export class MonaClient {
   }
 
   attach(chatId: string): void {
+    if (this.isChatDeleted(chatId)) return;
     this.knownChats.add(chatId);
     if (this.socket?.readyState === WS_OPEN) {
       this.queueSend({ type: "attach", chat_id: chatId });
@@ -1079,6 +1147,10 @@ export class MonaClient {
       discussion?: DiscussionLaunchOptions;
     },
   ): void {
+    if (this.isChatDeleted(chatId)) {
+      options?.onAdmission?.("cancelled");
+      return;
+    }
     this.knownChats.add(chatId);
     if (options?.inputId) {
       const key = JSON.stringify([chatId, options.inputId]);
@@ -1198,6 +1270,9 @@ export class MonaClient {
     if (wsInboundDebugEnabled()) {
       console.log("[mona ws inbound]", summarizeInboundWsPayload(parsed));
     }
+
+    const inboundChatId = (parsed as { chat_id?: string }).chat_id;
+    if (inboundChatId && this.isChatDeleted(inboundChatId)) return;
 
     if (parsed.event === "message_accepted") {
       if (!this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]))?.lifecycle) {
@@ -1443,6 +1518,12 @@ export class MonaClient {
   ): Promise<AnyRoomCommandResult> {
     const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
     return new Promise<AnyRoomCommandResult>((resolve, reject) => {
+      const frame = build(requestId);
+      const chatId = this.outboundChatId(frame);
+      if (chatId && this.isChatDeleted(chatId)) {
+        reject(new RoomCommandError("会话已删除，请求未再发送。", "session_deleted"));
+        return;
+      }
       const timer = setTimeout(() => {
         const pending = this.pendingRoomCommands.get(requestId);
         this.pendingRoomCommands.delete(requestId);
@@ -1451,8 +1532,8 @@ export class MonaClient {
         }
         reject(new Error(`${resultEvent} timed out`));
       }, timeoutMs);
-      this.pendingRoomCommands.set(requestId, { resolve, reject, timer, dispatchAttempted: false });
-      this.queueSend(build(requestId));
+      this.pendingRoomCommands.set(requestId, { resolve, reject, timer, dispatchAttempted: false, chatId });
+      this.queueSend(frame);
     });
   }
 
@@ -1502,6 +1583,7 @@ export class MonaClient {
   }
 
   private dispatch(chatId: string, ev: InboundEvent): void {
+    if (this.isChatDeleted(chatId)) return;
     const handlers = this.chatHandlers.get(chatId);
     if (handlers !== undefined && handlers.size > 0 && !this.pendingChatReplayScheduled.has(chatId)) {
       for (const h of handlers) {
@@ -1586,11 +1668,19 @@ export class MonaClient {
   }
 
   private queueSend(frame: Outbound): void {
+    const chatId = this.outboundChatId(frame);
+    if (chatId && this.isChatDeleted(chatId)) return;
     if (this.socket?.readyState === WS_OPEN) {
       this.rawSend(frame);
     } else {
       this.sendQueue.push(frame);
     }
+  }
+
+  private outboundChatId(frame: Outbound): string | undefined {
+    if ("chat_id" in frame) return frame.chat_id;
+    if ("source_chat_id" in frame) return frame.source_chat_id;
+    return undefined;
   }
 
   private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission): void {
@@ -1612,6 +1702,8 @@ export class MonaClient {
 
   private rawSend(frame: Outbound): void {
     if (!this.socket) return;
+    const chatId = this.outboundChatId(frame);
+    if (chatId && this.isChatDeleted(chatId)) return;
     try {
       const serialized = JSON.stringify(frame);
       if ("request_id" in frame && frame.request_id) {

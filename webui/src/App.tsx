@@ -1096,7 +1096,8 @@ function Shell({
   useEffect(() => {
     if (loading || !client) return;
     const activeRunIds = sessions
-      .filter((session) => typeof session.runStartedAt === "number")
+      .filter((session) => typeof session.runStartedAt === "number"
+        && (!session.key.startsWith("websocket:") || !client.isChatDeleted(session.chatId)))
       .map((session) => session.chatId);
     if (activeRunIds.length === 0) return;
 
@@ -1892,6 +1893,30 @@ function Shell({
       onModelNameChange(modelName);
     });
   }, [client, onModelNameChange]);
+
+  useEffect(() => {
+    if (!client) return;
+    return client.onSessionDeleted((chatId) => {
+      const key = `websocket:${chatId}`;
+      const nextRunning = new Set(runningChatIdsRef.current);
+      nextRunning.delete(chatId);
+      runningChatIdsRef.current = nextRunning;
+      setRunningChatIds(nextRunning);
+      setCompletedChatIds((current) => {
+        if (!current.has(chatId)) return current;
+        const next = new Set(current);
+        next.delete(chatId);
+        return next;
+      });
+      setActiveKey((current) => {
+        if (current !== key) return current;
+        const index = sessions.findIndex((session) => session.key === key);
+        const remaining = [...sessions.slice(index + 1), ...sessions.slice(0, index).reverse()];
+        return remaining.find((session) => (!session.key.startsWith("websocket:") || !client.isChatDeleted(session.chatId))
+          && !sidebarState.archived_keys.includes(session.key))?.key ?? null;
+      });
+    });
+  }, [client, sessions, sidebarState.archived_keys]);
 
   useEffect(() => {
     if (!client) return;

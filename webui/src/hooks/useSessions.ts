@@ -120,7 +120,8 @@ export function useSessions(): {
           }
           if (!mountedRef.current) return;
           try {
-            const rows = filterVisibleSessions(await listSessions(tokenRef.current));
+            const rows = filterVisibleSessions(await listSessions(tokenRef.current))
+              .filter((row) => !row.key.startsWith("websocket:") || !client.isChatDeleted(row.chatId));
             if (!mountedRef.current) return;
             const serverKeys = new Set(rows.map((row) => row.key));
             setSessions((prev) => [
@@ -166,6 +167,15 @@ export function useSessions(): {
       void refresh();
     });
   }, [client, refresh]);
+
+  useEffect(() => {
+    if (!client) return;
+    return client.onSessionDeleted((chatId) => {
+      const key = `websocket:${chatId}`;
+      optimisticKeysRef.current.delete(key);
+      setSessions((previous) => previous.filter((session) => session.key !== key));
+    });
+  }, [client]);
 
   useEffect(() => {
     if (!client) return;
@@ -238,10 +248,11 @@ export function useSessions(): {
   const deleteChat = useCallback(
     async (key: string) => {
       await apiDeleteSession(tokenRef.current, key);
+      if (key.startsWith("websocket:")) client?.forgetDeletedChat(key.slice("websocket:".length));
       optimisticKeysRef.current.delete(key);
       setSessions((prev) => prev.filter((s) => s.key !== key));
     },
-    [],
+    [client],
   );
 
   const updateWorkspace = useCallback(
@@ -513,7 +524,12 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   fullHistoryError: string | null;
   loadAllHistory: () => Promise<UIMessage[]>;
 } {
-  const { token } = useClientOptional();
+  const { client, token } = useClientOptional();
+  const isDeleted = useCallback((sessionKey: string | null) => (
+    sessionKey?.startsWith("websocket:")
+      ? client?.isChatDeleted(sessionKey.slice("websocket:".length)) ?? false
+      : false
+  ), [client]);
   const [refreshSeq, setRefreshSeq] = useState(0);
   useCloudUpdates((change) => {
     if (key && change.work_keys.includes(key)) setRefreshSeq((value) => value + 1);
@@ -544,8 +560,23 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   }, []);
 
   useEffect(() => {
-    if (!key) {
-      setState(emptySessionHistory(null));
+    if (!client) return;
+    return client.onSessionDeleted((chatId) => {
+      const deletedKey = `websocket:${chatId}`;
+      if (keyRef.current !== deletedKey) return;
+      for (const controller of controllersRef.current) controller.abort();
+      controllersRef.current.clear();
+      loadingEarlierRef.current = false;
+      fullHistoryRequestRef.current = null;
+      setState((previous) => ({
+        ...emptySessionHistory(deletedKey), missing: true, version: previous.version + 1,
+      }));
+    });
+  }, [client]);
+
+  useEffect(() => {
+    if (!key || isDeleted(key)) {
+      setState({ ...emptySessionHistory(key), missing: key !== null });
       return;
     }
     let cancelled = false;
@@ -574,7 +605,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
             ? { signal: controller.signal }
             : { limit: pageSize, signal: controller.signal },
         );
-        if (cancelled || keyRef.current !== key) return;
+        if (cancelled || keyRef.current !== key || controller.signal.aborted || isDeleted(key)) return;
         const ui = normalizeHistoryMessages(
           body,
           Math.max(0, (body?.pagination?.total ?? body?.messages.length ?? 0) - (body?.messages.length ?? 0)),
@@ -624,7 +655,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
           };
         });
       } catch (e) {
-        if (cancelled || keyRef.current !== key || controller.signal.aborted) return;
+        if (cancelled || keyRef.current !== key || controller.signal.aborted || isDeleted(key)) return;
         if (e instanceof ApiError && e.status === 404) {
           setState((prev) => ({
             ...(prev.key === key ? prev : emptySessionHistory(key)),
@@ -659,10 +690,10 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
       controllersRef.current.clear();
       fullHistoryRequestRef.current = null;
     };
-  }, [key, pageSize, refreshSeq, token, trackController, untrackController]);
+  }, [key, pageSize, refreshSeq, token, trackController, untrackController, isDeleted]);
 
   const loadEarlier = useCallback(async (): Promise<boolean> => {
-    if (!key || pageSize === undefined || loadingEarlierRef.current) return false;
+    if (!key || isDeleted(key) || pageSize === undefined || loadingEarlierRef.current) return false;
     const current = stateRef.current;
     const page = current.key === key ? current.pagination : null;
     if (!page?.hasMore || page.before == null) return false;
@@ -671,7 +702,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     setState((prev) => prev.key === key
       ? { ...prev, loadingEarlier: true, earlierError: null }
       : prev);
-    const isCurrent = () => keyRef.current === key && !controller.signal.aborted;
+    const isCurrent = () => keyRef.current === key && !controller.signal.aborted && !isDeleted(key);
     try {
       const body = await fetchWebuiThread(token, key, undefined, {
         limit: pageSize,
@@ -759,10 +790,10 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
         setState((prev) => prev.key === key ? { ...prev, loadingEarlier: false } : prev);
       }
     }
-  }, [key, pageSize, token, trackController, untrackController]);
+  }, [key, pageSize, token, trackController, untrackController, isDeleted]);
 
   const loadAllHistory = useCallback(async (): Promise<UIMessage[]> => {
-    if (!key) return EMPTY_MESSAGES;
+    if (!key || isDeleted(key)) return EMPTY_MESSAGES;
     const current = stateRef.current;
     if (current.key === key && current.fullHistoryReady) return current.messages;
     const pending = fullHistoryRequestRef.current;
@@ -776,7 +807,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     request = (async () => {
       try {
         const body = await fetchWebuiThread(token, key, undefined, { signal: controller.signal });
-        if (keyRef.current !== key || controller.signal.aborted) return EMPTY_MESSAGES;
+        if (keyRef.current !== key || controller.signal.aborted || isDeleted(key)) return EMPTY_MESSAGES;
         const complete = normalizeHistoryMessages(body);
         let result = complete;
         setState((prev) => {
@@ -805,7 +836,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
         });
         return result;
       } catch (error) {
-        if (keyRef.current === key && !controller.signal.aborted) {
+        if (keyRef.current === key && !controller.signal.aborted && !isDeleted(key)) {
           setState((prev) => prev.key === key
             ? {
                 ...prev,
@@ -814,7 +845,8 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
               }
             : prev);
         }
-        return stateRef.current.key === key ? stateRef.current.messages : EMPTY_MESSAGES;
+        return !controller.signal.aborted && !isDeleted(key) && stateRef.current.key === key
+          ? stateRef.current.messages : EMPTY_MESSAGES;
       } finally {
         untrackController(controller);
         if (fullHistoryRequestRef.current?.promise === request) {
@@ -824,7 +856,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     })();
     fullHistoryRequestRef.current = { key, promise: request };
     return request;
-  }, [key, token, trackController, untrackController]);
+  }, [key, token, trackController, untrackController, isDeleted]);
 
   if (!key) {
     return {

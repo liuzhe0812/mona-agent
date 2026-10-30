@@ -464,8 +464,9 @@ export function ThreadShell({
 
   const initial = useMemo(() => {
     if (!chatId) return historical;
+    if (client.isChatDeleted(chatId)) return [];
     return messageCacheRef.current.get(chatId) ?? historical;
-  }, [chatId, historical]);
+  }, [chatId, client, historical]);
 
   // Refresh signal bumped on every turn_end and on chat switch; consumed
   // by ``useArtifacts`` so the shared-output scan re-runs and converges
@@ -502,6 +503,7 @@ export function ThreadShell({
   const textDraftVersions = useRef(new Map<string, number>());
   const textDraft = textDrafts.get(draftScope) ?? "";
   const setTextDraft = useCallback((value: string) => {
+    if (chatId && client.isChatDeleted(chatId)) return;
     textDraftVersions.current.set(draftScope, (textDraftVersions.current.get(draftScope) ?? 0) + 1);
     setTextDrafts((current) => {
       const next = new Map(current);
@@ -509,18 +511,50 @@ export function ThreadShell({
       else next.delete(draftScope);
       return next;
     });
-  }, [draftScope]);
+  }, [chatId, client, draftScope]);
   const [documentDrafts, setDocumentDrafts] = useState<Map<string, AttachedDocument[]>>(new Map());
   const documentDraftKey = chatId ?? "";
   const documentDraft = documentDrafts.get(documentDraftKey) ?? EMPTY_DOCUMENT_DRAFT;
   const handleDocumentDraftChange = useCallback((documents: AttachedDocument[]) => {
+    if (chatId && client.isChatDeleted(chatId)) return;
     setDocumentDrafts((previous) => {
       const next = new Map(previous);
       if (documents.length > 0) next.set(documentDraftKey, documents);
       else next.delete(documentDraftKey);
       return next;
     });
-  }, [documentDraftKey]);
+  }, [chatId, client, documentDraftKey]);
+  useEffect(() => client.onSessionDeleted((deletedChatId) => {
+    const scope = `chat:${deletedChatId}`;
+    messageCacheRef.current.delete(deletedChatId);
+    appliedHistoryVersionRef.current.delete(deletedChatId);
+    pendingCanonicalHydrateRef.current.delete(deletedChatId);
+    sessionKeyByChatIdRef.current.delete(deletedChatId);
+    historyRevisionByChatIdRef.current.delete(deletedChatId);
+    textDraftVersions.current.delete(scope);
+    setTextDrafts((current) => { const next = new Map(current); next.delete(scope); return next; });
+    setDocumentDrafts((current) => { const next = new Map(current); next.delete(deletedChatId); return next; });
+    if (prevChatIdForCacheRef.current === deletedChatId) prevChatIdForCacheRef.current = null;
+    const pending = pendingFirstRef.current;
+    if (pending?.targetChatId === deletedChatId) {
+      pendingFirstRef.current = null;
+      pending.state = "cancelled";
+      pending.options = undefined;
+      pending.images = undefined;
+      pending.prepared = undefined;
+      pending.finish(false);
+      setBooting(false);
+      setFirstMessageRejection((current) => current?.inputId === pending.inputId ? null : current);
+    }
+    if (pendingFirstWorkspaceRouteChatRef.current === deletedChatId) pendingFirstWorkspaceRouteChatRef.current = null;
+    if (liveChatRef.current === deletedChatId) {
+      setMessages([]);
+      setQuote(null);
+      setBranchCandidate(null);
+      setFocusMessage(null);
+      setWidgetPrompt(undefined);
+    }
+  }), [client, setMessages]);
   const homeDraftVersion = textDraftVersions.current.get("new") ?? 0;
   const consumeHomeDraft = useCallback((submitted: readonly AttachedDocument[]) => {
     const unchanged = (textDraftVersions.current.get("new") ?? 0) === homeDraftVersion;
@@ -581,8 +615,8 @@ export function ThreadShell({
   }, [messages, activeModelOptions, contextWindowTokens, modelName, liveTokenUsage, isCompacting]);
 
   useEffect(() => {
-    if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
-  }, [chatId, historyKey]);
+    if (chatId && historyKey && !client.isChatDeleted(chatId)) sessionKeyByChatIdRef.current.set(chatId, historyKey);
+  }, [chatId, client, historyKey]);
 
   const displayMessages = useMemo(() => projectWebuiThreadMessages(messages), [messages]);
   const latestDiscussionRun = useMemo(
@@ -627,7 +661,7 @@ export function ThreadShell({
   }, [loadScheduleItems, showHeroComposer]);
 
   useEffect(() => {
-    if (!chatId || loading) return;
+    if (!chatId || loading || client.isChatDeleted(chatId)) return;
     const hadRevision = historyRevisionByChatIdRef.current.has(chatId);
     const previousRevision = historyRevisionByChatIdRef.current.get(chatId);
     const revisionChanged = hadRevision && previousRevision !== historyRevision;
@@ -692,7 +726,7 @@ export function ThreadShell({
   useEffect(() => {
     if (!chatId) return;
     return client.onSessionUpdate((updatedChatId, scope) => {
-      if (scope === "metadata") return;
+      if (scope === "metadata" || client.isChatDeleted(updatedChatId)) return;
       pendingCanonicalHydrateRef.current.add(updatedChatId);
       appliedHistoryVersionRef.current.delete(updatedChatId);
       if (updatedChatId !== chatId) return;
@@ -711,15 +745,16 @@ export function ThreadShell({
   }, [chatId, historical, setMessages]);
 
   useLayoutEffect(() => {
+    if (chatId && client.isChatDeleted(chatId)) return;
     if (chatId) {
       const prev = prevChatIdForCacheRef.current;
-      if (prev && prev !== chatId) {
+      if (prev && prev !== chatId && !client.isChatDeleted(prev)) {
         messageCacheRef.current.set(prev, projectWebuiThreadMessages(messages));
         skipLayoutCacheRef.current = true;
       }
       prevChatIdForCacheRef.current = chatId;
     } else {
-      if (prevChatIdForCacheRef.current) {
+      if (prevChatIdForCacheRef.current && !client.isChatDeleted(prevChatIdForCacheRef.current)) {
         messageCacheRef.current.set(
           prevChatIdForCacheRef.current,
           projectWebuiThreadMessages(messages),
@@ -728,13 +763,13 @@ export function ThreadShell({
       }
       prevChatIdForCacheRef.current = null;
     }
-  }, [chatId, messages]);
+  }, [chatId, client, messages]);
 
   // Persist thread to in-memory cache after paint so ``useMonaStream``'s chat switch
   // ``useEffect`` reset has flushed; ``skipLayoutCacheRef`` drops the first run that still
   // sees the *previous* chat's ``messages`` (avoids stale rows leaking across sessions).
   useEffect(() => {
-    if (!chatId) {
+    if (!chatId || client.isChatDeleted(chatId)) {
       return;
     }
     if (skipLayoutCacheRef.current) {
@@ -745,10 +780,10 @@ export function ThreadShell({
       return;
     }
     messageCacheRef.current.set(chatId, projectWebuiThreadMessages(messages));
-  }, [chatId, loading, messages]);
+  }, [chatId, client, loading, messages]);
 
   useEffect(() => {
-    if (!chatId) return;
+    if (!chatId || client.isChatDeleted(chatId)) return;
     const pending = pendingFirstRef.current;
     if (!pending || pending.dispatched) return;
     if (pending.targetChatId !== chatId) {
@@ -770,7 +805,7 @@ export function ThreadShell({
           : canvasRouteMessageRef.current(pending.content);
         const canvasPath = routed.canvasPath
           ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
-        if (cancelled) return;
+        if (cancelled || client.isChatDeleted(chatId) || pendingFirstRef.current !== pending) return;
         pending.prepared = {
           content: routed.content,
           options: {
@@ -781,7 +816,7 @@ export function ThreadShell({
           },
         };
       }
-      if (cancelled) return;
+      if (cancelled || client.isChatDeleted(chatId) || pendingFirstRef.current !== pending) return;
       pending.dispatched = true;
       pending.state = "sent";
       send(pending.prepared.content, pending.images, {
@@ -1001,6 +1036,7 @@ export function ThreadShell({
         agentId: directAgentId, workspace: selectedWorkspace,
         targetChatId: null, state: "creating", dispatched: false, content, images, options, finish,
         observe: (state) => {
+          if (pending.targetChatId && client.isChatDeleted(pending.targetChatId)) return;
           if (pending.state === "accepted" && state !== "accepted") return;
           pending.state = state;
           pending.options?.onAdmission?.(state);
@@ -1048,12 +1084,12 @@ export function ThreadShell({
       })();
       return completion;
     },
-    [booting, directAgentId, onCreateChat, onCreateDirectChat, onSelectSession, selectedWorkspace],
+    [booting, client, directAgentId, onCreateChat, onCreateDirectChat, onSelectSession, selectedWorkspace],
   );
 
   const handleThreadSend = useCallback(
     async (content: string, _images?: SendImage[], _options?: SendOptions) => {
-      if (missingInstalledPartner) return;
+      if (missingInstalledPartner || (chatId && client.isChatDeleted(chatId))) return;
       const officeContext = activeOfficeContextRef.current
         ? { ...activeOfficeContextRef.current }
         : null;
@@ -1083,7 +1119,7 @@ export function ThreadShell({
         officeContext ? { ...(options ?? {}), ...officeContext } : options,
       );
     },
-    [conversation?.type, isStreaming, missingInstalledPartner, pendingQueue, send],
+    [chatId, client, conversation?.type, isStreaming, missingInstalledPartner, pendingQueue, send],
   );
 
   const handleQuote = useCallback((message: UIMessage, author: string) => {

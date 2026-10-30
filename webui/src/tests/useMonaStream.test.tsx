@@ -40,6 +40,8 @@ function fakeClient() {
       defaultChatId: null as string | null,
       onStatus: () => () => {},
       onError: () => () => {},
+      onSessionDeleted: () => () => {},
+      isChatDeleted: () => false,
       getRunStartedAt(chatId: string) {
         const v = runStartedAtByChatId.get(chatId);
         return v === undefined ? null : v;

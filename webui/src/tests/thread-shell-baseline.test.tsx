@@ -23,6 +23,9 @@ function makeClient() {
     defaultChatId: null as string | null,
     onStatus: () => () => {},
     onRuntimeModelUpdate: () => () => {},
+    onSessionDeleted: () => () => {},
+    isChatDeleted: () => false,
+    getUserQuestions: () => [],
     getRunStartedAt: () => null,
     getGoalState: (chatId: string) => goalStateByChatId.get(chatId),
     onChat: (chatId: string, handler: (ev: import("@/lib/types").InboundEvent) => void) => {

@@ -620,6 +620,7 @@ export function useMonaStream(
 } {
   const { client } = useClientOptional();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
+  const [deletionVersion, setDeletionVersion] = useState(0);
   const initialRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
   const [isStreaming, setIsStreaming] = useState(initialRunStartedAt !== null);
   // A restored in-progress turn may already have emitted activity before this
@@ -682,6 +683,14 @@ export function useMonaStream(
     }
     pendingStreamEventsRef.current = [];
   }, []);
+
+  useEffect(() => client?.onSessionDeleted((deletedChatId) => {
+    if (activeChatRef.current !== deletedChatId) return;
+    pendingMessageRef.current = null;
+    stopRequestRef.current = null;
+    clearPendingStreamWork();
+    setDeletionVersion((value) => value + 1);
+  }), [client, clearPendingStreamWork]);
 
   const createActivitySegmentId = useCallback((activate = true) => {
     activitySegmentCounterRef.current += 1;
@@ -976,7 +985,7 @@ export function useMonaStream(
   // ``initialMessages`` update: a brand-new chat can receive an empty/404
   // history response after the optimistic first message has already rendered.
   useEffect(() => {
-    const restoredMessages = initialMessages.map((message) => {
+    const restoredMessages = chatId && client?.isChatDeleted(chatId) ? [] : initialMessages.map((message) => {
       const admission = chatId && client?.getMessageAdmission?.(chatId, message.id);
       return admission ? { ...message,
         sendState: admission === "accepted" || admission === "consumed" ? undefined
@@ -1024,12 +1033,13 @@ export function useMonaStream(
       streamEndTimerRef.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, client, clearActivitySegment, clearPendingStreamWork]);
+  }, [chatId, client, clearActivitySegment, clearPendingStreamWork, deletionVersion]);
 
   useEffect(() => {
     if (!chatId || !client) return;
 
     const handle = (ev: InboundEvent) => {
+      if (client.isChatDeleted(chatId)) return;
       if (ev.event === "error") {
         if (ev.input_id) return;
         const pending = pendingMessageRef.current;
@@ -1678,7 +1688,7 @@ export function useMonaStream(
 
   const send = useCallback(
     (content: string, images?: SendImage[], options?: SendOptions) => {
-      if (!chatId || !client) return;
+      if (!chatId || !client || client.isChatDeleted(chatId)) return;
       const hasImages = !!images && images.length > 0;
       const hasDocuments = !!options?.docPaths?.length;
       // Text is optional when images are attached — the agent will still see
@@ -1759,6 +1769,7 @@ export function useMonaStream(
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       let acceptedReported = false;
       const onAdmission = (state: MessageAdmission) => {
+        if (client.isChatDeleted(chatId)) return;
         if (state === "accepted" || state === "consumed") {
           if (!acceptedReported) options?.onAdmission?.("accepted");
           acceptedReported = true;
@@ -1834,7 +1845,7 @@ export function useMonaStream(
 
   const inject = useCallback(
     (content: string, images?: SendImage[], options?: SendOptions) => {
-      if (!chatId || !client) return;
+      if (!chatId || !client || client.isChatDeleted(chatId)) return;
       const hasImages = !!images && images.length > 0;
       if (!hasImages && !options?.docPaths?.length && !content.trim()) return;
       const targetTurnId = client.getWorkTurn?.(chatId)?.turnId;
@@ -1878,6 +1889,7 @@ export function useMonaStream(
       client.sendMessage(chatId, content, wireMedia, {
         ...options, taskId, inputId, targetTurnId,
         onAdmission: (state) => {
+          if (client.isChatDeleted(chatId)) return;
           options?.onAdmission?.(state);
           if (!mountedRef.current || activeChatRef.current !== chatId) return;
           setMessages((previous) => previous.map((message) => message.id === inputId ? {
@@ -1894,7 +1906,7 @@ export function useMonaStream(
   );
 
   const stop = useCallback(() => {
-    if (!chatId || !client || stoppingRef.current || !isStreaming) return;
+    if (!chatId || !client || client.isChatDeleted(chatId) || stoppingRef.current || !isStreaming) return;
     const pending = pendingMessageRef.current;
     if (pending?.awaitingAdmission && client.cancelUnsentInput?.(chatId, pending.messageId)) return;
     const turn = client.getWorkTurn?.(chatId);

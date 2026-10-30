@@ -58,6 +58,8 @@ function wrap(node: ReactNode) {
     onChat: () => () => {},
     onError: () => () => {},
     onSessionUpdate: () => () => {},
+    onSessionDeleted: () => () => {},
+    isChatDeleted: () => false,
     onRuntimeModelUpdate: () => () => {},
     onVideoProjectChanged: () => () => {},
     getRunStartedAt: () => null,

@@ -69,6 +69,7 @@ import {
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 const MAX_QUOTE_CONTENT_CHARS = 4_000;
 
@@ -577,7 +578,7 @@ export function ThreadComposer({
   value: controlledValue,
   onValueChange,
   clearOnSend = true,
-  disabled,
+  disabled: disabledProp,
   sendDisabled = false,
   placeholder,
   inputLabel,
@@ -621,6 +622,8 @@ export function ThreadComposer({
   suggestedPrompt,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
+  const client = useClientContextOrNull()?.client;
+  const disabled = disabledProp || Boolean(chatId && client?.isChatDeleted(chatId));
   const fileAttachLabel = t("thread.composer.attachFile");
   const resolvedAttachLabel = customAttachLabel ?? fileAttachLabel;
   const {
@@ -744,8 +747,27 @@ export function ThreadComposer({
     };
   }, []);
 
-  const { images, enqueue, remove, clear, encoding } =
+  const { images, enqueue, remove, clear, clearScope, encoding } =
     useAttachedImages(draftScope);
+
+  useEffect(() => client?.onSessionDeleted((deletedChatId) => {
+    const scope = `chat:${deletedChatId}`;
+    clearScope(scope);
+    mentionDraftsRef.current.delete(scope);
+    scopedSubmissions.current.delete(scope);
+    if (chatId !== deletedChatId) return;
+    if (draftScope !== undefined) {
+      clearScope(draftScope);
+      mentionDraftsRef.current.delete(draftScope);
+      scopedSubmissions.current.delete(draftScope);
+    } else clear();
+    mentionedRef.current.clear();
+    clearDocuments();
+    setValue("");
+    setMention(null);
+    setInlineError(null);
+    onClearQuote?.();
+  }), [chatId, clear, clearDocuments, clearScope, client, draftScope, onClearQuote, setValue]);
 
   const formatRejection = useCallback(
     (reason: AttachmentError): string => {
@@ -760,6 +782,7 @@ export function ThreadComposer({
 
   const addFiles = useCallback(
     (files: File[]) => {
+      if (chatId && client?.isChatDeleted(chatId)) return;
       if (files.length === 0) return;
       if (!imageInputEnabled) {
         setInlineError(t("thread.composer.imageNotSupported"));
@@ -772,11 +795,12 @@ export function ThreadComposer({
         setInlineError(null);
       }
     },
-    [enqueue, formatRejection, imageInputEnabled, t],
+    [chatId, client, enqueue, formatRejection, imageInputEnabled, t],
   );
 
   const addAttachments = useCallback(
     (files: File[]) => {
+      if (chatId && client?.isChatDeleted(chatId)) return;
       if (files.length === 0 || disabled) return;
       if (!attachmentsEnabled) {
         setInlineError(attachmentsDisabledMessage);
@@ -790,11 +814,12 @@ export function ThreadComposer({
       if (images.length > 0) addFiles(images);
       if (attachments.length > 0) void addDocuments(attachments);
     },
-    [addFiles, addDocuments, attachmentsDisabledMessage, attachmentsEnabled, disabled, documentsUploading, imageInputEnabled],
+    [addFiles, addDocuments, attachmentsDisabledMessage, attachmentsEnabled, chatId, client, disabled, documentsUploading, imageInputEnabled],
   );
 
   const addDroppedAttachments = useCallback(
     (files: File[]) => {
+      if (chatId && client?.isChatDeleted(chatId)) return;
       if (files.length === 0 || disabled) return;
       if (!attachmentsEnabled) {
         setInlineError(attachmentsDisabledMessage);
@@ -803,7 +828,7 @@ export function ThreadComposer({
       if (documentsUploading) return;
       void addDocuments(files);
     },
-    [addDocuments, attachmentsDisabledMessage, attachmentsEnabled, disabled, documentsUploading],
+    [addDocuments, attachmentsDisabledMessage, attachmentsEnabled, chatId, client, disabled, documentsUploading],
   );
 
   const {
@@ -1048,6 +1073,7 @@ export function ThreadComposer({
   );
 
   const submit = useCallback(async () => {
+    if (chatId && client?.isChatDeleted(chatId)) return;
     const inFlight = draftScope === undefined ? undefined : scopedSubmissions.current.get(draftScope);
     if (!canSend || (draftScope === undefined ? submitting.current : inFlight && inFlight.consumer === onConsumeDraft)) return;
     const owner = chatId;
@@ -1055,7 +1081,7 @@ export function ThreadComposer({
     const originalMentions = mentionedRef.current;
     let consumed = false;
     const consumeSubmitted = () => {
-      if (consumed || !mounted.current || !scopedConsumption) return;
+      if (consumed || !mounted.current || !scopedConsumption || (owner && client?.isChatDeleted(owner))) return;
       consumed = true;
       const textConsumed = scopedConsumption(documents);
       if (textConsumed) originalMentions.clear();
@@ -1118,10 +1144,11 @@ export function ThreadComposer({
     try {
       const result = onSend(content, payload, sendOptions);
       if (awaitSendResult && await result !== true) return;
+      if (owner && client?.isChatDeleted(owner)) return;
       if (scopedConsumption) { consumeSubmitted(); return; }
       if (!mounted.current || submitScope.current !== owner) return;
     } catch (cause) {
-      if (mounted.current && submitScope.current === owner) setInlineError(cause instanceof Error ? cause.message : "发送失败，原输入已保留。");
+      if (mounted.current && submitScope.current === owner && !(owner && client?.isChatDeleted(owner))) setInlineError(cause instanceof Error ? cause.message : "发送失败，原输入已保留。");
       return;
     } finally {
       if (draftScope === undefined) submitting.current = false;
@@ -1139,7 +1166,7 @@ export function ThreadComposer({
     setMention(null);
     onClearQuote?.();
     resizeTextarea();
-  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, documents, draftScope, onClearQuote, onConsumeDraft, onSend, quote, readyImages, remove, removeDocument, resizeTextarea, setValue, value]);
+  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, client, documents, draftScope, onClearQuote, onConsumeDraft, onSend, quote, readyImages, remove, removeDocument, resizeTextarea, setValue, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionMenu) {

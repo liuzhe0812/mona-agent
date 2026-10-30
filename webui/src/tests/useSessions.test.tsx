@@ -24,6 +24,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 function fakeClient() {
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
+  const sessionDeletedHandlers = new Set<(chatId: string) => void>();
+  const deletedChatIds = new Set<string>();
   const statusHandlers = new Set<(status: ConnectionStatus) => void>();
   let currentStatus: ConnectionStatus = "open";
   return {
@@ -42,6 +44,16 @@ function fakeClient() {
     onSessionUpdate: (handler: (chatId: string, scope?: string) => void) => {
       sessionUpdateHandlers.add(handler);
       return () => sessionUpdateHandlers.delete(handler);
+    },
+    onSessionDeleted: (handler: (chatId: string) => void) => {
+      sessionDeletedHandlers.add(handler);
+      return () => sessionDeletedHandlers.delete(handler);
+    },
+    isChatDeleted: (chatId: string) => deletedChatIds.has(chatId),
+    forgetDeletedChat: (chatId: string) => {
+      if (deletedChatIds.has(chatId)) return;
+      deletedChatIds.add(chatId);
+      for (const handler of sessionDeletedHandlers) handler(chatId);
     },
     emitSessionUpdate: (chatId: string, scope?: string) => {
       for (const handler of sessionUpdateHandlers) handler(chatId, scope);

@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 export interface PendingMessage {
   id: string;
@@ -14,12 +15,24 @@ export interface PendingMessage {
 const MAX_PENDING = 3;
 
 export function usePendingQueue(chatId: string | null = null) {
+  const client = useClientContextOrNull()?.client;
   const [queues, setQueues] = useState<Record<string, PendingMessage[]>>({});
   const scope = chatId ?? "";
   const messages = queues[scope] ?? [];
   const setMessages = useCallback((update: (previous: PendingMessage[]) => PendingMessage[]) => {
+    if (client?.isChatDeleted(scope)) return;
     setQueues((previous) => ({ ...previous, [scope]: update(previous[scope] ?? []) }));
-  }, [scope]);
+  }, [client, scope]);
+
+  const clearScope = useCallback((deletedChatId: string) => {
+    setQueues((previous) => {
+      if (!(deletedChatId in previous)) return previous;
+      const next = { ...previous };
+      delete next[deletedChatId];
+      return next;
+    });
+  }, []);
+  useEffect(() => client?.onSessionDeleted(clearScope), [client, clearScope]);
 
   const enqueue = useCallback((content: string, images?: SendImage[], options?: SendOptions): boolean => {
     let accepted = false;
@@ -61,5 +74,5 @@ export function usePendingQueue(chatId: string | null = null) {
       : message));
   }, [setMessages]);
 
-  return { messages, enqueue, remove, update, clear, setDeliveryState };
+  return { messages, enqueue, remove, update, clear, clearScope, setDeliveryState };
 }

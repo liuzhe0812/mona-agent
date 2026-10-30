@@ -138,6 +138,8 @@ function makeClient() {
   const errorHandlers = new Set<(err: { kind: string }) => void>();
   const chatHandlers = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
+  const sessionDeletedHandlers = new Set<(chatId: string) => void>();
+  const deletedChatIds = new Set<string>();
   const artifactsChangedHandlers = new Set<() => void>();
   const goalStateByChatId = new Map<string, import("@/lib/types").GoalStateWsPayload>();
   const workTurns = new Map<string, { turnId: string }>();
@@ -179,9 +181,19 @@ function makeClient() {
         sessionUpdateHandlers.delete(handler);
       };
     },
-    onSessionDeleted: () => () => {},
-    isChatDeleted: () => false,
-    forgetDeletedChat: () => {},
+    onSessionDeleted: (handler: (chatId: string) => void) => {
+      sessionDeletedHandlers.add(handler);
+      return () => sessionDeletedHandlers.delete(handler);
+    },
+    isChatDeleted: (chatId: string) => deletedChatIds.has(chatId),
+    forgetDeletedChat: (chatId: string) => {
+      if (deletedChatIds.has(chatId)) return;
+      deletedChatIds.add(chatId);
+      chatHandlers.delete(chatId);
+      workTurns.delete(chatId);
+      goalStateByChatId.delete(chatId);
+      for (const handler of sessionDeletedHandlers) handler(chatId);
+    },
     onArtifactsChanged: (handler: () => void) => {
       artifactsChangedHandlers.add(handler);
       return () => {
@@ -1477,6 +1489,25 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the home draft when its created chat is deleted before a late admission", async () => {
+    const client = makeClient();
+    const create = vi.fn().mockResolvedValue("created-first");
+    render(wrap(client, <GuardedCreationHost create={create} />));
+    const upload = await startDocumentUpload(client, "home-delete.pdf");
+    finishDocumentUpload(client, upload, "home-delete.pdf", `uploads/${upload}/home-delete.pdf`);
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "preserve this home request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const first = client.sendMessage.mock.calls[0][3];
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    act(() => client.forgetDeletedChat("created-first"));
+    await act(async () => { first.onAdmission("accepted"); });
+    expect(screen.getByLabelText("Message input")).toHaveValue("preserve this home request");
+    expect(screen.getByText("home-delete.pdf")).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["new home draft", "old home request"])("consumes only the original home revision and document when acceptance arrives late: %s", async (nextDraft) => {
     const client = makeClient();
     const create = vi.fn().mockResolvedValue("created-first");
@@ -2341,6 +2372,43 @@ describe("ThreadShell", () => {
     expect(screen.getByLabelText("Message input")).toHaveValue("draft owned by A");
     ui.rerender(view());
     expect(screen.getByLabelText("Message input")).toHaveValue("new chat draft");
+  });
+
+  it("clears only the deleted chat's draft, cached history and append queue", async () => {
+    const client = makeClient();
+    const view = (id: string) => wrap(client, <ThreadShell session={session(id)} title={id} onToggleSidebar={() => {}} />);
+    const ui = render(view("delete-a"));
+    await waitFor(() => expect(screen.getByLabelText("Message input")).not.toBeDisabled());
+    act(() => {
+      client._emitChat("delete-a", { event: "goal_status", chat_id: "delete-a", status: "running", turn_id: "delete-turn", started_at: 10 });
+      client._emitChat("delete-a", { event: "message", chat_id: "delete-a", text: "cached A result" });
+    });
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "queued A request" } });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const append = client.sendMessage.mock.calls[0][3];
+    const a = await startDocumentUpload(client, "delete-a.pdf");
+    finishDocumentUpload(client, a, "delete-a.pdf", "uploads/delete-a.pdf");
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "remaining A draft" } });
+    ui.rerender(view("keep-b"));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "keep B draft" } });
+    const b = await startDocumentUpload(client, "keep-b.pdf");
+    finishDocumentUpload(client, b, "keep-b.pdf", "uploads/keep-b.pdf");
+    act(() => client.forgetDeletedChat("delete-a"));
+    await act(async () => { append.onAdmission("paused"); });
+    expect(screen.getByLabelText("Message input")).toHaveValue("keep B draft");
+    expect(screen.getByText("keep-b.pdf")).toBeInTheDocument();
+    ui.rerender(view("delete-a"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    expect(screen.getByLabelText("Message input")).toBeDisabled();
+    expect(screen.queryByText("cached A result")).not.toBeInTheDocument();
+    expect(screen.queryByText("queued A request")).not.toBeInTheDocument();
+    expect(screen.queryByText("delete-a.pdf")).not.toBeInTheDocument();
+    ui.rerender(view("keep-b"));
+    expect(screen.getByLabelText("Message input")).toHaveValue("keep B draft");
+    expect(screen.getByText("keep-b.pdf")).toBeInTheDocument();
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache optimistic messages under the next chat during a session switch", async () => {
