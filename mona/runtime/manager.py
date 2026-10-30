@@ -154,7 +154,8 @@ def _safe_relative_path(value: str) -> PurePosixPath:
     if not value or "\\" in value or "\x00" in value:
         raise ValueError(f"invalid runtime path {value!r}")
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or ":" in path.parts[0]:
+    if (not path.parts or path.is_absolute() or ".." in path.parts
+            or any(":" in part for part in path.parts)):
         raise ValueError(f"unsafe runtime path {value!r}")
     return path
 
@@ -360,6 +361,7 @@ class RuntimeComponentStore:
         seen: set[str] = set()
         total = 0
         files = 0
+        destination = destination.resolve()
         with zipfile.ZipFile(archive) as bundle:
             members = bundle.infolist()
             for member in members:
@@ -383,7 +385,9 @@ class RuntimeComponentStore:
                     raise RuntimeManagerError("runtime archive exceeds uncompressed size limit")
             for member in members:
                 path = _safe_relative_path(member.filename.rstrip("/"))
-                target = destination.joinpath(*path.parts)
+                target = destination.joinpath(*path.parts).resolve()
+                if not target.is_relative_to(destination):
+                    raise RuntimeManagerError(f"runtime archive path escapes destination: {member.filename!r}")
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -396,9 +400,12 @@ class RuntimeComponentStore:
 
     @staticmethod
     def _validate_entrypoints(root: Path, manifest: RuntimeComponentManifest) -> None:
+        root = root.resolve()
         for relative in manifest.entrypoints.values():
             path = _safe_relative_path(relative)
-            resolved = root.joinpath(*path.parts)
+            resolved = root.joinpath(*path.parts).resolve()
+            if not resolved.is_relative_to(root):
+                raise RuntimeManagerError(f"runtime entrypoint escapes component: {relative}")
             if not resolved.is_file():
                 raise RuntimeManagerError(f"runtime entrypoint is missing: {relative}")
 

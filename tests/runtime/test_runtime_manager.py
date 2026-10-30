@@ -91,6 +91,40 @@ def test_runtime_archive_rejects_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.exe").exists()
 
 
+@pytest.mark.parametrize("name", ["pkg/C:../escaped.txt", "pkg/C:/escaped.txt", "pkg/file.txt:stream"])
+def test_runtime_archive_rejects_windows_drive_and_stream_paths(tmp_path: Path, name: str) -> None:
+    archive = tmp_path / "escape.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(name, "escape")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(ValueError, match="unsafe runtime path"):
+        RuntimeComponentStore(tmp_path / "runtimes")._extract(archive, staging)
+
+    assert not (tmp_path / "escaped.txt").exists()
+    assert not list(staging.iterdir())
+
+
+def test_runtime_archive_rejects_existing_link_outside_staging(tmp_path: Path) -> None:
+    archive = tmp_path / "escape.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("pkg/escaped.txt", "escape")
+    staging = tmp_path / "staging"
+    outside = tmp_path / "outside"
+    staging.mkdir()
+    outside.mkdir()
+    try:
+        (staging / "pkg").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are not available")
+
+    with pytest.raises(RuntimeManagerError, match="escapes destination"):
+        RuntimeComponentStore(tmp_path / "runtimes")._extract(archive, staging)
+
+    assert not (outside / "escaped.txt").exists()
+
+
 def test_runtime_archive_requires_declared_entrypoint(tmp_path: Path) -> None:
     archive = tmp_path / "missing.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
