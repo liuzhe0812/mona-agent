@@ -1095,6 +1095,12 @@
     "cancel": "Cancel"
   },
   "errors": {
+    "workStop": {
+      "unknownTitle": "Stop result not confirmed",
+      "unknownBody": "We could not confirm that the original task has stopped. Check its progress and results before continuing. The original request will not be replayed.",
+      "unsupportedTitle": "This task cannot be stopped yet",
+      "unsupportedBody": "The original task status is not confirmed. Wait for an update and try again. For collaboration, use the stop action on the corresponding task card."
+    },
     "messageRejected": {
       "unknownTitle": "Delivery not confirmed",
       "unknownBody": "We could not confirm whether this message was accepted. Your original input and attachments have been kept and will not be sent again automatically. Check this conversation before starting a new request.",

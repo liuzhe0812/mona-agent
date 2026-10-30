@@ -44,6 +44,7 @@ from mona.config.schema import AgentModelBinding, Base
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.task_plan import reset_task_plan, task_plan_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
+from mona.session.work_turns import WorkTurnController
 from mona.utils.helpers import safe_filename
 from mona.utils.media_cleanup import MediaCleanupState, cleanup_duplicate_websocket_media
 from mona.utils.media_decode import FileSizeExceeded
@@ -287,6 +288,11 @@ _MAX_QUOTE_CONTENT_CHARS = 4_000
 
 def _is_valid_chat_id(value: Any) -> bool:
     return isinstance(value, str) and _CHAT_ID_RE.match(value) is not None
+
+
+def _work_turn_identity(metadata: dict[str, Any]) -> dict[str, str]:
+    return {key: metadata[key] for key in ("turn_id", "input_id")
+            if isinstance(metadata.get(key), str) and metadata[key]}
 
 
 def _parse_message_quote(value: Any) -> dict[str, str] | None:
@@ -697,7 +703,21 @@ class WebSocketChannel(BaseChannel):
         *,
         started_at: float | None = None,
         replay_idle: bool = False,
+        turn_id: str | None = None,
+        input_id: str | None = None,
     ) -> None:
+        controller = getattr(self.bus, "work_turns", None)
+        main = controller.current(chat_id) if isinstance(controller, WorkTurnController) else None
+        if main is not None:
+            if turn_id is not None and turn_id != main.turn_id:
+                return
+            await self.send_goal_status(
+                chat_id, "running", started_at=main.started_at,
+                turn_id=main.turn_id, input_id=main.input_id, turn_state=main.state,
+            )
+            return
+        if turn_id is not None and status == "running":
+            return
         main_started = websocket_turn_wall_started_at(chat_id)
         session_key = f"websocket:{chat_id}"
         subagent_started = None
@@ -709,6 +729,12 @@ class WebSocketChannel(BaseChannel):
                 subagents_running = int(get_count(session_key) or 0)
             if callable(get_started):
                 subagent_started = get_started(session_key)
+
+        if turn_id is not None and status == "idle":
+            await self.send_goal_status(chat_id, "idle", turn_id=turn_id, input_id=input_id)
+            if subagents_running > 0:
+                await self.send_goal_status(chat_id, "running", started_at=subagent_started)
+            return
 
         active_starts = [
             value
@@ -724,7 +750,7 @@ class WebSocketChannel(BaseChannel):
             return
         if main_started is not None or subagents_running > 0:
             return
-        await self.send_goal_status(chat_id, "idle")
+        await self.send_goal_status(chat_id, "idle", **_work_turn_identity({"turn_id": turn_id, "input_id": input_id}))
 
     async def _maybe_push_artifact_task(self, chat_id: str) -> None:
         state = self._artifact_task_state(f"websocket:{chat_id}")
@@ -773,6 +799,31 @@ class WebSocketChannel(BaseChannel):
                                    detail="回答未提交，问题可能已结束，请检查回答或查看最新会话。", **fields)
             return
         await self._send_event(connection, "answer_user_question_result", ok=True, **fields)
+
+    async def _handle_stop_work_turn(self, connection: Any, client_id: str, envelope: dict[str, Any]) -> None:
+        chat_id = envelope.get("chat_id")
+        request_id = envelope.get("request_id")
+        turn_id = envelope.get("expected_turn_id")
+        fields = {"chat_id": chat_id, "request_id": request_id, "turn_id": turn_id}
+        if (not _is_valid_chat_id(chat_id) or chat_id not in self._conn_chats.get(connection, ())
+                or not self.is_allowed(client_id)
+                or not isinstance(request_id, str) or len(request_id) > 128 or not _API_KEY_RE.fullmatch(request_id)
+                or not isinstance(turn_id, str) or len(turn_id) > 128 or not _API_KEY_RE.fullmatch(turn_id)):
+            await self._send_event(connection, "work_turn_stop_result", ok=False,
+                                   code="invalid_stop_target", detail="无法核对要停止的任务，请查看当前会话。", **fields)
+            return
+        controller = getattr(self.bus, "work_turns", None)
+        known = controller.find(chat_id, turn_id) if isinstance(controller, WorkTurnController) else None
+        outcome = await controller.stop(chat_id, turn_id) if isinstance(controller, WorkTurnController) else "unsupported"
+        external_unknown = bool(known and known.state == "finished" and known.stop_outcome == "unknown")
+        if outcome == "unknown" and known is None and isinstance(controller, WorkTurnController) and controller.current(chat_id) is None:
+            count = getattr(self._subagent_manager, "get_running_count_by_session", None)
+            if callable(count) and count(f"websocket:{chat_id}") > 0:
+                outcome = "unsupported"
+        if outcome == "unknown" and not external_unknown:
+            await self._send_combined_goal_status(chat_id, "running", replay_idle=True)
+        await self._send_event(connection, "work_turn_stop_result", ok=True, outcome=outcome,
+                               **({"external_unknown": True} if external_unknown else {}), **fields)
 
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
@@ -6336,6 +6387,9 @@ class WebSocketChannel(BaseChannel):
                 envelope=envelope,
             )
             return
+        if t == "stop_work_turn":
+            await self._handle_stop_work_turn(connection, client_id, envelope)
+            return
         if t == "message":
             cid = envelope.get("chat_id")
             content = envelope.get("content")
@@ -6819,6 +6873,7 @@ class WebSocketChannel(BaseChannel):
                     "event": "widget", "chat_id": msg.chat_id, "widget": widget,
                     "author_id": msg.metadata.get("author_id") or MONA_AGENT_ID,
                     "task_id": msg.metadata.get("task_id"),
+                    **_work_turn_identity(msg.metadata),
                 }
                 # Only confirmed results survive replay; previews stay transient.
                 if widget.get("status") != "streaming":
@@ -6830,7 +6885,8 @@ class WebSocketChannel(BaseChannel):
         if msg.metadata.get("_context_usage"):
             raw = json.dumps({"event": "context_usage", "chat_id": msg.chat_id,
                               "token_usage": msg.metadata.get("token_usage"),
-                              "job_id": msg.metadata.get("job_id")}, ensure_ascii=False)
+                              "job_id": msg.metadata.get("job_id"),
+                              **_work_turn_identity(msg.metadata)}, ensure_ascii=False)
             for connection in conns:
                 await self._safe_send_to(connection, raw, label="context_usage")
             return
@@ -6874,6 +6930,7 @@ class WebSocketChannel(BaseChannel):
                     msg.chat_id,
                     status,
                     started_at=float(started_raw) if isinstance(started_raw, int | float) else None,
+                    **_work_turn_identity(msg.metadata),
                 )
             return
         # Signal that the agent has fully finished processing the current turn.
@@ -6888,6 +6945,7 @@ class WebSocketChannel(BaseChannel):
                 latency_ms=lat_i,
                 goal_state=gs_blob,
                 task_id=msg.metadata.get("task_id"),
+                **_work_turn_identity(msg.metadata),
                 token_usage=token_usage if isinstance(token_usage, dict) else None,
             )
             get_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
@@ -6912,6 +6970,7 @@ class WebSocketChannel(BaseChannel):
                 "event": "file_edit",
                 "chat_id": msg.chat_id,
                 "edits": edits,
+                **_work_turn_identity(msg.metadata),
             }
             task_id = msg.metadata.get("task_id")
             if isinstance(task_id, str) and task_id:
@@ -6980,6 +7039,9 @@ class WebSocketChannel(BaseChannel):
         task_id = msg.metadata.get("task_id")
         if isinstance(task_id, str) and task_id:
             payload["task_id"] = task_id
+        for field in ("turn_id", "input_id"):
+            if msg.metadata.get(field):
+                payload[field] = msg.metadata[field]
         token_usage = msg.metadata.get("token_usage")
         if isinstance(token_usage, dict) and token_usage:
             payload["token_usage"] = token_usage
@@ -7031,6 +7093,7 @@ class WebSocketChannel(BaseChannel):
             "event": "reasoning_delta",
             "chat_id": chat_id,
             "text": delta,
+            **_work_turn_identity(meta),
         }
         stream_id = meta.get("_stream_id")
         if stream_id is not None:
@@ -7053,6 +7116,7 @@ class WebSocketChannel(BaseChannel):
         body: dict[str, Any] = {
             "event": "reasoning_end",
             "chat_id": chat_id,
+            **_work_turn_identity(meta),
         }
         stream_id = meta.get("_stream_id")
         if stream_id is not None:
@@ -7086,6 +7150,7 @@ class WebSocketChannel(BaseChannel):
             body["author_id"] = (
                 author_id if isinstance(author_id, str) and author_id else MONA_AGENT_ID
             )
+        body.update(_work_turn_identity(meta))
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
         task_id = meta.get("task_id")
@@ -7103,6 +7168,8 @@ class WebSocketChannel(BaseChannel):
         *,
         goal_state: dict[str, Any] | None = None,
         task_id: str | None = None,
+        turn_id: str | None = None,
+        input_id: str | None = None,
         token_usage: dict[str, Any] | None = None,
     ) -> None:
         """Signal that the agent has fully finished processing the current turn."""
@@ -7116,6 +7183,10 @@ class WebSocketChannel(BaseChannel):
             body["goal_state"] = goal_state
         if isinstance(task_id, str) and task_id:
             body["task_id"] = task_id
+        if turn_id:
+            body["turn_id"] = turn_id
+        if input_id:
+            body["input_id"] = input_id
         if token_usage:
             body["token_usage"] = token_usage
         self._try_append_webui_transcript(chat_id, body)
@@ -7157,6 +7228,9 @@ class WebSocketChannel(BaseChannel):
         status: str,
         *,
         started_at: float | None = None,
+        turn_id: str | None = None,
+        input_id: str | None = None,
+        turn_state: str | None = None,
     ) -> None:
         """Notify subscribed clients that a turn started or finished (wall-clock hint)."""
         conns = list(self._subs.get(chat_id, ()))
@@ -7169,6 +7243,12 @@ class WebSocketChannel(BaseChannel):
         }
         if status == "running" and started_at is not None:
             body["started_at"] = started_at
+        if turn_id:
+            body["turn_id"] = turn_id
+        if input_id:
+            body["input_id"] = input_id
+        if turn_state:
+            body["turn_state"] = turn_state
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_status ")

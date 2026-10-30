@@ -613,7 +613,7 @@ export function useMonaStream(
   /** Clear the current ``streamError`` (e.g. after the user dismisses the
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
-  messageRejection: { runActive: boolean; uncertain?: boolean; inputId?: string } | null;
+  messageRejection: { runActive: boolean; uncertain?: boolean; inputId?: string; stopOutcome?: "unknown" | "unsupported" } | null;
   dismissMessageRejection: () => void;
 } {
   const { client } = useClientOptional();
@@ -626,6 +626,7 @@ export function useMonaStream(
   const [isCompacting, setIsCompacting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stoppingRef = useRef(false);
+  const stopRequestRef = useRef<{ turnId?: string } | null>(null);
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
@@ -634,7 +635,7 @@ export function useMonaStream(
   const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
-  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string } | null>(null);
+  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string; stopOutcome?: "unknown" | "unsupported" } | null>(null);
   const activeChatRef = useRef(chatId);
   activeChatRef.current = chatId;
   const mountedRef = useRef(true);
@@ -1003,6 +1004,7 @@ export function useMonaStream(
     setTaskPlan(restoredTaskPlan);
     setLiveTokenUsage(undefined);
     stoppingRef.current = false;
+    stopRequestRef.current = null;
     setStopping(false);
     buffer.current = null;
     activeAssistantRef.current = null;
@@ -1177,6 +1179,12 @@ export function useMonaStream(
 
       if (ev.event === "goal_status") {
         if (ev.status === "running") {
+          if (ev.turn_id && stopRequestRef.current?.turnId && ev.turn_id !== stopRequestRef.current.turnId) {
+            stopRequestRef.current = null;
+            stoppingRef.current = false;
+            suppressStreamUntilTurnEndRef.current = false;
+            setStopping(false);
+          }
           setIsStreaming(true);
           if (!stoppingRef.current) setStopping(false);
           if (typeof ev.started_at === "number") {
@@ -1829,8 +1837,11 @@ export function useMonaStream(
 
   const stop = useCallback(() => {
     if (!chatId || !client || stoppingRef.current || !isStreaming) return;
+    const request = { turnId: client.getWorkTurn?.(chatId)?.turnId };
+    stopRequestRef.current = request;
     stoppingRef.current = true;
     setStopping(true);
+    setMessageRejection(null);
     flushPendingStreamEvents();
     setMessages((prev) => {
       buffer.current = null;
@@ -1844,9 +1855,33 @@ export function useMonaStream(
       return finishPendingWidgets(prev).map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
     });
     suppressStreamUntilTurnEndRef.current = true;
-    const taskId = currentTaskIdRef.current;
-    client.sendMessage(chatId, "/stop", undefined, taskId ? { taskId } : undefined);
-  }, [chatId, clearActivitySegment, client, flushPendingStreamEvents, isStreaming]);
+    void (async () => {
+      let outcome;
+      try {
+        outcome = await client.stopWorkTurn?.(chatId, request.turnId) ?? "unsupported";
+      } catch {
+        outcome = "unknown";
+      }
+      if (!mountedRef.current || activeChatRef.current !== chatId || stopRequestRef.current !== request) return;
+      stopRequestRef.current = null;
+      stoppingRef.current = false;
+      setStopping(false);
+      suppressStreamUntilTurnEndRef.current = false;
+      const current = client.getWorkTurn?.(chatId);
+      if (current && request.turnId && current.turnId !== request.turnId) return;
+      if (outcome === "stopped" || outcome === "already_finished") {
+        const started = client.getRunStartedAt(chatId);
+        setIsStreaming(started !== null);
+        setRunStartedAt(started);
+        setIsAwaitingModelResponse(false);
+        if (started === null) setIsCompacting(false);
+        onTurnEnd?.();
+      } else {
+        setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null,
+          stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown" });
+      }
+    })();
+  }, [chatId, clearActivitySegment, client, flushPendingStreamEvents, isStreaming, onTurnEnd]);
 
   return {
     messages,

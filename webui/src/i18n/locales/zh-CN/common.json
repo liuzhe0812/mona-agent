@@ -1110,6 +1110,12 @@
     "cancel": "取消"
   },
   "errors": {
+    "workStop": {
+      "unknownTitle": "停止结果待核对",
+      "unknownBody": "暂时无法确认原任务已停止。请先核对会话中的进度和结果，再决定是否继续；原请求不会自动重发。",
+      "unsupportedTitle": "暂时无法停止此任务",
+      "unsupportedBody": "原任务的状态尚未确认，请等待进度更新后重试。协作任务可从对应任务卡片停止。"
+    },
     "messageRejected": {
       "unknownTitle": "送达状态待核对",
       "unknownBody": "暂时无法确认这条消息是否已被接收。原输入和附件已保留，不会自动重发。请先核对当前会话，再决定是否发起新请求。",

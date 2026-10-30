@@ -54,7 +54,9 @@ from mona.session.webui_turns import (
     WebuiTurnCoordinator,
     build_bus_progress_callback,
     mark_webui_session,
+    notify_work_turn_closed,
 )
+from mona.session.work_turns import WorkTurn, WorkTurnController
 from mona.utils.document import extract_documents
 from mona.utils.helpers import (
     detect_image_mime,
@@ -1530,6 +1532,29 @@ class AgentLoop:
             if not task.done()
         )
 
+    async def _cancel_work_turn(self, task: asyncio.Task, keys: list[str]) -> str:
+        """Cancel the owner only; its existing finally blocks own resource cleanup."""
+        from mona.agent.tools.exec_session import DEFAULT_EXEC_SESSION_MANAGER
+        from mona.agent.tools.terminal import _TERMINAL_TASKS_BY_SESSION
+
+        def unowned_activity() -> bool:
+            count = getattr(self.subagents, "get_running_count_by_session", None)
+            if callable(count) and any(isinstance(value := count(key), int) and value > 0 for key in keys):
+                return True
+            if any(_TERMINAL_TASKS_BY_SESSION.get(key) for key in keys):
+                return True
+            return any(
+                session.owner_session_key in keys and session.process.returncode is None
+                for session in tuple(DEFAULT_EXEC_SESSION_MANAGER._sessions.values())
+            )
+
+        external_unknown = unowned_activity()
+        task.cancel()
+        results = await asyncio.gather(task, return_exceptions=True)
+        if any(isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError) for result in results):
+            raise RuntimeError("Work turn resource cleanup was not confirmed")
+        return "unknown" if external_unknown or unowned_activity() else "stopped"
+
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
         if self._unified_session and not msg.session_key_override:
@@ -1895,6 +1920,7 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
+        source_key = msg.session_key
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
@@ -1904,11 +1930,28 @@ class AgentLoop:
         # Register a pending queue so follow-up messages for this session are
         # routed here (mid-turn injection) instead of spawning a new task.
         pending = asyncio.Queue(maxsize=20)
-        self._pending_queues[session_key] = pending
+        registered = False
+        work_turn: WorkTurn | None = None
+        work_turns = getattr(self.bus, "work_turns", None)
 
         try:
             async with lock, gate:
                 try:
+                    if isinstance(work_turns, WorkTurnController):
+                        await work_turns.wait_ready(session_key)
+                        if msg.channel == "websocket":
+                            task = asyncio.current_task()
+                            assert task is not None
+                            keys = list(dict.fromkeys([session_key, source_key]))
+                            work_turn = work_turns.start(
+                                session_key, msg.chat_id, task,
+                                lambda: self._cancel_work_turn(task, keys),
+                                input_id=msg.metadata.get("input_id"),
+                                on_closed=lambda turn: notify_work_turn_closed(self.bus, turn),
+                            )
+                            msg = dataclasses.replace(msg, metadata={**msg.metadata, "turn_id": work_turn.turn_id})
+                    self._pending_queues[session_key] = pending
+                    registered = True
                     on_stream = on_stream_end = None
                     if msg.metadata.get("_wants_stream"):
                         # Split one answer into distinct stream segments.
@@ -2000,6 +2043,8 @@ class AgentLoop:
                         )
                     raise
                 except Exception as exc:
+                    if work_turn is not None and work_turn.state == "stopping":
+                        work_turn.cleanup_failed = True
                     logger.exception("Error processing message for session {}", session_key)
                     content = (
                         "会话记录暂时无法保存，本次任务已中断。已生成的文件仍保留，请稍后继续。"
@@ -2011,13 +2056,19 @@ class AgentLoop:
                             channel=msg.channel,
                             chat_id=msg.chat_id,
                             content=content,
+                            metadata=msg.metadata,
                         )
                     )
+                finally:
+                    if work_turn is not None:
+                        work_turns.finish(work_turn.turn_id)
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages
             # rather than silently lost.
-            queue = self._pending_queues.pop(session_key, None)
+            queue = pending if registered else None
+            if self._pending_queues.get(session_key) is pending:
+                self._pending_queues.pop(session_key, None)
             if queue is not None:
                 leftover = 0
                 while True:
@@ -2033,10 +2084,12 @@ class AgentLoop:
                         leftover,
                         session_key,
                     )
-            await self._webui_turns.publish_run_status(msg, "idle")
-            self._pending_turn_latency_ms.pop(session_key, None)
-            self._pending_turn_usage.pop(session_key, None)
-            self._webui_turns.discard(session_key)
+            if registered:
+                if work_turn is None:
+                    await self._webui_turns.publish_run_status(msg, "idle")
+                self._pending_turn_latency_ms.pop(session_key, None)
+                self._pending_turn_usage.pop(session_key, None)
+                self._webui_turns.discard(session_key)
 
     async def close_mcp(self) -> None:
         """Drain pending background archives, then close MCP connections."""
@@ -2473,7 +2526,7 @@ class AgentLoop:
             session=session,
             session_key=key,
             state=TurnState.RESTORE,
-            turn_id=f"{key}:{time.time_ns()}",
+            turn_id=msg.metadata.get("turn_id") or f"{key}:{time.time_ns()}",
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,

@@ -69,6 +69,60 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("stops only the confirmed Work turn and never sends a slash command", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    lastSocket().fakeMessage({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a", input_id: "input-a" });
+    const stopping = client.stopWorkTurn("chat", client.getWorkTurn("chat")?.turnId);
+    const frame = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(frame).toMatchObject({ type: "stop_work_turn", chat_id: "chat", expected_turn_id: "turn-a" });
+    expect(lastSocket().sent.map((value) => JSON.parse(value))).not.toContainEqual(expect.objectContaining({ content: "/stop" }));
+    lastSocket().fakeMessage({ event: "work_turn_stop_result", request_id: frame.request_id, ok: true, chat_id: "chat", turn_id: "turn-a", outcome: "stopped" });
+    await expect(stopping).resolves.toBe("stopped");
+    expect(client.getRunStartedAt("chat")).toBeNull();
+    expect(client.getWorkTurn("chat")).toBeUndefined();
+    client.close();
+  });
+
+  it("keeps a newer Work turn when an older stop result and terminal frames arrive", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const delivered = vi.fn();
+    client.onChat("chat", delivered);
+    client.connect(); lastSocket().fakeOpen();
+    lastSocket().fakeMessage({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" });
+    const stopping = client.stopWorkTurn("chat", "turn-a");
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    lastSocket().fakeMessage({ event: "goal_status", chat_id: "chat", status: "running", started_at: 20, turn_id: "turn-b" });
+    delivered.mockClear();
+    for (const event of [
+      { event: "goal_status", status: "idle" },
+      { event: "goal_status", status: "running", started_at: 10 },
+      { event: "turn_end" },
+      { event: "delta", text: "old output" },
+    ]) lastSocket().fakeMessage({ ...event, chat_id: "chat", turn_id: "turn-a" });
+    lastSocket().fakeMessage({ event: "work_turn_stop_result", request_id: request.request_id, ok: true, chat_id: "chat", turn_id: "turn-a", outcome: "already_finished" });
+    await expect(stopping).resolves.toBe("already_finished");
+    expect(client.getWorkTurn("chat")?.turnId).toBe("turn-b");
+    expect(client.getRunStartedAt("chat")).toBe(20);
+    expect(delivered).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("keeps an unconfirmed stop outcome and refuses a stop without an original turn", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    await expect(client.stopWorkTurn("chat")).resolves.toBe("unsupported");
+    expect(lastSocket().sent).toEqual([]);
+    lastSocket().fakeMessage({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" });
+    const stopping = client.stopWorkTurn("chat", "turn-a");
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    lastSocket().fakeMessage({ event: "work_turn_stop_result", request_id: request.request_id, ok: true, chat_id: "chat", turn_id: "turn-a", outcome: "unknown" });
+    await expect(stopping).resolves.toBe("unknown");
+    expect(client.getWorkTurn("chat")?.turnId).toBe("turn-a");
+    expect(client.getRunStartedAt("chat")).toBe(10);
+    client.close();
+  });
+
   it("drops only expired control commands that have never been dispatched", async () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     const expired = client.answerUserQuestion("chat-a", "question-old", null);

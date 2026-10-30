@@ -351,6 +351,8 @@ export interface RoomState {
 /** Shared fields of the ``create_room`` / ``update_room`` / ``get_room_state``
  * result events (phase 2d). On ``ok: false`` only ``code`` / ``detail`` are set. */
 export interface RoomCommandResult {
+  turn_id?: string;
+  outcome?: WorkTurnStopOutcome;
   ok: boolean;
   chat_id?: string;
   request_id?: string;
@@ -359,6 +361,8 @@ export interface RoomCommandResult {
   conversation?: ConversationMeta;
   agents?: RoomAgentInfo[];
 }
+
+export type WorkTurnStopOutcome = "stopped" | "already_finished" | "unknown" | "unsupported";
 
 /** Job states mirrored from ``mona/agent/jobs.py`` (guide 5.6). */
 export type AgentJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -1294,6 +1298,9 @@ export type InboundEvent =
   | {
       event: "turn_end";
       chat_id: string;
+      turn_id?: string;
+      input_id?: string;
+      turn_state?: "running" | "stopping" | "unknown";
       latency_ms?: number;
       task_id?: string;
       token_usage?: RawTokenUsage;
@@ -1304,6 +1311,9 @@ export type InboundEvent =
   | {
       event: "goal_status";
       chat_id: string;
+      turn_id?: string;
+      input_id?: string;
+      turn_state?: "running" | "stopping" | "unknown";
       /** Turn executing (user message through agent loop). */
       status: "running" | "idle";
       /** Server ``time.time()`` when ``status`` is ``running``. */
@@ -1331,6 +1341,7 @@ export type InboundEvent =
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
   | { event: "artifact_task_started"; chat_id: string; task_id: string }
   | { event: "message_accepted"; chat_id: string; input_id: string }
+  | ({ event: "work_turn_stop_result" } & RoomCommandResult)
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
   | {
@@ -1503,6 +1514,7 @@ export type Outbound =
       request_id?: string;
     }
   | { type: "attach"; chat_id: string }
+  | { type: "stop_work_turn"; chat_id: string; request_id: string; expected_turn_id: string }
   | {
       type: "start_discussion";
       input_id?: string;

@@ -19,6 +19,7 @@ from mona.bus.queue import MessageBus
 from mona.providers.base import LLMProvider
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.manager import Session, SessionManager
+from mona.session.work_turns import WorkTurn, WorkTurnController
 from mona.utils.helpers import truncate_text
 from mona.utils.llm_runtime import LLMRuntime
 
@@ -168,18 +169,34 @@ def websocket_turn_wall_started_at(chat_id: str) -> float | None:
     return _WEBSOCKET_TURN_WALL_STARTED_AT.get(chat_id)
 
 
+def notify_work_turn_closed(bus: MessageBus, turn: WorkTurn) -> None:
+    """Publish the original turn's idle before its resource barrier is released."""
+    controller = getattr(bus, "work_turns", None)
+    if isinstance(controller, WorkTurnController) and controller.current(turn.chat_id) is None:
+        _WEBSOCKET_TURN_WALL_STARTED_AT.pop(turn.chat_id, None)
+    metadata = {"_goal_status": True, "goal_status": "idle", "turn_id": turn.turn_id}
+    if turn.input_id:
+        metadata["input_id"] = turn.input_id
+    bus.outbound.put_nowait(OutboundMessage("websocket", turn.chat_id, "", metadata=metadata))
+
+
 async def publish_turn_run_status(bus: MessageBus, msg: InboundMessage, status: str) -> None:
     """Notify WebSocket clients while a user turn is executing (timing strip)."""
     if msg.channel != "websocket":
         return
     cid = str(msg.chat_id)
+    controller = getattr(bus, "work_turns", None)
+    turn = controller.current(cid) if isinstance(controller, WorkTurnController) else None
+    turn_id = msg.metadata.get("turn_id")
+    if turn is not None and (turn.turn_id != turn_id or status == "idle"):
+        return
     meta: dict[str, Any] = {
         **dict(msg.metadata or {}),
         "_goal_status": True,
         "goal_status": status,
     }
     if status == "running":
-        t0 = time.time()
+        t0 = turn.started_at if turn is not None else time.time()
         meta["started_at"] = t0
         _WEBSOCKET_TURN_WALL_STARTED_AT[cid] = t0
     else:

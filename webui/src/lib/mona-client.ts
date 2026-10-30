@@ -24,6 +24,7 @@ import type {
   WorkflowTrigger,
   WorkflowUpdatedPayload,
   MessageQuote,
+  WorkTurnStopOutcome,
 } from "./types";
 import type { UserQuestionAnswer, UserQuestionRequest } from "./user-questions";
 
@@ -114,6 +115,11 @@ type ErrorHandler = (error: StreamError) => void;
 export type MessageAdmission = "accepted" | "rejected" | "unknown";
 type AdmissionHandler = (state: MessageAdmission) => void;
 
+export interface WorkTurnSnapshot {
+  readonly turnId: string;
+  readonly inputId?: string;
+}
+
 /** Rejection for failed room commands; ``code`` carries the wire-safe
  *  server error code (e.g. ``approval_expired``) when the failure came from
  *  a ``*_result`` frame. */
@@ -194,6 +200,8 @@ export class MonaClient {
   private knownChats = new Set<string>();
   /** Wall-clock run strip: updated from ``goal_status`` even with no ``onChat`` subscriber. */
   private runStartedAtByChatId = new Map<string, number>();
+  private workTurnsByChatId = new Map<string, WorkTurnSnapshot>();
+  private retiredWorkTurns = new Set<string>();
   /** Latest ``goal_state`` snapshot per ``chat_id`` (multi-session isolation). */
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
   private taskPlanByChatId = new Map<string, TaskPlanWsPayload>();
@@ -331,6 +339,51 @@ export class MonaClient {
 
   getMessageAdmission(chatId: string, inputId: string): MessageAdmission | undefined {
     return this.messageAdmissions.get(JSON.stringify([chatId, inputId]))?.state;
+  }
+
+  getWorkTurn(chatId: string): WorkTurnSnapshot | undefined {
+    return this.workTurnsByChatId.get(chatId);
+  }
+
+  async stopWorkTurn(chatId: string, expectedTurnId?: string): Promise<WorkTurnStopOutcome> {
+    if (!expectedTurnId) return "unsupported";
+    const result = await this.sendRoomCommandRaw("work_turn_stop_result", (requestId) => ({
+      type: "stop_work_turn", chat_id: chatId, request_id: requestId, expected_turn_id: expectedTurnId,
+    }));
+    if (result.chat_id !== chatId || result.turn_id !== expectedTurnId) return "unknown";
+    const outcome = result.outcome === "stopped" || result.outcome === "already_finished"
+      || result.outcome === "unsupported" ? result.outcome : "unknown";
+    if ((outcome === "stopped" || outcome === "already_finished")
+      && this.workTurnsByChatId.get(chatId)?.turnId === expectedTurnId) {
+      this.retireWorkTurn(chatId, expectedTurnId);
+      this.runStartedAtByChatId.delete(chatId);
+      this.emitRunStatus(chatId, null);
+    }
+    return outcome;
+  }
+
+  private retireWorkTurn(chatId: string, turnId: string): void {
+    this.retiredWorkTurns.add(JSON.stringify([chatId, turnId]));
+    if (this.workTurnsByChatId.get(chatId)?.turnId === turnId) this.workTurnsByChatId.delete(chatId);
+    if (this.retiredWorkTurns.size > 256) this.retiredWorkTurns.delete(this.retiredWorkTurns.values().next().value!);
+  }
+
+  private acceptWorkTurnEvent(chatId: string, event: InboundEvent): boolean {
+    if ("turn_id" in event && typeof event.turn_id === "string"
+      && this.retiredWorkTurns.has(JSON.stringify([chatId, event.turn_id]))) return false;
+    if (event.event !== "goal_status" && event.event !== "turn_end") return true;
+    const current = this.workTurnsByChatId.get(chatId);
+    if (event.turn_id && this.retiredWorkTurns.has(JSON.stringify([chatId, event.turn_id]))) return false;
+    if (event.event === "goal_status" && event.status === "running") {
+      if (event.turn_id) {
+        if (current && current.turnId !== event.turn_id) this.retireWorkTurn(chatId, current.turnId);
+        this.workTurnsByChatId.set(chatId, { turnId: event.turn_id, inputId: event.input_id });
+      }
+      return true;
+    }
+    if (event.turn_id && current && current.turnId !== event.turn_id) return false;
+    if (current) this.retireWorkTurn(chatId, current.turnId);
+    return true;
   }
 
   /** Last ``goal_state`` payload for *chatId*, if any frame has arrived this connection. */
@@ -849,10 +902,10 @@ export class MonaClient {
     this.setStatus("connecting");
     const sock = this.socketFactory(this.currentUrl);
     this.socket = sock;
-    sock.onopen = () => this.handleOpen();
-    sock.onmessage = (ev) => this.handleMessage(ev);
-    sock.onerror = () => this.setStatus("error");
-    sock.onclose = (ev) => this.handleClose(ev);
+    sock.onopen = () => { if (this.socket === sock) this.handleOpen(); };
+    sock.onmessage = (ev) => { if (this.socket === sock) this.handleMessage(ev); };
+    sock.onerror = () => { if (this.socket === sock) this.setStatus("error"); };
+    sock.onclose = (ev) => { if (this.socket === sock) this.handleClose(ev); };
   }
 
   close(): void {
@@ -1190,6 +1243,7 @@ export class MonaClient {
 
     if (
       parsed.event === "answer_user_question_result" ||
+      parsed.event === "work_turn_stop_result" ||
       parsed.event === "create_room_result" ||
       parsed.event === "create_direct_conversation_result" ||
       parsed.event === "update_room_result" ||
@@ -1309,6 +1363,7 @@ export class MonaClient {
 
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
+      if (!this.acceptWorkTurnEvent(chatId, parsed)) return;
       if (parsed.event === "user_questions") this.userQuestionsByChat.set(chatId, parsed.requests);
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);

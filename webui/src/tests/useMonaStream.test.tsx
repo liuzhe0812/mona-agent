@@ -44,6 +44,8 @@ function fakeClient() {
         const v = runStartedAtByChatId.get(chatId);
         return v === undefined ? null : v;
       },
+      getWorkTurn: vi.fn((_chatId: string): import("@/lib/mona-client").WorkTurnSnapshot | undefined => undefined),
+      stopWorkTurn: vi.fn(async (_chatId: string, _turnId?: string) => "stopped" as const),
       getGoalState(chatId: string) {
         return goalStateByChatId.get(chatId);
       },
@@ -1495,8 +1497,9 @@ describe("useMonaStream", () => {
     expect(result.current.messages[0].media).toHaveLength(1);
   });
 
-  it("stops the active turn without adding a user slash command bubble", () => {
+  it("stops the confirmed turn without adding or sending a user slash command", async () => {
     const fake = fakeClient();
+    fake.client.getWorkTurn.mockReturnValue({ turnId: "original-turn" });
     const { result } = renderHook(() => useMonaStream("chat-stop", EMPTY_MESSAGES), {
       wrapper: wrap(fake.client),
     });
@@ -1512,14 +1515,9 @@ describe("useMonaStream", () => {
       result.current.stop();
     });
 
-    expect(fake.client.sendMessage).toHaveBeenCalledTimes(2);
-
-    expect(fake.client.sendMessage).toHaveBeenLastCalledWith(
-      "chat-stop",
-      "/stop",
-      undefined,
-      { taskId: result.current.currentTaskId },
-    );
+    expect(fake.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(fake.client.stopWorkTurn).toHaveBeenCalledTimes(1);
+    expect(fake.client.stopWorkTurn).toHaveBeenCalledWith("chat-stop", "original-turn");
     expect(result.current.isStreaming).toBe(true);
     expect(result.current.stopping).toBe(true);
     expect(result.current.messages).toHaveLength(1);
@@ -1535,6 +1533,7 @@ describe("useMonaStream", () => {
 
     expect(result.current.isStreaming).toBe(false);
     expect(result.current.stopping).toBe(false);
+    await act(async () => {});
   });
 
   it("keeps the local loading state until direct agent mentions complete", () => {

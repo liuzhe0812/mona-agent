@@ -1047,6 +1047,12 @@
     "cancel": "取消"
   },
   "errors": {
+    "workStop": {
+      "unknownTitle": "停止結果待核對",
+      "unknownBody": "暫時無法確認原任務已停止。請先核對對話中的進度和結果，再決定是否繼續；原請求不會自動重送。",
+      "unsupportedTitle": "暫時無法停止此任務",
+      "unsupportedBody": "原任務的狀態尚未確認，請等待進度更新後重試。協作任務可從對應任務卡片停止。"
+    },
     "messageRejected": {
       "unknownTitle": "送達狀態待核對",
       "unknownBody": "暫時無法確認這則訊息是否已被接收。原輸入和附件已保留，不會自動重傳。請先核對目前的對話，再決定是否發起新請求。",
