@@ -426,7 +426,7 @@ describe("ProducingPhase playback and narration settings", () => {
     });
     render(wrap(<ProducingPhase projectName="proj" />));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("正在导出 32%");
+    expect(await screen.findByRole("status")).toHaveTextContent("正在合成画面 · 32%");
     expect(screen.queryByText("兼容渲染器")).not.toBeInTheDocument();
     expect(screen.queryByText("HyperFrames")).not.toBeInTheDocument();
     expect(
