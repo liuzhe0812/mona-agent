@@ -68,7 +68,7 @@ new file mode 100644
 +    document.addEventListener("keydown", escape);
 +    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
 +  }, [open]);
-+  if (!session) return <a className="account-nav-entry" href="/account" aria-label="登录或注册">登录 / 注册</a>;
++  if (!session) return <a className="account-nav-entry account-nav-login nav-link" href="/account" aria-label="登录或注册"><span className="nav-link-label">登录 / 注册</span></a>;
 +  const name = session.user.display_name || "Mona 账号";
 +  return <>
 +    <details className="account-menu" ref={menu} onToggle={event => setOpen(event.currentTarget.open)}>
@@ -97,7 +97,7 @@ diff --git a/official-site/app/account/account.css b/official-site/app/account/a
 new file mode 100644
 --- /dev/null
 +++ b/official-site/app/account/account.css
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,118 @@
 +.account-shell, .account-menu, .account-feedback {
 +  --account-muted: color-mix(in srgb, var(--paper) 68%, transparent);
 +  --account-line: color-mix(in srgb, var(--paper) 18%, transparent);
@@ -171,8 +171,11 @@ new file mode 100644
 +.account-feedback p { margin: 0 0 24px; line-height: 1.8; font-size: 14px; }
 +.account-nav-entry { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid currentColor; border-radius: 999px; padding: 7px 14px; color: inherit; background: transparent; font-family: "Microsoft YaHei", sans-serif; font-size: 13px; white-space: nowrap; text-decoration: none; cursor: pointer; }
 +.account-nav-entry:hover { background: color-mix(in srgb, var(--paper) 8%, transparent); }
++.final-direction .site-nav .account-nav-login { border: 0; font: inherit; }
 +.account-menu { position: relative; }
 +.account-menu summary { padding: 4px 9px 4px 5px; list-style: none; }
++.final-direction .site-nav .account-menu summary { min-height: 36px; padding: 5px 10px; border: 0; border-radius: 9px; font: inherit; }
++.final-direction .site-nav .account-nav-avatar { width: 22px; height: 22px; font-size: 12px; }
 +.account-menu summary::-webkit-details-marker { display: none; }
 +.account-nav-avatar { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--red); color: var(--paper); font-size: 13px; font-weight: 700; }
 +.account-nav-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
@@ -200,6 +203,7 @@ new file mode 100644
 +  .account-nav-name { max-width: 72px; }
 +  .site-nav .account-menu { width: 100%; }
 +  .site-nav .account-menu summary { display: flex; width: 100%; justify-content: flex-start; }
++  .final-direction .site-nav .account-menu summary { min-height: 48px; padding: 10px 16px; }
 +  .site-nav .account-nav-name { flex: 1; max-width: none; }
 +  .site-nav .account-menu summary svg { margin-left: auto; }
 +  .site-nav .account-menu-panel { position: static; width: 100%; margin-top: 8px; border: 0; border-top: 1px solid var(--account-line); border-radius: 0; background: transparent; }
@@ -725,7 +729,7 @@ diff --git a/official-site/tests/account-browser.test.mjs b/official-site/tests/
 new file mode 100644
 --- /dev/null
 +++ b/official-site/tests/account-browser.test.mjs
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,316 @@
 +// Browser acceptance against production-built account UI and isolated synthetic API edges.
 +// No SMTP, WeChat account, production user or model request is used.
 +import assert from 'node:assert/strict';
@@ -882,6 +886,27 @@ new file mode 100644
 +      await cdp.wait("document.querySelector('.account-menu')?.open===false && document.querySelector('.account-menu summary').getAttribute('aria-expanded')==='false'");
 +      assert.equal(await cdp.eval("document.activeElement===document.querySelector('.account-menu summary')"), true);
 +    };
++    await t.test('signed-out account entry matches the desktop navigation',async()=>{
++      await cdp.send('Page.navigate',{url:origin+'/'});
++      await cdp.wait("document.readyState==='complete' && document.querySelector('.site-nav .account-nav-login')!==null && Number(getComputedStyle(document.querySelector('.site-header')).opacity)>0.99");
++      const appearance=await cdp.eval(`(() => {
++        const entry=document.querySelector('.site-nav .account-nav-login');
++        const neighbor=document.querySelector('.site-nav .nav-link:not(.account-nav-entry)');
++        const style=getComputedStyle(entry), adjacent=getComputedStyle(neighbor);
++        return {href:entry.getAttribute('href'),height:entry.getBoundingClientRect().height,
++          neighborHeight:neighbor.getBoundingClientRect().height,fontSize:style.fontSize,neighborFontSize:adjacent.fontSize,
++          fontWeight:style.fontWeight,neighborFontWeight:adjacent.fontWeight,
++          border:[style.borderTopWidth,style.borderRightWidth,style.borderBottomWidth,style.borderLeftWidth],outline:style.outlineStyle};
++      })()`);
++      await capture('guest-navigation-desktop');
++      assert.equal(appearance.href,'/account');
++      assert.ok(Math.abs(appearance.height-appearance.neighborHeight)<=1,JSON.stringify(appearance));
++      assert.equal(appearance.fontSize,appearance.neighborFontSize);
++      assert.equal(appearance.fontWeight,appearance.neighborFontWeight);
++      assert.deepEqual(appearance.border,['0px','0px','0px','0px']);
++      assert.equal(appearance.outline,'none');
++      passed.push('guest_navigation_consistency');
++    });
 +    await nav('/account');
 +    await cdp.wait("[...document.querySelectorAll('button')].some(e=>e.textContent==='微信扫码登录'&&!e.disabled)");
 +    await cdp.wait("document.querySelector('.account-brand .mona-wordmark')?.naturalWidth>0");
