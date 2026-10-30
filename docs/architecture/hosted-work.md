@@ -105,3 +105,9 @@ Auth 测试必须使用临时 cwd、临时 SQLite、随机测试 JWT secret、�
 内网 HTTP 浏览器不是安全上下文：请求 ID 使用 getRandomValues 生成 128 位随机标识，不依赖 randomUUID；下载使用固定版本的 SHA-256 库核对内容，不跳过摘要校验。网页不要求浏览器关闭安全选项。
 
 验收不得只检查 curl 返回 200。tests/hosted_work/test_web_access.py 覆盖模块脚本/样式携带 Origin、MIME、内网配置、Host/Origin 拒绝和业务鉴权。deploy/hosted-work/browser-check.mjs 用本机独立 Edge/Chromium 配置实际加载发布页面，检查网络错误、样式、脚本、布局及控制台；可在单独测试标签内拦截 API 验证登录、新建会话、附件、发送、下载校验及停止，但报告明确区分模拟接口流程和真实认证/推理，绝不把浏览器 fixture 部署到服务端或称为真实模型联调。
+
+## 9. 账号衔接候选验证（2026-10-30）
+
+以明确提交 `6a0ca489a4fcb593159e3570a07bc562b7be49bd` 的后端源码构建了独立候选，未带入当时其他任务未提交的云同步源码。归档 SHA256 为 `2d543e074457c9b4b685c0df759b1d0db25d58f8e10c91bd36cc6e3afc3f570b`，已在 Ubuntu 新目录核对 manifest 并通过 104 项测试，包括真实 gVisor 文件、网络与用户隔离。
+
+这只是候选验证：运行中的 Work 未切换，模型列表仍为空；生产 Auth 的网站登录与 identity 接口尚未上线，公网 Work 专用通道和真实联合验收尚未完成。仓库仍有并行提交，正式发布前须再次核对最新源码与候选差异。
