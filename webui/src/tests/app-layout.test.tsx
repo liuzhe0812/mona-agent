@@ -580,435 +580,59 @@ describe("App layout", () => {
     expect(attachSpy).toHaveBeenCalledWith("chat-a");
   });
 
-  it.skip("opens the settings view from the sidebar footer", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "Existing chat",
-      },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              agent: {
-                model: "openai/gpt-4o",
-                provider: "auto",
-                resolved_provider: "openai",
-                has_api_key: true,
-                model_preset: "default",
-                max_tokens: 8192,
-                context_window_tokens: 65536,
-                temperature: 0.1,
-                reasoning_effort: null,
-                timezone: "UTC",
-                tool_hint_max_length: 40,
-              },
-              model_presets: [
-                {
-                  name: "default",
-                  label: "Default",
-                  active: true,
-                  is_default: true,
-                  model: "openai/gpt-4o",
-                  provider: "auto",
-                  max_tokens: 8192,
-                  context_window_tokens: 65536,
-                  temperature: 0.1,
-                  reasoning_effort: null,
-                },
-                {
-                  name: "deep",
-                  label: "deep",
-                  active: false,
-                  is_default: false,
-                  model: "anthropic/claude-opus-4-5",
-                  provider: "anthropic",
-                  max_tokens: 8192,
-                  context_window_tokens: 200000,
-                  temperature: 0.1,
-                  reasoning_effort: "high",
-                },
-              ],
-              providers: [
-                {
-                  name: "openai",
-                  label: "OpenAI",
-                  configured: true,
-                  api_key_hint: "open••••-key",
-                },
-                {
-                  name: "openrouter",
-                  label: "OpenRouter",
-                  configured: false,
-                  api_key_required: true,
-                  default_api_base: "https://openrouter.ai/api/v1",
-                },
-                {
-                  name: "ant_ling",
-                  label: "Ant Ling",
-                  configured: false,
-                  api_key_required: true,
-                  default_api_base: "https://api.ant-ling.com/v1",
-                },
-                {
-                  name: "azure_openai",
-                  label: "Azure OpenAI",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "huggingface",
-                  label: "Hugging Face",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "siliconflow",
-                  label: "SiliconFlow",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "volcengine",
-                  label: "VolcEngine",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "byteplus",
-                  label: "BytePlus",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "qianfan",
-                  label: "Qianfan",
-                  configured: false,
-                  api_key_required: true,
-                },
-                {
-                  name: "atomic_chat",
-                  label: "Atomic Chat",
-                  configured: false,
-                  api_key_required: false,
-                  default_api_base: "http://localhost:1337/v1",
-                },
-              ],
-              web_search: {
-                provider: "brave",
-                api_key_hint: "BSAo••••ew20",
-                base_url: null,
-                max_results: 5,
-                timeout: 30,
-                providers: [
-                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
-                  { name: "brave", label: "Brave Search", credential: "api_key" },
-                  { name: "tavily", label: "Tavily", credential: "api_key" },
-                ],
-              },
-              web: {
-                enable: true,
-                proxy: null,
-                user_agent: null,
-                search: { max_results: 5, timeout: 30 },
-              },
-              image_generation: {
-                enabled: false,
-                provider: "openrouter",
-                provider_configured: true,
-                model: "openai/gpt-5.4-image-2",
-                default_aspect_ratio: "1:1",
-                default_image_size: "1K",
-                max_images_per_turn: 4,
-                save_dir: "generated",
-                providers: [
-                  {
-                    name: "openrouter",
-                    label: "OpenRouter",
-                    configured: true,
-                    api_key_hint: "sk-o••••test",
-                    api_base: "https://openrouter.ai/api/v1",
-                    default_api_base: "https://openrouter.ai/api/v1",
-                  },
-                  {
-                    name: "gemini",
-                    label: "Gemini",
-                    configured: false,
-                    api_key_hint: null,
-                    api_base: null,
-                    default_api_base: "https://generativelanguage.googleapis.com/v1beta/openai/",
-                  },
-                ],
-              },
-              runtime: {
-                config_path: "/tmp/config.json",
-                workspace_path: "/tmp/workspace",
-                gateway_host: "127.0.0.1",
-                gateway_port: 18790,
-                heartbeat: {
-                  enabled: true,
-                  interval_s: 1800,
-                  keep_recent_messages: 8,
-                },
-                dream: {
-                  schedule: "every 2h",
-                  max_batch_size: 20,
-                  max_iterations: 15,
-                  annotate_line_ages: true,
-                },
-                unified_session: false,
-              },
-              advanced: {
-                restrict_to_workspace: false,
-                ssrf_whitelist_count: 0,
-                mcp_server_count: 0,
-                exec_enabled: true,
-                exec_sandbox: null,
-                exec_path_append_set: false,
-              },
-              requires_restart: false,
-            }),
-          };
-        }
-        return { ok: false, status: 404, json: async () => ({}) };
-      }),
-    );
-
+  it("opens account settings from the current account entry", async () => {
+    mockSessions = [{
+      key: "websocket:chat-a", channel: "websocket", chatId: "chat-a",
+      createdAt: null, updatedAt: null, title: "Existing chat", preview: "",
+    }];
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     render(<App />);
-
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = getSessionPanel();
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByTitle("Existing chat")).toBeInTheDocument();
 
-    expect(document.title).toBe("Settings · mona");
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
     const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
-    expect(settingsNav.className).toContain("overflow-x-auto");
-    expect(settingsNav.className).not.toContain("grid-cols-2");
-    expect(within(settingsNav).getByRole("button", { name: "General" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(within(settingsNav).queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
-    expect(within(settingsNav).queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Balance & billing" })).toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Usage" })).toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Models" })).toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Providers" })).toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Image" })).toBeInTheDocument();
-    expect(within(settingsNav).queryByRole("button", { name: "Web" })).not.toBeInTheDocument();
-    expect(within(settingsNav).queryByRole("button", { name: "Runtime" })).not.toBeInTheDocument();
-    expect(within(settingsNav).getByRole("button", { name: "Advanced" })).toBeInTheDocument();
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "Models" }));
-    expect(screen.getByText("AI")).toBeInTheDocument();
-    const modelInput = screen.getByDisplayValue("openai/gpt-4o");
-    expect(modelInput).toBeInTheDocument();
-    fireEvent.change(modelInput, { target: { value: "openai/gpt-4o-mini" } });
-    expect(screen.getByText("Unsaved changes.").parentElement?.className).toContain(
-      "text-blue-600",
-    );
-    fireEvent.change(modelInput, { target: { value: "openai/gpt-4o" } });
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "Providers" }));
-    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
-    expect(screen.getByText("Ant Ling")).toBeInTheDocument();
-    expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByText("OpenAI"));
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current key"), {
-      target: { value: "unsaved-openai-key" },
-    });
-    fireEvent.click(screen.getByText("OpenRouter"));
-    fireEvent.click(screen.getByText("OpenAI"));
-    expect(screen.getByText("open••••-key")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("unsaved-openai-key")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("Ant Ling"));
-    expect(screen.getByDisplayValue("https://api.ant-ling.com/v1")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Atomic Chat"));
-    expect(screen.getByDisplayValue("http://localhost:1337/v1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "Image" }));
-    expect(screen.getByRole("heading", { name: "Image" })).toBeInTheDocument();
-    expect(screen.getByText("Provider status")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("openai/gpt-5.4-image-2")).toBeInTheDocument();
-    expect(screen.getByText("Save directory")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "General" }));
-    expect(screen.getByText("Search provider")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Brave Search/ })).toBeInTheDocument();
-    expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current key"), {
-      target: { value: "unsaved-brave-key" },
-    });
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Brave Search/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Tavily" }));
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Tavily/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Brave Search" }));
-    expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
-
-    expect(screen.getByText("Timezone")).toBeInTheDocument();
-    expect(screen.getByText("Workspace path")).toBeInTheDocument();
-    expect(screen.queryByText("Bot name")).not.toBeInTheDocument();
-    expect(screen.queryByText("Safety")).not.toBeInTheDocument();
-    expect(screen.queryByText("Gateway status")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(settingsNav).getByRole("button", { name: "Account" }))
+      .toHaveAttribute("aria-current", "page");
+    expect(within(settingsNav).getByRole("button", { name: "General" }))
+      .not.toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Account" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Back to chat" })).toBeVisible();
+    expect(document.title).toBe("Settings · mona");
+    expect(createChatSpy).not.toHaveBeenCalled();
   });
 
-  it.skip("returns from settings to the blank start page when no session was active", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "First chat",
-      },
-      {
-        key: "websocket:chat-b",
-        channel: "websocket",
-        chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Second chat",
-      },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              agent: {
-                model: "openai/gpt-4o",
-                provider: "openai",
-                resolved_provider: "openai",
-                has_api_key: true,
-                model_preset: "default",
-                max_tokens: 8192,
-                context_window_tokens: 65536,
-                temperature: 0.1,
-                reasoning_effort: null,
-                timezone: "UTC",
-                tool_hint_max_length: 40,
-              },
-              model_presets: [
-                {
-                  name: "default",
-                  label: "Default",
-                  active: true,
-                  is_default: true,
-                  model: "openai/gpt-4o",
-                  provider: "openai",
-                  max_tokens: 8192,
-                  context_window_tokens: 65536,
-                  temperature: 0.1,
-                  reasoning_effort: null,
-                },
-              ],
-              providers: [{ name: "openai", label: "OpenAI", configured: true }],
-              web_search: {
-                provider: "duckduckgo",
-                api_key_hint: null,
-                base_url: null,
-                max_results: 5,
-                timeout: 30,
-                providers: [
-                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
-                  { name: "brave", label: "Brave Search", credential: "api_key" },
-                ],
-              },
-              web: {
-                enable: true,
-                proxy: null,
-                user_agent: null,
-                search: { max_results: 5, timeout: 30 },
-              },
-              image_generation: {
-                enabled: false,
-                provider: "openrouter",
-                provider_configured: false,
-                model: "openai/gpt-5.4-image-2",
-                default_aspect_ratio: "1:1",
-                default_image_size: "1K",
-                max_images_per_turn: 4,
-                save_dir: "generated",
-                providers: [
-                  {
-                    name: "openrouter",
-                    label: "OpenRouter",
-                    configured: false,
-                    api_key_hint: null,
-                    api_base: null,
-                    default_api_base: "https://openrouter.ai/api/v1",
-                  },
-                ],
-              },
-              runtime: {
-                config_path: "/tmp/config.json",
-                workspace_path: "/tmp/workspace",
-                gateway_host: "127.0.0.1",
-                gateway_port: 18790,
-                heartbeat: {
-                  enabled: true,
-                  interval_s: 1800,
-                  keep_recent_messages: 8,
-                },
-                dream: {
-                  schedule: "every 2h",
-                  max_batch_size: 20,
-                  max_iterations: 15,
-                  annotate_line_ages: true,
-                },
-                unified_session: false,
-              },
-              advanced: {
-                restrict_to_workspace: false,
-                ssrf_whitelist_count: 0,
-                mcp_server_count: 0,
-                exec_enabled: true,
-                exec_sandbox: null,
-                exec_path_append_set: false,
-              },
-              requires_restart: false,
-            }),
-          };
-        }
-        return { ok: false, status: 404, json: async () => ({}) };
-      }),
-    );
-
+  it("returns from account settings to the blank home without selecting or creating a chat", async () => {
+    mockSessions = ["First chat", "Second chat"].map((title, index) => ({
+      key: `websocket:chat-${index}`, channel: "websocket", chatId: `chat-${index}`,
+      createdAt: null, updatedAt: null, title, preview: "",
+    }));
+    const { DEFAULT_SIDEBAR_STATE: initialState } = await import("@/hooks/useSidebarState");
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(initialState);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
     render(<App />);
-
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = getSessionPanel();
-    fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
-    await waitFor(() => expect(document.title).toBe("mona"));
+    await screen.findByTitle("First chat");
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    expect(document.title).toBe("mona");
 
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
-    expect(within(settingsNav).getByRole("button", { name: "General" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    expect(within(settingsNav).getByRole("button", { name: "Account" }))
+      .toHaveAttribute("aria-current", "page");
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
 
-    await waitFor(() => expect(document.title).toBe("mona"));
-    expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Settings sections" })).not.toBeInTheDocument();
+    expect(document.title).toBe("mona");
+    expect(screen.getByText("What can I do for you?")).toBeVisible();
+    expect(screen.getByLabelText("Message input")).toHaveValue("");
+    expect(screen.getByTitle("First chat")).not.toHaveAttribute("aria-current", "page");
+    expect(screen.getByTitle("Second chat")).not.toHaveAttribute("aria-current", "page");
+    expect(createChatSpy).not.toHaveBeenCalled();
+    expect(attachSpy).not.toHaveBeenCalled();
   });
 
   it.skip("filters sessions in the centered search dialog", async () => {
