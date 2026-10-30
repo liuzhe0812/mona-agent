@@ -10,6 +10,7 @@ import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { ClientProvider } from "@/providers/ClientProvider";
 import type { SettingsPayload, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
+import { saveWorkspaceCanvas } from "@/lib/tauri";
 import * as api from "@/lib/api";
 import { fetchFilePreviewBlob } from "@/lib/api";
 import { developmentApi, type DevExecutor } from "@/lib/development-api";
@@ -274,6 +275,34 @@ function officeSession(sessionId: string, displayName: string, type: OfficeSessi
     saveState: "dirty",
     lastError: null,
   };
+}
+
+async function openOfficeSession(
+  client: ReturnType<typeof makeClient>,
+  chatId: string,
+  office: OfficeSessionState,
+) {
+  await act(async () => {
+    client._emitChat(chatId, {
+      event: "message",
+      chat_id: chatId,
+      text: "",
+      kind: "progress",
+      agent_ui: { kind: "office_session", data: { version: 1, action: "open", session: office } },
+    });
+  });
+  await waitFor(() => expect(screen.getByRole("tab", { name: office.displayName }))
+    .toHaveAttribute("aria-selected", "true"));
+}
+
+function holdCanvasSave() {
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  vi.mocked(saveWorkspaceCanvas).mockClear().mockImplementationOnce(async (_root, canvas) => {
+    await pending;
+    return { canvas, path: "D:\\workspace\\canvases\\pending.mona-canvas" };
+  });
+  return release;
 }
 
 function WelcomeSessionHost({
@@ -751,6 +780,82 @@ describe("ThreadShell", () => {
     expect(screen.getByRole("tab", { name: /销售计划.xlsx/ }))
       .toHaveAttribute("aria-selected", "true");
     expect(useFilePreviewStore.getState().splitRatio).toBe(0.5);
+  });
+
+  it("captures the active Office document for a normal send", async () => {
+    const client = makeClient();
+    render(wrap(client, <ThreadShell
+      session={session("office-normal")}
+      title="Office"
+      onToggleSidebar={() => {}}
+      onNewChat={() => {}}
+    />));
+    await openOfficeSession(client, "office-normal", officeSession("office-a", "Document A", "sheets"));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "整理这份表格" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "office-normal", "整理这份表格", undefined, expect.objectContaining({
+        officeSessionId: "office-a", officeDocumentType: "sheets", officeDisplayName: "Document A",
+      }),
+    ));
+  });
+
+  it("preserves Office A when a pending canvas send switches to chat and Office B", async () => {
+    const client = makeClient();
+    const releaseSave = holdCanvasSave();
+    const view = (chatId: string) => wrap(client, <ThreadShell
+      session={session(chatId)}
+      title={chatId}
+      onToggleSidebar={() => {}}
+      onNewChat={() => {}}
+    />);
+    const { rerender } = render(view("office-chat-a"));
+    await openOfficeSession(client, "office-chat-a", officeSession("office-a", "Document A", "sheets"));
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "帮我画一个退款审批流程图" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(saveWorkspaceCanvas).toHaveBeenCalledOnce());
+    expect(client.sendMessage).not.toHaveBeenCalled();
+
+    rerender(view("office-chat-b"));
+    await openOfficeSession(client, "office-chat-b", officeSession("office-b", "Document B", "slides"));
+    await act(async () => releaseSave());
+
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "office-chat-a", expect.stringContaining("退款审批流程图"), undefined, expect.objectContaining({
+        officeSessionId: "office-a", officeDocumentType: "sheets", officeDisplayName: "Document A",
+        canvasPath: "D:\\workspace\\canvases\\pending.mona-canvas",
+      }),
+    ));
+  });
+
+  it("preserves the queued prompt's Office context while its canvas is saved", async () => {
+    const client = makeClient();
+    const consumed = vi.fn();
+    const releaseSave = holdCanvasSave();
+    const view = (queued: boolean) => wrap(client, <ThreadShell
+      session={session("office-queued")}
+      title="Queued Office"
+      onToggleSidebar={() => {}}
+      onNewChat={() => {}}
+      queuedPrompt={queued ? { id: "office-queued-prompt", content: "帮我画一个退款审批流程图" } : null}
+      onQueuedPromptConsumed={consumed}
+    />);
+    const { rerender } = render(view(false));
+    await openOfficeSession(client, "office-queued", officeSession("office-a", "Document A", "sheets"));
+    rerender(view(true));
+    await waitFor(() => expect(saveWorkspaceCanvas).toHaveBeenCalledOnce());
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    await openOfficeSession(client, "office-queued", officeSession("office-b", "Document B", "slides"));
+    await act(async () => releaseSave());
+
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "office-queued", expect.stringContaining("退款审批流程图"), undefined, expect.objectContaining({
+        officeSessionId: "office-a", officeDocumentType: "sheets", officeDisplayName: "Document A",
+        canvasPath: "D:\\workspace\\canvases\\pending.mona-canvas",
+      }),
+    ));
+    expect(consumed).toHaveBeenCalledWith("office-queued-prompt");
   });
 
   it("restores an open Office editor after the desktop UI reloads", async () => {

@@ -906,8 +906,10 @@ export function ThreadShell({
   const handleThreadSend = useCallback(
     async (content: string, _images?: SendImage[], _options?: SendOptions) => {
       if (missingInstalledPartner) return;
+      const officeContext = activeOfficeContextRef.current
+        ? { ...activeOfficeContextRef.current }
+        : null;
       if (isStreaming) {
-        const officeContext = activeOfficeContextRef.current;
         pendingQueue.enqueue(
           content,
           _images,
@@ -927,7 +929,6 @@ export function ThreadShell({
         : routed.canvasId || routedCanvasPath
           ? { ..._options, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
           : _options;
-      const officeContext = activeOfficeContextRef.current;
       send(
         routed.content,
         _images,
@@ -1010,6 +1011,9 @@ export function ThreadShell({
 
     consumedQueuedPromptRef.current = queuedPrompt.id;
     setScrollToBottomSignal((value) => value + 1);
+    const officeContext = activeOfficeContextRef.current
+      ? { ...activeOfficeContextRef.current }
+      : null;
     let cancelled = false;
     void (async () => {
       const routed = conversation?.type === "room"
@@ -1018,7 +1022,6 @@ export function ThreadShell({
       const canvasPath = routed.canvasPath
         ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
       if (cancelled) return;
-      const officeContext = activeOfficeContextRef.current;
       const options = routed.displayContent || routed.canvasId || canvasPath || queuedPrompt.origin
         ? {
             displayContent: routed.displayContent,
