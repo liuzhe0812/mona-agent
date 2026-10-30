@@ -237,6 +237,20 @@ function session(chatId: string) {
   };
 }
 
+async function startDocumentUpload(client: ReturnType<typeof makeClient>, name: string) {
+  const input = screen.getByLabelText("Message input").closest("form")!.querySelector('input[type="file"]')!;
+  const file = new File(["bytes"], name);
+  Object.defineProperty(file, "path", { value: `D:/input/${name}` });
+  const callCount = client.sendDocUpload.mock.calls.length;
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(callCount + 1));
+  return client.sendDocUpload.mock.calls[callCount][0];
+}
+
+function finishDocumentUpload(client: ReturnType<typeof makeClient>, uploadId: string, name: string, path: string) {
+  act(() => client._emitUpload({ ok: true, chatId: uploadId, files: [{ name, path }] }));
+}
+
 function transcriptFromSimpleMessages(
   rows: Array<{ role: "user" | "assistant"; content: string }>,
 ): { schemaVersion: number; messages: UIMessage[] } {
@@ -1434,6 +1448,78 @@ describe("ThreadShell", () => {
       "chat-new", "", undefined,
       expect.objectContaining({ docPaths: [path] }),
     ));
+  });
+
+  it("keeps a completed document draft in its original chat and sends only that chat's documents", async () => {
+    const client = makeClient();
+    const view = (chatId: string) => wrap(client, <ThreadShell session={session(chatId)} title={chatId} onToggleSidebar={() => {}} />);
+    const { rerender } = render(view("document-a"));
+    const uploadId = await startDocumentUpload(client, "alpha.txt");
+    finishDocumentUpload(client, uploadId, "alpha.txt", "uploads/alpha.txt");
+    expect(screen.getByText("alpha.txt")).toBeInTheDocument();
+
+    rerender(view("document-b"));
+    expect(screen.queryByText("alpha.txt")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "B without a document" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    expect(client.sendMessage.mock.calls[0][0]).toBe("document-b");
+    expect(client.sendMessage.mock.calls[0][3]?.docPaths).toBeUndefined();
+
+    rerender(view("document-a"));
+    expect(screen.getByText("alpha.txt")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "A with its document" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "document-a", "A with its document", undefined,
+      expect.objectContaining({ docPaths: ["uploads/alpha.txt"] }),
+    ));
+    const form = screen.getByLabelText("Message input").closest("form")!;
+    expect(within(form).queryByText("alpha.txt")).not.toBeInTheDocument();
+  });
+
+  it("keeps document drafts independent when one chat removes its file", async () => {
+    const client = makeClient();
+    const view = (chatId: string) => wrap(client, <ThreadShell session={session(chatId)} title={chatId} onToggleSidebar={() => {}} />);
+    const { rerender } = render(view("document-a"));
+    const a = await startDocumentUpload(client, "alpha.txt");
+    finishDocumentUpload(client, a, "alpha.txt", "uploads/alpha.txt");
+
+    rerender(view("document-b"));
+    const b = await startDocumentUpload(client, "beta.txt");
+    finishDocumentUpload(client, b, "beta.txt", "uploads/beta.txt");
+    expect(screen.getByText("beta.txt")).toBeInTheDocument();
+    expect(screen.queryByText("alpha.txt")).not.toBeInTheDocument();
+
+    rerender(view("document-a"));
+    expect(screen.getByText("alpha.txt")).toBeInTheDocument();
+    expect(screen.queryByText("beta.txt")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "移除" }));
+    expect(screen.queryByText("alpha.txt")).not.toBeInTheDocument();
+
+    rerender(view("document-b"));
+    expect(screen.getByText("beta.txt")).toBeInTheDocument();
+    expect(screen.queryByText("alpha.txt")).not.toBeInTheDocument();
+  });
+
+  it("ignores an upload result that arrives after switching chats", async () => {
+    const client = makeClient();
+    const view = (chatId: string) => wrap(client, <ThreadShell session={session(chatId)} title={chatId} onToggleSidebar={() => {}} />);
+    const { rerender } = render(view("document-a"));
+    const uploadId = await startDocumentUpload(client, "late.txt");
+
+    rerender(view("document-b"));
+    const b = await startDocumentUpload(client, "beta.txt");
+    finishDocumentUpload(client, uploadId, "late.txt", "uploads/late.txt");
+    expect(screen.queryByText("late.txt")).not.toBeInTheDocument();
+    finishDocumentUpload(client, b, "beta.txt", "uploads/beta.txt");
+    expect(screen.getByText("beta.txt")).toBeInTheDocument();
+    rerender(view("document-a"));
+    expect(screen.queryByText("late.txt")).not.toBeInTheDocument();
+    expect(screen.queryByText("beta.txt")).not.toBeInTheDocument();
+    rerender(view("document-b"));
+    expect(screen.getByText("beta.txt")).toBeInTheDocument();
+    expect(screen.queryByText("late.txt")).not.toBeInTheDocument();
   });
 
   it("preserves file references when appending a queued message to a running task", async () => {

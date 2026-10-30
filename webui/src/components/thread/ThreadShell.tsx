@@ -42,6 +42,7 @@ import { SidebarBrowserPanel, type SidebarBrowserController } from "@/components
 import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
+import type { AttachedDocument } from "@/hooks/useAttachedDocuments";
 import {
   assistantOrdinalForMessage,
   mergeHistoryMessages,
@@ -87,6 +88,7 @@ const OfficeEditorHost = lazy(() =>
 const SIDEBAR_WORKSPACE_TAB_ID = "tool:workspace";
 const SIDEBAR_BROWSER_TAB_ID = "tool:browser";
 const SIDEBAR_TERMINAL_TAB_ID = "tool:terminal";
+const EMPTY_DOCUMENT_DRAFT: AttachedDocument[] = [];
 
 function isOfficeSessionState(value: unknown): value is OfficeSessionState {
   if (!value || typeof value !== "object") return false;
@@ -480,6 +482,17 @@ export function ThreadShell({
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const pendingQueue = usePendingQueue(chatId);
+  const [documentDrafts, setDocumentDrafts] = useState<Map<string, AttachedDocument[]>>(new Map());
+  const documentDraft = chatId ? documentDrafts.get(chatId) ?? EMPTY_DOCUMENT_DRAFT : EMPTY_DOCUMENT_DRAFT;
+  const handleDocumentDraftChange = useCallback((documents: AttachedDocument[]) => {
+    if (!chatId) return;
+    setDocumentDrafts((previous) => {
+      const next = new Map(previous);
+      if (documents.length > 0) next.set(chatId, documents);
+      else next.delete(chatId);
+      return next;
+    });
+  }, [chatId]);
   const [widgetPrompt, setWidgetPrompt] = useState<{ text: string; requestId: string }>();
   useEffect(() => setWidgetPrompt(undefined), [chatId]);
   const handleWidgetPrompt = useCallback((text: string) => {
@@ -1070,6 +1083,8 @@ export function ThreadShell({
         <ThreadComposer
           chatId={chatId}
           onSend={handleThreadSend}
+          documentDraft={documentDraft}
+          onDocumentDraftChange={handleDocumentDraftChange}
           suggestedPrompt={widgetPrompt}
           disabled={!chatId || Boolean(historyUnavailable) || missingInstalledPartner}
           isStreaming={isStreaming}
