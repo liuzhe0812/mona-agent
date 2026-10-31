@@ -154,6 +154,52 @@ beforeEach(() => {
 });
 
 describe("ProducingPhase playback and narration settings", () => {
+  it("closes full preview when hidden and leaves it closed on return", async () => {
+    const rendered = render(wrap(<ProducingPhase projectName="proj" visible />));
+    fireEvent.click(await screen.findByRole("button", { name: "预览整片" }));
+    await screen.findByTitle("proj 整片预览");
+
+    rendered.rerender(wrap(<ProducingPhase projectName="proj" visible={false} />));
+    expect(screen.queryByTitle("proj 整片预览")).not.toBeInTheDocument();
+    rendered.rerender(wrap(<ProducingPhase projectName="proj" visible />));
+
+    expect(screen.queryByTitle("proj 整片预览")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "预览整片" })).toBeEnabled();
+  });
+
+  it("ignores a delayed audio play result after the video is hidden", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:scene") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    let resolvePlay!: () => void;
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
+      () => new Promise<void>((resolve) => { resolvePlay = resolve; }),
+    );
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause");
+    mocks.fetchVideoProject.mockResolvedValue(project({ narrationEnabled: true }));
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [{ ...scene, htmlPath: "scene.html" }] });
+    mocks.fetchSceneAudioMixBytes.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    try {
+      const rendered = render(wrap(<ProducingPhase projectName="proj" visible />));
+      const button = await screen.findByRole("button", { name: "播放当前场景" });
+      await waitFor(() => expect(button).toBeEnabled());
+      fireEvent.click(button);
+      await waitFor(() => expect(play).toHaveBeenCalledOnce());
+      rendered.rerender(wrap(<ProducingPhase projectName="proj" visible={false} />));
+      expect(pause).toHaveBeenCalled();
+      await act(async () => resolvePlay());
+      rendered.rerender(wrap(<ProducingPhase projectName="proj" visible />));
+      expect(screen.getByRole("button", { name: "播放当前场景" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "暂停当前场景" })).not.toBeInTheDocument();
+    } finally {
+      play.mockRestore();
+      pause.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectUrl });
+      Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: originalRevokeObjectUrl });
+    }
+  });
+
   it("shows current-scene controls by default and keeps detail tracks optional", async () => {
     render(wrap(<ProducingPhase projectName="proj" />));
     await screen.findByRole("button", { name: "播放当前场景" });

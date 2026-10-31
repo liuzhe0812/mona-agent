@@ -476,7 +476,7 @@ export function VideoStyleWorkspace({ initialSeriesId, baseStyle, aspectRatio, t
   };
 
   return <>
-    <CustomVideoStyleEditor name={name} onNameChange={(value) => { setName(value); dirty.current = true; }}
+    <CustomVideoStyleEditor visible={visible} name={name} onNameChange={(value) => { setName(value); dirty.current = true; }}
       description={description} onDescriptionChange={(value) => { setDescription(value); dirty.current = true; setSampleCurrent(false); }}
       referencePaths={referencePaths} onAddReference={() => void addReference()} onRemoveReference={(path) => { setReferencePaths((paths) => paths.filter((item) => item !== path)); dirty.current = true; setSampleCurrent(false); }}
       referencePreviews={{ ...storedReferencePreviews, ...referencePreviews }} onReferenceFiles={(files) => void uploadReferences(files)}

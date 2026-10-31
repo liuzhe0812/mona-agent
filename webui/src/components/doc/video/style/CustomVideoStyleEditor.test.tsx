@@ -39,6 +39,21 @@ function props(overrides: Partial<CustomVideoStyleEditorProps> = {}): CustomVide
 }
 
 describe("CustomVideoStyleEditor", () => {
+  it("releases a hidden sample while keeping the editor state", () => {
+    const editorProps = props({ sample: { html: "<html>sample</html>", duration: 12 } });
+    const view = render(<CustomVideoStyleEditor {...editorProps} visible />);
+    expect(screen.getByTitle("风格样片预览")).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "样式" }), { button: 0, ctrlKey: false });
+    expect(screen.getByLabelText("主题色")).toBeInTheDocument();
+
+    view.rerender(<CustomVideoStyleEditor {...editorProps} visible={false} />);
+    expect(screen.queryByTitle("风格样片预览")).not.toBeInTheDocument();
+    view.rerender(<CustomVideoStyleEditor {...editorProps} visible />);
+
+    expect(screen.getByTitle("风格样片预览")).toBeInTheDocument();
+    expect(screen.getByLabelText("主题色")).toBeInTheDocument();
+  });
+
   it("keeps the initial prompt until the conversation is ready, then reveals the mounted chat", async () => {
     const editorProps = props();
     const view = render(<CustomVideoStyleEditor {...editorProps} />);

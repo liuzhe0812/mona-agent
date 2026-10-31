@@ -21,6 +21,7 @@ export type CustomVideoStyleAspectRatio = "16:9" | "9:16" | "1:1";
 export type CustomVideoStyleField = "primaryColor" | "backgroundColor" | "fontFamily";
 
 export interface CustomVideoStyleEditorProps {
+  visible?: boolean;
   name: string;
   onNameChange: (name: string) => void;
   description: string;
@@ -85,6 +86,7 @@ function fileName(path: string): string {
 const ignoreReferenceFiles = (_files: File[]) => {};
 
 export function CustomVideoStyleEditor({
+  visible = true,
   name,
   onNameChange,
   description,
@@ -321,12 +323,12 @@ export function CustomVideoStyleEditor({
                   className="relative min-h-0 min-w-0 shrink-0 overflow-hidden bg-black"
                   style={{ width: previewWidth, height: previewHeight, aspectRatio: `${aspectWidth} / ${aspectHeight}` }}
                 >
-                  <iframe
+                  {visible && <iframe
                     title="风格样片预览"
                     srcDoc={sample?.html}
                     sandbox="allow-scripts"
                     className="absolute inset-0 h-full w-full border-0"
-                  />
+                  />}
                 </div>
               ) : !started ? (
                 <div

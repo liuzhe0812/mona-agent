@@ -1275,7 +1275,7 @@ export function VideoMakerView({
                   {styleLibraryTab === "builtin" ? <VideoStyleGallery templates={styleTemplates} showHeader={false} selectedId={singleStyleSource === "template" ? templateId : null} disabled={starting}
                     onSelect={(id) => { setSingleStyleSource("template"); setTemplateId(id); }}
                     onCreateFrom={(style) => { setCreatingBaseStyle(style); setConfigSubview("create-series"); }} /> :
-                    <SavedVideoStyleGallery token={token} series={series} selectedId={singleStyleSource === "series" ? styleSeriesId : null} loading={seriesLoading} disabled={seriesUpdating || starting}
+                    <SavedVideoStyleGallery token={token} series={series} selectedId={singleStyleSource === "series" ? styleSeriesId : null} loading={seriesLoading} disabled={seriesUpdating || starting} visible={visible}
                       onSelect={(value) => { handleSelectStyleSeries(value); setSelectedSeries(value); }}
                       onEdit={(value) => { setSelectedSeries(value); setCreatingBaseStyle(undefined); setConfigSubview("style-editor"); }}
                       onCreate={() => { setCreatingBaseStyle(undefined); setConfigSubview("create-series"); }}
@@ -1399,6 +1399,7 @@ export function VideoMakerView({
           ) : (
             <ProducingPhase
               projectName={projectName ?? ""}
+              visible={visible}
               modelControl={videoSession ? <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} /> : undefined}
               onPhaseChange={handleProjectPhaseChange}
               onRequestAgent={handleRequestAgent}

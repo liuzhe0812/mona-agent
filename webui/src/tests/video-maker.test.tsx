@@ -664,6 +664,46 @@ describe("ProducingPhase", () => {
     });
   });
 
+  it("releases a hidden video preview without resetting its scene or playhead", async () => {
+    const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 900, 600));
+    const client = makeClient();
+    const initialProject: EmbeddedVideoProject = { name: "proj", phase: "producing", chatId: null };
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [producingScene(1, { htmlStatus: "previewing" }), producingScene(2, { htmlStatus: "previewing" })],
+    });
+    mocks.fetchScenePreviewHtml.mockResolvedValue({ html: "<html>scene</html>", needsGeneration: false });
+    const view = (visible: boolean) => wrap(
+      <VideoMakerView embedded initialProject={initialProject} visible={visible} />,
+      client,
+    );
+    try {
+      const rendered = render(view(true));
+      fireEvent.click(await screen.findByRole("option", { name: /场景 2/ }));
+      await screen.findByTitle("scene-2-preview");
+      fireEvent.change(screen.getByRole("slider", { name: "场景播放位置" }), { target: { value: "2000" } });
+      fireEvent.click(screen.getByRole("button", { name: "播放当前场景" }));
+      await screen.findByRole("button", { name: "暂停当前场景" });
+      const position = (screen.getByRole("slider", { name: "场景播放位置" }) as HTMLInputElement).value;
+      fireEvent.click(screen.getByRole("button", { name: "全屏预览当前场景" }));
+      await screen.findByTitle("scene-fullscreen-preview");
+
+      rendered.rerender(view(false));
+      expect(screen.queryByTitle("scene-2-preview")).not.toBeInTheDocument();
+      expect(screen.queryByTitle("scene-fullscreen-preview")).not.toBeInTheDocument();
+      rendered.rerender(view(true));
+
+      await screen.findByTitle("scene-2-preview");
+      expect(screen.queryByTitle("scene-fullscreen-preview")).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /场景 2/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("slider", { name: "场景播放位置" })).toHaveValue(position);
+      expect(screen.getByRole("button", { name: "播放当前场景" })).toBeInTheDocument();
+    } finally {
+      measure.mockRestore();
+    }
+  });
+
   it("retries reading a failed project without sending another creation task", async () => {
     const onRequestAgent = vi.fn();
     mocks.fetchVideoStoryboard.mockResolvedValueOnce({ ok: false, error: "internal parse trace" });

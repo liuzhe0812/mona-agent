@@ -91,6 +91,7 @@ import {
 
 interface ProducingPhaseProps {
   projectName: string;
+  visible?: boolean;
   /** Persisted project changes refresh history without changing the workspace. */
   onPhaseChange?: (phase: VideoProjectPhase) => void;
   onRequestAgent?: (prompt: string, displayText?: string) => void | Promise<void>;
@@ -268,6 +269,7 @@ function ScenePreviewFrame({
 
 export function ProducingPhase({
   projectName,
+  visible = true,
   onPhaseChange,
   onRequestAgent,
   onFocusChange,
@@ -333,6 +335,16 @@ export function ProducingPhase({
   const [timelineAudioRetryCount, setTimelineAudioRetryCount] = useState(0);
   const timelineAudioRef = useRef<HTMLAudioElement>(null);
   const timelinePlaybackIntentRef = useRef(0);
+
+  useEffect(() => {
+    if (visible) return;
+    timelinePlaybackIntentRef.current += 1;
+    timelineRetryIntentRef.current = null;
+    timelineAudioRef.current?.pause();
+    setTimelinePlaying(false);
+    setFullscreen(false);
+    setFullFilmOpen(false);
+  }, [visible]);
 
   const [fullPreviewHtml, setFullPreviewHtml] = useState<string | null>(null);
   const [fullPreviewLoading, setFullPreviewLoading] = useState(false);
@@ -1576,7 +1588,7 @@ export function ProducingPhase({
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   加载预览...
                 </div>
-              ) : previewHtml ? (
+              ) : previewHtml ? visible && (
                 <ScenePreviewFrame
                   html={previewHtml}
                   ratioW={ratio.w}
@@ -2138,7 +2150,7 @@ export function ProducingPhase({
       />
 
       {/* 全屏预览:当前场景 */}
-      <Dialog open={fullscreen} onOpenChange={changeFullscreen}>
+      <Dialog open={visible && fullscreen} onOpenChange={changeFullscreen}>
         <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0">
           <div className="flex h-full flex-col">
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
@@ -2155,7 +2167,7 @@ export function ProducingPhase({
               </Button>
             </div>
             <div className="min-h-0 flex-1 bg-muted/30">
-              {previewHtml && (
+              {visible && previewHtml && (
                 <ScenePreviewFrame
                   html={previewHtml}
                   ratioW={ratio.w}
@@ -2203,7 +2215,7 @@ export function ProducingPhase({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={fullFilmOpen} onOpenChange={setFullFilmOpen}>
+      <Dialog open={visible && fullFilmOpen} onOpenChange={setFullFilmOpen}>
         <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0">
           <div className="flex h-full flex-col">
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
@@ -2220,7 +2232,7 @@ export function ProducingPhase({
               </Button>
             </div>
             <div className="min-h-0 flex-1 bg-black">
-              {isExportDone && !outputStale && exportDownloadUrl ? (
+              {visible && (isExportDone && !outputStale && exportDownloadUrl ? (
                 <video
                   src={exportDownloadUrl}
                   className="h-full w-full"
@@ -2254,7 +2266,7 @@ export function ProducingPhase({
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   正在准备整片画面与声音…
                 </div>
-              )}
+              ))}
             </div>
           </div>
         </DialogContent>
