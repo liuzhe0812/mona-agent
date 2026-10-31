@@ -48,7 +48,7 @@ it("permanent removal clearly protects local copies and does not claim immediate
   expect(screen.getByRole("dialog")).toHaveTextContent("本地副本不删除");
   expect(api.applyTrash).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "确认彻底删除" }));
-  await screen.findByText("已彻底移除云恢复记录。可清理上传残留以释放无引用文件占用。");
+  await screen.findByText("已彻底移除云恢复记录。可通过“清理空间”回收可释放的空间。");
 });
 
 it("supports moving the selected Work cloud copy without another picker", async () => {

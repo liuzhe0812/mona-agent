@@ -21,9 +21,10 @@ _RESERVED_NAME = re.compile(r"^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)", r
 
 
 class WorkFileError(ValueError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, size: int | None = None):
         super().__init__(message)
         self.code = code
+        self.size = size
 
 
 def portable_path(value: Any) -> str:
@@ -74,7 +75,7 @@ def _safe_file(root: Path, relative: str, anchor: Path | None = None) -> tuple[P
     if info.st_nlink > 1:
         raise WorkFileError("linked_path", "关联文件是硬链接，不自动上传。")
     if info.st_size > MAX_FILE_BYTES:
-        raise WorkFileError("file_too_large", "关联文件超过个人空间上限。")
+        raise WorkFileError("file_too_large", "关联文件超过个人空间上限。", size=info.st_size)
     lowered = [part.casefold() for part in PurePosixPath(relative).parts]
     if (any(part in _SKIP_DIRS for part in lowered[:-1]) or lowered[-1] in _SECRET_NAMES
             or lowered[-1].startswith(".env.") or lowered[-1].endswith((".pem", ".key", ".p12", ".pfx"))):
@@ -124,11 +125,13 @@ def collect_work_files(*, workspace: Path, media_root: Path, session_key: str,
     candidates: list[tuple[str, str, str]] = []
     unavailable: list[dict] = []
 
-    def unavailable_file(raw: Any, reason: str, source_path: str | None = None) -> None:
+    def unavailable_file(raw: Any, reason: str, source_path: str | None = None, size: int | None = None) -> None:
         name = str(raw).replace("\\", "/").rsplit("/", 1)[-1][:255]
         item = {"name": name, "reason": reason}
         if source_path is not None:
             item["source_path"] = source_path
+        if size is not None:
+            item["size"] = size
         if item not in unavailable:
             unavailable.append(item)
 
@@ -226,7 +229,9 @@ def collect_work_files(*, workspace: Path, media_root: Path, session_key: str,
             code = exc.code if isinstance(exc, WorkFileError) else "missing"
             if code == "file_changed":
                 raise
-            unavailable_file(relative, code, str(roots[area] / relative) if code == "missing" else None)
+            unavailable_file(relative, code,
+                str(roots[area] / relative) if code in {"missing", "file_too_large"} else None,
+                exc.size if isinstance(exc, WorkFileError) else None)
         if len(sources) > MAX_FILES:
             raise WorkFileError("too_many_files", "关联文件过多，请缩小同步范围。")
     return sources, unavailable

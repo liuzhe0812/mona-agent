@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, History, Loader2, RotateCcw } from "lucide-react";
+import { Download, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TooltipButton } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cloudSyncApi, type CloudCandidate, type CloudConversation, type CloudFile, type CloudHistoryPage, type CloudHistoryVersion } from "@/lib/cloud-sync";
+import { cloudSyncApi, type CloudConversation, type CloudFile, type CloudHistoryPage, type CloudHistoryVersion } from "@/lib/cloud-sync";
 
 import { CloudTrashDialog } from "./CloudTrashDialog";
 
@@ -21,13 +19,15 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", hour12: false }).format(new Date(value));
 }
 
-export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
-  conversations: CloudConversation[];
-  candidates: CloudCandidate[];
+export function CloudHistoryDialog({ sessionKey, title, onClose, onRestored }: {
+  sessionKey: string;
+  title: string;
+  onClose: () => void;
   onRestored: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [resource, setResource] = useState("");
+  const [conversation, setConversation] = useState<CloudConversation | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [moved, setMoved] = useState(false);
   const [tab, setTab] = useState<"history" | "files">("history");
   const [page, setPage] = useState<CloudHistoryPage | null>(null);
   const [files, setFiles] = useState<CloudFile[] | null>(null);
@@ -40,14 +40,39 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const mutation = useRef(false);
-  const known = conversations.filter((item) => item.version > 0 && !item.trashed);
-  const selectedConversation = known.find((item) => item.resource_id === resource);
-  const titles = new Map(candidates.map((item) => [item.key, item.title]));
+  const resource = conversation?.resource_id ?? "";
 
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; generation.current += 1; abort.current?.abort(); };
   }, []);
+
+  const readStatus = useCallback(async () => {
+    const current = ++generation.current;
+    abort.current?.abort();
+    const controller = new AbortController();
+    abort.current = controller;
+    setLoading(true); setError(""); setChecked(false); setConversation(null); setMoved(false);
+    try {
+      const status = await cloudSyncApi.status(controller.signal);
+      if (!status.available) throw new Error(status.problem?.message || "无法读取云端状态，请登录并联网后重试。");
+      if (status.needs_key) throw new Error("请先在账号设置中迁移旧云空间，再查看历史版本。");
+      if (status.space && !Array.isArray(status.conversations)) throw new Error("无法读取云端记录，请稍后重试。");
+      const selected = status.conversations?.find((item) => item.key === sessionKey && item.version > 0) ?? null;
+      if (alive.current && current === generation.current) {
+        setConversation(selected?.trashed ? null : selected); setMoved(selected?.trashed === true); setChecked(true);
+      }
+    } catch (cause) {
+      if (alive.current && current === generation.current && !(cause instanceof Error && cause.name === "AbortError")) setError(errorMessage(cause));
+    } finally {
+      if (alive.current && current === generation.current) setLoading(false);
+    }
+  }, [sessionKey]);
+
+  useEffect(() => {
+    void readStatus();
+    return () => { generation.current += 1; abort.current?.abort(); };
+  }, [readStatus]);
 
   const read = useCallback(async (selected: string, section: "history" | "files", before?: number) => {
     const current = ++generation.current;
@@ -73,16 +98,16 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
   }, []);
 
   useEffect(() => {
-    if (!open || !resource) return;
+    if (!resource) return;
     setPage(null); setFiles(null); setConfirmation(null); setRestored(false);
     void read(resource, tab);
     return () => { generation.current += 1; abort.current?.abort(); };
-  }, [open, resource, tab, read]);
+  }, [resource, tab, read]);
 
   const close = () => {
     if (mutation.current) return;
     generation.current += 1; abort.current?.abort();
-    setOpen(false); setConfirmation(null); setPage(null); setFiles(null); setError(""); setRestored(false);
+    onClose();
   };
   const run = async (action: () => Promise<void>) => {
     if (mutation.current) return;
@@ -106,25 +131,21 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
     });
   };
 
-  return <>
-    <TooltipButton size="xs" variant="ghost" title="查看云会话、关联文件和历史版本" aria-label="会话与历史" disabled={!known.length} onClick={() => {
-      setResource(known[0].resource_id); setTab("history"); setOpen(true);
-    }}><History className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />会话与历史</TooltipButton>
-    <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
-      <DialogContent className="sm:max-w-xl" showCloseButton={!busy}>
-        <DialogHeader>
-          <DialogTitle>{confirmation ? `恢复版本 ${confirmation.version.version}？` : "云会话与历史"}</DialogTitle>
+  return <Dialog open onOpenChange={(value) => { if (!value) close(); }}>
+      <DialogContent className="relative flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-xl" showCloseButton={!busy}>
+        <DialogHeader className="shrink-0">
+          <DialogTitle>{confirmation ? `恢复版本 ${confirmation.version.version}？` : "历史版本"}</DialogTitle>
           <DialogDescription>{confirmation ? "将恢复为一个新的本地会话，当前会话不会被覆盖，也不会重新执行历史任务。" : "文件可按需下载；历史版本恢复为新会话，不覆盖当前内容。"}</DialogDescription>
         </DialogHeader>
         {!confirmation && <>
-          <Select value={resource} disabled={busy} onValueChange={setResource} aria-label="选择云会话"
-            options={known.map((item) => ({ value: item.resource_id,
-              label: `${titles.get(item.key) || "未命名会话"}${item.conflict_copy ? " · 同步分支" : ""}` }))} />
-          <Tabs value={tab} onValueChange={(value) => setTab(value as "history" | "files")}>
+          <p className="truncate text-body font-medium" title={title}>{title}</p>
+          {conversation && <Tabs value={tab} onValueChange={(value) => setTab(value as "history" | "files")}>
             <TabsList><TabsTrigger value="history" disabled={busy}>历史版本</TabsTrigger><TabsTrigger value="files" disabled={busy}>关联文件</TabsTrigger></TabsList>
-          </Tabs>
-          <div className="max-h-72 overflow-y-auto" aria-busy={loading}>
+          </Tabs>}
+          <div className="min-h-0 max-h-72 overflow-y-auto" aria-busy={loading}>
             {loading && <p role="status" className="flex items-center gap-2 py-4 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取…</p>}
+            {!loading && checked && !conversation && !moved && <p className="py-4 text-caption text-muted-foreground">此会话暂无云端历史。同步上传成功后可在这里查看。</p>}
+            {moved && <p role="status" className="py-4 text-caption">云端副本已移至回收站，可前往“云空间管理 → 回收站”恢复。本地会话仍保留。</p>}
             {tab === "history" && page && <ul aria-label="会话历史版本" className="divide-y divide-border/50">
               {page.items.map((item) => <li key={item.version} className="flex items-center justify-between gap-3 py-3">
                 <div className="min-w-0"><p className="text-body">版本 {item.version}{item.deleted ? " · 已删除记录" : ""}</p><time dateTime={item.created_at} className="text-caption text-muted-foreground">{formatTime(item.created_at)}</time></div>
@@ -146,18 +167,18 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
           {restored && <p role="status" className="text-caption">已恢复为新会话，可在会话列表中查看。</p>}
         </>}
         {error && <p role="alert" className="text-caption text-destructive">{error}</p>}
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           {confirmation ? <>
             <Button variant="outline" disabled={busy} onClick={() => { setConfirmation(null); setError(""); }}>取消</Button>
             <Button disabled={busy} onClick={restore}>{busy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}{busy ? "恢复中…" : "确认恢复"}</Button>
           </> : <>
-            {error && <Button variant="outline" disabled={busy || loading} onClick={() => void read(resource, tab)}>重新读取</Button>}
-            {selectedConversation && <CloudTrashDialog disabled={busy || loading} onChanged={onRestored} target={{ resource_id: resource,
-              version: selectedConversation.version, title: titles.get(selectedConversation.key) || "未命名会话" }} />}
+            {error && <Button variant="outline" disabled={busy || loading} onClick={() => void (resource ? read(resource, tab) : readStatus())}>重新读取</Button>}
+            {conversation && <CloudTrashDialog disabled={busy || loading} onChanged={() => {
+              setConversation(null); setPage(null); setFiles(null); setMoved(true); onRestored();
+            }} target={{ resource_id: resource, version: conversation.version, title }} />}
             <Button variant="outline" disabled={busy} onClick={close}>关闭</Button>
           </>}
         </DialogFooter>
       </DialogContent>
-    </Dialog>
-  </>;
+    </Dialog>;
 }

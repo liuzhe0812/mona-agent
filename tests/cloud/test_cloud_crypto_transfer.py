@@ -230,6 +230,30 @@ def test_missing_original_attachment_reuses_its_exact_confirmed_cloud_copy(examp
     assert changed.snapshot["unavailable_files"]  # Immutable caller snapshot was not altered.
 
 
+def test_unavailable_attachments_report_each_file_before_any_upload(example, monkeypatch):
+    cipher, exported, manager, session, transcript, media = example
+    (media / "资料.txt").unlink()
+    large = media / "video.mp4"
+    large.write_bytes(b"x" * 20)
+    session.add_message("user", "another attachment", media=[str(large)])
+    manager.save(session)
+    monkeypatch.setattr("mona.cloud.work_files.MAX_FILE_BYTES", 10)
+    monkeypatch.setattr("mona.cloud.transfer.MAX_FILE_BYTES", 10)
+    changed = export_work_snapshot(manager, session.key, vault_id=cipher.vault_id,
+        resource_id=exported.snapshot["resource_id"], transcript_path=transcript, media_root=media)
+    service = ObjectService()
+    with pytest.raises(CloudTransferError) as exc:
+        WorkTransfer(cipher, service).push(changed, base_version=0)
+    assert exc.value.code == "associated_file_unavailable"
+    assert exc.value.files == [
+        {"name": "资料.txt", "reason": "missing", "source_path": str(media / "资料.txt")},
+        {"name": "video.mp4", "reason": "file_too_large", "source_path": str(large),
+         "size": 20, "limit_bytes": 10},
+    ]
+    assert not service.uploads and not service.versions
+    changed.bytes()
+
+
 def test_stale_write_preserves_original_cloud_version(example):
     cipher, export, *_ = example
     server = ObjectService()

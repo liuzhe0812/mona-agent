@@ -13,7 +13,7 @@ from threading import Event
 from typing import Callable, Iterator, Protocol
 
 from mona.cloud.crypto import MAX_PLAINTEXT, VaultCipher
-from mona.cloud.work_files import HEX64, ID32, materialize_work_file
+from mona.cloud.work_files import HEX64, ID32, MAX_FILE_BYTES, materialize_work_file
 from mona.cloud.work_snapshot import WorkExport, canonical_bytes, validate_work_snapshot
 
 _MAX_OBJECTS = 2048
@@ -22,9 +22,10 @@ _BUNDLE_FORMAT = "mona-encrypted-work-bundle"
 
 
 class CloudTransferError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, files: list[dict] | None = None):
         super().__init__(message)
         self.code = code
+        self.files = files or []
 
 
 class CloudTransport(Protocol):
@@ -103,6 +104,7 @@ class WorkTransfer:
                            if isinstance(item.get("source_path"), str)}
         descriptors = {item["id"]: item for item in snapshot["files"]}
         unavailable = []
+        blocked_files = []
         for item in snapshot.get("unavailable_files", []):
             if item.get("reason") not in {"missing", "file_too_large"}:
                 unavailable.append(item)
@@ -114,12 +116,19 @@ class WorkTransfer:
             old = prior_files.get(reusable["id"]) if reusable else None
             if (item.get("reason") != "missing" or not reusable or not old
                     or old["sha256"] != reusable["sha256"] or old["size"] != reusable["size"]):
-                raise CloudTransferError("associated_file_unavailable",
-                    "会话的关联文件缺失或超过同步上限，尚未更新云版本。请恢复缺失文件或调整会话范围后重试。")
+                issue = {key: item[key] for key in ("name", "reason", "source_path", "size") if key in item}
+                if item["reason"] == "file_too_large":
+                    issue["limit_bytes"] = MAX_FILE_BYTES
+                blocked_files.append(issue)
+                continue
             # Reuse only this exact file's confirmed cloud version. A same-named
             # attachment elsewhere is not evidence that the missing file exists.
             if reusable["id"] not in descriptors:
                 descriptors[reusable["id"]] = {**copy.deepcopy(reusable), "availability": "cloud"}
+        if blocked_files:
+            raise CloudTransferError("associated_file_unavailable",
+                "会话的关联文件暂不可上传，尚未更新云版本。请在上传范围中查看问题文件；其他内容继续同步。",
+                files=blocked_files)
         snapshot["files"] = list(descriptors.values())
         snapshot["unavailable_files"] = unavailable
         sources = {source.descriptor["id"]: source for source in exported.sources}

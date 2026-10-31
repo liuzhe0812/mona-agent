@@ -102,6 +102,20 @@ describe("cloud sync settings", () => {
     expect(api.enable).not.toHaveBeenCalled();
   });
 
+  it("does not submit or count a historical selection missing from the visible candidates", async () => {
+    api.status.mockResolvedValue({ ...active, selected_keys: [candidates[0].key, "websocket:deleted"] });
+    render(<CloudSyncSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "上传范围" }));
+    expect(screen.getByText("上传工作会话（已选 1 / 共 2）")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "全选", exact: true }));
+    expect(screen.getByText("上传工作会话（已选 2 / 共 2）")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "上传本机现有及后续的日程与待办" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存上传范围" }));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], false, true, false, false, false, false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("a failed pause is not presented as completed", async () => {
     api.status.mockResolvedValue(active);
     api.pause.mockRejectedValue(new Error("暂停尚未确认，请重试。"));
@@ -243,18 +257,22 @@ describe("cloud sync settings", () => {
     expect(screen.queryByText("已同步", { exact: true })).not.toBeInTheDocument();
   });
 
-  it("keeps trash visible and reveals cleanup only in space management", async () => {
+  it("groups trash and a single cleanup action under cloud space management", async () => {
     api.status.mockResolvedValue(active);
     render(<CloudSyncSettings />);
-    expect(await screen.findByRole("button", { name: "回收站", exact: true })).toBeInTheDocument();
+    const toggle = await screen.findByRole("button", { name: "云空间管理", exact: true });
+    expect(screen.queryByRole("button", { name: "回收站", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清理空间", exact: true })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "清理过期历史", exact: true })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "清理上传残留", exact: true })).not.toBeInTheDocument();
-    const toggle = screen.getByRole("button", { name: "空间管理", exact: true });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: "清理过期历史", exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "清理上传残留", exact: true })).toBeInTheDocument();
+    const management = within(screen.getByRole("group", { name: "云空间管理操作" }));
+    expect(management.getByRole("button", { name: "回收站", exact: true })).toBeInTheDocument();
+    expect(management.getByRole("button", { name: "清理空间", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清理过期历史", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清理上传残留", exact: true })).not.toBeInTheDocument();
     fireEvent.click(toggle);
     expect(screen.queryByRole("button", { name: "清理上传残留", exact: true })).not.toBeInTheDocument();
   });
@@ -262,11 +280,50 @@ describe("cloud sync settings", () => {
   it("identifies the affected conversation without clearing its selection", async () => {
     api.status.mockResolvedValue({ ...active, phase: "partial", blocked_keys: [candidates[0].key] });
     render(<CloudSyncSettings />);
-    expect(await screen.findByText("部分内容待处理")).toBeInTheDocument();
+    expect(await screen.findByText("部分内容暂未同步")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "上传范围" }));
-    expect(screen.getByRole("checkbox", { name: /工作会话一.*关联文件缺失/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /工作会话一.*关联文件暂不可上传/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "工作会话二" })).not.toBeChecked();
     expect(api.scope).not.toHaveBeenCalled();
+  });
+
+  it("shows the specific file problems without toggling the conversation and still allows saving", async () => {
+    const sourcePath = "C:/Mona/media/report.pptx";
+    api.status.mockResolvedValue({ ...active, phase: "partial", blocked_keys: [candidates[0].key],
+      blocked_files: { [candidates[0].key]: [
+        { name: "report.pptx", reason: "missing", source_path: sourcePath },
+        { name: "video.mp4", reason: "file_too_large", size: 12_000_000_000, limit_bytes: 10_000_000_000 },
+      ] } });
+    render(<CloudSyncSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看未上传会话" }));
+    const choice = screen.getByRole("checkbox", { name: /工作会话一/ });
+    const details = screen.getByText("查看问题文件（2）").closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("查看问题文件（2）"));
+    expect(choice).toBeChecked();
+    expect(within(details).getByText("report.pptx")).toBeInTheDocument();
+    expect(within(details).getByText(`原位置：${sourcePath}`)).toBeInTheDocument();
+    expect(within(details).getByText(/本机找不到该文件/)).toBeInTheDocument();
+    expect(within(details).getByText(/文件为 12 GB，超过单文件上传上限 10 GB/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存上传范围" }));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([candidates[0].key], false, false, false, false, false, false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("clears an old save error when the user changes the selection", async () => {
+    api.status.mockResolvedValue(active);
+    api.scope.mockRejectedValueOnce(new Error("会话列表已变化，请重新打开上传范围后选择。"));
+    render(<CloudSyncSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "上传范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存上传范围" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("会话列表已变化");
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存上传范围" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "工作会话一" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存上传范围" }));
+    await waitFor(() => expect(api.scope).toHaveBeenLastCalledWith([], false, false, false, false, false, false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it.each(["取消", "保存上传范围"])("handles pending conversations only after %s", async (action) => {
@@ -275,17 +332,20 @@ describe("cloud sync settings", () => {
       blocked_keys: [candidates[1].key], sync_new_conversations: true, sync_planning: true,
       sync_notes: true, sync_preferences: true, problem: { code: "associated_file_unavailable", message: problemMessage } });
     render(<CloudSyncSettings />);
-    const pending = await screen.findByRole("button", { name: "查看待处理会话" });
-    expect(pending).toHaveTextContent("1 个会话待处理");
+    const pending = await screen.findByRole("button", { name: "查看未上传会话" });
+    expect(pending).toHaveTextContent("1 个会话暂未上传 · 查看原因");
     expect(screen.queryByText(problemMessage)).not.toBeInTheDocument();
     fireEvent.click(pending);
     const choices = screen.getAllByRole("checkbox", { name: /^工作会话/ });
-    expect(choices[0]).toHaveAccessibleName(/工作会话二.*关联文件缺失/);
+    expect(choices[0]).toHaveAccessibleName(/工作会话二.*关联文件暂不可上传/);
     expect(choices[0]).toBeChecked();
     expect(choices[1]).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "取消选择待处理会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "暂不上传这 1 个会话" }));
     expect(choices[0]).not.toBeChecked();
+    expect(choices[0]).toHaveAccessibleName(/已排除，保存后不再上传此会话/);
     expect(choices[1]).toBeChecked();
+    expect(screen.getByRole("status")).toHaveTextContent("已排除 1 个会话，保存后生效。");
+    expect(screen.queryByRole("button", { name: /暂不上传这/ })).not.toBeInTheDocument();
     expect(api.scope).not.toHaveBeenCalled();
     if (action === "保存上传范围") {
       api.scope.mockImplementation(async () => {
@@ -298,11 +358,11 @@ describe("cloud sync settings", () => {
     if (action === "保存上传范围") {
     await waitFor(() => expect(api.scope).toHaveBeenCalledWith([candidates[0].key], true, true, true, true, false, false));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(screen.queryByRole("button", { name: "查看待处理会话" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "查看未上传会话" })).not.toBeInTheDocument();
     } else {
       expect(api.scope).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "查看待处理会话" }));
-      expect(screen.getByRole("checkbox", { name: /工作会话二.*关联文件缺失/ })).toBeChecked();
+      fireEvent.click(screen.getByRole("button", { name: "查看未上传会话" }));
+      expect(screen.getByRole("checkbox", { name: /工作会话二.*关联文件暂不可上传/ })).toBeChecked();
     }
   });
 
@@ -313,7 +373,7 @@ describe("cloud sync settings", () => {
     expect(await screen.findByText("同步未完成")).toBeInTheDocument();
     expect(screen.getByText("自动接收已开启；上传本机资料需单独确认。")).toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent(problem.message);
-    expect(screen.queryByRole("button", { name: "查看待处理会话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看未上传会话" })).not.toBeInTheDocument();
   });
 
   it("groups the actions together and explains them on hover", async () => {
@@ -321,9 +381,11 @@ describe("cloud sync settings", () => {
       resource_id: "a".repeat(32), version: 1, conflict_copy: false, trashed: false }] });
     render(<CloudSyncSettings />);
     const actions = within(await screen.findByRole("group", { name: "云同步操作" }));
-    for (const name of ["立即同步", "上传范围", "回收站", "会话与历史", "空间管理"]) {
+    for (const name of ["立即同步", "上传范围", "云空间管理"]) {
       expect(actions.getByRole("button", { name, exact: true })).toBeInTheDocument();
     }
+    expect(actions.queryByRole("button", { name: "会话与历史" })).not.toBeInTheDocument();
+    expect(actions.queryByRole("button", { name: "回收站" })).not.toBeInTheDocument();
     fireEvent.pointerMove(actions.getByRole("button", { name: "上传范围" }), { pointerType: "mouse" });
     expect(await screen.findByRole("tooltip", { name: "选择要上传的本机资料；不影响接收云端已有内容" })).toBeInTheDocument();
     expect(api.scope).not.toHaveBeenCalled();

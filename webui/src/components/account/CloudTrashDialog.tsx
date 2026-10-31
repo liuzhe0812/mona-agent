@@ -11,7 +11,7 @@ const names = { trash: "移至云回收站", restore: "恢复", purge: "彻底�
 const descriptions = {
   trash: "仅移动云端副本，暂停该会话的云端更新；本地会话、文件和运行任务保持不变。",
   restore: "恢复到云空间。已开启对应内容同步的设备会接收更新，不自动执行历史任务。",
-  purge: "移除这项云记录及其全部可恢复历史，此操作不可撤销。本地副本不删除；无其他引用的文件可通过“清理上传残留”释放空间。",
+  purge: "移除这项云记录及其全部可恢复历史，此操作不可撤销。本地副本不删除；之后可通过“清理空间”回收可释放的空间。",
 };
 function errorText(error: unknown) { return error instanceof Error ? error.message : "操作尚未确认，请稍后重试。"; }
 
@@ -99,7 +99,7 @@ export function CloudTrashDialog({ disabled, target, onChanged }: { disabled?: b
           {!page.items.length && !loading && <li className="py-4 text-caption text-muted-foreground">回收站为空</li>}
         </ul>}
         {!selection && !target && page?.has_more && <Button variant="ghost" disabled={busy || loading} onClick={() => void read(page.next_before)}>更早记录</Button>}
-        {done && <p role="status" className="text-caption">{done === "restore" ? "已恢复到云空间，开启对应同步后可在原模块查看。" : done === "trash" ? "已移至云回收站，本地资料仍保留。" : "已彻底移除云恢复记录。可清理上传残留以释放无引用文件占用。"}</p>}
+        {done && <p role="status" className="text-caption">{done === "restore" ? "已恢复到云空间，开启对应同步后可在原模块查看。" : done === "trash" ? "已移至云回收站，本地资料仍保留。" : "已彻底移除云恢复记录。可通过“清理空间”回收可释放的空间。"}</p>}
         {error && <p role="alert" className="text-caption text-destructive">{error}</p>}
         <DialogFooter>
           {selection ? <>

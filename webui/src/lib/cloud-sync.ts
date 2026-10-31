@@ -2,9 +2,13 @@ import { getGatewayHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 
 export interface CloudCandidate { key: string; title: string }
+export interface CloudFileIssue {
+  name: string; reason: "missing" | "file_too_large"; source_path?: string; size?: number; limit_bytes?: number;
+}
 export interface CloudStatus {
   available: boolean; enabled: boolean; upload_enabled: boolean; phase: string;
   blocked_keys?: string[];
+  blocked_files?: Record<string, CloudFileIssue[]>;
   plan?: "free" | "pro";
   space?: { quota_bytes: number; used_bytes: number; reserved_bytes: number; object_count: number } | null;
   needs_key?: boolean;

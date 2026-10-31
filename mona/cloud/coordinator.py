@@ -80,6 +80,7 @@ class CloudCoordinator:
         self.closed = False
         self.phase, self.problem, self.last_sync = "idle", None, None
         self.blocked_keys: list[str] = []
+        self.blocked_files: dict[str, list[dict]] = {}
         self.transferred_bytes = 0
         self.draft = None
         self.cleanup_draft = None
@@ -171,6 +172,8 @@ class CloudCoordinator:
             # Only public quota fields leave this service; keys and account
             # binding remain confined to the desktop/Python boundary.
             public_space = {k: space[k] for k in ("quota_bytes", "used_bytes", "reserved_bytes", "object_count") if k in space} if isinstance(space, dict) else None
+            candidates = await asyncio.to_thread(self._candidates, vault)
+            candidate_keys = {item["key"] for item in candidates}
             result.update(available=True, plan=context.get("plan"), space=public_space,
                 local_download_usage=await asyncio.to_thread(self.store.download_usage, context["account_id"]),
                 enabled=bool(space) and receiving,
@@ -180,16 +183,18 @@ class CloudCoordinator:
                 last_sync=self.last_sync if bound else None,
                 problem=self.problem if bound else None,
                 needs_key=bool(space) and not space.get("key_managed") and not context.get("recovery"),
-                candidates=await asyncio.to_thread(self._candidates, vault),
-                selected_keys=config.session_keys if same else [],
+                candidates=candidates,
+                selected_keys=[key for key in config.session_keys if key in candidate_keys] if same else [],
                 sync_new_conversations=config.sync_new_conversations if same else False,
                 sync_planning=config.sync_planning if same else False,
                 sync_preferences=config.sync_preferences if same else False,
                 sync_notes=config.sync_notes if same else False,
                 sync_operations=config.sync_operations if same else False,
                 sync_operations_credentials=config.sync_operations_credentials if same else False,
-                blocked_keys=[key for key in self.blocked_keys if key in config.session_keys]
+                blocked_keys=[key for key in self.blocked_keys if key in config.session_keys and key in candidate_keys]
                     if same and config.vault_id == vault else [])
+            result["blocked_files"] = {key: self.blocked_files[key] for key in result["blocked_keys"]
+                                       if key in self.blocked_files}
             rows = await asyncio.to_thread(self.store.mappings, vault) if vault else []
             result["conversations"] = [{"key": row["local_key"], "resource_id": row["resource"],
                 "version": row["version"]["version"] if row["version"] and row["version"]["resource_id"] == row["resource"] else 0,
@@ -382,9 +387,10 @@ class CloudCoordinator:
             if config.upload_enabled is False:
                 raise CloudTransferError("upload_confirmation_required", "请先确认允许上传的本机资料。")
             candidates = {row["key"] for row in await asyncio.to_thread(self._candidates, config.vault_id)}
-            if any(key not in candidates for key in keys):
-                raise CloudTransferError("invalid_scope", "请选择本机普通工作会话。")
-            config.session_keys = list(dict.fromkeys(keys))
+            previously_selected = set(config.session_keys)
+            if any(key not in candidates and key not in previously_selected for key in keys):
+                raise CloudTransferError("invalid_scope", "会话列表已变化，请重新打开上传范围后选择。")
+            config.session_keys = list(dict.fromkeys(key for key in keys if key in candidates))
             if sync_new_conversations is not None:
                 config.sync_new_conversations = sync_new_conversations
             if sync_planning is not None:
@@ -402,7 +408,14 @@ class CloudCoordinator:
             if sync_notes is not None:
                 config.sync_notes = sync_notes
                 config.notes_vault_token = await self._notes_scope(context) if sync_notes else ""
-            config.excluded_session_keys = sorted(candidates.difference(keys))
+            excluded = set(config.excluded_session_keys)
+            excluded.difference_update(config.session_keys)
+            excluded.update(candidates.difference(config.session_keys))
+            excluded.update(previously_selected.difference(candidates))
+            if len(excluded) > 10_000:
+                raise CloudTransferError("scope_too_large",
+                    "本机历史会话的上传选择记录超过 10,000 条，范围未保存。请联系支持处理。")
+            config.excluded_session_keys = sorted(excluded)
             space = context.get("space")
             if space and not space.get("key_managed"):
                 cipher = VaultCipher.from_recovery(context.get("recovery"))
@@ -720,6 +733,7 @@ class CloudCoordinator:
             self.cancelled.clear()
             self.phase, self.problem = "syncing", None
             self.blocked_keys = []
+            self.blocked_files = {}
             context, planning, notes, ui_preferences, operations = None, None, None, None, None
             self._updated_work_keys.clear()
             try:
@@ -843,6 +857,7 @@ class CloudCoordinator:
                             if exc.code != "associated_file_unavailable":
                                 raise
                             self.blocked_keys.append(key)
+                            self.blocked_files[key] = exc.files
                             continue
                         await self._guard(context["binding"])
                         await asyncio.to_thread(self.store.put, config.vault_id, resource, key, content_digest, version,
@@ -871,7 +886,7 @@ class CloudCoordinator:
                 self.phase = "partial" if self.blocked_keys or operations_problem else "pending" if not planning_done or not notes_done or not operations_done else "waiting" if waiting_for_task else "idle"
                 if self.blocked_keys:
                     self.problem = {"code": "associated_file_unavailable",
-                        "message": f"{len(self.blocked_keys)} 个会话因关联文件缺失或过大暂未同步，其他内容会继续同步。请在“同步范围”中查看，恢复文件或取消选择这些会话。"}
+                        "message": f"{len(self.blocked_keys)} 个会话因关联文件问题暂未上传，其他内容继续同步。可在“上传范围”中查看具体文件或排除会话，均不影响保存范围。"}
                 elif operations_problem:
                     self.problem = operations_problem
                 if not self.blocked_keys and not operations_problem and not waiting_for_task and planning_done and notes_done and operations_done:

@@ -756,6 +756,120 @@ async def test_auto_new_work_sync_keeps_initial_exclusions_and_survives_restart(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["deleted", "non_work", "foreign"])
+async def test_scope_drops_previously_selected_sessions_that_are_no_longer_candidates(desktops, reason):
+    service, create = desktops
+    a, _ = create("a")
+    healthy = add_conversation(a, key="websocket:healthy", attachment=False)
+    unavailable = add_conversation(a, key="websocket:unavailable", attachment=False)
+    excluded = add_conversation(a, key="websocket:excluded", attachment=False)
+    draft = await a.prepare()
+    await a.enable(draft["draft_id"], [healthy.key, unavailable.key], True, sync_new_conversations=True)
+
+    excluded.metadata["mode"] = "code"
+    a.manager.save(excluded)
+    if reason == "deleted":
+        assert a.manager.delete_session(unavailable.key)
+    elif reason == "non_work":
+        unavailable.metadata["mode"] = "code"
+        a.manager.save(unavailable)
+    else:
+        foreign_vault = "f" * 32 if a.preferences.read().vault_id != "f" * 32 else "e" * 32
+        a.store.put(foreign_vault, "d" * 32, unavailable.key, "", None)
+
+    a.blocked_keys = [unavailable.key, healthy.key]
+    a.blocked_files = {key: [{"name": "data.txt", "reason": "missing"}]
+                       for key in a.blocked_keys}
+    before = a.preferences.path.read_bytes()
+    state = await a.status()
+    assert {item["key"] for item in state["candidates"]} == {healthy.key}
+    assert state["selected_keys"] == [healthy.key]
+    assert state["blocked_keys"] == [healthy.key]
+    assert state["blocked_files"] == {healthy.key: a.blocked_files[healthy.key]}
+    assert a.preferences.path.read_bytes() == before
+
+    keys = [healthy.key, unavailable.key] if reason == "deleted" else [healthy.key]
+    result = await a.select(keys)
+    config = a.preferences.read()
+    assert result["selected_keys"] == config.session_keys == [healthy.key]
+    assert config.sync_new_conversations is True
+    assert set(config.excluded_session_keys) == {unavailable.key, excluded.key}
+
+    excluded.metadata.pop("mode")
+    a.manager.save(excluded)
+    if reason == "deleted":
+        add_conversation(a, key=unavailable.key, attachment=False)
+    elif reason == "non_work":
+        unavailable.metadata.pop("mode")
+        a.manager.save(unavailable)
+    else:
+        with a.store.connection() as db:
+            db.execute("DELETE FROM sync_positions WHERE vault=? AND local_key=?", (foreign_vault, unavailable.key))
+    await a.run_once()
+    assert a.problem is None
+    assert a.preferences.read().session_keys == [healthy.key]
+    assert len(service.versions) == 1
+
+
+@pytest.mark.asyncio
+async def test_scope_can_save_no_conversations_with_other_categories(desktops):
+    _, create = desktops
+    a, _ = create("a")
+    session = add_conversation(a, attachment=False)
+    await enable(a, [session.key])
+
+    async def notes_index():
+        pass
+
+    a.notes_client = SimpleNamespace(index=notes_index, vault="a" * 64)
+    result = await a.select([], sync_new_conversations=True, sync_planning=True, sync_notes=True,
+                            sync_preferences=True, sync_operations=True, sync_operations_credentials=True)
+    config = a.preferences.read()
+    assert result["selected_keys"] == config.session_keys == []
+    assert all(result[key] for key in ("sync_new_conversations", "sync_planning", "sync_notes",
+                                       "sync_preferences", "sync_operations", "sync_operations_credentials"))
+    assert config.notes_vault_token == "a" * 64
+    assert config.excluded_session_keys == [session.key]
+
+
+@pytest.mark.asyncio
+async def test_scope_exclusion_limit_does_not_write_unreadable_settings(desktops):
+    _, create = desktops
+    a, _ = create("a")
+    session = add_conversation(a, attachment=False)
+    await enable(a, [session.key])
+    config = a.preferences.read()
+    config.excluded_session_keys = [f"websocket:excluded-{index}" for index in range(10_000)]
+    a.preferences.write(config)
+    a.manager.delete_session(session.key)
+    before = a.preferences.path.read_bytes()
+    with pytest.raises(CloudTransferError) as exc:
+        await a.select([])
+    assert exc.value.code == "scope_too_large"
+    assert a.preferences.path.read_bytes() == before
+    assert a.preferences.read() == config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["unknown", "foreign"])
+async def test_scope_rejects_new_non_candidate_sessions(desktops, reason):
+    _, create = desktops
+    a, _ = create("a")
+    healthy = add_conversation(a, key="websocket:healthy", attachment=False)
+    await enable(a, [healthy.key])
+    key = "websocket:unavailable"
+    if reason == "foreign":
+        add_conversation(a, key=key, attachment=False)
+        foreign_vault = "f" * 32 if a.preferences.read().vault_id != "f" * 32 else "e" * 32
+        a.store.put(foreign_vault, "d" * 32, key, "", None)
+    before = a.preferences.path.read_bytes()
+    with pytest.raises(CloudTransferError, match="会话列表已变化，请重新打开上传范围") as exc:
+        await a.select([healthy.key, key], sync_planning=True)
+    assert exc.value.code == "invalid_scope"
+    assert a.preferences.path.read_bytes() == before
+
+
+@pytest.mark.asyncio
 async def test_new_work_is_not_automatically_opted_in_for_existing_selected_only_setup(desktops):
     service, create = desktops
     a, _ = create("a")
@@ -818,18 +932,29 @@ async def test_missing_selected_attachment_does_not_publish_or_report_complete(d
     assert a.phase == "partial" and a.last_sync is None
     assert a.problem["code"] == "associated_file_unavailable"
     assert a.blocked_keys == [session.key]
-    assert (await a.status())["blocked_keys"] == [session.key]
+    state = await a.status()
+    assert state["blocked_keys"] == [session.key]
+    assert state["blocked_files"] == {session.key: [
+        {"name": "data.txt", "reason": "missing", "source_path": str(a.media_root / "data.txt")},
+    ]}
+    assert (await a.select([session.key, healthy.key]))["selected_keys"] == [session.key, healthy.key]
+    await a.select([healthy.key])
+    state = await a.status()
+    assert state["blocked_keys"] == [] and state["blocked_files"] == {}
+    await a.select([session.key, healthy.key])
     assert len(service.versions) == 1
     assert next(row for row in a.store.mappings(a.preferences.read().vault_id)
         if row["local_key"] == healthy.key)["version"]["version"] == 1
     native.account_id = "2"
     assert (await a.status())["blocked_keys"] == []
+    assert (await a.status())["blocked_files"] == {}
     native.account_id = "1"
     assert a.manager.read_session_file(session.key)["messages"][0]["content"] == "first message"
     (a.media_root / "data.txt").write_text("ATTACHMENT_BODY", encoding="utf-8")
     await a.run_once()
     assert a.problem is None and a.phase == "idle" and a.last_sync is not None
     assert a.blocked_keys == []
+    assert a.blocked_files == {} and (await a.status())["blocked_files"] == {}
     assert len(service.versions) == 2
 
 
