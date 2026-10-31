@@ -1,0 +1,10 @@
+{
+  "baseline_path": "/opt/mona-auth-releases/20261014-account-keys-c14f258/app/admin/index.html",
+  "baseline_sha256": "d660f3b529affe7d800cbefbf0e80fb10b514a45d5fb760a13d9d0c78c257f98",
+  "after_sha256": "6a31204f13e1aaa82404c6e9fe021fb81ff92ba45e6bf827dd464265851cf5f9",
+  "patch_sha256": "ba5ed37e5e4d328092794df6a309f3f8edf9d6bf16244bead96ea68027f5b629",
+  "assets": {
+    "suggestions.css": "62bbd1ea3c05065fc39510c54c1f6d7d5a09426dc07a1047a182fa40190ec74a",
+    "suggestions.js": "2c4943026903ea58a89f997463a57cc745cb66c4bfafba22ecdfdecb07336c79"
+  }
+}

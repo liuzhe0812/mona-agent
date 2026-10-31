@@ -4,11 +4,11 @@
   "files": {
     "official-site/app/suggestions/page.tsx": {
       "before_sha256": null,
-      "after_sha256": "15c865eb8239db39208d08a58c7338fc0dde0959ea0915e03e6c5550db39764c"
+      "after_sha256": "26ecbfedb9cbf3248f354786d671bb1245552c39c89f00656e07f0c129d52474"
     },
     "official-site/app/suggestions/suggestions.css": {
       "before_sha256": null,
-      "after_sha256": "0e3d0a3c30038de6f758a98c070bc6f7e99395b6aa9c47598e403e2af1afe9a9"
+      "after_sha256": "ce3537fe35a7bc528a5bb148f94b7952ce3187166235b08468527d226ec2c474"
     },
     "official-site/app/page.tsx": {
       "before_sha256": "3b870933bddf9993b92be7da77978da75cbdbf9a2a4d4c014a6b7928346906fe",
@@ -24,7 +24,7 @@
     },
     "official-site/tests/suggestions-browser.test.mjs": {
       "before_sha256": null,
-      "after_sha256": "ce2fa6e72a625da8b93bd9ac8bedeab530ace05f8500585c7350da373cd18038"
+      "after_sha256": "2cca2ff46a3584975dd173886fc0cbe0164419dab3956e10fde60ae8101e9442"
     }
   }
 }

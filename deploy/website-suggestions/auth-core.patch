@@ -1,0 +1,42 @@
+diff --git a/app/main.py b/app/main.py
+--- a/app/main.py
++++ b/app/main.py
+@@ -96,10 +96,12 @@
+ 
+     @app.get("/admin/{full_path:path}")
+     async def admin_spa(full_path: str):
+-        file_path = _admin_dir / full_path
++        file_path = (_admin_dir / full_path).resolve()
++        if not file_path.is_relative_to(_admin_dir.resolve()):
++            raise HTTPException(status_code=404, detail="Not found")
+         if file_path.exists() and file_path.is_file():
+-            return FileResponse(file_path)
+-        return FileResponse(_admin_dir / "index.html")
++            return FileResponse(file_path, headers={"Cache-Control": "no-store"})
++        return FileResponse(_admin_dir / "index.html", headers={"Cache-Control": "no-store"})
+ 
+ 
+ @app.get("/health")
+diff --git a/app/routers/identity_router.py b/app/routers/identity_router.py
+--- a/app/routers/identity_router.py
++++ b/app/routers/identity_router.py
+@@ -1,5 +1,5 @@
+ """Generic read-only account identity, independent of any consuming product."""
+-from fastapi import APIRouter, Depends, Response
++from fastapi import APIRouter, Depends, HTTPException, Response
+ 
+ from app.deps import get_current_user
+ from app.models import User
+@@ -12,3 +12,12 @@
+     response.headers["Cache-Control"] = "no-store"
+     response.headers["Vary"] = "Authorization"
+     return {"account_id": str(user.id)}
++
++
++@router.get("/identity/admin")
++def admin_identity(response: Response, user: User = Depends(get_current_user)):
++    if not user.is_admin:
++        raise HTTPException(status_code=403, detail="Administrator identity required")
++    response.headers["Cache-Control"] = "no-store"
++    response.headers["Vary"] = "Authorization"
++    return {"account_id": str(user.id)}

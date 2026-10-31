@@ -15,3 +15,5 @@
 /mona/skills/mona-motion/assets/huashu-motion/** -text
 /mona/skills/mona-motion/references/huashu-motion/** -text
 /deploy/website-suggestions/official-site.patch -text whitespace=cr-at-eol
+/deploy/website-suggestions/admin-integration.patch -text whitespace=cr-at-eol
+/deploy/website-suggestions/auth-core.patch -text whitespace=cr-at-eol

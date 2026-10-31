@@ -1,0 +1,3 @@
+#suggestionTable td:nth-child(4) { min-width: 220px; max-width: 540px; }
+#suggestionStatus:empty, #suggestionRetry[hidden], #suggestionMore[hidden] { display: none; }
+.suggestion-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 20px; }

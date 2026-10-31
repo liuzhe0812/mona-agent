@@ -15,16 +15,18 @@ spec.loader.exec_module(module)
 
 @pytest.fixture
 def service(tmp_path):
-    state = {"revoked": False, "unavailable": False, "calls": 0}
+    state = {"revoked": False, "unavailable": False, "calls": 0, "admin": True}
 
     def identity(request):
-        assert str(request.url) == "http://127.0.0.1:8000/auth/web/profile"
+        assert request.url.path in {"/auth/web/profile", "/auth/identity/admin"}
         state["calls"] += 1
         if state["unavailable"]:
             raise httpx.ConnectError("identity unavailable")
         token = request.headers.get("authorization", "")
-        if state["revoked"] or not token.startswith("Bearer test-session-"):
+        if state["revoked"] or not token.startswith(("Bearer test-session-", "Bearer test-admin-")):
             return httpx.Response(401)
+        if request.url.path == "/auth/identity/admin":
+            return httpx.Response(200, json={"account_id": "9"}) if state["admin"] and token.startswith("Bearer test-admin-") else httpx.Response(403)
         return httpx.Response(200, json={"id": token.rsplit("-", 1)[1], "display_name": "测试用户 💡", "email": "private@example.com"})
 
     settings = module.Settings(database=(tmp_path / "suggestions.sqlite3").resolve())
@@ -115,3 +117,67 @@ def test_auth_failure_is_not_saved_and_pagination_has_no_gaps(service):
     assert client.get("/api/suggestions?before=-1").status_code == 422
     assert client.get("/api/suggestions?before=9999999999999999999999").status_code == 422
     assert client.get("/api/suggestions").headers["cache-control"] == "no-store"
+
+
+def test_admin_moderation_is_live_authorized_and_filters_public_list(service):
+    client, settings, state = service
+    request_id = str(uuid4())
+    created = post(client, request_id=request_id).json()
+    route = "/api/suggestions/admin/" + created["id"]
+    admin = {"Authorization": "Bearer test-admin-9", "Origin": "https://mona-ai.cn"}
+    regular = {"Authorization": "Bearer test-session-1", "Origin": "https://mona-ai.cn"}
+    assert client.get("/api/suggestions/admin").status_code == 401
+    assert client.get("/api/suggestions/admin", headers=regular).status_code == 403
+    assert client.patch(route, headers=regular, json={"hidden": True}).status_code == 403
+    assert client.delete(route, headers=regular).status_code == 403
+    hidden = client.patch(route, headers=admin, json={"hidden": True})
+    assert hidden.status_code == 200 and hidden.json()["state"] == "hidden"
+    assert hidden.json()["moderated_by"] == "9"
+    assert client.get("/api/suggestions").json()["items"] == []
+    assert client.get("/api/suggestions/admin?state=hidden", headers=admin).json()["items"][0]["id"] == created["id"]
+    assert post(client, request_id=request_id).status_code == 409
+    state["admin"] = False
+    assert client.patch(route, headers=admin, json={"hidden": False}).status_code == 403
+    state["admin"] = True
+    assert client.patch(route, headers=admin, json={"hidden": False}).json()["state"] == "public"
+    assert len(client.get("/api/suggestions").json()["items"]) == 1
+    assert client.delete(route, headers=admin).json() == {"id": created["id"], "state": "deleted"}
+    assert client.delete(route, headers=admin).status_code == 200
+    assert client.get("/api/suggestions").json()["items"] == []
+    assert client.get("/api/suggestions/admin", headers=admin).json()["items"] == []
+    assert client.patch(route, headers=admin, json={"hidden": False}).status_code == 409
+    assert post(client, request_id=request_id).status_code == 409
+    with sqlite3.connect(settings.database) as db:
+        assert db.execute("SELECT state FROM suggestions WHERE id=?", (created["id"],)).fetchone() == ("deleted",)
+    state["revoked"] = True
+    assert client.get("/api/suggestions/admin", headers=admin).status_code == 401
+
+
+def test_admin_origin_validation_and_dependency_failure_cannot_change_rows(service):
+    client, _, state = service
+    row = post(client).json()
+    route = "/api/suggestions/admin/" + row["id"]
+    headers = {"Authorization": "Bearer test-admin-9", "Origin": "https://evil.example"}
+    assert client.patch(route, headers=headers, json={"hidden": True}).status_code == 403
+    assert client.delete(route, headers=headers).status_code == 403
+    headers["Origin"] = "https://mona-ai.cn"
+    assert client.patch(route, headers=headers, json={"hidden": "false"}).status_code == 422
+    assert client.patch(route, headers=headers, json={"hidden": True, "account_id": "9"}).status_code == 422
+    state["unavailable"] = True
+    assert client.delete(route, headers=headers).status_code == 503
+    assert client.get("/api/suggestions/admin", headers=headers).status_code == 503
+    assert client.get("/api/suggestions").json()["items"] == [row]
+
+
+def test_legacy_database_migration_preserves_real_rows(tmp_path):
+    path = (tmp_path / "legacy.sqlite3").resolve()
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE suggestions(id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, request_id TEXT NOT NULL, body TEXT NOT NULL, display_name TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(account_id,request_id))")
+        db.execute("INSERT INTO suggestions(account_id,request_id,body,display_name,created_at) VALUES(?,?,?,?,?)", ("1", str(uuid4()), "原建议 👩🏽‍💻", "原作者", "2026-10-31T00:00:00Z"))
+    settings = module.Settings(database=path)
+    for _ in range(2):
+        with TestClient(module.create_app(settings)) as client:
+            assert client.get("/api/suggestions").json()["items"][0]["body"] == "原建议 👩🏽‍💻"
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
+        assert db.execute("SELECT state,moderated_by,moderated_at FROM suggestions").fetchone() == ("public", None, None)
