@@ -55,6 +55,8 @@ function documentUploadClient() {
     resultHandler?.({ chatId, ok: true, files: files.map(({ name }) => ({ name, path: `uploads/${name}` })) });
   });
   const client = {
+    isChatDeleted: vi.fn().mockReturnValue(false),
+    onSessionDeleted: vi.fn(() => () => {}),
     onDocUploadResult: (handler: DocUploadResultHandler) => {
       resultHandler = handler;
       return () => { if (resultHandler === handler) resultHandler = undefined; };
