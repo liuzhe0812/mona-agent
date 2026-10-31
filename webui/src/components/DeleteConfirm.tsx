@@ -19,8 +19,9 @@ interface DeleteConfirmProps {
   descriptionText?: string;
   /** 可选覆盖确认按钮文案；不传则保持默认「删除对话」语义 */
   confirmText?: string;
+  busy?: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
 }
 
 export function DeleteConfirm({
@@ -29,12 +30,13 @@ export function DeleteConfirm({
   titleText,
   descriptionText,
   confirmText,
+  busy = false,
   onCancel,
   onConfirm,
 }: DeleteConfirmProps) {
   const { t } = useTranslation();
   return (
-    <AlertDialog open={open} onOpenChange={(o) => (!o ? onCancel() : undefined)}>
+    <AlertDialog open={open} onOpenChange={(o) => (!o && !busy ? onCancel() : undefined)}>
       <AlertDialogContent
         className="w-full max-w-sm gap-0 rounded-xl border-border/70 bg-popover p-6 shadow-overlay sm:rounded-xl"
       >
@@ -56,15 +58,20 @@ export function DeleteConfirm({
         <AlertDialogFooter className="mt-6 gap-2 sm:space-x-0">
           <AlertDialogCancel
             onClick={onCancel}
+            disabled={busy}
             className="text-ui"
           >
             {t("deleteConfirm.cancel")}
           </AlertDialogCancel>
           <AlertDialogAction
-            onClick={onConfirm}
+            disabled={busy}
+            onClick={(event) => {
+              const result = onConfirm();
+              if (result) event.preventDefault();
+            }}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {confirmText ?? t("deleteConfirm.confirm")}
+            {busy ? t("deleteConfirm.deleting") : confirmText ?? t("deleteConfirm.confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

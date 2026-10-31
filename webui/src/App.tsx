@@ -29,6 +29,15 @@ import { useFilePreviewStore, type PreviewScope } from "@/components/deliver/fil
 import { StartupScene } from "@/components/StartupScene";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -70,7 +79,7 @@ import {
   resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
-import { removeProject, resetApiBase } from "@/lib/api";
+import { ApiError, removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
@@ -728,9 +737,11 @@ function Shell({
   const [rightWorkspaceMaximized, setRightWorkspaceMaximized] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
-    key: string;
+    keys: string[];
     label: string;
   } | null>(null);
+  const [deletingSessions, setDeletingSessions] = useState(false);
+  const [sessionActionError, setSessionActionError] = useState<{ title: string; description: string } | null>(null);
   const [pendingRename, setPendingRename] = useState<{
     key: string;
     label: string;
@@ -1544,6 +1555,21 @@ function Shell({
     [updateSidebarState],
   );
 
+  const onBatchPin = useCallback(async (keys: string[], shouldPin: boolean) => {
+    const saved = await updateSidebarState((current) => {
+      const pinned = new Set(current.pinned_keys);
+      for (const key of keys) {
+        if (shouldPin) pinned.add(key);
+        else pinned.delete(key);
+      }
+      return { ...current, pinned_keys: [...pinned] };
+    }, { rollbackOnFailure: true });
+    if (!saved) setSessionActionError({
+      title: t("chat.batchPinFailed"),
+      description: t("chat.batchSaveFailedDescription"),
+    });
+  }, [t, updateSidebarState]);
+
   const onRequestRename = useCallback((key: string, label: string) => {
     setPendingRename({ key, label });
   }, []);
@@ -1608,6 +1634,35 @@ function Shell({
     },
     [activeKey, sessions, sidebarState.archived_keys, updateSidebarState],
   );
+
+  const onBatchArchive = useCallback(async (keys: string[], shouldArchive: boolean) => {
+    const selected = new Set(keys);
+    const saved = await updateSidebarState((current) => {
+      const archived = new Set(current.archived_keys);
+      for (const key of keys) {
+        if (shouldArchive) archived.add(key);
+        else archived.delete(key);
+      }
+      return {
+        ...current,
+        pinned_keys: current.pinned_keys.filter((key) => !selected.has(key)),
+        archived_keys: [...archived],
+      };
+    }, { rollbackOnFailure: true });
+    if (!saved) {
+      setSessionActionError({
+        title: t("chat.batchArchiveFailed"),
+        description: t("chat.batchSaveFailedDescription"),
+      });
+      return;
+    }
+    if (shouldArchive) {
+      const archived = new Set([...sidebarState.archived_keys, ...keys]);
+      setActiveKey((current) => current && selected.has(current)
+        ? sessions.find((session) => !archived.has(session.key))?.key ?? null
+        : current);
+    }
+  }, [sessions, sidebarState.archived_keys, t, updateSidebarState]);
 
   const onToggleArchived = useCallback(() => {
     void updateSidebarState((current) => ({
@@ -1993,22 +2048,38 @@ function Shell({
   const onTurnEnd = useDeferredTitleRefresh(activeSession, refresh);
 
   const onConfirmDelete = useCallback(async () => {
-    if (!pendingDelete) return;
-    const key = pendingDelete.key;
-    const deletingActive = activeKey === key;
-    const currentIndex = sessions.findIndex((s) => s.key === key);
-    const fallbackKey = deletingActive
-      ? (sessions[currentIndex + 1]?.key ?? sessions[currentIndex - 1]?.key ?? null)
-      : activeKey;
-    setPendingDelete(null);
-    if (deletingActive) setActiveKey(fallbackKey);
-    try {
-      await deleteChat(key);
-    } catch (e) {
-      if (deletingActive) setActiveKey(key);
-      console.error("Failed to delete session", e);
+    if (!pendingDelete || deletingSessions) return;
+    setDeletingSessions(true);
+    const deleted = new Set<string>();
+    for (const key of pendingDelete.keys) {
+      try {
+        await deleteChat(key);
+        deleted.add(key);
+      } catch (e) {
+        console.error("Failed to delete session", {
+          key,
+          status: e instanceof ApiError ? e.status : undefined,
+          error: e instanceof Error ? e.name : "unknown",
+        });
+      }
     }
-  }, [pendingDelete, deleteChat, activeKey, sessions]);
+    setActiveKey((current) => {
+      if (!current || !deleted.has(current)) return current;
+      const currentIndex = sessions.findIndex((session) => session.key === current);
+      const remaining = [...sessions.slice(currentIndex + 1), ...sessions.slice(0, currentIndex).reverse()];
+      return remaining.find((session) => !deleted.has(session.key) && !sidebarState.archived_keys.includes(session.key))?.key ?? null;
+    });
+    setPendingDelete(null);
+    setDeletingSessions(false);
+    const failed = pendingDelete.keys.length - deleted.size;
+    if (failed) {
+      void refresh();
+      setSessionActionError({
+        title: t("chat.deleteSessionsFailed"),
+        description: t("chat.deleteSessionsFailedDescription", { completed: deleted.size, failed }),
+      });
+    }
+  }, [pendingDelete, deletingSessions, deleteChat, sessions, sidebarState.archived_keys, refresh, t]);
 
   const headerTitle = activeSession
     ? sidebarState.title_overrides[activeSession.key] ||
@@ -2087,10 +2158,13 @@ function Shell({
     onRetry: refresh,
     onSelect: onSelectChat,
     onRequestDelete: (key: string, label: string) =>
-      setPendingDelete({ key, label }),
+      setPendingDelete({ keys: [key], label }),
     onTogglePin,
     onRequestRename,
     onToggleArchive,
+    onBatchPin,
+    onBatchArchive,
+    onRequestBatchDelete: (keys: string[]) => setPendingDelete({ keys, label: "" }),
     onMarkAllRead,
     onToggleArchived,
     pinnedKeys: sidebarState.pinned_keys,
@@ -2582,9 +2656,24 @@ function Shell({
         <DeleteConfirm
           open={!!pendingDelete}
           title={pendingDelete?.label ?? ""}
-          onCancel={() => setPendingDelete(null)}
+          titleText={pendingDelete && pendingDelete.keys.length > 1
+            ? t("deleteConfirm.multipleTitle", { count: pendingDelete.keys.length })
+            : undefined}
+          busy={deletingSessions}
+          onCancel={() => { if (!deletingSessions) setPendingDelete(null); }}
           onConfirm={onConfirmDelete}
         />
+        {sessionActionError ? (
+          <AlertDialog open onOpenChange={(open) => { if (!open) setSessionActionError(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{sessionActionError.title}</AlertDialogTitle>
+                <AlertDialogDescription>{sessionActionError.description}</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter><AlertDialogAction>{t("common.dismiss")}</AlertDialogAction></AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
         <RenameChatDialog
           open={!!pendingRename}
           title={pendingRename?.label ?? ""}

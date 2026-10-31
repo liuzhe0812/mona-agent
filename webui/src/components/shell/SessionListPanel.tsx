@@ -3,6 +3,7 @@ import { Download, LibraryBig, LoaderCircle, Plus, Search, Settings2, UsersRound
 import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
+import { CloudHistoryDialog } from "@/components/account/CloudHistoryDialog";
 import {
   AgentAvatar,
   MONA_AGENT_ID,
@@ -42,6 +43,9 @@ interface SessionListPanelProps {
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
+  onBatchPin?: (keys: string[], pinned: boolean) => void;
+  onBatchArchive?: (keys: string[], archived: boolean) => void;
+  onRequestBatchDelete?: (keys: string[]) => void;
   onMarkAllRead: () => void;
   pinnedKeys?: string[];
   archivedKeys?: string[];
@@ -67,6 +71,7 @@ interface SessionListPanelProps {
 export function SessionListPanel(props: SessionListPanelProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [historyTarget, setHistoryTarget] = useState<{ key: string; title: string } | null>(null);
   const [createQuery, setCreateQuery] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [expertUpdates, setExpertUpdates] = useState<ReadonlyMap<string, ExpertCatalogItem>>(
@@ -282,6 +287,9 @@ export function SessionListPanel(props: SessionListPanelProps) {
           onTogglePin={props.onTogglePin}
           onRequestRename={props.onRequestRename}
           onToggleArchive={props.onToggleArchive}
+          onBatchPin={props.onBatchPin}
+          onBatchArchive={props.onBatchArchive}
+          onRequestBatchDelete={props.onRequestBatchDelete}
           onMarkAllRead={props.onMarkAllRead}
           pinnedKeys={props.pinnedKeys}
           archivedKeys={props.archivedKeys}
@@ -295,8 +303,11 @@ export function SessionListPanel(props: SessionListPanelProps) {
           projectNames={props.projectNames}
           onRequestProjectRename={props.onRequestProjectRename}
           onOpenProjectFolder={props.onOpenProjectFolder}
+          onOpenHistory={(key, title) => setHistoryTarget({ key, title })}
         />
       </div>
+      {historyTarget && <CloudHistoryDialog key={historyTarget.key} sessionKey={historyTarget.key} title={historyTarget.title}
+        onClose={() => setHistoryTarget(null)} onRestored={() => { void props.onRetry?.(); }} />}
     </section>
   );
 }

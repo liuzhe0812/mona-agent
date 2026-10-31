@@ -120,6 +120,7 @@ vi.mock("@/lib/mona-client", () => {
     getRunStartedAt = () => null;
     getGoalState = () => undefined;
     getTaskPlan = () => undefined;
+    getUserQuestions = () => [];
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = attachSpy;
@@ -150,6 +151,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 
 import { deriveWsUrl, fetchBootstrap, resetGatewayBaseUrl } from "@/lib/bootstrap";
 import * as api from "@/lib/api";
+import { DEFAULT_SIDEBAR_STATE } from "@/hooks/useSidebarState";
 import App from "@/App";
 
 function getSessionPanel() {
@@ -232,6 +234,72 @@ describe("App layout", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["Pin", "Archive"])("saves batch session %s in one sidebar update", async (action) => {
+    mockSessions = ["Alpha", "Beta", "Charlie", "Delta"].map((title, index) => ({
+      key: `websocket:${index}`,
+      channel: "websocket",
+      chatId: String(index),
+      createdAt: `2026-10-01T0${4 - index}:00:00Z`,
+      updatedAt: `2026-10-01T0${4 - index}:00:00Z`,
+      title,
+      preview: "",
+    }));
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(DEFAULT_SIDEBAR_STATE);
+    const update = vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+
+    render(<App />);
+    const first = await screen.findByTitle("Alpha");
+    await waitFor(() => expect(api.fetchSidebarState).toHaveBeenCalled());
+    fireEvent.click(first);
+    fireEvent.click(screen.getByTitle("Charlie"), { shiftKey: true });
+    fireEvent.contextMenu(screen.getByTitle("Beta"));
+    update.mockClear();
+    fireEvent.click(await screen.findByRole("menuitem", { name: action }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const saved = update.mock.calls[0][1];
+    expect(action === "Pin" ? saved.pinned_keys : saved.archived_keys)
+      .toEqual(["websocket:0", "websocket:1", "websocket:2"]);
+    if (action === "Archive") {
+      await waitFor(() => expect(screen.getByTitle("Delta")).toHaveAttribute("aria-current", "page"));
+    }
+  });
+
+  it("confirms batch session deletion once and reports partial failures", async () => {
+    mockSessions = ["Alpha", "Beta", "Charlie", "Delta"].map((title, index) => ({
+      key: `websocket:${index}`,
+      channel: "websocket",
+      chatId: String(index),
+      createdAt: `2026-10-01T0${4 - index}:00:00Z`,
+      updatedAt: `2026-10-01T0${4 - index}:00:00Z`,
+      title,
+      preview: "",
+    }));
+    vi.spyOn(api, "fetchSidebarState").mockResolvedValue(DEFAULT_SIDEBAR_STATE);
+    vi.spyOn(api, "updateSidebarState").mockImplementation(async (_token, state) => state);
+    deleteChatSpy.mockImplementation(async (key: string) => {
+      if (key === "websocket:1") throw new Error("private details");
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByTitle("Alpha"));
+    fireEvent.click(screen.getByTitle("Charlie"), { shiftKey: true });
+    fireEvent.contextMenu(screen.getByTitle("Beta"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+
+    expect(await screen.findByText("Delete 3 selected conversations?")).toBeInTheDocument();
+    expect(deleteChatSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete chat" }));
+    expect(await screen.findByText("Some conversations could not be deleted")).toBeInTheDocument();
+    expect(deleteChatSpy.mock.calls.map(([key]) => key)).toEqual(["websocket:0", "websocket:1", "websocket:2"]);
+    expect(screen.getByText(/Deleted 2 conversations.*1 conversations/)).toBeInTheDocument();
+    expect(screen.queryByText("private details")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Alpha")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Charlie")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Beta")).toHaveAttribute("aria-current", "page");
   });
 
   it("warms native provider connection state after bootstrap without opening settings", async () => {

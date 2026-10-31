@@ -401,6 +401,7 @@
     "pin": "置頂",
     "unpin": "取消置頂",
     "rename": "重新命名",
+    "historyVersions": "歷史版本",
     "renameTitle": "重新命名對話",
     "renameDescription": "為這個對話設定僅用於 WebUI 側邊欄的名稱。",
     "renamePlaceholder": "對話名稱",
@@ -410,6 +411,11 @@
     "showArchived": "顯示封存",
     "hideArchived": "隱藏封存",
     "delete": "刪除",
+    "batchPinFailed": "無法確認對話置頂結果",
+    "batchArchiveFailed": "無法確認對話封存結果",
+    "batchSaveFailedDescription": "請檢查連線和對話清單後重試。",
+    "deleteSessionsFailed": "部分對話刪除未完成",
+    "deleteSessionsFailedDescription": "已刪除 {{completed}} 個對話，另有 {{failed}} 個對話的刪除結果無法確認。請檢查對話清單後重試。",
     "newChat": "新增對話",
     "createConversation": "建立對話",
     "chooseAgent": "選擇夥伴",
@@ -543,9 +549,11 @@
   },
   "deleteConfirm": {
     "title": "刪除這個對話？",
+    "multipleTitle": "刪除選取的 {{count}} 個對話？",
     "description": "此操作無法復原。",
     "cancel": "取消",
-    "confirm": "刪除對話"
+    "confirm": "刪除對話",
+    "deleting": "正在刪除…"
   },
   "connection": {
     "idle": "閒置",

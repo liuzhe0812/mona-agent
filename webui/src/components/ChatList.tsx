@@ -21,6 +21,7 @@ import {
   Plus,
   Folder,
   FolderOpen,
+  History,
   TriangleAlert,
   Trash2,
 } from "lucide-react";
@@ -83,6 +84,9 @@ interface ChatListProps {
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
+  onBatchPin?: (keys: string[], pinned: boolean) => void;
+  onBatchArchive?: (keys: string[], archived: boolean) => void;
+  onRequestBatchDelete?: (keys: string[]) => void;
   onMarkAllRead?: () => void;
   pinnedKeys?: string[];
   archivedKeys?: string[];
@@ -105,6 +109,7 @@ interface ChatListProps {
   onCreateTask?: (workspace: string) => void;
   projectNames?: Record<string, string>;
   onRequestProjectRename?: (workspace: string, label: string) => void;
+  onOpenHistory?: (key: string, title: string) => void;
 }
 
 export const ChatList = memo(function ChatList({
@@ -115,6 +120,9 @@ export const ChatList = memo(function ChatList({
   onTogglePin,
   onRequestRename,
   onToggleArchive,
+  onBatchPin,
+  onBatchArchive,
+  onRequestBatchDelete,
   onMarkAllRead,
   pinnedKeys = [],
   archivedKeys = [],
@@ -133,12 +141,16 @@ export const ChatList = memo(function ChatList({
   projectNames = {},
   onRequestProjectRename,
   onOpenProjectFolder,
+  onOpenHistory,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [projectExpansionOverrides, setProjectExpansionOverrides] = useState<Set<string>>(
     () => new Set(),
   );
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const selectionAnchor = useRef<string | null>(null);
+  const multiSelectEnabled = Boolean(onBatchPin && onBatchArchive && onRequestBatchDelete);
   const { t } = useTranslation();
   const clientCtx = useClientContextOrNull();
   const agentsById = useAgents(clientCtx?.token ?? null);
@@ -165,6 +177,37 @@ export const ChatList = memo(function ChatList({
     () => limitGroups(groups, visibleLimit, activeKey),
     [activeKey, groups, visibleLimit],
   );
+  const groupIsExpanded = useCallback((group: ChatSection) => {
+    const groupKey = group.workspace ? `project:${group.workspace}` : group.kind;
+    if (group.kind === "project") {
+      return defaultProjectExpanded
+        ? !projectExpansionOverrides.has(groupKey)
+        : projectExpansionOverrides.has(groupKey);
+    }
+    return group.kind !== "archived" || expandedGroups.has(groupKey);
+  }, [defaultProjectExpanded, expandedGroups, projectExpansionOverrides]);
+  const visibleKeys = useMemo(
+    () => limitedGroups.flatMap((group) => groupIsExpanded(group) ? group.sessions.map((session) => session.key) : []),
+    [groupIsExpanded, limitedGroups],
+  );
+  const visibleSelectedKeys = useMemo(
+    () => visibleKeys.filter((key) => selectedKeys.has(key)),
+    [selectedKeys, visibleKeys],
+  );
+
+  useEffect(() => {
+    selectionAnchor.current = activeKey;
+    setSelectedKeys(activeKey ? new Set([activeKey]) : new Set());
+  }, [activeKey]);
+
+  useEffect(() => {
+    const visible = new Set(visibleKeys);
+    if (selectionAnchor.current && !visible.has(selectionAnchor.current)) selectionAnchor.current = null;
+    setSelectedKeys((previous) => {
+      const next = new Set([...previous].filter((key) => visible.has(key)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [visibleKeys]);
 
   const toggleGroup = useCallback((groupKey: string, project = false) => {
     if (project) {
@@ -327,12 +370,7 @@ export const ChatList = memo(function ChatList({
         {limitedGroups.map((group) => {
           const groupKey = group.workspace ? `project:${group.workspace}` : group.kind;
           const collapsible = group.kind === "project" || group.kind === "archived";
-          const projectExpanded = defaultProjectExpanded
-            ? !projectExpansionOverrides.has(groupKey)
-            : projectExpansionOverrides.has(groupKey);
-          const expanded = group.kind === "project"
-            ? projectExpanded
-            : !collapsible || expandedGroups.has(groupKey);
+          const expanded = groupIsExpanded(group);
           const projectLabel = group.workspace
             ? projectNames[group.workspace]?.trim() || group.label
             : group.label;
@@ -411,9 +449,13 @@ export const ChatList = memo(function ChatList({
             <ul>
               {group.sessions.map((s) => {
                 const active = s.key === activeKey;
+                const selected = multiSelectEnabled && selectedKeys.has(s.key);
+                const multipleSelected = selected && visibleSelectedKeys.length > 1;
                 const generatedTitle = s.title?.trim() || "";
                 const isPinned = pinned.has(s.key);
                 const isArchived = archived.has(s.key);
+                const allSelectedPinned = multipleSelected && visibleSelectedKeys.every((key) => pinned.has(key));
+                const allSelectedArchived = multipleSelected && visibleSelectedKeys.every((key) => archived.has(key));
                 const isUnread = unread.has(s.key);
                 const cleanedPreview = cleanSessionPreview(s.preview);
                 const timestamp = sessionListTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
@@ -470,23 +512,51 @@ export const ChatList = memo(function ChatList({
                       <ContextMenuTrigger asChild>
                         <button
                           type="button"
-                          onClick={() => onSelect(s.key)}
+                          onClick={(event) => {
+                            if (multiSelectEnabled && event.shiftKey) {
+                              const anchorIndex = visibleKeys.indexOf(selectionAnchor.current ?? activeKey ?? "");
+                              const targetIndex = visibleKeys.indexOf(s.key);
+                              if (anchorIndex !== -1 && targetIndex !== -1) {
+                                setSelectedKeys(new Set(visibleKeys.slice(
+                                  Math.min(anchorIndex, targetIndex),
+                                  Math.max(anchorIndex, targetIndex) + 1,
+                                )));
+                                return;
+                              }
+                            }
+                            selectionAnchor.current = s.key;
+                            setSelectedKeys(new Set([s.key]));
+                            onSelect(s.key);
+                          }}
+                          onContextMenu={() => {
+                            if (multiSelectEnabled && !selectedKeys.has(s.key)) {
+                              selectionAnchor.current = s.key;
+                              setSelectedKeys(new Set([s.key]));
+                            }
+                          }}
+                          onMouseDown={(event) => {
+                            if (multiSelectEnabled && event.shiftKey) event.preventDefault();
+                          }}
                           title={tooltipTitle}
                           aria-current={active ? "page" : undefined}
+                          aria-pressed={multiSelectEnabled ? selected : undefined}
                           className={cn(
                             "group relative flex h-16 w-full min-w-0 items-center gap-3 px-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
-                            active
+                            active || selected
                               ? "rounded-md bg-[hsl(var(--sidebar-active-surface)/0.09)] text-sidebar-foreground"
                               : "text-sidebar-foreground/82 hover:rounded-md hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
+                      {multipleSelected ? (
+                        <span aria-hidden className="absolute bottom-2 left-0 top-2 w-0.5 rounded-full bg-sidebar-foreground/60" />
+                      ) : null}
                       {/* 极浅底部分隔线：与头像左沿对齐，悬停/选中时隐藏。 */}
                       <span
                         aria-hidden
                         className={cn(
                           "pointer-events-none absolute bottom-0 left-2 right-2 h-px bg-sidebar-border/50",
                           "group-hover:opacity-0",
-                          active && "opacity-0",
+                          (active || selected) && "opacity-0",
                         )}
                       />
                       <span className="relative flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-md">
@@ -543,7 +613,7 @@ export const ChatList = memo(function ChatList({
                       portalContainer={actionMenuPortalContainer}
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
-                      {onMarkAllRead ? (
+                      {!multipleSelected && onMarkAllRead ? (
                         <>
                           <ContextMenuItem
                             disabled={unread.size === 0}
@@ -556,34 +626,51 @@ export const ChatList = memo(function ChatList({
                         </>
                       ) : null}
                       <ContextMenuItem
-                        onSelect={() => onTogglePin(s.key)}
+                        onSelect={() => {
+                          if (multipleSelected) onBatchPin?.(visibleSelectedKeys, !allSelectedPinned);
+                          else onTogglePin(s.key);
+                        }}
                       >
-                        {isPinned ? (
+                        {(multipleSelected ? allSelectedPinned : isPinned) ? (
                           <PinOff className="mr-2 h-4 w-4" />
                         ) : (
                           <Pin className="mr-2 h-4 w-4" />
                         )}
-                        {isPinned ? t("chat.unpin") : t("chat.pin")}
+                        {(multipleSelected ? allSelectedPinned : isPinned) ? t("chat.unpin") : t("chat.pin")}
                       </ContextMenuItem>
+                      {!multipleSelected ? (
                       <ContextMenuItem
                         onSelect={() => onRequestRename(s.key, rowTitle)}
                       >
                         <Pencil className="mr-2 h-4 w-4" />
                         {t("chat.rename")}
                       </ContextMenuItem>
+                      ) : null}
+                      {!multipleSelected && onOpenHistory && /^websocket:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(s.key) ? (
+                        <ContextMenuItem onSelect={() => onOpenHistory(s.key, rowTitle)}>
+                          <History className="mr-2 h-4 w-4" />
+                          {t("chat.historyVersions")}
+                        </ContextMenuItem>
+                      ) : null}
                       <ContextMenuItem
-                        onSelect={() => onToggleArchive(s.key)}
+                        onSelect={() => {
+                          if (multipleSelected) onBatchArchive?.(visibleSelectedKeys, !allSelectedArchived);
+                          else onToggleArchive(s.key);
+                        }}
                       >
-                        {isArchived ? (
+                        {(multipleSelected ? allSelectedArchived : isArchived) ? (
                           <ArchiveRestore className="mr-2 h-4 w-4" />
                         ) : (
                           <Archive className="mr-2 h-4 w-4" />
                         )}
-                        {isArchived ? t("chat.unarchive") : t("chat.archive")}
+                        {(multipleSelected ? allSelectedArchived : isArchived) ? t("chat.unarchive") : t("chat.archive")}
                       </ContextMenuItem>
                       <ContextMenuItem
                         onSelect={() => {
-                          window.setTimeout(() => onRequestDelete(s.key, rowTitle), 0);
+                          window.setTimeout(() => {
+                            if (multipleSelected) onRequestBatchDelete?.(visibleSelectedKeys);
+                            else onRequestDelete(s.key, rowTitle);
+                          }, 0);
                         }}
                         className="text-destructive focus:text-destructive"
                       >

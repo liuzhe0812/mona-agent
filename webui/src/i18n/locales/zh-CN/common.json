@@ -464,6 +464,7 @@
     "pin": "置顶",
     "unpin": "取消置顶",
     "rename": "重命名",
+    "historyVersions": "历史版本",
     "renameTitle": "重命名对话",
     "renameDescription": "为这个对话设置一个仅用于 WebUI 侧边栏的名称。",
     "renamePlaceholder": "对话名称",
@@ -473,6 +474,11 @@
     "showArchived": "显示归档",
     "hideArchived": "隐藏归档",
     "delete": "删除",
+    "batchPinFailed": "无法确认会话置顶结果",
+    "batchArchiveFailed": "无法确认会话归档结果",
+    "batchSaveFailedDescription": "请检查连接和会话列表后重试。",
+    "deleteSessionsFailed": "部分会话删除未完成",
+    "deleteSessionsFailedDescription": "已删除 {{completed}} 个会话，另有 {{failed}} 个会话的删除结果无法确认。请检查会话列表后重试。",
     "newChat": "新建对话",
     "createConversation": "创建会话",
     "chooseAgent": "选择伙伴",
@@ -606,9 +612,11 @@
   },
   "deleteConfirm": {
     "title": "删除这个对话？",
+    "multipleTitle": "删除选中的 {{count}} 个会话？",
     "description": "此操作无法撤销。",
     "cancel": "取消",
-    "confirm": "删除对话"
+    "confirm": "删除对话",
+    "deleting": "正在删除…"
   },
   "connection": {
     "idle": "空闲",

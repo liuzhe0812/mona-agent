@@ -449,6 +449,7 @@
     "pin": "Pin",
     "unpin": "Unpin",
     "rename": "Rename",
+    "historyVersions": "Version history",
     "renameTitle": "Rename chat",
     "renameDescription": "Choose a local sidebar name for this chat.",
     "renamePlaceholder": "Chat name",
@@ -458,6 +459,11 @@
     "showArchived": "Show archived",
     "hideArchived": "Hide archived",
     "delete": "Delete",
+    "batchPinFailed": "Could not confirm the pin result",
+    "batchArchiveFailed": "Could not confirm the archive result",
+    "batchSaveFailedDescription": "Check your connection and the conversation list before trying again.",
+    "deleteSessionsFailed": "Some conversations could not be deleted",
+    "deleteSessionsFailedDescription": "Deleted {{completed}} conversations. The result for {{failed}} conversations could not be confirmed. Check the list before trying again.",
     "newChat": "New chat",
     "createConversation": "Create conversation",
     "chooseAgent": "Choose a partner",
@@ -591,9 +597,11 @@
   },
   "deleteConfirm": {
     "title": "Delete this chat?",
+    "multipleTitle": "Delete {{count}} selected conversations?",
     "description": "This action cannot be undone.",
     "cancel": "Cancel",
-    "confirm": "Delete chat"
+    "confirm": "Delete chat",
+    "deleting": "Deleting…"
   },
   "connection": {
     "idle": "Idle",

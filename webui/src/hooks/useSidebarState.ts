@@ -125,12 +125,12 @@ function pruneMissingSessions(
     }
     return out;
   };
+  // Read markers are merged forward by the server and cleared on session deletion.
   return {
     ...state,
     pinned_keys: filterKeys(state.pinned_keys),
     archived_keys: filterKeys(state.archived_keys),
     title_overrides: filterMap(state.title_overrides),
-    last_read_at_by_key: filterMap(state.last_read_at_by_key),
     tags_by_key: filterMap(state.tags_by_key),
   };
 }
@@ -200,12 +200,14 @@ export function useSidebarState(
   loading: boolean;
   update: (
     updater: (state: SidebarStatePayload) => SidebarStatePayload,
-  ) => Promise<void>;
+    options?: { rollbackOnFailure?: boolean },
+  ) => Promise<boolean>;
 } {
   const { token } = useClientOptional();
   const tokenRef = useRef(token);
   const stateRef = useRef(DEFAULT_SIDEBAR_STATE);
   const persistVersionRef = useRef(0);
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
   const loadPromiseRef = useRef<Promise<void> | null>(null);
   /** True only once an authoritative server payload replaced the baseline. */
   const loadOkRef = useRef(false);
@@ -261,7 +263,10 @@ export function useSidebarState(
   }, [loadState, token]);
 
   const update = useCallback(
-    async (updater: (current: SidebarStatePayload) => SidebarStatePayload) => {
+    async (
+      updater: (current: SidebarStatePayload) => SidebarStatePayload,
+      options?: { rollbackOnFailure?: boolean },
+    ) => {
       // 首次磁盘加载完成前不得写入，否则未加载的 DEFAULT 会覆盖服务端标记。
       await loadPromiseRef.current;
       if (!loadOkRef.current) {
@@ -272,26 +277,37 @@ export function useSidebarState(
         if (!loadOkRef.current) {
           // Server still unreachable: keep the optimistic state in memory and
           // skip the write so the persisted markers survive.
-          stateRef.current = normalizeSidebarState(updater(stateRef.current));
-          setState(stateRef.current);
-          return;
+          if (!options?.rollbackOnFailure) {
+            stateRef.current = normalizeSidebarState(updater(stateRef.current));
+            setState(stateRef.current);
+          }
+          return false;
         }
       }
-      const next = normalizeSidebarState(updater(stateRef.current));
+      const previous = stateRef.current;
+      const next = normalizeSidebarState(updater(previous));
       const version = persistVersionRef.current + 1;
       persistVersionRef.current = version;
       stateRef.current = next;
       setState(next);
       try {
-        const persisted = normalizeSidebarState(
-          await persistSidebarState(tokenRef.current, next),
-        );
-        if (persistVersionRef.current !== version) return;
-        stateRef.current = persisted;
-        setState(persisted);
+        const updateToken = tokenRef.current;
+        const write = persistQueueRef.current.then(() => persistSidebarState(updateToken, next));
+        persistQueueRef.current = write.then(() => undefined, () => undefined);
+        const persisted = normalizeSidebarState(await write);
+        if (persistVersionRef.current === version) {
+          stateRef.current = persisted;
+          setState(persisted);
+        }
+        return true;
       } catch {
-        // Keep the optimistic UI state. Older gateways or transient auth expiry
-        // should not break the chat list; the next refresh can try again.
+        // Existing callers keep the optimistic state; batch actions may request
+        // rollback when no newer update has replaced it.
+        if (options?.rollbackOnFailure && persistVersionRef.current === version) {
+          stateRef.current = previous;
+          setState(previous);
+        }
+        return false;
       }
     },
     [loadState],
