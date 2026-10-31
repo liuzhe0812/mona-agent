@@ -52,7 +52,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 - 使用根目录 `mona-gateway.spec`，核对真实输出后完整替换 `src-tauri/resources/mona-gateway/`，不合并旧输出而残留已删除模块。删除或移动前核对 resolved-path 范围、Git 状态及引用，只操作本次生成物。
 - 新 Gateway 的 `--help` 必须通过，`--version` 必须等于目标产品版本。spec 从当前 `pyproject.toml` 生成独立的 `mona-ai` metadata 并排除打包环境的旧 metadata；不要用构建机器上已安装包的版本代替成品版本验收。
 - Mona 是纯桌面客户端：生产前端只由 Tauri 的 `frontendDist` 嵌入。Gateway 资源及热更新包内不得带入 `mona/web/dist/` 网页前端副本；内部 HTTP/WebSocket 通信仍是桌面功能所需。不要把第二份前端当成网页访问功能保留。
-- 核对内置 Skill 的按路径执行脚本已作为真实文件进入 Gateway，至少覆盖 PPT 导出、PDF helpers、Office helpers、技能创建和视频脚本及子模块。不能仅检查 Python import 是否成功；普通模块源码、测试、缓存和开发依赖不要随之全量拷入。
+- 核对内置 Skill 当前按路径执行的脚本已作为真实文件进入 Gateway，至少覆盖 PPT 导出、Office helpers、技能创建和视频脚本及子模块。PDF 当前使用内置工具而非路径脚本，核对 PDF Skill 文档、打包的工具模块及 PDF 依赖；以后若增加路径脚本，也须作为真实文件打包。普通模块源码、测试、缓存和开发依赖不要随之全量拷入。
 - Tauri 的 `beforeBuildCommand` 已运行 WebUI `build:tauri`，包括 Office 前端，不无理由重复完整构建。另行检查 `resources/office-editor/` 的清单、sidecar 平台/架构、大小及 SHA；前端构建不代表这些外置资源已生成。按需下载运行时不塞入安装包。
 - 使用已核对的 `src-tauri/build-windows-release.ps1` 构建 NSIS，再对最终安装包生成并真实验证 Ed25519 `.exe.sig`。Office sidecar 不做 Authenticode 变异，manifest 大小与 SHA 必须在打包前精确匹配。构建必须显式仅 NSIS，避免额外 MSI/WiX。
 - 等待 Windows 构建和签名命令完整成功返回后，再使用独立 staging，把同次构建的最终 `mona-desktop.exe` 复制为根级 `Mona.exe`，把安装包内同一份 Gateway 复制为根级 `mona-gateway/`。不得复制 Tauri 打包过程中仍可能变化的中间主程序。Windows 免费签名覆盖最终 NSIS 安装包，不意味着主程序或 Gateway 获得 Authenticode 签名。不重命名原始构建产物。
