@@ -340,6 +340,8 @@ def replay_transcript_to_ui_messages(
     paths to ``{url, name?}`` / attachment dicts the client expects.
     """
     messages: list[dict[str, Any]] = []
+    background_messages: list[dict[str, Any]] = []
+    background_ids: set[str] = set()
     buffer_message_index: int | None = None
     buffer_parts: list[str] = []
     buffer_source_index: int | None = None
@@ -475,10 +477,12 @@ def replay_transcript_to_ui_messages(
         reasoning_message_index = None
         reasoning_parts = []
 
-    def close_reasoning(prev: list[dict[str, Any]]) -> None:
+    def close_reasoning(prev: list[dict[str, Any]], stream_id: Any = None) -> None:
         for i in range(len(prev) - 1, -1, -1):
             if prev[i].get("reasoningStreaming"):
                 prev[i] = {**prev[i], "reasoningStreaming": False}
+                if isinstance(stream_id, str) and stream_id:
+                    prev[i]["streamId"] = stream_id
                 return
 
     def is_reasoning_only_placeholder(m: dict[str, Any]) -> bool:
@@ -787,6 +791,22 @@ def replay_transcript_to_ui_messages(
 
     for idx, rec in enumerate(lines):
         ev = rec.get("event")
+        if ev == "background_message":
+            message_id, text = rec.get("id"), rec.get("text")
+            if isinstance(message_id, str) and message_id and isinstance(text, str) and text and message_id not in background_ids:
+                background_ids.add(message_id)
+                author = rec.get("author_id")
+                background_messages.append({
+                    "id": message_id,
+                    "role": "assistant",
+                    "content": text,
+                    "createdAt": _ts_base + idx,
+                    "sourceTranscriptIndex": idx,
+                    "authorType": "agent",
+                    "authorId": author if isinstance(author, str) and author else MONA_AGENT_ID,
+                    "messageType": "message",
+                })
+            continue
         if ev != "delta":
             flush_delta_buffer()
         if ev != "reasoning_delta":
@@ -882,7 +902,10 @@ def replay_transcript_to_ui_messages(
                     ]
                     if paths:
                         media = augment_user_media(paths)
-                next_record = lines[idx + 1] if idx + 1 < len(lines) else {}
+                next_index = idx + 1
+                while next_index < len(lines) and lines[next_index].get("event") == "background_message":
+                    next_index += 1
+                next_record = lines[next_index] if next_index < len(lines) else {}
                 # Older blocking questions emitted their preview delivery just before the tool result.
                 legacy_question_preview = bool(files) and all(str(file.get("mime", "")).startswith("image/") for file in files) and any(
                     event.get("name") == "ask_user_question" and event.get("phase") == "end"
@@ -969,6 +992,9 @@ def replay_transcript_to_ui_messages(
                     )
                     buffer_message_index = len(messages) - 1
                 buffer_task_id = None
+            stream_id = rec.get("stream_id")
+            if isinstance(stream_id, str) and stream_id:
+                messages[buffer_message_index]["streamId"] = stream_id
             buffer_parts.append(chunk)
             buffer_source_index = idx
             rec_task_id = rec.get("task_id")
@@ -998,13 +1024,16 @@ def replay_transcript_to_ui_messages(
             close_file_edit_phase_before_activity()
             if reasoning_message_index is None:
                 reasoning_message_index = attach_reasoning_chunk(messages, "", idx)
+            stream_id = rec.get("stream_id")
+            if isinstance(stream_id, str) and stream_id:
+                messages[reasoning_message_index]["streamId"] = stream_id
             reasoning_parts.append(chunk)
             continue
 
         if ev == "reasoning_end":
             if suppress_until_turn_end:
                 continue
-            close_reasoning(messages)
+            close_reasoning(messages, rec.get("stream_id"))
             continue
 
         if ev == "message":
@@ -1121,6 +1150,9 @@ def replay_transcript_to_ui_messages(
             rec_task_id = rec.get("task_id")
             if isinstance(rec_task_id, str) and rec_task_id:
                 extra["taskId"] = rec_task_id
+            rec_stream_id = rec.get("stream_id")
+            if isinstance(rec_stream_id, str) and rec_stream_id:
+                extra["streamId"] = rec_stream_id
             rec_token_usage = _ui_token_usage(rec.get("token_usage"))
             if rec_token_usage is not None:
                 extra["tokenUsage"] = rec_token_usage
@@ -1162,6 +1194,19 @@ def replay_transcript_to_ui_messages(
     for m in messages:
         m.pop("isStreaming", None)
         m.pop("reasoningStreaming", None)
+    if background_messages:
+        pending = iter(background_messages)
+        background = next(pending, None)
+        merged = []
+        for message in messages:
+            while background is not None and background["createdAt"] < message["createdAt"]:
+                merged.append(background)
+                background = next(pending, None)
+            merged.append(message)
+        if background is not None:
+            merged.append(background)
+            merged.extend(pending)
+        messages = merged
     return messages
 
 

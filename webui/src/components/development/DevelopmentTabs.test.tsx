@@ -17,7 +17,8 @@ describe("development browser-like tab strip", () => {
     expect(strip).not.toHaveClass("flex-1");
     expect(add.nextElementSibling).toHaveClass("flex-1");
     expect(newTab).toHaveAttribute("aria-selected", "true");
-    expect(newTab).toHaveClass("h-8", "bg-muted/60", "text-foreground");
+    expect(newTab).toHaveClass("h-8", "text-foreground");
+    expect(newTab.parentElement).toHaveClass("bg-muted/60");
     view.rerender(<DevelopmentTabs {...props} active="workspace" tabs={["workspace", "terminal", "review"]} />);
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["新标签页", "文件", "终端", "审查"]);
     expect(screen.getByRole("tab", { name: "文件" })).toHaveAttribute("aria-selected", "true");

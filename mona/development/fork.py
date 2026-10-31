@@ -18,14 +18,29 @@ def history(transcript: Session) -> dict:
     return transcript.metadata.get(HISTORY_KEY, {"runs": [], "events": []})
 
 
-def snapshot_history(runtime: DevelopmentRuntime, session_id: str, transcript: Session, after: int) -> tuple[list, list]:
+def snapshot_history(runtime: DevelopmentRuntime, session_id: str, transcript: Session, after: int,
+                     messages: list[dict]) -> tuple[list, list]:
     saved = history(transcript)
     # Imported records describe past work; they never become executable DB runs.
     runs = [r.model_dump(mode="json", by_alias=True) for r in runtime.store.list_runs(session_id, 20)]
-    runs.extend(saved["runs"])
-    events = [event for event in saved["events"] if event["sequence"] > after]
-    events.extend(e.model_dump(mode="json", by_alias=True) for e in runtime.store.events_after(session_id, after, 100))
-    return runs, events[:100]
+    events = []
+    for event in saved["events"]:
+        if event["sequence"] > after:
+            events.append(event)
+            if len(events) == 100:
+                break
+    if len(events) < 100:
+        events.extend(e.model_dump(mode="json", by_alias=True)
+                      for e in runtime.store.events_after(session_id, after, 100 - len(events)))
+    known = {run["id"] for run in runs}
+    needed = {item["runId"] for item in (*messages, *events) if item.get("runId")} - known
+    runs.extend(run.model_dump(mode="json", by_alias=True) for run in runtime.store.runs_by_id(session_id, needed))
+    known.update(run["id"] for run in runs)
+    for run in saved["runs"]:
+        if run["id"] in needed and run["id"] not in known:
+            runs.append(run)
+            known.add(run["id"])
+    return runs, events
 
 
 async def fork_session(runtime: DevelopmentRuntime, source_id: str, revision: int, request_id: str,

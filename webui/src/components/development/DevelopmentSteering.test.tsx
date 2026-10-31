@@ -107,3 +107,24 @@ it("keeps ordinary follow-ups and their saved text in the queue after interrupti
   expect(screen.queryByRole("button", { name: "引导到当前任务" })).toBeNull();
   expect(api.send).not.toHaveBeenCalled();
 });
+
+it("keeps an unknown delivered guide in the existing status dialog instead of presenting it as pending delivery", async () => {
+  const session = { id: "unknown-session", projectId: "guide-project", title: "任务", executor: "mona" as const, model: null,
+    readonly: false, parentSessionId: null, pinned: false, archived: false, revision: 1, updatedAt: "" };
+  const value: DevSnapshot = { session, runs: [{ id: "finished-run", sessionId: session.id, executor: "mona", status: "interrupted", revision: 2, createdAt: "" }],
+    messages: [{ id: "delivered-message", role: "user", content: "已保存的补充说明", runId: "finished-run", toolCalls: [], queued: false, truncated: false }],
+    pendingInputs: [{ id: "unknown-input", messageId: "old-placeholder", runId: "finished-run", state: "unknown", intent: "steering", revision: 3,
+      canCloseUnknown: true, source: { content: "已保存的补充说明" } }],
+    messageCount: 1, before: null, events: [], eventCursor: 0, live: null };
+  useDevelopmentStore.getState().setSnapshot(session.id, value);
+  render(<DevelopmentPane project={{ id: session.projectId, displayName: "项目", rootPath: "D:/project", lastOpenedAt: "" }} session={session}
+    executors={[{ id: "mona", name: "Mona", available: true, reason: "", models: [] }]} compact />);
+  expect(screen.queryByText("等待引导当前任务…")).not.toBeInTheDocument();
+  expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "任务状态与操作" }));
+  const status = within(await screen.findByRole("dialog", { name: "任务状态与操作" }))
+    .getByRole("status", { name: "补充消息待核对" });
+  expect(status).toHaveTextContent("已保存的补充说明");
+  expect(within(status).getByRole("button", { name: "结束这条消息的等待" })).toBeEnabled();
+  expect(api.send).not.toHaveBeenCalled();
+});

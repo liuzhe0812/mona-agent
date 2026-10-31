@@ -285,18 +285,21 @@ class DevelopmentRuntime:
     def snapshot(self, session_id: str, *, before: int | None = None, limit: int = 100, after: int = 0) -> dict:
         from mona.development.fork import snapshot_history
 
+        if not 1 <= limit <= 200 or after < 0 or (before is not None and before < 0):
+            raise ValueError("Invalid page")
         session = self.resolve_session_title(self.store.get_session(session_id))
         transcript = self.sessions.get_or_create(session.transcript_key)
         end = min(len(transcript.messages), before if before is not None else len(transcript.messages))
         start = max(0, end - limit)
-        runs, events = snapshot_history(self, session.id, transcript, after)
+        messages = [public_message(m) for m in transcript.messages[start:end]
+                    if not m.get("_input_cancelled") and not m.get("_input_delivered")
+                    and not m.get("_collaboration_context") and not m.get("_runtime_input")]
+        runs, events = snapshot_history(self, session.id, transcript, after, messages)
         binding = next((b for b in self.store.list_bindings(session.id)
                         if b.state == "active" and b.executor == session.executor), None)
         preview = get_binding(self, session.id)
         return {"session": session.model_dump(mode="json", by_alias=True),
-                "messages": [public_message(m) for m in transcript.messages[start:end]
-                    if not m.get("_input_cancelled") and not m.get("_input_delivered")
-                    and not m.get("_collaboration_context") and not m.get("_runtime_input")],
+                "messages": messages,
                 "before": start if start else None, "messageCount": len(transcript.messages),
                 "runs": runs,
                 "events": events,
@@ -311,10 +314,11 @@ class DevelopmentRuntime:
                     "replacesBindingId": binding.replaces_binding_id, "replacementReason": binding.replacement_reason} if binding else None,
                 "pendingDecisions": self.native.decisions.list_pending(session.id, include_children=True),
                 "pendingInputs": [{**item.model_dump(mode="json", by_alias=True),
+                    "canCloseUnknown": self._can_close_unknown_input(item),
                     "source": copy.deepcopy(next((m.get("_input_source") for m in transcript.messages if m.get("id") == item.message_id), None))}
-                    for r in self.store.list_runs(session.id, 20) for item in self.store.list_inputs(r.id)
-                    if item.state in {InputState.PENDING, InputState.RESERVED, InputState.UNKNOWN}
-                    and not any(m.get("id") == item.message_id and (m.get("_runtime_input") or m.get("_input_delivered")) for m in transcript.messages)]}
+                    for item in self.store.pending_inputs(session.id)
+                    if not any(m.get("id") == item.message_id and (m.get("_runtime_input")
+                        or m.get("_input_delivered") and item.state != InputState.UNKNOWN) for m in transcript.messages)]}
 
     async def submit(self, session_id: str, request_id: str, content: str, *, intent: str = "follow_up",
                      expected_revision: int | None = None, doc_paths: list[str] | None = None,
@@ -355,6 +359,7 @@ class DevelopmentRuntime:
                 if target_run_id is not None and previous_input.run_id != target_run_id:
                     raise ConflictError("引导目标轮次已变化，原请求没有重复执行。")
                 return {"input": previous_input.model_dump(mode="json", by_alias=True), "queued": previous_input.state == InputState.PENDING, "reused": True}
+            self.store.check_creation_input(session_id, request_id)
             if session.executor != ExecutorId.MONA:
                 if session.executor.value not in self.config_loader().development.enabled_engines:
                     raise DevelopmentError("engine_disabled", "此模型来源已停用，请在模型设置中启用后再调用。")
@@ -390,17 +395,23 @@ class DevelopmentRuntime:
                     accepted = await self.native.service.steer(queued, content)
                     return {"input": accepted.model_dump(mode="json", by_alias=True), "queued": False}
                 return {"input": queued.model_dump(mode="json", by_alias=True), "queued": True}
-            result = await self._dispatch_start(session, request_id, message_id, content, display_content=display_content, input_source=input_source)
+            result = await self._dispatch_start(session, request_id, message_id, content, display_content=display_content,
+                                                input_source=input_source, authorize=authorize)
             self.resolve_session_title(self.store.get_session(session_id))
             return result
 
     async def _dispatch_start(self, session, request_id: str, message_id: str, content: MessageContent,
-                              *, display_content: str | None = None, input_source: dict | None = None) -> dict:
+                              *, display_content: str | None = None, input_source: dict | None = None,
+                              authorize: Callable[[], None] | None = None) -> dict:
         if session.executor == ExecutorId.MONA:
+            if authorize is not None:
+                authorize()
             return self._start(session, request_id, message_id, content, display_content=display_content, input_source=input_source)
         if session.executor.value not in self.config_loader().development.enabled_engines:
             raise DevelopmentError("engine_disabled", "此模型来源已停用，排队任务未自动执行。")
         binding = await self.native.ensure(session)
+        if authorize is not None:
+            authorize()
         transcript = self.sessions.get_or_create(session.transcript_key)
         include_source = binding.transcript_cursor == 0
         handoff = binding.handoff
@@ -538,8 +549,10 @@ class DevelopmentRuntime:
         try:
             async with self._lock(run.session_id):
                 if not self._closed and self.store.get_run(run.id).status == RunStatus.UNKNOWN:
-                    # Observe only; recovering a result must not dispatch queued work.
-                    await self.native.recover(run.session_id, run.id)
+                    # Only confirmed required-result work may continue; ordinary queues stay idle.
+                    result = await self.native.recover(run.session_id, run.id)
+                    if result.status == RunStatus.WAITING_CHILDREN:
+                        self._schedule_result_work(run.id)
         except DevelopmentError as exc:
             logger.warning("Native run recovery unavailable for {} ({})", run.id, exc.code)
         except Exception as exc:
@@ -713,13 +726,15 @@ class DevelopmentRuntime:
         pending = next((i for i in candidates if i.id == owner.continuation_input_id), next(iter(candidates), None))
         if pending is None:
             return
+        previous = self.store.find_run_request(session_id, pending.id)
+        if previous and previous.error_code == "host_restarted_before_dispatch":
+            return
         session = self.store.get_session(session_id)
         transcript = self.sessions.get_or_create(session.transcript_key)
         row = next((m for m in transcript.messages if m.get("id") == pending.message_id), None)
         if row is None:
             raise DevelopmentError("missing_queued_input", "排队消息正文缺失，未执行。")
         if session.executor != ExecutorId.MONA and session.executor.value not in self.config_loader().development.enabled_engines:
-            self.store.transition_input(pending.id, pending.revision, InputState.REJECTED)
             return
         source = row.get("_input_source") or {}
         internal = source.get("kind") == "collaboration_result"
@@ -779,6 +794,25 @@ class DevelopmentRuntime:
             if run.executor != ExecutorId.MONA:
                 guided = await self.native.service.steer(guided, message["content"])
             return {"input": guided.model_dump(mode="json", by_alias=True), "queued": guided.state == InputState.PENDING}
+
+    def _can_close_unknown_input(self, item: RunInput) -> bool:
+        if item.state != InputState.UNKNOWN or item.intent != "steering":
+            return False
+        run = self.store.get_run(item.run_id)
+        task = self.tasks.get(run.id)
+        return (run.status in TERMINAL_RUN_STATUSES and (task is None or task.done())
+                and not self.native.service.is_dispatching(run.id))
+
+    async def close_unknown_input(self, session_id: str, input_id: str, revision: int) -> RunInput:
+        async with self._lock(session_id):
+            item = self.store.get_input(input_id)
+            if item.session_id != session_id or item.intent != "steering":
+                raise ConflictError("消息不属于当前会话的引导记录。")
+            if item.state == InputState.CLOSED_UNKNOWN:
+                return item
+            if not self._can_close_unknown_input(item):
+                raise ConflictError("请先结束原任务，再核对这条补充消息；原消息不会重新发送。")
+            return self.store.transition_input(item.id, revision, InputState.CLOSED_UNKNOWN)
 
     async def cancel_input(self, session_id: str, input_id: str) -> None:
         async with self._lock(session_id):

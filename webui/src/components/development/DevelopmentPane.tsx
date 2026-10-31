@@ -13,6 +13,7 @@ import { DevelopmentDecision } from "./DevelopmentDecisions";
 import { DevelopmentPermissionSelector, type DevelopmentPermissionMode } from "./DevelopmentPermissionSelector";
 import { DevelopmentBackgroundTasks } from "./DevelopmentBackgroundTasks";
 import { DevelopmentUnknownResult } from "./DevelopmentUnknownResult";
+import { DevelopmentUnknownInputs } from "./DevelopmentUnknownInputs";
 import { DevelopmentTranscript } from "./DevelopmentTranscript";
 import type { TimelineNavigation } from "./zcode/VirtualTimeline";
 import { useTimelineScroll } from "./zcode/useTimelineScroll";
@@ -44,7 +45,8 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
   const snapshot = useDevelopmentSession(id, visible);
   const turns = useMemo(() => buildDevelopmentTurns(snapshot?.messages ?? [], snapshot?.runs ?? [], snapshot?.live), [snapshot?.messages, snapshot?.runs, snapshot?.live]);
   const current = snapshot?.session ?? session;
-  const queue = useMemo(() => projectPendingGuideQueue({ items: (snapshot?.pendingInputs ?? []).map((item, admissionSeq) => {
+  const queue = useMemo(() => projectPendingGuideQueue({ items: (snapshot?.pendingInputs ?? [])
+    .filter((item) => item.intent !== "steering" || item.state !== "unknown").map((item, admissionSeq) => {
     const message = snapshot?.messages.find((entry) => entry.id === item.messageId);
     return { ...item, queueItemId: item.id, sourceCommandId: item.id, clientId: item.id,
       text: message?.content || item.source?.content || item.source?.documentNames?.join("、") || "",
@@ -55,6 +57,7 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
   const documents = useDevelopmentStore((s) => id ? s.documentDrafts[id] ?? EMPTY_DOCUMENTS : EMPTY_DOCUMENTS);
   const error = useDevelopmentStore((s) => id ? s.errors[id] : "");
   const pending = useDevelopmentStore((s) => id ? s.sends[id] : undefined);
+  const unknownGuides = (snapshot?.pendingInputs ?? []).filter((item) => item.intent === "steering" && item.state === "unknown");
   const approvalDecisionId = useDevelopmentStore((s) => id ? s.sides[id]?.approvalDecisionId : undefined);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -282,7 +285,7 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
       ? "子任务结果未处理完成。已有记录仍保留，请核对任务与当前模型后继续。" : "");
   useEffect(() => { setFailureOpen(!!failure); }, [failure, actionError, id, run?.id]);
   const needsAttention = !!(pending?.uncertain || !modelsLoading && executors.length > 0 && !executor?.available
-    || run?.status === "unknown" || questions.length);
+    || run?.status === "unknown" || questions.length || unknownGuides.length);
   const hasStatus = !!current && !!(needsAttention || snapshot?.before != null);
   useEffect(() => { if (!hasStatus) setStatusDialogOpen(false); }, [hasStatus]);
   useEffect(() => { setStatusDialogOpen(false); }, [id]);
@@ -290,13 +293,14 @@ export function DevelopmentPane({ session, project, executors, modelsLoading = f
     {questions.map((decision) => <DevelopmentDecision key={decision.id} decision={decision} />)}
     {run?.status === "unknown" && <DevelopmentUnknownResult key={run.id} run={run} binding={snapshot?.nativeBinding}
       onStop={stop} stopping={stopping} />}
-    {pending?.uncertain && <div role="status" aria-label="发送状态待核对" className="space-y-2 text-warning"><p>上次发送结果待核对。核对时沿用原请求，不会重复启动任务。</p><Button variant="outline" size="sm" disabled={sending || switching || !executor?.available || current.archived} onClick={() => void send()}>核对发送</Button></div>}
+    {!!unknownGuides.length && <DevelopmentUnknownInputs key={current.id} sessionId={current.id} inputs={unknownGuides} />}
+    {pending?.uncertain && !unknownGuides.some((item) => item.id === pending.id) && <div role="status" aria-label="发送状态待核对" className="space-y-2 text-warning"><p>上次发送结果待核对。核对时沿用原请求，不会重复启动任务。</p><Button variant="outline" size="sm" disabled={sending || switching || !executor?.available || current.archived} onClick={() => void send()}>核对发送</Button></div>}
     {snapshot?.before != null && <Button variant="ghost" size="sm" onClick={() => void loadOlder()}>读取较早消息</Button>}
     {!modelsLoading && executors.length > 0 && !executor?.available && <p role="status" className="text-muted-foreground">{executor?.reason ?? "当前模型不可用"}{onManageModels && <Button variant="ghost" size="sm" className="ml-2" onClick={onManageModels}>配置模型</Button>}</p>}
   </div>;
   return <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}><DevelopmentMarkdown project={project} sessionId={fileSessionId ?? id}><section ref={pane} data-testid="development-pane" aria-label={current?.title ?? "空开发会话"}
     className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background">
-    {project && current && !compact ? <DevelopmentHeader key={current.id} project={project} session={current} executors={executors} visible={visible} onToggleProjects={onToggleProjects} onNew={onNew} creatingTask={creatingTask} onRename={onRename} onUpdate={onUpdate} onOpenStatus={() => setStatusDialogOpen(true)} hasStatus={hasStatus} needsAttention={needsAttention}
+    {project && current && !compact ? <DevelopmentHeader key={current.id} project={project} session={current} executors={executors} visible={visible} onToggleProjects={onToggleProjects} onRename={onRename} onUpdate={onUpdate} onOpenStatus={() => setStatusDialogOpen(true)} hasStatus={hasStatus} needsAttention={needsAttention}
       overviewOpen={overviewOpen} onOverviewOpenChange={setOverviewOpen} overviewContainer={overviewContainer.current} overviewDocked={overviewDocked} /> : <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 px-4">
       {onToggleProjects && <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="切换项目列表" onClick={onToggleProjects}><PanelLeft className="h-4 w-4" /></Button>}
       {project && <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />}

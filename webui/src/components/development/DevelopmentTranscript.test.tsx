@@ -6,6 +6,7 @@ import { TooltipProvider } from "./zcode/primitives/tooltip";
 import { DevelopmentTranscript, pairTranscriptTools, nativeTimeline } from "./DevelopmentTranscript";
 import { DevelopmentActivity, DevelopmentWorkItems, developmentActivity } from "./DevelopmentActivity";
 import { DevelopmentStreamContext } from "./DevelopmentStreamContext";
+import { buildDevelopmentTurns } from "./development-turns";
 import { buildAssistantWorkRenderItems } from "./zcode/tools/conversationAssistantWorkItems";
 import type { WorkRow } from "./zcode/types";
 
@@ -237,6 +238,63 @@ describe("native timeline", () => {
     expect(text.indexOf("pytest")).toBeLessThan(text.indexOf("修改完成"));
     expect(view.container.querySelectorAll('[data-native-operation="command:cmd"]')).toHaveLength(1);
     expect(nativeTimeline(messages, [...events, event("e5", "agent.message.completed", { messageId: "last" })], runs).streaming.size).toBe(0);
+  });
+
+  it("keeps out-of-order native events isolated by run and preserves unbound request navigation", () => {
+    const runs: DevRun[] = [
+      { ...run, executor: "codex", requestMessageId: "legacy_request" },
+      { ...run, id: "run_b", executor: "claude", status: "succeeded" },
+    ];
+    const messages = [
+      message("legacy_request", { role: "user", content: "旧请求", runId: undefined }),
+      message("first_a", { content: "前文", runId: "run_a" }),
+      message("answer_b", { content: "另一轮", runId: "run_b" }),
+      message("last_a", { content: "结论", runId: "run_a" }),
+    ];
+    const delta = { ...event("delta_a", "command.output", { id: "same", delta: "日志" }), sequence: 3 };
+    const events = [
+      { ...event("last_a_delta", "agent.message.delta", { messageId: "last_a" }), sequence: 5 },
+      { ...event("b_message", "agent.message.delta", { messageId: "answer_b" }, "run_b"), sequence: 9 },
+      delta,
+      { ...event("a_end", "command.completed", { id: "same", exitCode: 0 }), sequence: 4 },
+      { ...event("b_start", "command.started", { id: "same", command: "other" }, "run_b"), sequence: 8 },
+      { ...event("a_first", "agent.message.completed", { messageId: "first_a" }), sequence: 1 },
+      { ...event("a_start", "command.started", { id: "same", command: "pytest" }), sequence: 2 },
+      delta,
+      { ...event("unbound", "command.started", { id: "unbound" }), runId: undefined, sequence: 6 },
+    ];
+    const original = JSON.stringify({ messages, events });
+    const timeline = nativeTimeline(messages, events, runs);
+    expect(timeline.before.get("last_a")).toHaveLength(1);
+    expect(timeline.before.get("last_a")?.[0]).toMatchObject({ id: "command:same", description: "pytest", output: "日志", state: "returned" });
+    expect(timeline.before.get("answer_b")?.[0]).toMatchObject({ id: "command:same", description: "other", state: "pending" });
+    expect([...timeline.streaming]).toEqual(["last_a"]);
+    expect(timeline.tail.size).toBe(0);
+    expect(buildDevelopmentTurns(messages, runs)[0]).toMatchObject({ id: "legacy_request", assistantPreview: "结论" });
+    expect(JSON.stringify({ messages, events })).toBe(original);
+
+    const completed = { ...event("a_complete", "agent.message.completed", { messageId: "last_a" }), sequence: 7 };
+    expect(nativeTimeline(messages, [...events, completed], runs).streaming.size).toBe(0);
+  });
+
+  it("keeps many activities in order in their original message or tail without mutating inputs", () => {
+    const messages = [message("answer", { content: "完成", authorId: "codex" })];
+    const events = Array.from({ length: 60 }, (_, index) => ({
+      ...event(`command_${index}`, "command.started", { id: `cmd-${index}`, command: `command ${index}` }),
+      sequence: index + 1,
+    }));
+    events.push({ ...event("answer_event", "agent.message.completed", { messageId: "answer" }), sequence: 61 });
+    const runs: DevRun[] = [{ ...run, executor: "codex" }];
+    const original = JSON.stringify({ messages, events, runs });
+
+    const first = nativeTimeline(messages, events, runs);
+    const second = nativeTimeline(messages, events, runs);
+    const rows = first.before.get("answer")!;
+    expect(rows.map((row) => row.id)).toEqual(Array.from({ length: 60 }, (_, index) => `command:cmd-${index}`));
+    expect(rows.map((row) => row.sequence)).toEqual(Array.from({ length: 60 }, (_, index) => index + 1));
+    expect(rows).not.toBe(second.before.get("answer"));
+    expect(nativeTimeline([], events, runs).tail.get(run.id)?.map((row) => row.id)).toEqual(rows.map((row) => row.id));
+    expect(JSON.stringify({ messages, events, runs })).toBe(original);
   });
 
   it("keeps a returned failed subagent on its original tool row in event order", () => {

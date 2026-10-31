@@ -16,7 +16,7 @@ from mona.config.schema import (
     builtin_development_subagents,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{1,95}$")]
 
 
@@ -244,16 +244,18 @@ class InputState(str, Enum):
     CANCELLED = "cancelled"
     REJECTED = "rejected"
     UNKNOWN = "unknown"
+    CLOSED_UNKNOWN = "closed_unknown"
 
 
 INPUT_TRANSITIONS: dict[InputState, frozenset[InputState]] = {
     InputState.PENDING: frozenset({InputState.RESERVED, InputState.CANCELLED}),
     InputState.RESERVED: frozenset({InputState.PENDING, InputState.ACCEPTED, InputState.REJECTED, InputState.UNKNOWN}),
     InputState.ACCEPTED: frozenset({InputState.CONSUMED, InputState.UNKNOWN}),
-    InputState.UNKNOWN: frozenset({InputState.ACCEPTED, InputState.CONSUMED, InputState.REJECTED}),
+    InputState.UNKNOWN: frozenset({InputState.ACCEPTED, InputState.CONSUMED, InputState.REJECTED, InputState.CLOSED_UNKNOWN}),
     InputState.CONSUMED: frozenset(),
     InputState.CANCELLED: frozenset(),
     InputState.REJECTED: frozenset(),
+    InputState.CLOSED_UNKNOWN: frozenset(),
 }
 
 

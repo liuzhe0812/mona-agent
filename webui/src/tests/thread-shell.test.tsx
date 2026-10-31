@@ -2572,6 +2572,54 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByText("live assistant reply")).toBeInTheDocument());
   });
 
+  it("keeps a live answer and an independent background result through history refresh", async () => {
+    const client = makeClient();
+    const chatId = "chat-development-result";
+    let withBackground = false;
+    const historical = [
+      { id: "u-1", role: "user", content: "检查项目", createdAt: 1, historyPosition: 0 },
+      { id: "buf-old", role: "assistant", content: "处理中", createdAt: 2, historyPosition: 1,
+        taskId: "work-task", streamId: "old-stream" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("webui-thread")) return { ok: false, status: 404, json: async () => ({}) };
+      return httpJson({
+        schemaVersion: 3,
+        messages: withBackground ? [
+          ...historical,
+          { id: "buf-current", role: "assistant", content: "处理中", createdAt: 3, historyPosition: 2,
+            taskId: "work-task", streamId: "current-stream" },
+          { id: "notice-1", role: "assistant", content: "开发任务已完成", createdAt: 4, historyPosition: 3 },
+        ] : historical,
+        pagination: { hasMore: false, before: null, revision: withBackground ? "revision-2" : "revision-1", total: withBackground ? 4 : 2 },
+      });
+    }));
+
+    render(wrap(client, <ThreadShell session={session(chatId)} title="开发任务" onToggleSidebar={() => {}} />));
+    await screen.findByText("检查项目");
+    act(() => {
+      client._emitChat(chatId, { event: "artifact_task_started", chat_id: chatId, task_id: "work-task" });
+      client._emitChat(chatId, { event: "goal_status", chat_id: chatId, status: "running", turn_id: "work-turn" });
+      client._emitChat(chatId, { event: "delta", chat_id: chatId, text: "处理中", task_id: "work-task", stream_id: "current-stream" });
+    });
+    await waitFor(() => expect(screen.getAllByText("处理中")).toHaveLength(2));
+    expect(screen.getByRole("button", { name: i18n.t("thread.composer.stop") })).toBeInTheDocument();
+
+    withBackground = true;
+    act(() => client._emitSessionUpdate(chatId, "thread"));
+    await screen.findByText("开发任务已完成");
+    expect(screen.getAllByText("处理中")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: i18n.t("thread.composer.stop") })).toBeInTheDocument();
+
+    act(() => client._emitChat(chatId, {
+      event: "delta", chat_id: chatId, text: "完成", task_id: "work-task", stream_id: "current-stream",
+    }));
+    await screen.findByText("处理中完成");
+    expect(screen.getAllByText("处理中")).toHaveLength(1);
+    expect(screen.getAllByText("开发任务已完成")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: i18n.t("thread.composer.stop") })).toBeInTheDocument();
+  });
+
   it("does not refetch thread history on turn_end", async () => {
     const client = makeClient();
     let historyCalls = 0;

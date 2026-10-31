@@ -25,6 +25,7 @@ from mona.development.executors.diagnostics import ERRORS as NATIVE_ERRORS
 from mona.development.executors.rpc import RpcError
 from mona.development.model_selection import coding_models, resolve_coding_model
 from mona.development.runtime import DevelopmentRuntime
+from mona.development.session_creation import create_session
 from mona.development.store import ConflictError, DevelopmentError, DevelopmentStore, NotFoundError
 from mona.development.workspace import (
     directory_entries,
@@ -45,6 +46,7 @@ class ProjectBody(Contract):
 
 
 class SessionBody(Contract):
+    request_id: Identifier | None = None
     executor: ExecutorId = ExecutorId.MONA
     title: str = Field(default="新开发任务", min_length=1, max_length=200)
     model: str | None = Field(default=None, max_length=200)
@@ -52,6 +54,12 @@ class SessionBody(Contract):
     model_reasoning_effort: str | None = Field(default=None, max_length=32)
     readonly: bool = False
     parent_session_id: Identifier | None = None
+
+
+class CancelSessionCreationBody(SessionBody):
+    request_id: Identifier
+    send_request_id: Identifier
+    confirmed: Literal[True]
 
 
 class SessionUpdate(Contract):
@@ -146,6 +154,11 @@ class GuideInputBody(Contract):
     target_run_id: Identifier
 
 
+class CloseUnknownInputBody(Contract):
+    revision: int = Field(ge=0)
+    confirmed: Literal[True]
+
+
 class SaveBody(Contract):
     path: str = Field(min_length=1, max_length=4096)
     content: str = Field(max_length=1_048_576)
@@ -161,16 +174,20 @@ def _wire(value: Any) -> Any:
     return value.model_dump(mode="json", by_alias=True)
 
 
-def get_runtime(request: web.Request) -> DevelopmentRuntime:
-    runtime = request.app.get(RUNTIME_KEY)
+def get_runtime_for_app(app: web.Application) -> DevelopmentRuntime:
+    runtime = app.get(RUNTIME_KEY)
     if runtime is None:
         def config_loader():
             return resolve_config_env_vars(load_config())
-        loop = request.app["agent_loop"]
+        loop = app["agent_loop"]
         runtime = DevelopmentRuntime(DevelopmentStore(get_data_dir() / "development" / "state.sqlite3"),
                                      loop.sessions, config_loader, attachment_root=Path(loop.workspace))
-        request.app[RUNTIME_KEY] = runtime
+        app[RUNTIME_KEY] = runtime
     return runtime
+
+
+def get_runtime(request: web.Request) -> DevelopmentRuntime:
+    return get_runtime_for_app(request.app)
 
 
 async def _body(request: web.Request, model: type[Contract]):
@@ -311,30 +328,19 @@ async def projects(request):
     return web.json_response([_wire(p) for p in runtime.store.list_projects()])
 
 
+async def cancel_session_creation(request):
+    body = CancelSessionCreationBody.model_validate({**await request.json(), "requestId": request.match_info["request_id"]})
+    result = get_runtime(request).store.cancel_session_creation(request.match_info["project_id"], body.request_id,
+        body.model_dump(mode="json", exclude={"request_id", "send_request_id", "confirmed"}), body.send_request_id)
+    return web.json_response(result)
+
+
 async def sessions(request):
     runtime = get_runtime(request)
     project_id = request.match_info["project_id"]
     if request.method == "POST":
         body = await _body(request, SessionBody)
-        if body.executor == ExecutorId.MONA:
-            if body.model_provider is not None:
-                resolve_coding_model(runtime.config_loader(), body.model, body.model_provider,
-                                     body.model_reasoning_effort, require_visible=True)
-            elif body.model_reasoning_effort is not None:
-                raise DevelopmentError("invalid_model_source", "请通过模型来源选择推理强度。")
-            elif body.model:
-                runtime.config_loader().resolve_preset(body.model)
-        elif body.model_provider is not None:
-            raise DevelopmentError("unsupported_model_route", "原生引擎使用自己的模型来源，请选择对应来源的模型。")
-        else:
-            if body.executor.value not in runtime.config_loader().development.enabled_engines:
-                raise DevelopmentError("engine_disabled", "此模型来源已停用，请在模型设置中启用后再调用。")
-            runtime.native.validate_effort(project_id, body.executor, body.model, body.model_reasoning_effort)
-        value = runtime.store.create_session(project_id, body.executor, body.title, body.model,
-                                            readonly=body.readonly, parent_session_id=body.parent_session_id,
-                                            model_provider=body.model_provider,
-                                            model_reasoning_effort=body.model_reasoning_effort,
-                                            permission_mode=PermissionMode(runtime.config_loader().development.permissions.default_mode))
+        value = create_session(runtime, project_id, **body.model_dump())
         return web.json_response(_wire(value))
     latest = runtime.store.latest_runs_for_project(project_id)
     values = [runtime.resolve_session_title(item) for item in runtime.store.list_sessions(project_id)]
@@ -551,6 +557,12 @@ async def guide_input(request):
         request.match_info["session_id"], request.match_info["input_id"], body.revision, body.target_run_id))
 
 
+async def close_unknown_input(request):
+    body = await _body(request, CloseUnknownInputBody)
+    return web.json_response(_wire(await get_runtime(request).close_unknown_input(
+        request.match_info["session_id"], request.match_info["input_id"], body.revision)))
+
+
 async def view(request):
     store = get_runtime(request).store
     if request.method == "PUT":
@@ -603,6 +615,21 @@ def register_development_routes(app: web.Application) -> None:
     from mona.development.workbench_api import register_workbench_routes
     register_workbench_routes(app)
     app.middlewares.append(development_auth)
+    if (loop := app.get("agent_loop")) is not None:
+        from mona.agent.tools.development_workbench import DevelopmentWorkbenchTool
+        from mona.development.hub import DevelopmentHub
+
+        hub = DevelopmentHub(lambda: get_runtime_for_app(app), loop.sessions, loop.bus)
+        loop.tools.register(DevelopmentWorkbenchTool(hub))
+
+        async def start_hub(_app):
+            await hub.start()
+
+        async def close_hub(_app):
+            await hub.close()
+
+        app.on_startup.append(start_hub)
+        app.on_cleanup.append(close_hub)
     app.on_cleanup.append(_cleanup)
     app.router.add_get(PREFIX + "/projects/{project_id}/executors/{executor}/login", native_login_status)
     app.router.add_delete(PREFIX + "/projects/{project_id}/executors/{executor}/login/{login_id}", native_login_status)
@@ -637,6 +664,7 @@ def register_development_routes(app: web.Application) -> None:
     for method in ("GET", "POST"):
         app.router.add_route(method, PREFIX + "/projects", projects)
         app.router.add_route(method, PREFIX + "/projects/{project_id}/sessions", sessions)
+    app.router.add_post(PREFIX + "/projects/{project_id}/session-creations/{request_id}/cancel", cancel_session_creation)
     app.router.add_patch(PREFIX + "/sessions/{session_id}", update_session)
     app.router.add_post(PREFIX + "/sessions/{session_id}/fork", fork_session)
     app.router.add_put(PREFIX + "/sessions/{session_id}/model", update_model)
@@ -645,6 +673,7 @@ def register_development_routes(app: web.Application) -> None:
     app.router.add_post(PREFIX + "/sessions/{session_id}/runs/{run_id}/interrupt", interrupt)
     app.router.add_delete(PREFIX + "/sessions/{session_id}/inputs/{input_id}", cancel_input)
     app.router.add_post(PREFIX + "/sessions/{session_id}/inputs/{input_id}/guide", guide_input)
+    app.router.add_post(PREFIX + "/sessions/{session_id}/inputs/{input_id}/close-unknown", close_unknown_input)
     app.router.add_get(PREFIX + "/views/{view_id}", view)
     app.router.add_put(PREFIX + "/views/{view_id}", view)
     app.router.add_get(PREFIX + "/projects/{project_id}/{section:directory|file|git|diff|context}", workspace)

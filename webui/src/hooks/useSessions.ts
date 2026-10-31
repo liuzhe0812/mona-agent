@@ -318,6 +318,7 @@ export function mergeHistoryMessages(
 function samePersistedMessage(left: UIMessage, right: UIMessage): boolean {
   if (left.id === right.id) return true;
   if (left.sendState === "rejected" || right.sendState === "rejected") return false;
+  if (left.streamId && right.streamId) return left.streamId === right.streamId;
   if (left.historyPosition != null && right.historyPosition != null) {
     return left.historyPosition === right.historyPosition;
   }
@@ -362,6 +363,21 @@ function isActiveLiveMessage(
     || Boolean(options.isStreaming && options.currentTaskId && message.taskId === options.currentTaskId);
 }
 
+function preserveActiveStreams(current: UIMessage[], incoming: UIMessage[]): UIMessage[] {
+  const streams = new Map(current
+    .filter((message) => message.role === "assistant" && message.streamId
+      && (message.isStreaming || message.reasoningStreaming))
+    .map((message) => [message.streamId!, message]));
+  return incoming.map((message) => {
+    const live = message.role === "assistant" && message.streamId ? streams.get(message.streamId) : undefined;
+    return live ? { ...message, ...live,
+      historyPosition: message.historyPosition,
+      assistantOrdinal: message.assistantOrdinal,
+      sourceTranscriptIndex: message.sourceTranscriptIndex,
+    } : message;
+  });
+}
+
 function unmatchedLiveTail(
   current: UIMessage[],
   incoming: UIMessage[],
@@ -369,7 +385,8 @@ function unmatchedLiveTail(
   allowOrderedUserEchoFallback = true,
 ): UIMessage[] {
   const live = current.flatMap((message, index) => (
-    message.historyPosition == null && isActiveLiveMessage(message, options)
+    (message.historyPosition == null || Boolean(message.streamId && (message.isStreaming || message.reasoningStreaming)))
+      && isActiveLiveMessage(message, options)
       ? [{ message, index }]
       : []
   ));
@@ -380,7 +397,11 @@ function unmatchedLiveTail(
   // fallback, so an older task row cannot consume a canonical row belonging
   // to a later optimistic send.
   for (const { message, index } of live) {
-    const canonicalIndex = incoming.findIndex((canonical, candidateIndex) => (
+    let canonicalIndex = incoming.findIndex((canonical, candidateIndex) => (
+      !matchedCanonical.has(candidateIndex)
+      && (message.id === canonical.id || Boolean(message.streamId && message.streamId === canonical.streamId))
+    ));
+    if (canonicalIndex < 0) canonicalIndex = incoming.findIndex((canonical, candidateIndex) => (
       !matchedCanonical.has(candidateIndex) && samePersistedMessage(message, canonical)
     ));
     if (canonicalIndex >= 0) {
@@ -427,12 +448,13 @@ export function reconcileHistoryMessages(
   options: { isStreaming?: boolean; currentTaskId?: string | null; missing?: boolean } = {},
 ): UIMessage[] {
   if (!incoming.length) return options.missing ? current.filter((message) => isActiveLiveMessage(message, options)) : current;
-  const firstPosition = incoming.find((message) => message.historyPosition != null)?.historyPosition ?? 0;
+  const reconciled = preserveActiveStreams(current, incoming);
+  const firstPosition = reconciled.find((message) => message.historyPosition != null)?.historyPosition ?? 0;
   const prefix = current.filter(
     (message) => message.historyPosition != null && message.historyPosition < firstPosition,
   );
-  const liveTail = unmatchedLiveTail(current, incoming, options);
-  return mergeHistoryMessages([], [...prefix, ...incoming, ...liveTail]);
+  const liveTail = unmatchedLiveTail(current, reconciled, options);
+  return mergeHistoryMessages([], [...prefix, ...reconciled, ...liveTail]);
 }
 
 /** Replace all canonical rows after a revision change, retaining only active live tail rows. */
@@ -442,7 +464,8 @@ export function replaceHistoryRevision(
   options: { isStreaming?: boolean; currentTaskId?: string | null; missing?: boolean } = {},
 ): UIMessage[] {
   if (!incoming.length) return options.missing ? current.filter((message) => isActiveLiveMessage(message, options)) : [];
-  return mergeHistoryMessages([], [...incoming, ...unmatchedLiveTail(current, incoming, options, false)]);
+  const reconciled = preserveActiveStreams(current, incoming);
+  return mergeHistoryMessages([], [...reconciled, ...unmatchedLiveTail(current, reconciled, options, false)]);
 }
 
 /** Return the server's global branch ordinal, falling back only for live tail rows. */

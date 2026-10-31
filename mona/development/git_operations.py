@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import tempfile
@@ -35,39 +36,50 @@ async def git(root: Path, *args: str, stdin: bytes | None = None, timeout: int =
         process = await asyncio.create_subprocess_exec(executable, "--no-pager", "--literal-pathspecs",
             "-c", "core.fsmonitor=false", *args, cwd=root, env=env,
             stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=os.name != "nt")
     except OSError as exc:
         raise DevelopmentError("git_unavailable", "Git 无法启动，请重新检测；未执行 Git 操作。") from exc
 
+    async def read(stream):
+        data = bytearray()
+        while chunk := await stream.read(65536):
+            data.extend(chunk)
+            if len(data) > 2_097_152:
+                raise GitUncertainError("Git 输出超过读取范围，请核对实际结果。")
+        return bytes(data)
+
+    async def send():
+        if stdin is not None:
+            try:
+                process.stdin.write(stdin)
+                await process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The exit code, not an early stdin close, determines the outcome.
+            finally:
+                process.stdin.close()
+
+    readers = [asyncio.create_task(read(process.stdout)), asyncio.create_task(read(process.stderr)),
+               asyncio.create_task(send())]
+
     async def collect():
-        async def read(stream):
-            data = bytearray()
-            while chunk := await stream.read(65536):
-                data.extend(chunk)
-                if len(data) > 2_097_152:
-                    raise GitUncertainError("Git 输出超过读取范围，请核对实际结果。")
-            return bytes(data)
-        async def send():
-            if stdin is not None:
-                try:
-                    process.stdin.write(stdin)
-                    await process.stdin.drain()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass  # The exit code, not an early stdin close, determines the outcome.
-                finally:
-                    process.stdin.close()
-        out, err, _ = await asyncio.gather(read(process.stdout), read(process.stderr), send())
+        out, err, _ = await asyncio.gather(*readers)
         await process.wait()
         return process.returncode, out, err
     try:
         return await asyncio.wait_for(collect(), timeout)
     except (asyncio.TimeoutError, asyncio.CancelledError, GitUncertainError) as exc:
-        if process.returncode is None:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        await process.wait()
+        from mona.agent.tools.shell import kill_process_tree
+
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        # Drain while terminating: paused pipes can keep wait() pending after Git exits.
+        try:
+            await asyncio.wait_for(asyncio.gather(kill_process_tree(process), process.communicate()), 10)
+        except asyncio.TimeoutError:
+            # Helpers can retain inherited pipes; release only this process's owned handles.
+            process._transport.close()
         if isinstance(exc, asyncio.CancelledError):
             raise
         raise GitUncertainError("等待 Git 结果中断；子进程或远程操作可能仍在运行，请核对后再操作。") from exc

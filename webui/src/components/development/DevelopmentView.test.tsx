@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
-import type { DevProject, DevRun, DevSession, DevSnapshot, ExecutorId } from "@/lib/development-api";
+import { DevelopmentApiError, type DevelopmentSessionOptions, type DevProject, type DevRun, type DevSession, type DevSnapshot, type ExecutorId } from "@/lib/development-api";
 import type { MonaClient } from "@/lib/mona-client";
 import { ClientProvider } from "@/providers/ClientProvider";
 import * as tauri from "@/lib/tauri";
@@ -15,7 +15,7 @@ const api = vi.hoisted(() => ({
   executorSettings: vi.fn(), updateExecutorSettings: vi.fn(), probe: vi.fn(), login: vi.fn(), message: vi.fn(),
   projects: vi.fn(), capabilities: vi.fn(), sessions: vi.fn(), snapshot: vi.fn(), openProject: vi.fn(),
   createSession: vi.fn(), forkSession: vi.fn(), updateSession: vi.fn(), deleteSession: vi.fn(), send: vi.fn(), model: vi.fn(), interrupt: vi.fn(),
-  cancelInput: vi.fn(), resources: vi.fn(), directory: vi.fn(), file: vi.fn(), saveFile: vi.fn(), git: vi.fn(), diff: vi.fn(),
+  cancelInput: vi.fn(), guideInput: vi.fn(), cancelSessionCreation: vi.fn(), resources: vi.fn(), directory: vi.fn(), file: vi.fn(), saveFile: vi.fn(), git: vi.fn(), diff: vi.fn(),
 }));
 vi.mock("@/lib/development-api", async (original) => ({ ...(await original<typeof import("@/lib/development-api")>()), developmentApi: api }));
 vi.mock("@/components/MarkdownText", () => ({ MarkdownText: ({ children }: { children: string }) => <div>{children}</div> }));
@@ -81,8 +81,9 @@ beforeEach(() => {
   projectApi.info.mockResolvedValue({ repository: null, repositoryState: "local", reason: "" });
   api.projects.mockResolvedValue([project]);
   api.sessions.mockImplementation(async (id: string) => Object.values(snapshots).map((value) => value.session).filter((value) => value.projectId === id));
-  api.createSession.mockImplementation(async (projectId: string, options: Partial<DevSession> = {}) => {
-    const value = { ...session(`dev_created_${Object.keys(snapshots).length}`, "新开发任务"), ...options, projectId };
+  api.createSession.mockImplementation(async (projectId: string, options: DevelopmentSessionOptions = {}) => {
+    const { requestId: _requestId, ...fields } = options;
+    const value = { ...session(`dev_created_${Object.keys(snapshots).length}`, "新开发任务"), ...fields, projectId };
     snapshots[value.id] = makeSnapshot(value); return value;
   });
   api.selectModelSource.mockImplementation(async (current: DevSession, route: { executor: ExecutorId; model: string | null; provider: string | null; effort: string | null }) => {
@@ -114,6 +115,15 @@ beforeEach(() => {
   api.git.mockResolvedValue({ available: false, files: [], reason: "不是 Git 项目" });
   api.file.mockResolvedValue({ path: "index.ts", content: "original", sha256: "filehash", bom: false });
   api.send.mockResolvedValue({ queued: false, run: { id: "run_first" } });
+  api.cancelSessionCreation.mockResolvedValue({ state: "cancelled", sessionId: null });
+  api.guideInput.mockImplementation(async (sessionId: string, inputId: string, revision: number, targetRunId: string) => {
+    const snapshot = snapshots[sessionId];
+    const queued = snapshot.pendingInputs.find((item) => item.id === inputId);
+    if (!queued) throw new Error("未找到排队消息");
+    const input = { ...queued, runId: targetRunId, intent: "steering" as const, revision: revision + 1 };
+    snapshot.pendingInputs = snapshot.pendingInputs.map((item) => item.id === inputId ? input : item);
+    return { input, queued: false };
+  });
   const store = useDevelopmentStore.getState(); store.selectProject(project.id); store.openSession(project.id, first.id);
 });
 afterEach(async () => { await act(async () => { cleanup(); }); vi.restoreAllMocks(); vi.useRealTimers(); });
@@ -124,9 +134,14 @@ async function openMoreAction(name: string) {
 }
 
 async function openWorkTab(title: string) {
-  const opener = screen.queryByRole("button", { name: "打开工作侧栏", exact: true });
+  const opener = await waitFor(() => {
+    const sidebar = screen.queryByRole("button", { name: "打开工作侧栏", exact: true });
+    const tabs = screen.queryByRole("button", { name: "打开工作标签", exact: true });
+    if (!sidebar && !tabs) throw new Error("工作侧栏尚未加载");
+    return sidebar;
+  }, { timeout: 5000 });
   if (opener) fireEvent.click(opener);
-  fireEvent.pointerDown(screen.getByRole("button", { name: "打开工作标签", exact: true }), { button: 0, ctrlKey: false });
+  fireEvent.pointerDown(await screen.findByRole("button", { name: "打开工作标签", exact: true }, { timeout: 5000 }), { button: 0, ctrlKey: false });
   fireEvent.click(await screen.findByRole("menuitem", { name: title, exact: true }));
 }
 
@@ -190,7 +205,7 @@ describe("development workbench", () => {
     api.capabilities.mockReturnValue(modelsRead.promise);
     render(<DevelopmentView />);
     await screen.findByRole("textbox", { name: "开发任务输入" });
-    await openMoreAction("新建开发任务");
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
     fireEvent.change(input, { target: { value: "先写好需求" } });
     expect(screen.getByRole("button", { name: "创建并发送开发任务" })).toBeDisabled();
@@ -284,25 +299,39 @@ describe("development workbench", () => {
     await screen.findByRole("button", { name: "打开开发任务：实现登录" });
     expect(screen.getByRole("button", { name: "打开开发任务：检查接口" })).toBeVisible();
     expect(screen.queryByRole("dialog", { name: "子任务读取失败" })).toBeNull();
-    const sidebar = await screen.findByRole("complementary", { name: "开发工作侧栏" });
+    const sidebar = await screen.findByRole("complementary", { name: "开发工作侧栏" }, { timeout: 5000 });
     expect(await within(sidebar).findByText("暂无已完成任务")).toBeVisible();
     expect(screen.queryByRole("dialog", { name: "子任务读取失败" })).toBeNull();
     expect([...reads.values()]).toEqual([2, 2, 2]);
     expect(api.send).not.toHaveBeenCalled();
     expect(api.createSession).not.toHaveBeenCalled();
   });
-  it("opens a subagent detail tab directly from the compact returned-result row", async () => {
+  it("opens a returned subagent from its original tool row", async () => {
     const child = { ...session("dev_linked_child", "协作 · 核对完整操作授权历史与归属关系"), parentSessionId: first.id, model: "test-model" };
     const childRun = { id: "linked_run", sessionId: child.id, executor: "mona" as const, status: "succeeded" as const, revision: 1,
       createdAt: "2026-10-08T00:00:00Z", finishedAt: "2026-10-08T00:00:10Z", resultMessageId: "linked_result" };
     snapshots[child.id] = { ...makeSnapshot(child), messageCount: 1, runs: [childRun], messages: [{ id: "linked_result", role: "assistant",
       content: "完整的子任务核对结果", toolCalls: [], truncated: false, queued: false, runId: childRun.id }] };
-    snapshots[first.id].messages = [{ id: "returned_child", role: "user", sourceKind: "collaboration", childSessionId: child.id,
-      content: "主会话不应展开的结果正文", toolCalls: [], truncated: false, queued: false }];
-    snapshots[first.id].messageCount = 1;
-    api.collaborations.mockResolvedValue([{ id: "linked_collaboration", parentSessionId: first.id, childSessionId: child.id, requestId: "linked_request",
-      title: "授权历史核对", executor: "mona", goal: "完整的任务目标", expectedOutput: "", readonly: true, state: "submitted", latestRun: childRun, returnMessageId: "returned_child", sourceDiffSha: null }]);
+    const parentRun: DevRun = { id: "parent_run", sessionId: first.id, executor: "mona", status: "succeeded", revision: 1,
+      createdAt: "2026-10-08T00:00:00Z", finishedAt: "2026-10-08T00:00:12Z", resultMessageId: "parent_result" };
+    const task = { id: "linked_collaboration", parentSessionId: first.id, childSessionId: child.id, requestId: "linked_request",
+      title: "授权历史核对", executor: "mona", goal: "完整的任务目标", expectedOutput: "", readonly: true, state: "submitted", latestRun: childRun, returnMessageId: "returned_child", sourceDiffSha: null };
+    snapshots[first.id].runs = [parentRun];
+    snapshots[first.id].messages = [
+      { id: "returned_child", role: "user", sourceKind: "collaboration", childSessionId: child.id,
+        content: "主会话不应展开的结果正文", toolCalls: [], truncated: false, queued: false },
+      { id: "parent_result", role: "assistant", runId: parentRun.id, content: "已处理协作结果", toolCalls: [], truncated: false, queued: false },
+    ];
+    snapshots[first.id].messageCount = 2;
+    snapshots[first.id].events = [
+      { id: "event_child_start", sequence: 1, runId: parentRun.id, type: "tool.started", payload: { itemId: "child_call", name: "development_collaboration", arguments: { action: "start", goal: task.goal } } },
+      { id: "event_child_done", sequence: 2, runId: parentRun.id, type: "tool.completed", payload: { itemId: "child_call", name: "development_collaboration", content: JSON.stringify(task) } },
+      { id: "event_parent_done", sequence: 3, runId: parentRun.id, type: "agent.message.completed", payload: { messageId: "parent_result" } },
+    ];
+    snapshots[first.id].eventCursor = 3;
+    api.collaborations.mockResolvedValue([task]);
     render(<DevelopmentView />);
+    fireEvent.click(await screen.findByRole("button", { name: "工作过程" }));
     const link = await screen.findByRole("button", { name: "查看子智能体任务：授权历史核对" });
     expect(link).toHaveTextContent("授权历史核对已完成");
     expect(screen.queryByText("主会话不应展开的结果正文")).toBeNull();
@@ -457,8 +486,8 @@ describe("development workbench", () => {
     api.send.mockResolvedValueOnce({ run, queued: false, reused: true });
     render(<DevelopmentView />);
     await screen.findByRole("textbox", { name: "开发任务输入" });
-    fireEvent.click(screen.getByRole("button", { name: "任务概览", exact: true }));
-    fireEvent.click(screen.getByRole("button", { name: "核对发送" }));
+    await openMoreAction("待处理事项");
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "任务状态与操作" })).getByRole("button", { name: "核对发送" }));
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(first.id, "request_original", "原请求内容"));
     expect(api.send).toHaveBeenCalledTimes(1);
     expect(useDevelopmentStore.getState().drafts[first.id]).toBe("保留新草稿");
@@ -489,7 +518,7 @@ describe("development workbench", () => {
   });
 
   it("keeps a new-task failure next to the draft instead of the page header", async () => {
-    api.createSession.mockRejectedValueOnce(new Error("新任务未创建"));
+    api.createSession.mockRejectedValueOnce(new DevelopmentApiError(422, "invalid_model", "新任务未创建"));
     render(<DevelopmentView />);
     fireEvent.click(await screen.findByRole("button", { name: "在 测试项目 新建会话" }));
     const form = await screen.findByTestId("development-new-task");
@@ -500,15 +529,15 @@ describe("development workbench", () => {
     expect(alert.closest("footer")).not.toBeNull();
   });
 
-  it("keeps uncertain send status in the title overview and reuses its request id", async () => {
+  it("keeps uncertain send status in pending actions and reuses its request id", async () => {
     useDevelopmentStore.getState().setSend(first.id, { id: "request_once", content: "只发送一次", uncertain: true });
     render(<DevelopmentView />);
     const scroll = await screen.findByLabelText("开发会话记录");
     expect(within(scroll).queryByText(/上次发送结果待核对/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "任务概览", exact: true }));
-    const status = within(screen.getByRole("region", { name: "任务概览浮卡" })).getByRole("status", { name: "发送状态待核对" });
-    expect(status).toHaveTextContent("不会重复启动任务");
     expect(within(screen.getByRole("textbox", { name: "开发任务输入" }).closest("footer")!).queryByText(/上次发送结果待核对/)).toBeNull();
+    await openMoreAction("待处理事项");
+    const status = within(await screen.findByRole("dialog", { name: "任务状态与操作" })).getByRole("status", { name: "发送状态待核对" });
+    expect(status).toHaveTextContent("不会重复启动任务");
     fireEvent.click(within(status as HTMLElement).getByRole("button", { name: "核对发送" }));
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(first.id, "request_once", "只发送一次"));
   });
@@ -522,9 +551,8 @@ describe("development workbench", () => {
     render(<DevelopmentView />);
     const scroll = await screen.findByLabelText("开发会话记录");
     expect(within(scroll).queryByRole("button", { name: "读取较早消息" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "任务概览", exact: true }));
-    const overview = screen.getByRole("region", { name: "任务概览浮卡" });
-    fireEvent.click(within(overview).getByRole("button", { name: "读取较早消息" }));
+    await openMoreAction("待处理事项");
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "任务状态与操作" })).getByRole("button", { name: "读取较早消息" }));
     expect(await screen.findByRole("dialog", { name: "操作未完成" })).toHaveTextContent("历史暂不可读取");
     expect(within(scroll).queryByText("历史暂不可读取")).toBeNull();
     expect(scroll.querySelector("footer")?.textContent).not.toContain("历史暂不可读取");
@@ -552,15 +580,16 @@ describe("development workbench", () => {
     expect(screen.getByRole("textbox", { name: "开发任务输入" })).toBeInTheDocument();
   });
 
-  it("puts pending confirmations in the title controls instead of the transcript", async () => {
+  it("places permission requests at the input and sends the decision once", async () => {
     snapshots.dev_first.pendingDecisions = [{ id: "decision_one", sessionId: first.id, runId: "run_one", kind: "permission", details: { reason: "需要确认本次操作" } }];
     render(<DevelopmentView />);
     const scroll = await screen.findByLabelText("开发会话记录");
-    expect(within(scroll).queryByLabelText("当前任务确认")).toBeNull();
-    const trigger = screen.getByRole("button", { name: "任务概览", exact: true });
-    expect(trigger).toHaveAttribute("aria-description", "有待处理事项");
-    fireEvent.click(trigger);
-    expect(within(screen.getByRole("region", { name: "任务概览浮卡" })).getByLabelText("当前任务确认")).toBeInTheDocument();
+    const confirmation = within(scroll.querySelector("footer")!).getByLabelText("当前任务确认");
+    expect(confirmation).toHaveTextContent("需要确认本次操作");
+    expect(screen.queryByRole("textbox", { name: "开发任务输入" })).toBeNull();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "允许一次" }));
+    await waitFor(() => expect(api.decide).toHaveBeenCalledWith(first.id, "decision_one", "accept"));
+    expect(api.decide).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a side-chat failure in that tab and gives a working retry", async () => {
@@ -808,6 +837,7 @@ describe("development workbench", () => {
   });
   it("only shows structured plan state, never hardcoded completed TODOs", async () => {
     snapshots.dev_first.plan = { runId: "run_plan", plan: [{ step: "核对真实文件", status: "completed" }, { step: "运行项目测试", status: "in_progress" }] };
+    api.git.mockResolvedValue({ available: true, branch: "main", count: 0, files: [] });
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
     fireEvent.click(screen.getByRole("button", { name: "任务概览", exact: true }));
     const plan = screen.getByRole("region", { name: "任务待办" });
@@ -878,9 +908,8 @@ describe("development workbench", () => {
     const failure = await screen.findByRole("dialog", { name: "操作未完成" });
     expect(failure).toHaveTextContent("连接中断");
     fireEvent.click(within(failure).getByRole("button", { name: "知道了" }));
-    fireEvent.click(screen.getByRole("button", { name: "任务概览", exact: true }));
-    const overview = screen.getByRole("region", { name: "任务概览浮卡" });
-    fireEvent.click(within(overview).getByRole("button", { name: "核对发送" }));
+    await openMoreAction("待处理事项");
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "任务状态与操作" })).getByRole("button", { name: "核对发送" }));
     await waitFor(() => expect(api.send).toHaveBeenCalledTimes(2));
     expect(api.send.mock.calls[1][1]).toBe(firstId);
   });
@@ -891,7 +920,7 @@ describe("development workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "index.ts" }));
     const editor = await screen.findByRole("textbox", { name: "项目文件编辑器" });
     fireEvent.change(editor, { target: { value: "my unsaved change" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存", exact: true }));
+    fireEvent.keyDown(editor, { key: "s", code: "KeyS", ctrlKey: true });
     await screen.findByText("文件已被其他操作修改");
     expect(editor).toHaveValue("my unsaved change");
     expect(api.saveFile).toHaveBeenCalledWith(project.id, expect.objectContaining({ sha256: "filehash" }), "my unsaved change");
@@ -988,11 +1017,10 @@ describe("development workbench", () => {
     expect(api.createSession).not.toHaveBeenCalled();
   });
 
-  it.each(["新建开发任务", "在 测试项目 新建会话"])("%s opens a draft page and only creates the conversation on first send", async (name) => {
+  it("opens a draft page from the project list and only creates the conversation on first send", async () => {
     render(<DevelopmentView />);
     fireEvent.change(await screen.findByRole("textbox", { name: "开发任务输入" }), { target: { value: "旧会话草稿" } });
-    if (name === "新建开发任务") await openMoreAction(name);
-    else fireEvent.click(screen.getByRole("button", { name, exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     const draft = await screen.findByRole("textbox", { name: "新开发任务输入" });
     expect(draft).toHaveFocus();
     expect(screen.getByRole("heading", { name: "你想让我们在 测试项目 中构建什么？" })).toBeInTheDocument();
@@ -1030,37 +1058,537 @@ describe("development workbench", () => {
     await waitFor(() => expect(screen.getByTestId("development-pane")).toHaveAttribute("aria-label", "requirements.md"));
     await waitFor(() => expect(screen.getByTestId("development-session-dev_created_2")).toHaveTextContent("requirements.md"));
   });
+  it("restores an unsent new-task draft, attachment and route after the workbench reloads", async () => {
+    snapshots.dev_first.session = { ...first, model: "same-model", modelProvider: "custom-relay", modelReasoningEffort: "high" };
+    const { client, sendDocUpload } = documentUploadClient();
+    const workbench = () => <ClientProvider client={client} token="" runtimeStatus="ready"><DevelopmentView /></ClientProvider>;
+    const view = render(workbench());
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(input, { target: { value: "稍后完成的需求" } });
+    const file = new File(["spec"], "requirements.md", { type: "text/markdown" });
+    Object.defineProperty(file, "path", { value: "D:/project/requirements.md" });
+    fireEvent.change(screen.getByTestId("development-new-task").querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [file] } });
+    await waitFor(() => expect(sendDocUpload).toHaveBeenCalledOnce());
+    await screen.findByText("requirements.md");
+    const key = "mona.development.workbench.v1";
+    const persisted = localStorage.getItem(key)!;
+    expect(JSON.parse(persisted).state.newTaskDrafts[project.id]).toMatchObject({ draft: "稍后完成的需求", model: "same-model", provider: "custom-relay", effort: "high", documents: [{ name: "requirements.md" }] });
+    view.unmount();
+    useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+    localStorage.setItem(key, persisted);
+    await act(async () => { await useDevelopmentStore.persist.rehydrate(); });
+    render(workbench());
+    expect(await screen.findByRole("textbox", { name: "新开发任务输入" })).toHaveValue("稍后完成的需求");
+    expect(screen.getByText("requirements.md")).toBeInTheDocument();
+    expect(api.createSession).not.toHaveBeenCalled();
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("continues an uncertain creation after reload with the original identity, route, text and attachments", async () => {
+    snapshots.dev_first.session = { ...first, model: "original-model", modelProvider: "original-provider", modelReasoningEffort: "high" };
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    api.createSession.mockRejectedValueOnce(new DevelopmentApiError(401, "unauthorized", "请重新登录后继续"));
+    const { client, sendDocUpload } = documentUploadClient();
+    const workbench = () => <ClientProvider client={client} token="" runtimeStatus="ready"><DevelopmentView /></ClientProvider>;
+    const view = render(workbench());
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(input, { target: { value: "原任务内容" } });
+    const file = new File(["original"], "original.txt", { type: "text/plain" });
+    Object.defineProperty(file, "path", { value: "D:/project/original.txt" });
+    fireEvent.change(screen.getByTestId("development-new-task").querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [file] } });
+    await waitFor(() => expect(sendDocUpload).toHaveBeenCalledOnce());
+    await screen.findByText("original.txt");
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "继续上次提交" });
+    const originalRequest = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    const createOptions = api.createSession.mock.calls[0][1];
+    expect(createOptions).toMatchObject({ requestId: originalRequest.requestId, model: "original-model", modelProvider: "original-provider", modelReasoningEffort: "high", title: "原任务内容" });
+    expect(api.send).not.toHaveBeenCalled();
+    const key = "mona.development.workbench.v1";
+    const persisted = localStorage.getItem(key)!;
+    view.unmount();
+    useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+    localStorage.setItem(key, persisted);
+    await act(async () => { await useDevelopmentStore.persist.rehydrate(); });
+    render(workbench());
+    const restored = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(restored, { target: { value: "修改后的新草稿" } });
+    act(() => {
+      const state = useDevelopmentStore.getState();
+      state.setNewTaskDraft(project.id, { ...state.newTaskDrafts[project.id], model: "new-model", provider: "new-provider", documents: [{ name: "new.txt", path: "uploads/new.txt" }] });
+    });
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "创建并发送开发任务" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "继续上次提交" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(2));
+    expect(api.createSession.mock.calls[1][1]).toEqual(createOptions);
+    expect(await screen.findByText("请重新登录后继续")).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].requestId).toBe(originalRequest.requestId);
+    expect(api.send).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "继续上次提交" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(3));
+    expect(api.createSession.mock.calls[2][1]).toEqual(createOptions);
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith("dev_created_2", originalRequest.sendRequestId, "原任务内容", undefined, originalRequest.attachments));
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id]).toMatchObject({ draft: "修改后的新草稿", model: "new-model", provider: "new-provider", documents: [{ name: "new.txt", path: "uploads/new.txt" }] });
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined();
+  });
+  it("ignores an older failed creation attempt after the same request is continued", async () => {
+    let rejectFirst!: (reason: Error) => void;
+    let resolveSecond!: (value: DevSession) => void;
+    api.createSession.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }));
+    api.createSession.mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "保持原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledOnce());
+    const requestId = useDevelopmentStore.getState().pendingNewTasks[project.id].requestId;
+    view.unmount();
+    render(<DevelopmentView />);
+    fireEvent.click(await screen.findByRole("button", { name: "继续上次提交" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(2));
+    expect(api.createSession.mock.calls[1][1].requestId).toBe(requestId);
+    await act(async () => rejectFirst(new DevelopmentApiError(422, "invalid_model", "旧尝试被拒绝")));
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].requestId).toBe(requestId);
+    const created = session("dev_continued", "保持原提交");
+    snapshots[created.id] = makeSnapshot(created);
+    await act(async () => resolveSecond(created));
+    await waitFor(() => expect(api.send).toHaveBeenCalledOnce());
+    expect(api.send).toHaveBeenCalledWith(created.id, expect.any(String), "保持原提交");
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined();
+  });
+  it("preserves an existing session draft when a lost creation response is recovered", async () => {
+    const created = session("dev_already_created", "原提交");
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost")).mockResolvedValueOnce(created);
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "继续上次提交" });
+    snapshots[created.id] = makeSnapshot(created);
+    act(() => {
+      useDevelopmentStore.getState().setDraft(created.id, "已在新会话输入的草稿");
+      useDevelopmentStore.getState().setDocumentDraft(created.id, [{ name: "existing.txt", path: "uploads/existing.txt" }]);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续上次提交" }));
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith(created.id, expect.any(String), "原提交"));
+    expect(useDevelopmentStore.getState().drafts[created.id]).toBe("已在新会话输入的草稿");
+    expect(useDevelopmentStore.getState().documentDrafts[created.id]).toEqual([{ name: "existing.txt", path: "uploads/existing.txt" }]);
+  });
+  it("does not replace another unconfirmed send in the recovered session", async () => {
+    const created = session("dev_busy_created", "原提交");
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost")).mockResolvedValueOnce(created);
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "继续上次提交" });
+    const requestId = useDevelopmentStore.getState().pendingNewTasks[project.id].requestId;
+    act(() => useDevelopmentStore.getState().setSend(created.id, { id: "request_other", content: "另一个发送", uncertain: true }));
+    fireEvent.click(screen.getByRole("button", { name: "继续上次提交" }));
+    expect(await screen.findByText(/此任务还有未确认的发送/)).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().sends[created.id]).toMatchObject({ id: "request_other", content: "另一个发送" });
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].requestId).toBe(requestId);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("requires confirmed abandonment before starting a new task after a creation conflict", async () => {
+    api.createSession.mockRejectedValueOnce(new DevelopmentApiError(409, "creation_request_conflict", "提交参数不一致"));
+    api.cancelSessionCreation.mockResolvedValueOnce({ state: "rejected", sessionId: "dev_existing" });
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(input, { target: { value: "保留当前输入" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    expect(await screen.findByText(/上次提交无法继续/)).toBeInTheDocument();
+    const originalId = useDevelopmentStore.getState().pendingNewTasks[project.id].requestId;
+    expect(screen.queryByRole("button", { name: "继续上次提交" })).toBeNull();
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    expect(screen.getByRole("textbox", { name: "新开发任务输入" })).toHaveValue("保留当前输入");
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].requestId).toBe(originalId);
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    await waitFor(() => expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined());
+    expect(api.cancelSessionCreation).toHaveBeenCalledWith(project.id, originalId, expect.any(Object), expect.any(String));
+    expect(screen.getByText(/提交信息与已有记录不一致，已结束本地等待/)).toBeInTheDocument();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.deleteSession).not.toHaveBeenCalled();
+    expect(api.interrupt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(2));
+    expect(api.createSession.mock.calls[1][1].requestId).not.toBe(originalId);
+  });
+  it("retries an unconfirmed abandonment after reload and preserves the current draft", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("create response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("cancel response lost"))
+      .mockResolvedValueOnce({ state: "accepted", sessionId: "dev_existing" });
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(input, { target: { value: "原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "放弃本次提交" });
+    const original = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    act(() => {
+      const state = useDevelopmentStore.getState();
+      state.setNewTaskDraft(project.id, { ...state.newTaskDrafts[project.id], draft: "修改后的草稿", documents: [{ name: "new.txt", path: "uploads/new.txt" }] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    expect(await screen.findByText(/暂未确认放弃/)).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toMatchObject({ requestId: original.requestId, state: "cancelling" });
+    expect(api.cancelSessionCreation).toHaveBeenCalledWith(project.id, original.requestId, original.options, original.sendRequestId);
+    expect(api.send).not.toHaveBeenCalled();
+    const key = "mona.development.workbench.v1";
+    const persisted = localStorage.getItem(key)!;
+    view.unmount();
+    useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+    localStorage.setItem(key, persisted);
+    await act(async () => { await useDevelopmentStore.persist.rehydrate(); });
+    render(<DevelopmentView />);
+    expect(await screen.findByRole("textbox", { name: "新开发任务输入" })).toHaveValue("修改后的草稿");
+    expect(screen.queryByRole("button", { name: "继续上次提交" })).toBeNull();
+    expect(api.cancelSessionCreation).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    expect(await screen.findByText(/原提交已被接收，任务状态可在原会话查看/)).toBeInTheDocument();
+    expect(api.cancelSessionCreation).toHaveBeenCalledTimes(2);
+    expect(api.cancelSessionCreation.mock.calls[1]).toEqual(api.cancelSessionCreation.mock.calls[0]);
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined();
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id]).toMatchObject({ draft: "修改后的草稿", documents: [{ name: "new.txt", path: "uploads/new.txt" }] });
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.deleteSession).not.toHaveBeenCalled();
+    expect(api.interrupt).not.toHaveBeenCalled();
+  });
+  it("keeps unconfirmed abandonment after another window persists stale workbench state", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("create response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("cancel request did not arrive"));
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "跨窗口保留草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "放弃本次提交" });
+    const original = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    const key = "mona.development.workbench.v1";
+    const stale = localStorage.getItem(key)!;
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    expect(await screen.findByText(/暂未确认放弃/)).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].state).toBe("cancelling");
+    localStorage.setItem(key, stale);
+    view.unmount();
+    useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+    localStorage.setItem(key, stale);
+    await act(async () => { await useDevelopmentStore.persist.rehydrate(); });
+    render(<DevelopmentView />);
+    expect(await screen.findByRole("button", { name: "继续放弃本次提交" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续上次提交" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledTimes(2));
+    expect(api.cancelSessionCreation.mock.calls[1]).toEqual([project.id, original.requestId, original.options, original.sendRequestId]);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("keeps another project's cancellation outbox when the first is confirmed", async () => {
+    const otherProject: DevProject = { id: "project_other", rootPath: "D:/other", displayName: "其他项目", lastOpenedAt: "" };
+    api.projects.mockResolvedValue([project, otherProject]);
+    api.createSession.mockRejectedValue(new TypeError("response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("first response lost"))
+      .mockRejectedValueOnce(new TypeError("second response lost"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "项目一草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await screen.findByText(/暂未确认放弃/);
+    const first = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    fireEvent.click(screen.getByRole("button", { name: "在 其他项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "项目二草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await screen.findByText(/暂未确认放弃/);
+    const second = useDevelopmentStore.getState().pendingNewTasks[otherProject.id];
+    const prefix = "mona.development.creation-cancel.pending.v1:";
+    const firstKey = `${prefix}${encodeURIComponent(project.id)}:${encodeURIComponent(first.requestId)}`;
+    const secondKey = `${prefix}${encodeURIComponent(otherProject.id)}:${encodeURIComponent(second.requestId)}`;
+    expect(localStorage.getItem(firstKey)).not.toBeNull();
+    expect(localStorage.getItem(secondKey)).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "继续放弃本次提交" }));
+    await waitFor(() => expect(localStorage.getItem(firstKey)).toBeNull());
+    expect(localStorage.getItem(secondKey)).not.toBeNull();
+    expect(useDevelopmentStore.getState().pendingNewTasks[otherProject.id].requestId).toBe(second.requestId);
+    expect(api.cancelSessionCreation.mock.calls[2]).toEqual([project.id, first.requestId, first.options, first.sendRequestId]);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("resolves an older cancellation without overwriting another pending request in the same project", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("cancel response lost"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "第一个提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await screen.findByText(/暂未确认放弃/);
+    const first = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    const other = { ...first, requestId: "request_other", sendRequestId: "request_other_send", content: "第二个提交",
+      options: { ...first.options, title: "第二个提交" }, draft: { ...first.draft, draft: "第二个草稿" }, state: "pending" as const };
+    act(() => {
+      const state = useDevelopmentStore.getState();
+      state.setPendingNewTask(project.id, other);
+      state.setNewTaskDraft(project.id, other.draft);
+    });
+    expect(screen.getByRole("textbox", { name: "新开发任务输入" })).toHaveValue("第二个草稿");
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledTimes(2));
+    expect(api.cancelSessionCreation.mock.calls[1]).toEqual([project.id, first.requestId, first.options, first.sendRequestId]);
+    await waitFor(() => expect(screen.getByRole("button", { name: "继续上次提交" })).toBeInTheDocument());
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toMatchObject({ requestId: other.requestId, content: "第二个提交", state: "pending" });
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id].draft).toBe("第二个草稿");
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("preserves another window's newer pending request when confirming an older cancellation", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("cancel response lost"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "旧提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await screen.findByText(/暂未确认放弃/);
+    const first = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    const other = { ...first, requestId: "request_new_window", sendRequestId: "request_new_window_send", content: "另一提交",
+      options: { ...first.options, title: "另一提交" }, draft: { ...first.draft, draft: "另一窗口草稿" }, state: "pending" };
+    const key = "mona.development.workbench.v1";
+    const saved = JSON.parse(localStorage.getItem(key)!);
+    saved.state.pendingNewTasks[project.id] = other;
+    saved.state.newTaskDrafts[project.id] = other.draft;
+    localStorage.setItem(key, JSON.stringify(saved));
+    fireEvent.change(screen.getByRole("textbox", { name: "新开发任务输入" }), { target: { value: "不能覆盖另一提交" } });
+    expect(screen.getByText("此项目在其他窗口有待确认提交，请先在原窗口处理。")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(key)!).state.pendingNewTasks[project.id].requestId).toBe(other.requestId);
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledTimes(2));
+    await screen.findByText("上次提交已放弃，当前草稿已保留。");
+    const persisted = JSON.parse(localStorage.getItem(key)!);
+    expect(persisted.state.pendingNewTasks[project.id].requestId).toBe(other.requestId);
+    expect(persisted.state.newTaskDrafts[project.id].draft).toBe("另一窗口草稿");
+    expect(api.cancelSessionCreation.mock.calls[1]).toEqual([project.id, first.requestId, first.options, first.sendRequestId]);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("keeps the current window's edited draft when another window starts abandonment", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new TypeError("cancel response lost"));
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    const input = await screen.findByRole("textbox", { name: "新开发任务输入" });
+    fireEvent.change(input, { target: { value: "原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "放弃本次提交" });
+    fireEvent.change(input, { target: { value: "本窗口的新草稿" } });
+    const pending = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    const key = `mona.development.creation-cancel.pending.v1:${encodeURIComponent(project.id)}:${encodeURIComponent(pending.requestId)}`;
+    const remote = JSON.stringify({ projectId: project.id, pending: { ...pending, state: "cancelling" }, draft: { ...pending.draft, draft: "另一窗口的草稿" } });
+    localStorage.setItem(key, remote);
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key, newValue: remote })));
+    expect(screen.getByRole("textbox", { name: "新开发任务输入" })).toHaveValue("本窗口的新草稿");
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    await screen.findByText(/暂未确认放弃/);
+    const rootKey = "mona.development.workbench.v1";
+    const persisted = localStorage.getItem(rootKey)!;
+    view.unmount();
+    useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+    localStorage.setItem(rootKey, persisted);
+    await act(async () => { await useDevelopmentStore.persist.rehydrate(); });
+    render(<DevelopmentView />);
+    expect(await screen.findByRole("textbox", { name: "新开发任务输入" })).toHaveValue("本窗口的新草稿");
+    fireEvent.click(screen.getByRole("button", { name: "继续放弃本次提交" }));
+    await screen.findByText("上次提交已放弃，当前草稿已保留。");
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id].draft).toBe("本窗口的新草稿");
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("does not release an abandonment rejected for conflicting message identity", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    api.cancelSessionCreation.mockRejectedValueOnce(new DevelopmentApiError(409, "creation_request_conflict", "消息标识不一致"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "保留草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "放弃本次提交" });
+    const original = useDevelopmentStore.getState().pendingNewTasks[project.id];
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    expect(await screen.findByText(/暂未确认放弃/)).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toMatchObject({ requestId: original.requestId, state: "cancelling" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id].requestId).toBe(original.requestId);
+    expect(screen.getByRole("textbox", { name: "新开发任务输入" })).toHaveValue("保留草稿");
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("does not request abandonment until its local outbox is saved", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "保留草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await screen.findByRole("button", { name: "放弃本次提交" });
+    const original = localStorage.setItem.bind(localStorage);
+    const write = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key.startsWith("mona.development.creation-cancel.pending.v1:")) throw new Error("storage unavailable");
+      return original(key, value);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    expect(await screen.findByText("无法保存放弃状态，请检查本地存储后重试。")).toBeInTheDocument();
+    expect(api.cancelSessionCreation).not.toHaveBeenCalled();
+    expect(api.send).not.toHaveBeenCalled();
+    write.mockRestore();
+    fireEvent.click(screen.getByRole("button", { name: "放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledOnce());
+  });
+  it("does not dispatch a late creation response while abandonment is pending", async () => {
+    let resolveCreate!: (value: DevSession) => void;
+    let resolveCancel!: (value: { state: "cancelled"; sessionId: string | null }) => void;
+    api.createSession.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    api.cancelSessionCreation.mockImplementationOnce(() => new Promise((resolve) => { resolveCancel = resolve; }));
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "不要迟到发送" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledOnce());
+    const requestId = useDevelopmentStore.getState().pendingNewTasks[project.id].requestId;
+    view.unmount();
+    render(<DevelopmentView />);
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledOnce());
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toMatchObject({ requestId, state: "cancelling" });
+    const created = session("dev_late_create", "不要迟到发送");
+    snapshots[created.id] = makeSnapshot(created);
+    await act(async () => resolveCreate(created));
+    expect(api.send).not.toHaveBeenCalled();
+    await act(async () => resolveCancel({ state: "cancelled", sessionId: created.id }));
+    expect(await screen.findByText("上次提交已放弃，当前草稿已保留。")).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id].draft).toBe("不要迟到发送");
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.deleteSession).not.toHaveBeenCalled();
+  });
+  it("observes cancellation from another window before dispatching a late creation response", async () => {
+    let resolveCreate!: (value: DevSession) => void;
+    api.createSession.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "跨窗口取消" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledOnce());
+    const key = "mona.development.workbench.v1";
+    const saved = JSON.parse(localStorage.getItem(key)!);
+    saved.state.pendingNewTasks[project.id].state = "cancelling";
+    const remote = JSON.stringify(saved);
+    localStorage.setItem(key, remote);
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key, newValue: remote })));
+    expect(screen.getByText("正在放弃上次提交…")).toBeInTheDocument();
+    const created = session("dev_other_window", "跨窗口取消");
+    snapshots[created.id] = makeSnapshot(created);
+    await act(async () => resolveCreate(created));
+    expect(api.send).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "继续放弃本次提交" })).toBeInTheDocument();
+  });
+  it("accepts the server cancellation tombstone for a late creation retry", async () => {
+    api.createSession.mockRejectedValueOnce(new TypeError("response lost"))
+      .mockRejectedValueOnce(new DevelopmentApiError(409, "creation_request_cancelled", "提交已放弃"));
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "保留原稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "继续上次提交" }));
+    expect(await screen.findByText(/上次提交不会继续发送/)).toBeInTheDocument();
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined();
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id].draft).toBe("保留原稿");
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("settles a pending abandonment when a late creation request sees the tombstone", async () => {
+    let rejectCreate!: (reason: Error) => void;
+    let resolveCancel!: (value: { state: "cancelled"; sessionId: string | null }) => void;
+    api.createSession.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCreate = reject; }));
+    api.cancelSessionCreation.mockImplementationOnce(() => new Promise((resolve) => { resolveCancel = resolve; }));
+    const view = render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "原提交" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledOnce());
+    view.unmount();
+    render(<DevelopmentView />);
+    fireEvent.click(await screen.findByRole("button", { name: "放弃本次提交" }));
+    await waitFor(() => expect(api.cancelSessionCreation).toHaveBeenCalledOnce());
+    await act(async () => rejectCreate(new DevelopmentApiError(409, "creation_request_cancelled", "提交已放弃")));
+    expect(useDevelopmentStore.getState().pendingNewTasks[project.id]).toBeUndefined();
+    expect(api.send).not.toHaveBeenCalled();
+    await act(async () => resolveCancel({ state: "cancelled", sessionId: "dev_created" }));
+    expect(await screen.findByText("上次提交已放弃，当前草稿已保留。")).toBeInTheDocument();
+    expect(api.send).not.toHaveBeenCalled();
+  });
+  it("does not create a task until its stable request can be saved", async () => {
+    render(<DevelopmentView />);
+    await screen.findByRole("textbox", { name: "开发任务输入" });
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "需要可靠保存" } });
+    const storage = useDevelopmentStore.persist.getOptions().storage!;
+    const write = vi.spyOn(storage, "setItem").mockImplementation(() => { throw new Error("storage unavailable"); });
+    fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
+    expect(await screen.findByText("无法保存提交信息，请检查本地存储后重试。")).toBeInTheDocument();
+    expect(api.createSession).not.toHaveBeenCalled();
+    expect(api.send).not.toHaveBeenCalled();
+    write.mockRestore();
+    fireEvent.click(screen.getByRole("button", { name: "继续上次提交" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledOnce());
+  });
   it("carries the exact channel, model and effort into the deferred new conversation", async () => {
     snapshots.dev_first.session = { ...first, model: "same-model", modelProvider: "custom-relay", modelReasoningEffort: "high" };
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
-    await openMoreAction("新建开发任务");
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     expect(api.createSession).not.toHaveBeenCalled();
     fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "沿用当前模型" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
-    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith(project.id, {
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith(project.id, expect.objectContaining({
       executor: "mona", model: "same-model", modelProvider: "custom-relay", modelReasoningEffort: "high",
       title: "沿用当前模型",
-    }));
+      requestId: expect.stringMatching(/^request_/),
+    })));
     expect(api.selectModelSource).not.toHaveBeenCalled();
   });
   it("deduplicates first send and does not steal focus after the user switches sessions", async () => {
     let finish!: (value: DevSession) => void;
     api.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
-    await openMoreAction("新建开发任务");
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "后台创建" } });
     const send = screen.getByRole("button", { name: "创建并发送开发任务" });
     fireEvent.click(send); fireEvent.click(send);
     expect(api.createSession).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByRole("textbox", { name: "新开发任务输入" }), { target: { value: "创建期间的新草稿" } });
     fireEvent.click(screen.getByRole("button", { name: "打开开发任务：检查接口", exact: true }));
     await act(async () => { finish(session("dev_late", "新开发任务")); });
     await waitFor(() => expect(api.send).toHaveBeenCalledWith("dev_late", expect.any(String), "后台创建"));
     expect(useDevelopmentStore.getState().views[project.id].sessionId).toBe(second.id);
+    expect(useDevelopmentStore.getState().newTaskDrafts[project.id].draft).toBe("创建期间的新草稿");
   });
   it("keeps the new-task input when creation fails and does not retry automatically", async () => {
-    api.createSession.mockRejectedValueOnce(new Error("新建请求失败"));
+    api.createSession.mockRejectedValueOnce(new DevelopmentApiError(422, "invalid_model", "新建请求失败"));
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
-    await openMoreAction("新建开发任务");
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     const draft = await screen.findByRole("textbox", { name: "新开发任务输入" });
     fireEvent.change(draft, { target: { value: "保留输入" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
@@ -1071,7 +1599,7 @@ describe("development workbench", () => {
     expect(api.send).not.toHaveBeenCalled();
   });
   it.each([
-    ["codex", "OpenAI", null], ["claude", "Anthropic", null], ["codebuddy", "CodeBuddy", null], ["mona", "内部渠道", "custom-relay"],
+    ["codex", "OpenAI", null], ["claude", "Anthropic", null], ["codebuddy", "WorkBuddy", null], ["mona", "内部渠道", "custom-relay"],
   ] as const)("selecting a %s model is the only action needed to route execution", async (engine, label, provider) => {
     api.capabilities.mockResolvedValue({ executors: [
       { id: "mona", name: "Mona Coding", available: true, reason: "", models: [{ id: "", label: "默认模型" },
@@ -1086,11 +1614,11 @@ describe("development workbench", () => {
     expect(api.selectModelSource).toHaveBeenCalledWith(first, { executor: engine, model: "same-model", provider, effort: null });
     expect(api.switchExecutor).not.toHaveBeenCalled();
     expect(api.send).not.toHaveBeenCalled();
-    await openMoreAction("新建开发任务");
+    fireEvent.click(screen.getByRole("button", { name: "在 测试项目 新建会话", exact: true }));
     expect(api.createSession).not.toHaveBeenCalled();
     fireEvent.change(await screen.findByRole("textbox", { name: "新开发任务输入" }), { target: { value: "使用所选模型创建任务" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并发送开发任务" }));
-    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith(project.id, { executor: engine, model: "same-model", modelProvider: provider, modelReasoningEffort: null, title: "使用所选模型创建任务" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith(project.id, expect.objectContaining({ executor: engine, model: "same-model", modelProvider: provider, modelReasoningEffort: null, title: "使用所选模型创建任务", requestId: expect.stringMatching(/^request_/) })));
   });
   it("queues active Code input using the shared shortcut without a mode selector", async () => {
     snapshots.dev_first.runs = [{ id: "run_active", sessionId: first.id, executor: "mona", status: "running", revision: 1, createdAt: "2026-09-26T01:00:00Z" }];
@@ -1105,17 +1633,24 @@ describe("development workbench", () => {
     expect(api.switchExecutor).not.toHaveBeenCalled();
   });
 
-  it.each(["append", "edit", "delete"] as const)("uses the shared queue %s action after cancelling the original input", async (action) => {
+  it.each(["append", "edit", "delete"] as const)("uses the shared queue %s action with the original input identity", async (action) => {
     snapshots.dev_first.runs = [{ id: "run_active", sessionId: first.id, executor: "mona", status: "running", revision: 1, createdAt: "" }];
     snapshots.dev_first.pendingInputs = [{ id: "queued_1", messageId: "message_queued", runId: "run_active", state: "pending", revision: 0, intent: "follow_up" }];
     snapshots.dev_first.messages = [{ id: "message_queued", role: "user", content: "检查新需求", queued: true, toolCalls: [], truncated: false }];
     snapshots.dev_first.messageCount = 1;
     api.cancelInput.mockImplementation(async () => { snapshots.dev_first.pendingInputs = []; });
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
-    fireEvent.click(screen.getByRole("button", { name: i18n.t(`thread.composer.pendingQueue.${action}Aria`) }));
-    await waitFor(() => expect(api.cancelInput).toHaveBeenCalledWith(first.id, "queued_1"));
-    if (action === "append") await waitFor(() => expect(api.send).toHaveBeenCalledWith(first.id, expect.any(String), "检查新需求", "steering"));
-    else {
+    if (action === "edit") {
+      fireEvent.pointerDown(screen.getByRole("button", { name: /^(更多操作|More actions)$/ }), { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole("menuitem", { name: i18n.t("thread.composer.pendingQueue.editAria") }));
+    } else fireEvent.click(screen.getByRole("button", { name: i18n.t(`thread.composer.pendingQueue.${action}Aria`) }));
+    if (action === "append") {
+      await waitFor(() => expect(api.guideInput).toHaveBeenCalledWith(first.id, "queued_1", 0, "run_active"));
+      expect(api.cancelInput).not.toHaveBeenCalled();
+      expect(api.send).not.toHaveBeenCalled();
+      expect(snapshots.dev_first.pendingInputs[0]).toMatchObject({ id: "queued_1", messageId: "message_queued", intent: "steering" });
+    } else {
+      await waitFor(() => expect(api.cancelInput).toHaveBeenCalledWith(first.id, "queued_1"));
       expect(api.send).not.toHaveBeenCalled();
       if (action === "edit") await waitFor(() => expect(screen.getByRole("textbox", { name: "开发任务输入" })).toHaveValue("检查新需求"));
     }
@@ -1127,7 +1662,7 @@ describe("development workbench", () => {
     snapshots.dev_first.messageCount = 1;
     api.cancelInput.mockRejectedValueOnce(new Error("消息已开始执行"));
     render(<DevelopmentView />); await screen.findByRole("textbox", { name: "开发任务输入" });
-    fireEvent.click(screen.getByRole("button", { name: i18n.t("thread.composer.pendingQueue.appendAria") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("thread.composer.pendingQueue.deleteAria") }));
     await waitFor(() => expect(api.cancelInput).toHaveBeenCalledTimes(1));
     expect(within(screen.getByLabelText("开发会话记录")).queryByText("消息已开始执行")).toBeNull();
     const failure = await screen.findByRole("dialog", { name: "操作未完成" });

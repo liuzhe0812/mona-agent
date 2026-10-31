@@ -101,6 +101,7 @@ AGENT_EXCLUSIVE_TOOLS: dict[str, frozenset[str]] = {
     "com.mona.musician": frozenset({"guitar_tab", "music_score"}),
 }
 TOOL_AGENT_OWNERS: dict[str, frozenset[str]] = {
+    "development_workbench": frozenset({"mona"}),
     **{
         name: frozenset({agent_id})
         for agent_id in ("com.mona.academic-researcher", "com.mona.musician")
@@ -120,6 +121,7 @@ MONA_CONTEXTUAL_TOOLS = (
     "canvas",
     "complete_goal",
     "delegate_agent",
+    "development_workbench",
     "hoard_capture",
     "hoard_search",
     "long_task",

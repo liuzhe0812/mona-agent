@@ -646,6 +646,8 @@ export interface UIMessage {
   historyPosition?: number;
   /** Stable backend task identity shared by the initial request and injected follow-ups. */
   taskId?: string;
+  /** Identity of one streamed assistant segment, shared with transcript replay. */
+  streamId?: string;
   /** Local input awaiting admission or explicitly rejected; retain it until the user retries. */
   sendState?: "pending" | "rejected";
   /** Short display text for user messages (e.g. action label). Falls back to ``content``. */

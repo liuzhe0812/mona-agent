@@ -16,9 +16,52 @@ import { DevelopmentNewTask, type NewTaskDraft } from "./DevelopmentNewTask";
 import { developmentModels, developmentModelRoute } from "./development-models";
 import { refreshDevelopmentSession, useDevelopmentSession } from "./useDevelopmentSession";
 import { stopDevelopmentTerminal } from "./terminal-lifecycle";
-import { attachmentDraft, EMPTY_SIDE, EMPTY_VIEW, useDevelopmentStore, type TerminalState } from "./store";
+import { attachmentDraft, DEVELOPMENT_STORAGE_KEY, EMPTY_SIDE, EMPTY_VIEW, useDevelopmentStore, type PendingNewTask, type TerminalState } from "./store";
 
 const DevelopmentSidebar = lazy(() => import("./DevelopmentSidebar").then((module) => ({ default: module.DevelopmentSidebar })));
+const CANCELLATION_OUTBOX_PREFIX = "mona.development.creation-cancel.pending.v1:";
+interface CancellationOutboxEntry { projectId: string; pending: PendingNewTask; draft?: NewTaskDraft }
+
+function cancellationOutboxKey(projectId: string, requestId: string) {
+  return `${CANCELLATION_OUTBOX_PREFIX}${encodeURIComponent(projectId)}:${encodeURIComponent(requestId)}`;
+}
+
+function readCancellationEntry(key: string): CancellationOutboxEntry | undefined {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return undefined;
+  const entry = JSON.parse(raw) as CancellationOutboxEntry | null;
+  if (!entry || typeof entry.projectId !== "string" || typeof entry.pending?.requestId !== "string"
+    || typeof entry.pending.sendRequestId !== "string" || entry.pending.state !== "cancelling"
+    || key !== cancellationOutboxKey(entry.projectId, entry.pending.requestId)) throw new Error("invalid cancellation record");
+  return entry;
+}
+
+function readCancellationOutbox(): CancellationOutboxEntry[] {
+  const entries: CancellationOutboxEntry[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith(CANCELLATION_OUTBOX_PREFIX)) continue;
+    const entry = readCancellationEntry(key);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+function saveCancellationOutbox(entry: CancellationOutboxEntry): void {
+  const key = cancellationOutboxKey(entry.projectId, entry.pending.requestId);
+  localStorage.setItem(key, JSON.stringify(entry));
+  if (localStorage.getItem(key) !== JSON.stringify(entry)) throw new Error("cancellation persistence failed");
+}
+
+function removeCancellationOutbox(entry: CancellationOutboxEntry): void {
+  const key = cancellationOutboxKey(entry.projectId, entry.pending.requestId);
+  localStorage.removeItem(key);
+  if (localStorage.getItem(key) !== null) throw new Error("cancellation cleanup failed");
+}
+
+function savedPendingNewTask(projectId: string): PendingNewTask | undefined {
+  return JSON.parse(localStorage.getItem(DEVELOPMENT_STORAGE_KEY) ?? "null")?.state?.pendingNewTasks?.[projectId];
+}
 
 export function DevelopmentView({ visible = true, browserHost, onOpenModelSettings }: { visible?: boolean; browserHost?: DevelopmentBrowserHost; onOpenModelSettings?: () => void }) {
   const selectedProject = useDevelopmentStore((s) => s.projectId);
@@ -32,6 +75,12 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
   const [modelsError, setModelsError] = useState("");
   const [projectError, setProjectError] = useState("");
   const [newTaskError, setNewTaskError] = useState("");
+  const [newTaskNotices, setNewTaskNotices] = useState<Record<string, string>>({});
+  const [outboxState, setOutboxState] = useState<{ entries: CancellationOutboxEntry[]; error: string }>(() => {
+    try { return { entries: readCancellationOutbox(), error: "" }; }
+    catch { return { entries: [], error: "无法读取上次放弃状态，请检查本地存储。" }; }
+  });
+  const restoredOutboxKeys = useRef(new Set(outboxState.entries.map((entry) => cancellationOutboxKey(entry.projectId, entry.pending.requestId))));
   const [renameError, setRenameError] = useState("");
   const [updateError, setUpdateError] = useState<{ title: string; message: string } | null>(null);
   const [deleteWarnings, setDeleteWarnings] = useState<string[]>([]);
@@ -40,16 +89,24 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
   const [path, setPath] = useState("");
   const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
   const creatingTask = useRef(false);
+  const remoteCancellations = useRef<Record<string, string>>({});
+  const [, setCancellationRevision] = useState(0);
   const taskNavigation = useRef(0);
   const [busy, setBusy] = useState(false);
   const [rename, setRename] = useState<DevSession | null>(null);
   const [name, setName] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [modelRefreshKey, setModelRefreshKey] = useState(0);
-  const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null);
-  const [newTasks, setNewTasks] = useState<Record<string, NewTaskDraft>>({});
+  const newTaskProjectId = useDevelopmentStore((s) => s.newTaskProjectId);
+  const newTasks = useDevelopmentStore((s) => s.newTaskDrafts);
+  const pendingNewTasks = useDevelopmentStore((s) => s.pendingNewTasks);
   const error = projectsError || modelsError;
   const project = projects.find((p) => p.id === selectedProject) ?? null;
+  const currentCancellation = project ? outboxState.entries.find((entry) => entry.projectId === project.id) : undefined;
+  const currentPending = project ? pendingNewTasks[project.id] : undefined;
+  const cancellationDraft = currentCancellation && (!currentPending || currentPending.requestId === currentCancellation.pending.requestId)
+    && (restoredOutboxKeys.current.has(cancellationOutboxKey(currentCancellation.projectId, currentCancellation.pending.requestId)) || !project || !newTasks[project.id])
+    ? currentCancellation.draft : undefined;
   const focusedId = view.sessionId;
   const cachedSession = useDevelopmentStore((s) => focusedId ? s.snapshots[focusedId]?.session : undefined);
   const listedSession = (selectedProject ? sessionLists[selectedProject] : [])?.find((s) => s.id === focusedId);
@@ -81,6 +138,31 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
     setSessionLists((old) => ({ ...old, [projectId]: rows }));
   }, []);
   const reloadWorkspace = () => { setRefreshKey((n) => n + 1); setModelRefreshKey((n) => n + 1); };
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key?.startsWith(CANCELLATION_OUTBOX_PREFIX)) {
+        try { setOutboxState({ entries: readCancellationOutbox(), error: "" }); }
+        catch { setOutboxState({ entries: [], error: "无法读取上次放弃状态，请检查本地存储。" }); }
+        return;
+      }
+      if (event.key !== DEVELOPMENT_STORAGE_KEY || !event.newValue) return;
+      try {
+        const remote = JSON.parse(event.newValue)?.state?.pendingNewTasks ?? {};
+        const current = useDevelopmentStore.getState();
+        for (const [projectId, value] of Object.entries(current.pendingNewTasks)) {
+          const received = remote[projectId] as PendingNewTask | undefined;
+          if (received?.requestId === value.requestId && received.state === "cancelling" && value.state !== "cancelling") {
+            remoteCancellations.current[projectId] = received.requestId;
+            setCancellationRevision((revision) => revision + 1);
+          }
+        }
+      } catch {
+        setNewTaskError("无法同步上次提交状态，请检查本地存储。");
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   useEffect(() => {
     if (!visible) return;
     let alive = true;
@@ -115,6 +197,42 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
       if (typeof value === "string") setPath(value);
     } catch (e) { setProjectError(e instanceof Error ? e.message : "目录选择失败"); }
   };
+  const changeNewTaskDraft = (projectId: string, draft: NewTaskDraft) => {
+    try {
+      const state = useDevelopmentStore.getState();
+      const pending = state.pendingNewTasks[projectId];
+      const entries = readCancellationOutbox();
+      const entry = entries.find((item) => item.projectId === projectId && (!pending || pending.requestId === item.pending.requestId));
+      const saved = savedPendingNewTask(projectId);
+      const owner = pending?.requestId ?? entry?.pending.requestId;
+      if (saved && owner && saved.requestId !== owner) {
+        setNewTaskError("此项目在其他窗口有待确认提交，请先在原窗口处理。");
+        return;
+      }
+      if (entry) {
+        saveCancellationOutbox({ ...entry, draft });
+        setOutboxState({ entries: readCancellationOutbox(), error: "" });
+      }
+      state.setNewTaskDraft(projectId, draft);
+    } catch {
+      setNewTaskError("无法保存草稿，请检查本地存储。");
+    }
+  };
+  const settleCancellation = (projectId: string, requestId: string, notice: string) => {
+    const entry = readCancellationEntry(cancellationOutboxKey(projectId, requestId));
+    const state = useDevelopmentStore.getState();
+    const current = state.pendingNewTasks[projectId];
+    const saved = savedPendingNewTask(projectId);
+    if ((!current || current.requestId === requestId) && (!saved || saved.requestId === requestId)) {
+      if (entry?.draft && (!state.newTaskDrafts[projectId] || restoredOutboxKeys.current.has(cancellationOutboxKey(projectId, requestId)))) state.setNewTaskDraft(projectId, entry.draft);
+      if (current) state.setPendingNewTask(projectId, null);
+    }
+    if (entry) removeCancellationOutbox(entry);
+    restoredOutboxKeys.current.delete(cancellationOutboxKey(projectId, requestId));
+    setOutboxState({ entries: readCancellationOutbox(), error: "" });
+    if (remoteCancellations.current[projectId] === requestId) delete remoteCancellations.current[projectId];
+    setNewTaskNotices((old) => ({ ...old, [projectId]: notice }));
+  };
   const beginNewTask = (target: DevProject) => {
     const state = useDevelopmentStore.getState();
     const previousId = state.views[target.id]?.sessionId;
@@ -127,65 +245,211 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
       : fallbackRoute
         ? { draft: "", ...fallbackRoute }
         : { draft: "", executor: "mona" as const, model: null, provider: null, effort: null };
-    setNewTasks((old) => ({ ...old, [target.id]: old[target.id] ?? initial }));
+    if (!state.newTaskDrafts[target.id]) state.setNewTaskDraft(target.id, initial);
     taskNavigation.current += 1;
     state.selectProject(target.id);
-    setNewTaskProjectId(target.id);
+    state.setNewTaskProject(target.id);
     setNewTaskError("");
   };
-  const submitNewTask = async (target: DevProject, content: string, attachments?: DevelopmentSendAttachments) => {
-    const pendingTask = newTasks[target.id];
-    if (!pendingTask || (!content.trim() && !attachments?.docPaths?.length) || creatingTask.current) return false;
+  const submitNewTask = async (target: DevProject, content: string, attachments?: DevelopmentSendAttachments, continuing = false) => {
+    if (creatingTask.current) return false;
+    const state = useDevelopmentStore.getState();
+    let pending = state.pendingNewTasks[target.id];
+    try {
+      const entries = readCancellationOutbox();
+      if ((pending && readCancellationEntry(cancellationOutboxKey(target.id, pending.requestId))) || entries.some((item) => item.projectId === target.id)) {
+        setOutboxState({ entries, error: "" });
+        setNewTaskError("请先确认放弃上次提交，当前草稿已保留。");
+        return false;
+      }
+    } catch {
+      setNewTaskError("无法读取上次放弃状态，请检查本地存储。");
+      return false;
+    }
+    if (pending && remoteCancellations.current[target.id] === pending.requestId) return false;
+    try {
+      const saved = savedPendingNewTask(target.id);
+      if (saved && !pending) { state.setPendingNewTask(target.id, saved); return false; }
+      if (saved && pending && saved.requestId !== pending.requestId) {
+        setNewTaskError("此项目还有未确认的提交，请先在原窗口处理。");
+        return false;
+      }
+      if (pending && saved?.requestId === pending.requestId && saved.state === "cancelling") {
+        remoteCancellations.current[target.id] = pending.requestId;
+        setCancellationRevision((revision) => revision + 1);
+        return false;
+      }
+    } catch {
+      setNewTaskError("无法读取提交信息，请检查本地存储后重试。");
+      return false;
+    }
+    if (pending && (!continuing || pending.state !== "pending")) return false;
+    if (!pending) {
+      const draft = state.newTaskDrafts[target.id];
+      if (continuing || !draft || (!content.trim() && !attachments?.docPaths?.length)) return false;
+      const messageTitle = content.replace(/\s+/g, " ").trim()
+        || (attachments?.documentNames ?? []).filter((name) => name.trim()).join("、");
+      const titleCharacters = Array.from(messageTitle);
+      const title = titleCharacters.length > 200 ? `${titleCharacters.slice(0, 199).join("")}…` : messageTitle;
+      pending = {
+        requestId: `request_${crypto.randomUUID().replaceAll("-", "")}`,
+        sendRequestId: `request_${crypto.randomUUID().replaceAll("-", "")}`,
+        options: { executor: draft.executor, model: draft.model, modelProvider: draft.provider, modelReasoningEffort: draft.effort,
+          ...(title ? { title } : {}) },
+        content,
+        ...(attachments?.docPaths?.length ? { attachments: { docPaths: [...attachments.docPaths], documentNames: [...(attachments.documentNames ?? [])] } } : {}),
+        draft: { ...draft, ...(draft.documents ? { documents: draft.documents.map((item) => ({ ...item })) } : {}) },
+        state: "pending",
+        attempt: 0,
+      } satisfies PendingNewTask;
+    }
+    // A late failure from an earlier attempt must not clear a resumed request.
+    pending = { ...pending, attempt: (pending.attempt ?? 0) + 1 };
+    try {
+      state.setPendingNewTask(target.id, pending);
+      const saved = JSON.parse(localStorage.getItem(DEVELOPMENT_STORAGE_KEY) ?? "null");
+      if (saved?.state?.pendingNewTasks?.[target.id]?.requestId !== pending.requestId) throw new Error("draft persistence failed");
+    } catch {
+      setNewTaskError("无法保存提交信息，请检查本地存储后重试。");
+      return false;
+    }
     creatingTask.current = true; setCreatingProjectId(target.id); setNewTaskError("");
-    const text = content;
-    const messageTitle = content.replace(/\s+/g, " ").trim()
-      || (attachments?.documentNames ?? []).filter((name) => name.trim()).join("、");
-    const titleCharacters = Array.from(messageTitle);
-    const title = titleCharacters.length > 200 ? `${titleCharacters.slice(0, 199).join("")}…` : messageTitle;
-    const requestId = `request_${crypto.randomUUID().replaceAll("-", "")}`;
+    setNewTaskNotices((old) => { const next = { ...old }; delete next[target.id]; return next; });
     const navigation = taskNavigation.current;
     try {
-      const result = await developmentApi.createSession(target.id, {
-        executor: pendingTask.executor, model: pendingTask.model,
-        modelProvider: pendingTask.provider, modelReasoningEffort: pendingTask.effort,
-        ...(title ? { title } : {}),
-      });
+      const result = await developmentApi.createSession(target.id, { ...pending.options, requestId: pending.requestId });
       setSessionLists((old) => ({ ...old, [target.id]: [result, ...(old[target.id] ?? []).filter((s) => s.id !== result.id)] }));
-      const state = useDevelopmentStore.getState();
-      state.setSnapshot(result.id, { session: result, messages: [], before: null, messageCount: 0,
-        runs: [], events: [], eventCursor: 0, pendingInputs: [], live: null });
-      state.setDraft(result.id, text);
-      state.setDocumentDraft(result.id, attachmentDraft(attachments));
-      state.setSend(result.id, { id: requestId, content: text, uncertain: false,
-        ...(attachments?.docPaths?.length ? { docPaths: [...attachments.docPaths] } : {}),
-        ...(attachments?.documentNames?.length ? { documentNames: [...attachments.documentNames] } : {}),
-      });
-      setNewTasks((old) => { const next = { ...old }; delete next[target.id]; return next; });
-      if (taskNavigation.current === navigation) {
-        state.openSession(target.id, result.id);
-        setNewTaskProjectId(null);
+      let current = useDevelopmentStore.getState();
+      if (current.pendingNewTasks[target.id]?.requestId !== pending.requestId || current.pendingNewTasks[target.id]?.state !== "pending" || remoteCancellations.current[target.id] === pending.requestId) return false;
+      if (readCancellationEntry(cancellationOutboxKey(target.id, pending.requestId))) return false;
+      const saved = savedPendingNewTask(target.id);
+      if (saved?.requestId !== pending.requestId || saved.state !== "pending") {
+        if (saved?.requestId === pending.requestId && saved.state === "cancelling") {
+          remoteCancellations.current[target.id] = pending.requestId;
+          setCancellationRevision((revision) => revision + 1);
+        }
+        return false;
       }
+      if (!current.snapshots[result.id]) current.setSnapshot(result.id, { session: result, messages: [], before: null, messageCount: 0,
+        runs: [], events: [], eventCursor: 0, pendingInputs: [], live: null });
+      current = useDevelopmentStore.getState();
+      if (current.sends[result.id] && current.sends[result.id].id !== pending.sendRequestId) {
+        if (taskNavigation.current === navigation) setNewTaskError("此任务还有未确认的发送，请先在任务中核对。上次提交已保留。");
+        return false;
+      }
+      const pendingNewTasks = { ...current.pendingNewTasks };
+      delete pendingNewTasks[target.id];
+      const newTaskDrafts = { ...current.newTaskDrafts };
+      if (JSON.stringify(newTaskDrafts[target.id]) === JSON.stringify(pending.draft)) delete newTaskDrafts[target.id];
+      const open = taskNavigation.current === navigation && current.projectId === target.id && current.newTaskProjectId === target.id;
+      const hadDraft = Object.prototype.hasOwnProperty.call(current.drafts, result.id);
+      const hadDocuments = Object.prototype.hasOwnProperty.call(current.documentDrafts, result.id);
+      // Persist the accepted session and its original message together before dispatch.
+      useDevelopmentStore.setState({ pendingNewTasks, newTaskDrafts,
+        drafts: { ...current.drafts, [result.id]: hadDraft ? current.drafts[result.id] : pending.content },
+        documentDrafts: { ...current.documentDrafts, [result.id]: hadDocuments ? current.documentDrafts[result.id] : attachmentDraft(pending.attachments) },
+        sends: { ...current.sends, [result.id]: { id: pending.sendRequestId, content: pending.content, uncertain: true,
+          ...(pending.attachments?.docPaths?.length ? { docPaths: [...pending.attachments.docPaths] } : {}),
+          ...(pending.attachments?.documentNames?.length ? { documentNames: [...pending.attachments.documentNames] } : {}) } },
+        ...(open ? { views: { ...current.views, [target.id]: { sessionId: result.id } }, newTaskProjectId: null } : {}),
+      });
       try {
-        if (attachments?.docPaths?.length) await developmentApi.send(result.id, requestId, text, undefined, attachments);
-        else await developmentApi.send(result.id, requestId, text);
-        state.setSend(result.id, null);
-        state.setDocumentDraft(result.id, (useDevelopmentStore.getState().documentDrafts[result.id] ?? []).filter((doc) => !attachments?.docPaths?.includes(doc.path)));
-        if (useDevelopmentStore.getState().drafts[result.id] === text) state.setDraft(result.id, "");
+        const updated = savedPendingNewTask(target.id);
+        const entry = readCancellationEntry(cancellationOutboxKey(target.id, pending.requestId));
+        if (entry || updated?.requestId === pending.requestId && updated.state === "cancelling") {
+          const latest = useDevelopmentStore.getState();
+          if (latest.sends[result.id]?.id === pending.sendRequestId) latest.setSend(result.id, null);
+          if (!latest.newTaskDrafts[target.id]) latest.setNewTaskDraft(target.id, entry?.draft ?? pending.draft);
+          if (!latest.pendingNewTasks[target.id] || latest.pendingNewTasks[target.id].requestId === pending.requestId) latest.setPendingNewTask(target.id, entry?.pending ?? updated!);
+          latest.setError(result.id, "上次提交正在放弃，输入已保留。");
+          return false;
+        }
+        if (pending.attachments?.docPaths?.length) await developmentApi.send(result.id, pending.sendRequestId, pending.content, undefined, pending.attachments);
+        else await developmentApi.send(result.id, pending.sendRequestId, pending.content);
+        const latest = useDevelopmentStore.getState();
+        if (latest.sends[result.id]?.id === pending.sendRequestId) {
+          latest.setSend(result.id, null);
+          if (!hadDocuments) latest.setDocumentDraft(result.id, (useDevelopmentStore.getState().documentDrafts[result.id] ?? []).filter((doc) => !pending.attachments?.docPaths?.includes(doc.path)));
+          if (!hadDraft && useDevelopmentStore.getState().drafts[result.id] === pending.content) latest.setDraft(result.id, "");
+        }
         refreshDevelopmentSession(result.id);
       } catch (cause) {
         const definite = cause instanceof DevelopmentApiError && cause.status >= 400 && cause.status < 500;
-        state.setSend(result.id, definite ? null : { id: requestId, content: text, uncertain: true,
-          ...(attachments?.docPaths?.length ? { docPaths: [...attachments.docPaths] } : {}),
-          ...(attachments?.documentNames?.length ? { documentNames: [...attachments.documentNames] } : {}),
-        });
-        state.setError(result.id, cause instanceof Error ? cause.message : "发送失败。新会话和原输入已保留。");
+        const latest = useDevelopmentStore.getState();
+        if (latest.sends[result.id]?.id === pending.sendRequestId) {
+          if (definite) {
+            latest.setSend(result.id, null);
+            if ((hadDraft || hadDocuments) && !useDevelopmentStore.getState().newTaskDrafts[target.id]) latest.setNewTaskDraft(target.id, pending.draft);
+          }
+          latest.setError(result.id, cause instanceof Error ? cause.message : "发送失败。新会话和原输入已保留。");
+        }
         return false;
       }
       setRefreshKey((n) => n + 1);
       return true;
     } catch (cause) {
-      if (taskNavigation.current === navigation) setNewTaskError(cause instanceof Error ? cause.message : "新建会话失败，输入仍保留。");
+      const latest = useDevelopmentStore.getState();
+      if (cause instanceof DevelopmentApiError && cause.code === "creation_request_cancelled") {
+        try { settleCancellation(target.id, pending.requestId, "上次提交不会继续发送。若此前已被接收，可在原会话查看任务状态；当前草稿已保留。"); }
+        catch { setNewTaskError("上次提交已停止，但本地状态未能保存，请检查本地存储。"); }
+      } else if (latest.pendingNewTasks[target.id]?.requestId === pending.requestId && cause instanceof DevelopmentApiError) {
+        if (latest.pendingNewTasks[target.id]?.state === "pending" && latest.pendingNewTasks[target.id]?.attempt === pending.attempt) {
+          if (["creation_request_conflict", "creation_request_deleted"].includes(cause.code)) latest.setPendingNewTask(target.id, { ...pending, state: "conflict" });
+          else if (cause.status >= 400 && cause.status < 500 && ![408, 409].includes(cause.status)) {
+            if (!continuing && pending.attempt === 1) latest.setPendingNewTask(target.id, null);
+            if (taskNavigation.current === navigation) setNewTaskError(cause.message);
+          }
+        }
+      }
       return false;
+    } finally {
+      creatingTask.current = false; setCreatingProjectId(null);
+    }
+  };
+  const abandonNewTask = async (target: DevProject) => {
+    if (creatingTask.current) return;
+    const state = useDevelopmentStore.getState();
+    let pending: PendingNewTask;
+    try {
+      const entry = readCancellationOutbox().find((item) => item.projectId === target.id);
+      const current = entry?.pending ?? state.pendingNewTasks[target.id];
+      if (!current) return;
+      pending = { ...current, state: "cancelling", attempt: (current.attempt ?? 0) + 1 };
+      const saved = savedPendingNewTask(target.id);
+      if (!entry && saved && saved.requestId !== pending.requestId) throw new Error("different pending request");
+      const rootPending = state.pendingNewTasks[target.id];
+      const ownsDraft = (!rootPending || rootPending.requestId === pending.requestId) && (!saved || saved.requestId === pending.requestId);
+      const restored = restoredOutboxKeys.current.has(cancellationOutboxKey(target.id, pending.requestId));
+      const draft = ownsDraft && !restored ? state.newTaskDrafts[target.id] ?? entry?.draft : entry?.draft;
+      saveCancellationOutbox({ projectId: target.id, pending, ...(draft ? { draft } : {}) });
+      setOutboxState({ entries: readCancellationOutbox(), error: "" });
+      if ((!rootPending || rootPending.requestId === pending.requestId) && (!saved || saved.requestId === pending.requestId)) {
+        state.setPendingNewTask(target.id, pending);
+        const persisted = savedPendingNewTask(target.id);
+        if (persisted?.requestId !== pending.requestId || persisted.state !== "cancelling") throw new Error("draft persistence failed");
+      }
+    } catch {
+      setNewTaskError("无法保存放弃状态，请检查本地存储后重试。");
+      return;
+    }
+    creatingTask.current = true; setCreatingProjectId(target.id); setNewTaskError("");
+    const navigation = taskNavigation.current;
+    let confirmed = false;
+    try {
+      const result = await developmentApi.cancelSessionCreation(target.id, pending.requestId, pending.options, pending.sendRequestId);
+      if (result.state !== "cancelled" && result.state !== "accepted" && result.state !== "rejected") throw new Error("invalid cancellation result");
+      confirmed = true;
+      settleCancellation(target.id, pending.requestId, result.state === "accepted"
+        ? "原提交已被接收，任务状态可在原会话查看。当前草稿已保留。"
+        : result.state === "rejected" ? "提交信息与已有记录不一致，已结束本地等待；已有会话和任务保留。当前草稿已保留。"
+          : "上次提交已放弃，当前草稿已保留。");
+    } catch {
+      let stillPending = true;
+      try { stillPending = readCancellationEntry(cancellationOutboxKey(target.id, pending.requestId))?.pending.attempt === pending.attempt; }
+      catch { stillPending = true; }
+      if (taskNavigation.current === navigation && (confirmed || stillPending)) {
+        setNewTaskError(confirmed ? "放弃已确认，但本地状态未能保存，请检查本地存储。" : "暂未确认放弃，请再次尝试。原提交不会自动发送。");
+      }
     } finally {
       creatingTask.current = false; setCreatingProjectId(null);
     }
@@ -274,8 +538,9 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
   };
   const selectSession = (session: DevSession) => {
     taskNavigation.current += 1;
-    setNewTaskProjectId(null);
-    useDevelopmentStore.getState().openSession(session.projectId, session.id);
+    const state = useDevelopmentStore.getState();
+    state.setNewTaskProject(null);
+    state.openSession(session.projectId, session.id);
   };
   const forkNavigation = taskNavigation.current;
   const forkSourceId = focused?.id;
@@ -323,10 +588,14 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-8 pb-24 text-center"><Code2 className="h-8 w-8 text-muted-foreground" /><h1 className="text-title-md font-medium">开始编程</h1><p className="text-ui text-muted-foreground">打开本地项目，或从左侧继续已有会话。</p><Button variant="outline" onClick={() => setProjectDialog(true)}><FolderOpen className="mr-2 h-4 w-4" />打开本地项目</Button></div></>
               : composing ? <DevelopmentNewTask key={`new:${project.id}`} project={project} executors={executors}
                   modelsLoading={modelsLoading}
-                  value={newTasks[project.id] ?? { draft: "", executor: "mona", model: null, provider: null, effort: null }}
-                  error={newTaskError}
+                  value={cancellationDraft ?? newTasks[project.id] ?? { draft: "", executor: "mona", model: null, provider: null, effort: null }}
+                  error={newTaskError || outboxState.error}
+                  notice={newTaskNotices[project.id]}
                   busy={creatingProjectId === project.id}
-                  onChange={(value) => setNewTasks((old) => ({ ...old, [project.id]: value }))}
+                  pendingSubmission={currentCancellation ? "cancelling" : currentPending && remoteCancellations.current[project.id] === currentPending.requestId ? "cancelling" : currentPending?.state}
+                  onContinueSubmission={() => { void submitNewTask(project, "", undefined, true); }}
+                  onAbandonSubmission={() => { void abandonNewTask(project); }}
+                  onChange={(value) => changeNewTaskDraft(project.id, value)}
                   onSubmit={(content, attachments) => submitNewTask(project, content, attachments)}
                   onToggleProjects={leftOpen ? undefined : () => setLeftOpen(true)} onManageModels={onOpenModelSettings} />
                 : <DevelopmentPane key={focused?.id ?? project.id} session={focused} project={project} executors={executors} modelsLoading={modelsLoading} visible={visible} workspaceError={error} onRetryWorkspace={reloadWorkspace}

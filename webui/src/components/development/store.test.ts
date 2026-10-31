@@ -89,6 +89,19 @@ describe("development view state", () => {
     expect(value.messages).toHaveLength(200); expect(new Set(value.messages.map((m) => m.id)).size).toBe(200);
     expect(value.messages[0].id).toBe("m0"); expect(value.before).toBeNull();
   });
+  it("retains historical run identities without rolling back a newer run when pages arrive", () => {
+    const s = useDevelopmentStore.getState();
+    const latest = { id: "run_latest", sessionId: "dev_a", executor: "codex" as const, status: "running" as const, revision: 2, createdAt: "" };
+    const historical = { id: "run_historical", sessionId: "dev_a", executor: "codex" as const, status: "succeeded" as const, revision: 3, createdAt: "" };
+    s.setSnapshot("dev_a", { ...snapshot(100, 200), runs: [latest] });
+    s.setSnapshot("dev_a", { ...snapshot(0, 100), runs: [{ ...latest, revision: 1 }, historical] }, true);
+    expect(useDevelopmentStore.getState().snapshots.dev_a.runs).toEqual([latest, historical]);
+    const completed = { ...latest, status: "succeeded" as const, revision: 3 };
+    s.setSnapshot("dev_a", { ...snapshot(100, 200), runs: [completed] });
+    expect(useDevelopmentStore.getState().snapshots.dev_a.runs).toEqual([completed, historical]);
+    s.setSnapshot("dev_a", { ...snapshot(0, 100), runs: [latest, historical] }, true);
+    expect(useDevelopmentStore.getState().snapshots.dev_a.runs).toEqual([completed, historical]);
+  });
   it("keeps completed message references stable while only the streamed text changes", () => {
     const s = useDevelopmentStore.getState(); const initial = snapshot(0, 2);
     initial.events = [{ id: "e1", type: "run.started", sequence: 1, runId: "run_a", payload: {} }]; initial.eventCursor = 1;

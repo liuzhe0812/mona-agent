@@ -23,6 +23,7 @@ _SKIP_MODULES = frozenset({
 # Tools reserved for the reserved Mona agent. A package agent must never get
 # them, even if its manifest allowlist names them (multi-agent guide 7.2).
 _MONA_ONLY_TOOLS = frozenset({
+    "development_workbench",
     "spawn",
     "delegate_agent",
     "propose_workflow",

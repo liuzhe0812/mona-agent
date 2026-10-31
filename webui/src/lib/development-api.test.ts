@@ -66,6 +66,23 @@ it.each(["POST", "PUT", "DELETE"])("does not repeat an uncertain %s operation", 
   expect(transport.fetch.mock.calls[0][1]).toMatchObject({ method, body: '{"revision":1}' });
 });
 
+it("sends the stable creation request identity without changing other session calls", async () => {
+  transport.fetch.mockImplementation(async () => json({ id: "dev_created" }));
+  await developmentApi.createSession("project", { requestId: "request_creation", title: "需求" });
+  expect(transport.fetch).toHaveBeenCalledWith("http://localhost/api/development/projects/project/sessions",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ requestId: "request_creation", title: "需求" }) }));
+  await developmentApi.createSession("project");
+  expect(transport.fetch.mock.calls[1][1].body).toBe("{}");
+});
+
+it("confirms abandonment using the original creation and first-message identities", async () => {
+  transport.fetch.mockImplementation(async () => json({ state: "cancelled", sessionId: null }));
+  await developmentApi.cancelSessionCreation("project", "request_creation", { executor: "mona", title: "需求" }, "request_send");
+  expect(transport.fetch).toHaveBeenCalledWith("http://localhost/api/development/projects/project/session-creations/request_creation/cancel",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ executor: "mona", title: "需求", sendRequestId: "request_send", confirmed: true }) }));
+  expect(transport.fetch).toHaveBeenCalledTimes(1);
+});
+
 it("stops a read cancelled during retry backoff", async () => {
   const controller = new AbortController();
   transport.fetch.mockRejectedValue(new TypeError("Failed to fetch"));

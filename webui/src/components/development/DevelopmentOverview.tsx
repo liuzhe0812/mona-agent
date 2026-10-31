@@ -5,12 +5,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { developmentApi, type DevExecutor, type DevProject, type DevSession, type ProjectResources } from "@/lib/development-api";
 import { DevelopmentCollaboration } from "./DevelopmentCollaboration";
 import { DevelopmentGitTools } from "./DevelopmentGitTools";
+import { DevelopmentPlan } from "./DevelopmentPlan";
 import { useDevelopmentStore, type WorkTab } from "./store";
 
 export function DevelopmentOverview({ project, session, onOpenTool }: {
   project: DevProject; session: DevSession; executors: DevExecutor[]; onOpenTool: (tab: WorkTab) => void;
 }) {
   const [resources, setResources] = useState<ProjectResources | null>(null);
+  const plan = useDevelopmentStore((s) => s.snapshots[session.id]?.plan);
+  const latestRunId = useDevelopmentStore((s) => s.snapshots[session.id]?.runs[0]?.id);
   useEffect(() => {
     let alive = true;
     void developmentApi.resources(project.id).then((value) => { if (alive) setResources(value); })
@@ -27,6 +30,7 @@ export function DevelopmentOverview({ project, session, onOpenTool }: {
       </Tooltip>
       <DevelopmentGitTools project={project} session={session} visible embedded onOpenReview={() => onOpenTool("review")} />
     </section>
+    {plan?.plan.length ? <div className="border-t border-border/50 pt-4"><DevelopmentPlan value={plan} currentRunId={latestRunId} /></div> : null}
     <div className="border-t border-border/50 pt-4"><DevelopmentCollaboration session={session} visible onConfigure={() => onOpenTool("subagents")} onOpenTasks={() => {
       useDevelopmentStore.getState().setSide(session.id, { agentSessionId: undefined });
       onOpenTool("agent");

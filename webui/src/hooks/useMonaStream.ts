@@ -797,6 +797,7 @@ export function useMonaStream(
         const kind = events[i].kind;
         const authorId = events[i].authorId;
         const streamKey = events[i].streamKey;
+        const streamId = streamKey?.startsWith("stream:") ? streamKey.slice("stream:".length) : undefined;
         const jobId = events[i].jobId;
         const taskId = events[i].taskId;
         let text = "";
@@ -841,6 +842,7 @@ export function useMonaStream(
             ...target,
             content: target.content + text,
             isStreaming: true,
+            ...(streamId ? { streamId } : {}),
             ...(authorId && !target.authorId
               ? { authorId, authorType: "agent" as const }
               : {}),
@@ -873,6 +875,7 @@ export function useMonaStream(
               ...candidate,
               reasoning: boundedReasoning((candidate.reasoning ?? "") + text),
               reasoningStreaming: true,
+              ...(streamId ? { streamId } : {}),
               ...(activitySegmentId ? { activitySegmentId } : {}),
             };
             found = true;
@@ -922,6 +925,7 @@ export function useMonaStream(
               isStreaming: true,
               reasoning: boundedReasoning(text),
               reasoningStreaming: true,
+              ...(streamId ? { streamId } : {}),
               ...(activitySegmentId ? { activitySegmentId } : {}),
               createdAt: Date.now(),
             });

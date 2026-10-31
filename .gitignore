@@ -81,6 +81,13 @@ design-assets/
 !/tests/development/test_fork.py
 !/tests/development/test_fork_native.py
 !/tests/development/test_session_titles.py
+!/tests/development/test_audit_run_recovery.py
+!/tests/development/test_audit_history_snapshot.py
+!/tests/development/test_git_process_cleanup.py
+!/tests/development/test_session_creation_idempotency.py
+!/tests/development/test_session_creation_cancellation.py
+!/tests/development/test_required_result_recovery.py
+!/tests/development/test_unknown_steering_resolution.py
 !/tests/test_media_provider_clients.py
 !/tests/providers/
 /tests/providers/*
@@ -635,3 +642,8 @@ webui/task-test.png
 !/mona/skills/mona-pptx/scripts/**
 /mona/skills/mona-pptx/scripts/**/__pycache__/
 !/tests/agent/test_ppt_source_images.py
+!/docs/plans/2026-10-30-development-hub.md
+!/tests/development/test_hub.py
+!/tests/development/test_session_creation_service.py
+!/tests/tools/test_development_workbench_tool.py
+!/tests/test_development_background_transcript.py

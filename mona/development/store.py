@@ -6,6 +6,7 @@ execution lock: independent sessions in the same project can run concurrently.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -56,6 +57,12 @@ class ConflictError(DevelopmentError):
         super().__init__("conflict", message)
 
 
+class SessionCreationConflictError(ConflictError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 _TABLES = {Project: "projects", DevelopmentSession: "sessions", Binding: "bindings",
            Run: "runs", RunInput: "inputs", DevelopmentView: "views", Collaboration: "collaborations"}
 _DDL = """
@@ -87,6 +94,16 @@ _COLLAB_DDL = """CREATE TABLE collaborations (
     child_session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id), request_id TEXT NOT NULL,
     payload TEXT NOT NULL, UNIQUE(parent_session_id, request_id))"""
 
+_SESSION_CREATION_DDL = """CREATE TABLE IF NOT EXISTS session_creations (
+    project_id TEXT NOT NULL REFERENCES projects(id), request_id TEXT NOT NULL,
+    session_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(project_id, request_id))"""
+_SESSION_CREATION_CANCELLATION_DDL = """CREATE TABLE IF NOT EXISTS session_creation_cancellations (
+    project_id TEXT NOT NULL REFERENCES projects(id), request_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL, send_request_id TEXT NOT NULL, state TEXT NOT NULL,
+    PRIMARY KEY(project_id, request_id))"""
+_SESSION_CREATION_FIELDS = frozenset({"executor", "title", "model", "readonly", "parent_session_id",
+    "model_provider", "model_reasoning_effort"})
+
 
 class DevelopmentStore:
     def __init__(self, path: Path):
@@ -95,7 +112,7 @@ class DevelopmentStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection(write=True) as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2, SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, 4, SCHEMA_VERSION):
                 raise DevelopmentError("unsupported_schema", "开发数据版本不兼容，原数据已保留。请使用对应版本的 Mona。")
             if version == 0:
                 if db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone():
@@ -108,13 +125,17 @@ class DevelopmentStore:
             present = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not set(_TABLES.values()).union({"events"}).issubset(present):
                 raise DevelopmentError("unsupported_schema", "开发数据结构不兼容，原数据未覆盖。")
+            db.execute(_SESSION_CREATION_DDL)
+            db.execute(_SESSION_CREATION_CANCELLATION_DDL)
+            db.execute("CREATE INDEX IF NOT EXISTS session_creation_cancellations_send "
+                       "ON session_creation_cancellations(send_request_id,state)")
             if version < 3:
                 if not db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='runs_one_active_session'").fetchone():
                     raise DevelopmentError("unsupported_schema", "开发数据结构不兼容，原数据未覆盖。")
                 db.execute("DROP INDEX runs_one_active_session")
                 db.execute("CREATE UNIQUE INDEX runs_one_active_session ON runs(session_id) "
                            "WHERE status NOT IN ('succeeded','failed','interrupted','closed_unknown')")
-                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         with self._connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
 
@@ -277,11 +298,85 @@ class DevelopmentStore:
             values = [Project.model_validate_json(r[0]) for r in db.execute("SELECT payload FROM projects")]
             return sorted((p for p in values if not p.removed), key=lambda p: (p.pinned, p.last_opened_at), reverse=True)
 
+    @staticmethod
+    def _session_creation_fingerprint(fields: dict) -> str:
+        value = json.dumps(fields, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _session_creation(db: sqlite3.Connection, project_id: str, request_id: str,
+                          fingerprint: str) -> DevelopmentSession | None:
+        cancelled = db.execute("SELECT fingerprint,state FROM session_creation_cancellations "
+                               "WHERE project_id=? AND request_id=?", (project_id, request_id)).fetchone()
+        if cancelled:
+            if cancelled["fingerprint"] != fingerprint:
+                raise SessionCreationConflictError("creation_request_conflict", "此创建请求已用于其他会话参数，请核对原任务。")
+            if cancelled["state"] == "cancelled":
+                raise SessionCreationConflictError("creation_request_cancelled", "这次提交已放弃，原消息不会重新发送。")
+        row = db.execute("SELECT session_id,fingerprint FROM session_creations WHERE project_id=? AND request_id=?",
+                         (project_id, request_id)).fetchone()
+        if row is None:
+            return None
+        if row["fingerprint"] != fingerprint:
+            raise SessionCreationConflictError("creation_request_conflict", "此创建请求已用于其他会话参数，请核对原任务。")
+        session = db.execute("SELECT payload FROM sessions WHERE id=? AND project_id=?",
+                             (row["session_id"], project_id)).fetchone()
+        if session is None:
+            raise SessionCreationConflictError("creation_request_deleted", "此创建请求对应的会话已删除，不会重新创建。")
+        return DevelopmentSession.model_validate_json(session[0])
+
+    def find_session_creation(self, project_id: str, request_id: str, fields: dict) -> DevelopmentSession | None:
+        with self._connection() as db:
+            self._get(db, Project, project_id)
+            return self._session_creation(db, project_id, request_id, self._session_creation_fingerprint(fields))
+
+    def cancel_session_creation(self, project_id: str, request_id: str, fields: dict, send_request_id: str) -> dict:
+        fingerprint = self._session_creation_fingerprint(fields)
+        with self._connection(write=True) as db:
+            self._get(db, Project, project_id)
+            previous = db.execute("SELECT fingerprint,send_request_id,state FROM session_creation_cancellations "
+                "WHERE project_id=? AND request_id=?", (project_id, request_id)).fetchone()
+            original = db.execute("SELECT session_id,fingerprint FROM session_creations WHERE project_id=? AND request_id=?",
+                (project_id, request_id)).fetchone()
+            session_id = original["session_id"] if original else None
+            exists = session_id and db.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if (previous and previous["fingerprint"] != fingerprint
+                    or original and original["fingerprint"] != fingerprint):
+                # The immutable original fingerprint already rejects this different intent.
+                return {"state": "rejected", "sessionId": session_id if exists else None}
+            if previous and previous["send_request_id"] != send_request_id:
+                raise SessionCreationConflictError("creation_request_conflict", "放弃请求与原提交不一致，请核对原任务。")
+            if previous:
+                state = previous["state"]
+            else:
+                accepted = session_id and db.execute("SELECT 1 FROM runs WHERE session_id=? AND request_id=? "
+                    "UNION ALL SELECT 1 FROM inputs WHERE session_id=? AND id=? LIMIT 1",
+                    (session_id, send_request_id, session_id, send_request_id)).fetchone()
+                state = "accepted" if accepted else "cancelled"
+                db.execute("INSERT INTO session_creation_cancellations VALUES(?,?,?,?,?)",
+                    (project_id, request_id, fingerprint, send_request_id, state))
+            return {"state": state, "sessionId": session_id if exists else None}
+
+    def check_creation_input(self, session_id: str, request_id: str) -> None:
+        with self._connection() as db:
+            self._check_creation_input(db, session_id, request_id)
+
+    @staticmethod
+    def _check_creation_input(db: sqlite3.Connection, session_id: str, request_id: str) -> None:
+        # Cancellation and admission share the write transaction, including a late first send.
+        cancelled = db.execute("SELECT 1 FROM session_creation_cancellations cancelled JOIN session_creations created "
+            "ON created.project_id=cancelled.project_id AND created.request_id=cancelled.request_id "
+            "WHERE created.session_id=? AND cancelled.send_request_id=? AND cancelled.state='cancelled'",
+            (session_id, request_id)).fetchone()
+        if cancelled:
+            raise SessionCreationConflictError("creation_request_cancelled", "这次提交已放弃，原消息不会重新发送。")
+
     def create_session(self, project_id: str, executor: ExecutorId = ExecutorId.MONA,
                        title: str = "新开发任务", model: str | None = None, *,
                        readonly: bool = False, parent_session_id: str | None = None,
                        model_provider: str | None = None, model_reasoning_effort: str | None = None,
-                       permission_mode: PermissionMode = PermissionMode.ASK) -> DevelopmentSession:
+                       permission_mode: PermissionMode = PermissionMode.ASK,
+                       request_id: str | None = None) -> DevelopmentSession:
         session = DevelopmentSession(project_id=project_id, executor=executor, title=title, model=model,
                                      title_source="default" if title == "新开发任务" else "manual",
                                      readonly=readonly, parent_session_id=parent_session_id,
@@ -289,12 +384,19 @@ class DevelopmentStore:
                                      permission_mode=permission_mode)
         with self._connection(write=True) as db:
             self._get(db, Project, project_id)
+            if request_id is not None:
+                fingerprint = self._session_creation_fingerprint(session.model_dump(mode="json", include=_SESSION_CREATION_FIELDS))
+                existing = self._session_creation(db, project_id, request_id, fingerprint)
+                if existing is not None:
+                    return existing
             if parent_session_id:
                 parent = self._get(db, DevelopmentSession, parent_session_id)
                 if parent.project_id != project_id:
                     raise ConflictError("侧边会话必须属于同一项目。")
                 session.permission_mode = parent.permission_mode
             db.execute("INSERT INTO sessions VALUES(?,?,?)", (session.id, project_id, session.model_dump_json()))
+            if request_id is not None:
+                db.execute("INSERT INTO session_creations VALUES(?,?,?,?)", (project_id, request_id, session.id, fingerprint))
             self._event(db, session, "session.created", {"sessionId": session.id})
         return session
 
@@ -806,6 +908,7 @@ class DevelopmentStore:
                 if (run.request_message_id, run.binding_id) != (message_id, binding_id):
                     raise ConflictError("相同请求标识携带了不同内容引用，未重复执行。")
                 return run, False
+            self._check_creation_input(db, session_id, request_id)
             if session.archived:
                 raise ConflictError("请先恢复已归档会话再执行。")
             pending_result = db.execute("SELECT i.id FROM inputs i JOIN runs owner ON "
@@ -846,6 +949,16 @@ class DevelopmentStore:
             self._get(db, DevelopmentSession, session_id)
             return [Run.model_validate_json(row[0]) for row in db.execute(
                 "SELECT payload FROM runs WHERE session_id=? ORDER BY rowid DESC LIMIT ?", (session_id, limit))]
+
+    def runs_by_id(self, session_id: str, identifiers: set[str]) -> list[Run]:
+        if not identifiers:
+            return []
+        placeholders = ",".join("?" for _ in identifiers)
+        with self._connection() as db:
+            self._get(db, DevelopmentSession, session_id)
+            return [Run.model_validate_json(row[0]) for row in db.execute(
+                f"SELECT payload FROM runs WHERE session_id=? AND id IN ({placeholders}) ORDER BY rowid DESC",
+                (session_id, *identifiers))]
 
     def binding_has_runs(self, binding_id: str) -> bool:
         """An attempted/uncertain dispatch is not an empty native conversation."""
@@ -1000,6 +1113,7 @@ class DevelopmentStore:
                 if (previous.session_id, previous.run_id, previous.message_id, previous.intent, previous.follow_up_allowed) != (value.session_id, value.run_id, value.message_id, value.intent, value.follow_up_allowed):
                     raise ConflictError("输入标识已经被其他内容使用。")
                 return previous
+            self._check_creation_input(db, value.session_id, value.id)
             if run.status in TERMINAL_RUN_STATUSES:
                 raise ConflictError("本轮已结束，请在原会话发起下一轮，不要重新执行旧请求。")
             db.execute("INSERT INTO inputs VALUES(?,?,?,?,?)", (value.id, value.session_id, value.run_id, value.state.value, value.model_dump_json()))
@@ -1050,6 +1164,13 @@ class DevelopmentStore:
             self._get(db, Run, run_id)
             return [RunInput.model_validate_json(row[0]) for row in db.execute(
                 "SELECT payload FROM inputs WHERE run_id=? ORDER BY rowid", (run_id,))]
+
+    def pending_inputs(self, session_id: str) -> list[RunInput]:
+        with self._connection() as db:
+            self._get(db, DevelopmentSession, session_id)
+            return [RunInput.model_validate_json(row[0]) for row in db.execute(
+                "SELECT payload FROM inputs WHERE session_id=? AND state IN ('pending','reserved','unknown') ORDER BY rowid",
+                (session_id,))]
 
     def replace_pending_input(self, input_id: str, expected_revision: int,
                               message_id: str) -> RunInput:
@@ -1249,32 +1370,46 @@ class DevelopmentStore:
     def reconcile_after_restart(self) -> int:
         """Call once after the Gateway obtains ownership; never replay or guess stopped."""
         with self._connection(write=True) as db:
-            rows = db.execute("SELECT payload FROM runs WHERE status IN ('preparing','running','waiting_user','interrupting','recovering')").fetchall()
+            rows = db.execute("SELECT payload FROM runs WHERE status IN ('queued','preparing','running','waiting_user','interrupting','recovering')").fetchall()
             for row in rows:
                 run = Run.model_validate_json(row[0])
-                run.status = RunStatus.UNKNOWN
+                unsent = run.status == RunStatus.QUEUED
+                run.status = RunStatus.FAILED if unsent else RunStatus.UNKNOWN
                 run.revision += 1
-                run.error_code = "host_restarted"
+                run.error_code = "host_restarted_before_dispatch" if unsent else "host_restarted"
+                if unsent:
+                    run.finished_at = now()
                 self._save(db, run)
                 session = self._get(db, DevelopmentSession, run.session_id)
-                self._event(db, session, "run.unknown", {"revision": run.revision, "reason": "host_restarted"}, run)
+                self._event(db, session, "run.failed" if unsent else "run.unknown",
+                    {"revision": run.revision, "reason": run.error_code}, run)
             for row in db.execute("SELECT payload FROM inputs WHERE state IN ('reserved','accepted')").fetchall():
                 value = RunInput.model_validate_json(row[0])
                 run = self._get(db, Run, value.run_id)
-                # All model dispatches persist a Run first. A reserved result
-                # outbox with no such Run is provably not sent, unlike an
-                # uncertain native receipt, so only that safe preparation resumes.
+                # A reserved result without a Run, or a Run still queued, cannot
+                # have crossed the dispatch boundary. Preserve other uncertain inputs.
                 if value.intent == "steering" and value.state == InputState.ACCEPTED and run.executor != ExecutorId.MONA and run.status in TERMINAL_RUN_STATUSES:
                     continue  # The completed native turn already owns this accepted input.
+                dispatch_row = db.execute("SELECT payload FROM runs WHERE session_id=? AND request_id=?",
+                    (value.session_id, value.id)).fetchone()
+                dispatch = Run.model_validate_json(dispatch_row[0]) if dispatch_row else None
                 unstarted_result = (value.state == InputState.RESERVED and run.continuation_input_id == value.id
-                    and not db.execute("SELECT 1 FROM runs WHERE session_id=? AND request_id=?",
-                        (value.session_id, value.id)).fetchone())
-                value.state = InputState.PENDING if unstarted_result else InputState.UNKNOWN
+                    and dispatch is None)
+                unstarted_queued = (value.state == InputState.RESERVED and value.follow_up_allowed and dispatch is not None
+                    and dispatch.status == RunStatus.FAILED and dispatch.error_code == "host_restarted_before_dispatch")
+                rejected_result = unstarted_queued and run.continuation_input_id == value.id
+                if rejected_result:
+                    value.state, event = InputState.REJECTED, "input.rejected"
+                elif unstarted_result or unstarted_queued:
+                    value.state, event = InputState.PENDING, "input.restored"
+                else:
+                    value.state, event = InputState.UNKNOWN, "input.unknown"
                 value.revision += 1
                 self._save(db, value)
                 session = self._get(db, DevelopmentSession, value.session_id)
-                self._event(db, session, "input.restored" if unstarted_result else "input.unknown",
-                    {"inputId": value.id, "reason": "dispatch_not_started" if unstarted_result else "host_restarted"}, run)
+                self._event(db, session, event,
+                    {"inputId": value.id, "reason": "dispatch_not_started"
+                        if unstarted_result or unstarted_queued else "host_restarted"}, run)
             for row in db.execute("SELECT payload FROM bindings").fetchall():
                 binding = Binding.model_validate_json(row[0])
                 if binding.handoff and binding.handoff.state == "reserved":

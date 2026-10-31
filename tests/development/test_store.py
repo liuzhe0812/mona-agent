@@ -164,10 +164,11 @@ def test_recovery_marks_unknown_once_and_never_replays(store, project):
     store.transition_input(item.id, 0, InputState.RESERVED)
     reopened = DevelopmentStore(store.path)
     assert reopened.get_run(in_flight.id).status == RunStatus.RUNNING  # read/open is not recovery
-    assert reopened.reconcile_after_restart() == 1
+    assert reopened.reconcile_after_restart() == 2
     assert reopened.reconcile_after_restart() == 0
     assert reopened.get_run(in_flight.id).status == RunStatus.UNKNOWN
-    assert reopened.get_run(queued.id).status == RunStatus.QUEUED
+    assert reopened.get_run(queued.id).status == RunStatus.FAILED
+    assert reopened.get_run(queued.id).error_code == "host_restarted_before_dispatch"
     assert reopened.get_run(finished.id).status == RunStatus.SUCCEEDED
     assert reopened.list_inputs(in_flight.id)[0].state == InputState.UNKNOWN
     with pytest.raises(ConflictError):
@@ -271,7 +272,7 @@ def test_events_paginate_without_crossing_sessions(store, project):
         store.events_after(a.id, -1)
 
 
-@pytest.mark.parametrize("version", [0, 1, 2, 3, 99])
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5, 99])
 def test_foreign_or_future_schema_is_never_recreated(tmp_path, version):
     path = tmp_path / "existing.sqlite3"
     with sqlite3.connect(path) as db:

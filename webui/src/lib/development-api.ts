@@ -27,6 +27,7 @@ export interface DevMessage {
   name?: string; toolCallId?: string | null; toolCalls: ToolCall[]; queued: boolean; timestamp?: string; authorId?: ExecutorId;
 }
 export interface DevInput { id: string; messageId: string; runId: string; state: string; revision: number; intent?: "steering" | "follow_up";
+  canCloseUnknown?: boolean;
   createdAt?: string; requestedIntent?: "steering" | "follow_up";
   source?: (DevelopmentSendAttachments & { content: string }) | null; }
 export interface DevEvent { id: string; sequence: number; type: string; runId: string | null; timestamp?: string; payload: Record<string, unknown> }
@@ -145,6 +146,7 @@ export interface GitSummary { available: boolean; reasonCode?: "git_unavailable"
   files: { path: string; status: string; previousPath?: string }[] }
 export interface ProjectResources { rules: { path: string; sha256: string }[]; skills: { name: string; description: string; path: string }[]; issues: string[] }
 export interface DevelopmentSendAttachments { docPaths?: string[]; documentNames?: string[] }
+export type DevelopmentSessionOptions = Partial<Pick<DevSession, "executor" | "title" | "model" | "modelProvider" | "modelReasoningEffort" | "readonly" | "parentSessionId">> & { requestId?: string };
 
 export class DevelopmentApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); this.name = "DevelopmentApiError"; }
@@ -245,8 +247,10 @@ export const developmentApi = {
   projects: () => request<DevProject[]>("/projects"),
   openProject: (path: string) => request<DevProject>("/projects", "POST", { path }),
   sessions: (projectId: string) => request<DevSession[]>(`/projects/${id(projectId)}/sessions`),
-  createSession: (projectId: string, options: Partial<Pick<DevSession, "executor" | "title" | "model" | "modelProvider" | "modelReasoningEffort" | "readonly" | "parentSessionId">> = {}) =>
+  createSession: (projectId: string, options: DevelopmentSessionOptions = {}) =>
     request<DevSession>(`/projects/${id(projectId)}/sessions`, "POST", options),
+  cancelSessionCreation: (projectId: string, requestId: string, options: Omit<DevelopmentSessionOptions, "requestId">, sendRequestId: string) =>
+    request<{ state: "cancelled" | "accepted" | "rejected"; sessionId: string | null }>(`/projects/${id(projectId)}/session-creations/${id(requestId)}/cancel`, "POST", { ...options, sendRequestId, confirmed: true }),
   forkSession: (session: DevSession, messageId: string, requestId: string) =>
     request<DevSession>(`/sessions/${id(session.id)}/fork`, "POST", { revision: session.revision, requestId, messageId }),
   updateSession: (session: DevSession, changes: Partial<Pick<DevSession, "title" | "pinned" | "archived">>) =>
@@ -266,6 +270,8 @@ export const developmentApi = {
   cancelInput: (sessionId: string, inputId: string) => request(`/sessions/${id(sessionId)}/inputs/${id(inputId)}`, "DELETE"),
   guideInput: (sessionId: string, inputId: string, revision: number, targetRunId: string) =>
     request<{ input: DevInput; queued: boolean; reused?: boolean }>(`/sessions/${id(sessionId)}/inputs/${id(inputId)}/guide`, "POST", { revision, targetRunId }),
+  closeUnknownInput: (sessionId: string, inputId: string, revision: number) =>
+    request<DevInput>(`/sessions/${id(sessionId)}/inputs/${id(inputId)}/close-unknown`, "POST", { revision, confirmed: true }),
   directory: (projectId: string, path = "", offset = 0) => request<{ entries: DirectoryEntry[]; nextOffset: number | null; total: number }>(`/projects/${id(projectId)}/directory?path=${id(path)}&offset=${offset}`),
   file: (projectId: string, path: string) => request<FileDocument>(`/projects/${id(projectId)}/file?path=${id(path)}`),
   saveFile: (projectId: string, file: FileDocument, content: string) => request<FileDocument>(`/projects/${id(projectId)}/file`, "PUT", { path: file.path, expectedSha256: file.sha256, content }),

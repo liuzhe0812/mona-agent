@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, FileDiff, GitBranch, GitCommitHorizontal, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { developmentApi, type DevProject, type DevSession, type GitSummary } from "@/lib/development-api";
-import { DevelopmentPlan } from "./DevelopmentPlan";
 import { DevelopmentGitActions } from "./DevelopmentGitActions";
 import { DevelopmentGitBranchPicker } from "./DevelopmentGitBranchPicker";
 import { DevelopmentGitUnavailable } from "./DevelopmentGitUnavailable";
@@ -21,8 +20,6 @@ export function DevelopmentGitTools({ project, session, visible, embedded = fals
   const recheck = () => { forceRefresh.current = true; setRefresh((n) => n + 1); };
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const latestRunId = useDevelopmentStore((s) => s.snapshots[session.id]?.runs[0]?.id);
-  const plan = useDevelopmentStore((s) => s.snapshots[session.id]?.plan);
   useEffect(() => {
     if (!visible) return;
     let disposed = false; let timer: ReturnType<typeof setTimeout>;
@@ -81,7 +78,6 @@ export function DevelopmentGitTools({ project, session, visible, embedded = fals
           <p className="text-caption text-muted-foreground">选择文件后确认提交；推送单独确认。</p>
           <Button variant="outline" size="sm" className="w-full" onClick={openReview}>查看工作区差异</Button>
         </> : summary ? <><DevelopmentGitUnavailable reasonCode={summary.reasonCode} reason={summary.reason} checking={checking} onRecheck={recheck} /><Button variant="ghost" size="sm" onClick={() => showActions()}>查看 Git 操作记录</Button></> : <p className="text-caption text-muted-foreground">正在读取仓库…</p>}
-        {plan?.plan.length ? <div className="border-t border-border/60 pt-4"><DevelopmentPlan value={plan} currentRunId={latestRunId} /></div> : null}
       </div>
     </div>}
     <DevelopmentGitActions key={session.id} project={project} session={session} open={actionsOpen} onOpenChange={setActionsOpen} onChanged={() => setRefresh((value) => value + 1)} />

@@ -673,6 +673,17 @@ class SessionManager:
         """Legacy global session path (~/.mona/sessions/)."""
         return self.legacy_sessions_dir / f"{self.legacy_safe_key(key)}.jsonl"
 
+    def get_existing(self, key: str) -> Session | None:
+        """Read an existing conversation without recreating a deleted source."""
+        if key in self._deleted_keys:
+            return None
+        if key in self._cache:
+            return self._cache[key]
+        session = self._load(key)
+        if session is not None:
+            self._cache[key] = session
+        return session
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.

@@ -56,16 +56,16 @@ export function DevelopmentTabs({ tabs, active, maximized, overviewOpen = true, 
           const next = event.key === "Home" ? 0 : event.key === "End" ? targets.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + targets.length) % targets.length;
           targets[next].focus(); targets[next].click();
         }}>
-        {overviewOpen && <div className={cn("group flex h-8 shrink-0 items-center rounded-md", active === "overview" && "bg-muted/60")}>
-          <Button type="button" variant="ghost" size="sm" role="tab" aria-selected={active === "overview"} title={pageTitle} onClick={() => onSelect("overview")} className={cn("h-8 max-w-48 shrink-0 gap-2 px-3 text-ui text-muted-foreground hover:bg-muted/50", active === "overview" && "bg-muted/60 font-medium text-foreground hover:bg-muted/60")}>
+        {overviewOpen && <div className={cn("group flex h-8 shrink-0 items-center rounded-md transition-colors hover:bg-muted/50 focus-within:bg-muted/50", active === "overview" && "bg-muted/60 hover:bg-muted/60 focus-within:bg-muted/60")}>
+          <Button type="button" variant="ghost" size="sm" role="tab" aria-selected={active === "overview"} title={pageTitle} onClick={() => onSelect("overview")} className={cn("h-8 max-w-48 shrink-0 gap-2 bg-transparent px-3 text-ui text-muted-foreground hover:bg-transparent active:bg-transparent", active === "overview" && "font-medium text-foreground")}>
             {pageIcon}<span className="truncate">{pageTitle}</span>
           </Button>
           <Button variant="ghost" size="icon" className={cn("mx-0.5 h-6 w-6 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100", active === "overview" && "opacity-100")} aria-label={`关闭 ${pageTitle}`} onClick={() => onClose("overview")}><X className="h-3 w-3" /></Button>
         </div>}
         {tabs.map((id) => { const tool = tools.find((item) => item.id === id); if (!tool) return null; const Icon = tool.icon;
           const title = id === "browser" && browserTab?.url ? pageTitle : tool.title;
-          return <div key={id} className={cn("group flex h-8 shrink-0 items-center rounded-md", id === active && "bg-muted/60")}>
-            <Button type="button" variant="ghost" size="sm" role="tab" aria-selected={id === active} title={title} onClick={() => onSelect(id)} className={cn("h-8 max-w-36 gap-1.5 pl-2 text-ui text-muted-foreground hover:bg-muted/50", id === active && "font-medium text-foreground hover:bg-transparent")}>{id === "browser" ? pageIcon : <Icon className="h-4 w-4 shrink-0" />}<span className="truncate">{title}</span></Button>
+          return <div key={id} className={cn("group flex h-8 shrink-0 items-center rounded-md transition-colors hover:bg-muted/50 focus-within:bg-muted/50", id === active && "bg-muted/60 hover:bg-muted/60 focus-within:bg-muted/60")}>
+            <Button type="button" variant="ghost" size="sm" role="tab" aria-selected={id === active} title={title} onClick={() => onSelect(id)} className={cn("h-8 max-w-36 gap-1.5 bg-transparent pl-2 text-ui text-muted-foreground hover:bg-transparent active:bg-transparent", id === active && "font-medium text-foreground")}>{id === "browser" ? pageIcon : <Icon className="h-4 w-4 shrink-0" />}<span className="truncate">{title}</span></Button>
             <Button variant="ghost" size="icon" className={cn("mx-0.5 h-6 w-6 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100", id === active && "opacity-100")} aria-label={`关闭 ${title}`} onClick={() => onClose(id)}><X className="h-3 w-3" /></Button>
           </div>;
         })}

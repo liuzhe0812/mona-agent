@@ -6,6 +6,11 @@ import type { DevExecutor, DevProject, DevSession } from "@/lib/development-api"
 import { DevelopmentHeader } from "./DevelopmentHeader";
 import { useDevelopmentStore } from "./store";
 
+const desktop = vi.hoisted(() => ({ isTauri: vi.fn(() => true), openPath: vi.fn(), invoke: vi.fn() }));
+vi.mock("@/lib/tauri", () => ({ isTauri: desktop.isTauri }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: desktop.openPath }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: desktop.invoke }));
+
 vi.mock("./DevelopmentOverview", () => ({
   DevelopmentOverview: ({ onOpenTool }: { onOpenTool: (tab: "workspace") => void }) => (
     <button type="button" onClick={() => onOpenTool("workspace")}>打开工作工具</button>
@@ -23,7 +28,7 @@ function HeaderHarness({ portal, docked, hasStatus = false, onOpenStatus }: {
 }) {
   const [overviewOpen, setOverviewOpen] = useState(false);
   return <>
-    <DevelopmentHeader project={project} session={session} executors={executors} visible onNew={vi.fn()}
+    <DevelopmentHeader project={project} session={session} executors={executors} visible
       hasStatus={hasStatus} needsAttention={hasStatus} onOpenStatus={onOpenStatus}
       overviewOpen={overviewOpen} onOverviewOpenChange={setOverviewOpen} overviewContainer={portal} overviewDocked={docked} />
     <div data-testid="conversation-area">对话内容</div>
@@ -37,7 +42,8 @@ function mountHeader(docked: boolean, options?: { hasStatus?: boolean; onOpenSta
   return { portal, view: render(<HeaderHarness portal={portal} docked={docked} {...options} />) };
 }
 
-beforeEach(() => { useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true); });
+beforeEach(() => { useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true);
+  desktop.isTauri.mockReturnValue(true); desktop.openPath.mockReset(); desktop.invoke.mockReset(); });
 afterEach(() => { cleanup(); portals.splice(0).forEach((portal) => portal.remove()); vi.restoreAllMocks(); });
 
 it("uses shared tooltips without native title attributes", async () => {
@@ -56,7 +62,7 @@ it("uses shared tooltips without native title attributes", async () => {
   expect(screen.queryByText("关闭摘要")).toBeNull();
   expect(close).not.toHaveAttribute("title");
   await user.hover(close);
-  expect(await screen.findByText("关闭摘要")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("关闭摘要"));
 });
 
 it("keeps a docked overview open on outside clicks, but closes a floating one and restores focus on Escape and tool switches", async () => {
@@ -110,4 +116,52 @@ it("keeps pending actions out of the task summary and opens them from the more m
   fireEvent.pointerDown(screen.getByRole("button", { name: "会话更多操作" }), { button: 0, ctrlKey: false });
   expect(await screen.findByRole("menu")).not.toHaveTextContent("待处理事项");
   withoutStatus.view.unmount();
+});
+
+it("opens the current project in the system explorer from the colored shortcut", async () => {
+  mountHeader(false);
+  const button = screen.getByRole("button", { name: "在资源管理器中打开项目" });
+  expect(button.querySelector("img")?.getAttribute("src")).toContain("folder.svg");
+  fireEvent.click(button);
+  await waitFor(() => expect(desktop.openPath).toHaveBeenCalledWith(project.rootPath));
+  expect(desktop.invoke).not.toHaveBeenCalled();
+});
+
+it("offers only explorer and a system terminal and preserves the work sidebar and terminals", async () => {
+  mountHeader(false);
+  const sides = useDevelopmentStore.getState().sides;
+  const terminals = useDevelopmentStore.getState().terminals;
+  fireEvent.pointerDown(screen.getByRole("button", { name: "选择项目打开方式" }), { button: 0, ctrlKey: false });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["资源管理器", "终端"]);
+  const terminal = within(menu).getByRole("menuitem", { name: "终端" });
+  expect(terminal.querySelector("img")?.getAttribute("src")).toContain("powershell.svg");
+  fireEvent.click(terminal);
+  await waitFor(() => expect(desktop.invoke).toHaveBeenCalledWith("system_open_in_terminal", { path: project.rootPath }));
+  expect(desktop.openPath).not.toHaveBeenCalled();
+  expect(useDevelopmentStore.getState().sides).toBe(sides);
+  expect(useDevelopmentStore.getState().terminals).toBe(terminals);
+});
+
+it("opens the exact project supplied to the header and reports launch failure in a dialog", async () => {
+  const target = { ...project, id: "another_project", rootPath: "D:/项目 有空格" };
+  desktop.openPath.mockRejectedValueOnce(new Error("internal path error"));
+  desktop.invoke.mockRejectedValueOnce(new Error("native path error"));
+  render(<DevelopmentHeader project={target} session={{ ...session, projectId: target.id }} executors={[]} visible
+    overviewOpen={false} onOverviewOpenChange={vi.fn()} overviewContainer={null} overviewDocked={false} />);
+  fireEvent.pointerDown(screen.getByRole("button", { name: "选择项目打开方式" }), { button: 0, ctrlKey: false });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "资源管理器" }));
+  const dialog = await screen.findByRole("dialog", { name: "操作未完成" });
+  expect(desktop.openPath).toHaveBeenCalledWith(target.rootPath);
+  expect(dialog).toHaveTextContent("无法打开项目目录");
+  expect(dialog).not.toHaveTextContent("internal path error");
+});
+
+it("uses the existing system explorer entry when the project is outside opener scope", async () => {
+  desktop.openPath.mockRejectedValueOnce(new Error("path outside allowed scope"));
+  desktop.invoke.mockResolvedValueOnce(true);
+  mountHeader(false);
+  fireEvent.click(screen.getByRole("button", { name: "在资源管理器中打开项目" }));
+  await waitFor(() => expect(desktop.invoke).toHaveBeenCalledWith("system_open_in_explorer", { path: project.rootPath }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

@@ -121,23 +121,38 @@ export function nativeTimeline(messages: DevMessage[], events: DevEvent[], runs:
   const before = new Map<string, Activity[]>();
   const tail = new Map<string, Activity[]>();
   const streaming = new Set<string>();
+  const eventsByRun = new Map<string, DevEvent[]>();
+  const messagesByRun = new Map<string, DevMessage[]>();
+  for (const event of events) {
+    if (!event.runId) continue;
+    const group = eventsByRun.get(event.runId) ?? [];
+    group.push(event);
+    eventsByRun.set(event.runId, group);
+  }
+  for (const message of messages) {
+    if (!message.runId) continue;
+    const group = messagesByRun.get(message.runId) ?? [];
+    group.push(message);
+    messagesByRun.set(message.runId, group);
+  }
   for (const run of runs) {
-
+    const runEvents = eventsByRun.get(run.id) ?? [];
     const linked = new Map<string, { first: number; complete: boolean }>();
-    for (const event of events) {
-      if (event.runId !== run.id || !["agent.message.delta", "agent.message.completed"].includes(event.type)) continue;
+    for (const event of runEvents) {
+      if (!["agent.message.delta", "agent.message.completed"].includes(event.type)) continue;
       const id = event.payload.messageId;
       if (typeof id !== "string") continue;
       const old = linked.get(id);
       linked.set(id, { first: Math.min(old?.first ?? event.sequence, event.sequence), complete: !!old?.complete || event.type === "agent.message.completed" });
     }
     for (const [id, state] of linked) if (!state.complete && run.status === "running") streaming.add(id);
-    const ordered = messages.filter((m) => m.runId === run.id && linked.has(m.id));
-    for (const row of developmentActivity(events, run.id)) {
+    const ordered = (messagesByRun.get(run.id) ?? []).filter((m) => linked.has(m.id));
+    for (const row of developmentActivity(runEvents, run.id)) {
       const next = ordered.find((m) => linked.get(m.id)!.first > row.sequence);
       const map = next ? before : tail;
       const key = next?.id ?? run.id;
-      map.set(key, [...(map.get(key) ?? []), row]);
+      const rows = map.get(key);
+      if (rows) rows.push(row); else map.set(key, [row]);
     }
   }
   return { before, tail, streaming };

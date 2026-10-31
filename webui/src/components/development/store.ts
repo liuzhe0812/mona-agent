@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { AttachedDocument } from "@/hooks/useAttachedDocuments";
-import type { DevelopmentSendAttachments, DevMessage, DevSnapshot, FileDocument } from "@/lib/development-api";
+import type { DevelopmentSendAttachments, DevelopmentSessionOptions, DevMessage, DevSnapshot, FileDocument } from "@/lib/development-api";
 import type { SubagentPreset } from "./workspace-api";
 import type { PendingCollaboration } from "./collaboration-requests";
 import type { StreamPreviewSource } from "./DevelopmentStreamContext";
+import type { NewTaskDraft } from "./DevelopmentNewTask";
 
 export type WorkTab = "review" | "terminal" | "browser" | "workspace" | "sidechat" | "subagents" | "agent";
 export interface ProjectView { sessionId: string | null }
@@ -12,9 +13,25 @@ export interface SideState { expanded: boolean; tab: WorkTab | "overview"; maxim
 export interface FileBuffer { file: FileDocument; draft: string }
 export interface TerminalState { id?: string; status: "opening" | "ready" | "closing" | "exited" | "error"; error?: string }
 interface PendingSend { id: string; content: string; uncertain: boolean; intent?: "steering" | "follow_up"; targetRunId?: string; docPaths?: string[]; documentNames?: string[] }
+export interface PendingNewTask {
+  requestId: string;
+  sendRequestId: string;
+  options: Omit<DevelopmentSessionOptions, "requestId">;
+  content: string;
+  attachments?: DevelopmentSendAttachments;
+  draft: NewTaskDraft;
+  state: "pending" | "conflict" | "cancelling";
+  attempt: number;
+}
 interface DevelopmentState {
   projectId: string | null;
   views: Record<string, ProjectView>;
+  newTaskProjectId: string | null;
+  newTaskDrafts: Record<string, NewTaskDraft>;
+  pendingNewTasks: Record<string, PendingNewTask>;
+  setNewTaskProject: (project: string | null) => void;
+  setNewTaskDraft: (project: string, draft: NewTaskDraft | null) => void;
+  setPendingNewTask: (project: string, pending: PendingNewTask | null) => void;
   drafts: Record<string, string>;
   documentDrafts: Record<string, AttachedDocument[]>;
   setDocumentDraft: (session: string, value: AttachedDocument[]) => void;
@@ -53,6 +70,7 @@ interface DevelopmentState {
 }
 export const EMPTY_VIEW: ProjectView = { sessionId: null };
 export const EMPTY_DOCUMENTS: AttachedDocument[] = [];
+export const DEVELOPMENT_STORAGE_KEY = "mona.development.workbench.v1";
 export function attachmentDraft(source?: DevelopmentSendAttachments | null): AttachedDocument[] {
   return (source?.docPaths ?? []).map((path, index) => ({ path, name: source?.documentNames?.[index] || path.split(/[\\/]/).pop() || path }));
 }
@@ -85,7 +103,18 @@ function sameMessage(a: DevMessage, b: DevMessage): boolean {
 }
 
 export const useDevelopmentStore = create<DevelopmentState>()(persist((set, get) => ({
-  projectId: null, views: {}, drafts: {}, documentDrafts: {}, sides: {}, snapshots: {}, errors: {}, sends: {}, files: {}, selectedFiles: {}, streamPreviews: {}, terminals: {}, browserTabs: {}, sideChats: {}, scrollOffsets: {}, subagentDrafts: {}, collaborationRequests: {},
+  projectId: null, views: {}, newTaskProjectId: null, newTaskDrafts: {}, pendingNewTasks: {}, drafts: {}, documentDrafts: {}, sides: {}, snapshots: {}, errors: {}, sends: {}, files: {}, selectedFiles: {}, streamPreviews: {}, terminals: {}, browserTabs: {}, sideChats: {}, scrollOffsets: {}, subagentDrafts: {}, collaborationRequests: {},
+  setNewTaskProject: (project) => set({ newTaskProjectId: project }),
+  setNewTaskDraft: (project, draft) => set((state) => {
+    const newTaskDrafts = { ...state.newTaskDrafts };
+    if (draft) newTaskDrafts[project] = draft; else delete newTaskDrafts[project];
+    return { newTaskDrafts };
+  }),
+  setPendingNewTask: (project, pending) => set((state) => {
+    const pendingNewTasks = { ...state.pendingNewTasks };
+    if (pending) pendingNewTasks[project] = pending; else delete pendingNewTasks[project];
+    return { pendingNewTasks };
+  }),
   setStreamPreview: (session, source) => set((state) => {
     const streamPreviews = { ...state.streamPreviews };
     if (source) streamPreviews[session] = source; else delete streamPreviews[session];
@@ -136,8 +165,17 @@ export const useDevelopmentStore = create<DevelopmentState>()(persist((set, get)
     const messages = older
       ? [...new Map([...incoming, ...(old?.messages ?? [])].map((m) => [m.id, m])).values()]
       : [...retained, ...incoming].slice(-Math.max(100, old?.messages.length ?? 0));
-    const result = older && old ? { ...old, messages, before: value.before } : {
-      ...value, messages, before: value.before == null ? null : Math.max(0, value.before - Math.max(0, messages.length - value.messages.length)) || null,
+    const oldRuns = new Map(old?.runs.map((run) => [run.id, run]));
+    const incomingRuns = value.runs.map((run) => {
+      const previous = oldRuns.get(run.id);
+      return previous && previous.revision > run.revision ? previous : run;
+    });
+    const incomingById = new Map(incomingRuns.map((run) => [run.id, run]));
+    const runs = older && old
+      ? [...old.runs.map((run) => incomingById.get(run.id) ?? run), ...incomingRuns.filter((run) => !oldRuns.has(run.id))]
+      : [...incomingRuns, ...(old?.runs ?? []).filter((run) => !incomingById.has(run.id))];
+    const result = older && old ? { ...old, messages, runs, before: value.before } : {
+      ...value, messages, runs, before: value.before == null ? null : Math.max(0, value.before - Math.max(0, messages.length - value.messages.length)) || null,
     };
     if (old && old.messages.length === result.messages.length && result.messages.every((message, index) => message === old.messages[index])) result.messages = old.messages;
     if (!older) {
@@ -171,8 +209,8 @@ export const useDevelopmentStore = create<DevelopmentState>()(persist((set, get)
   setBrowser: (session, tab) => set((state) => ({ browserTabs: { ...state.browserTabs, [session]: tab } })),
   setSideChat: (session, child) => set((state) => ({ sideChats: { ...state.sideChats, [session]: child } })),
 }), {
-  name: "mona.development.workbench.v1", version: 2, storage: createJSONStorage(() => localStorage),
+  name: DEVELOPMENT_STORAGE_KEY, version: 2, storage: createJSONStorage(() => localStorage),
   migrate: (saved) => migrateDevelopmentViews(saved),
-  partialize: (state) => ({ projectId: state.projectId, views: state.views, drafts: state.drafts, documentDrafts: state.documentDrafts,
+  partialize: (state) => ({ projectId: state.projectId, views: state.views, newTaskProjectId: state.newTaskProjectId, newTaskDrafts: state.newTaskDrafts, pendingNewTasks: state.pendingNewTasks, drafts: state.drafts, documentDrafts: state.documentDrafts,
     sides: state.sides, sends: state.sends, files: state.files, selectedFiles: state.selectedFiles, sideChats: state.sideChats, subagentDrafts: state.subagentDrafts, collaborationRequests: state.collaborationRequests }),
 }));
