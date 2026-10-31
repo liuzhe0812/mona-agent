@@ -1291,6 +1291,7 @@ export function useMonaStream(
           streamEndTimerRef.current = null;
         }
         setIsStreaming(false);
+        setRunStartedAt(null);
         setIsAwaitingModelResponse(false);
         setIsCompacting(false);
         stoppingRef.current = false;
