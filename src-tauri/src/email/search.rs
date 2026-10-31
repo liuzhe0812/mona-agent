@@ -5,7 +5,8 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) fn init_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS email_search_fts USING fts5(
             body, tokenize='trigram'
         );
@@ -15,19 +16,32 @@ pub(super) fn init_schema(conn: &Connection) -> Result<(), String> {
             file_size INTEGER NOT NULL,
             file_mtime_ns INTEGER NOT NULL
         );
-        CREATE TRIGGER IF NOT EXISTS email_search_message_delete
+        CREATE VIRTUAL TABLE IF NOT EXISTS email_search_short_fts USING fts5(
+            terms, content='', contentless_delete=1, detail=none, tokenize='ascii'
+        );
+        CREATE TABLE IF NOT EXISTS email_search_short_index_state (
+            message_rowid INTEGER PRIMARY KEY
+        );
+        DROP TRIGGER IF EXISTS email_search_message_delete;
+        CREATE TRIGGER email_search_message_delete
         AFTER DELETE ON messages BEGIN
             DELETE FROM email_search_fts WHERE rowid = old.rowid;
             DELETE FROM email_search_index_state WHERE message_rowid = old.rowid;
+            DELETE FROM email_search_short_fts WHERE rowid = old.rowid;
+            DELETE FROM email_search_short_index_state WHERE message_rowid = old.rowid;
         END;
-        CREATE TRIGGER IF NOT EXISTS email_search_eml_invalidate
+        DROP TRIGGER IF EXISTS email_search_eml_invalidate;
+        CREATE TRIGGER email_search_eml_invalidate
         AFTER UPDATE OF body_fetched, eml_path ON messages
-        WHEN old.body_fetched != new.body_fetched OR old.eml_path != new.eml_path BEGIN
+        BEGIN
             DELETE FROM email_search_fts WHERE rowid = old.rowid;
             DELETE FROM email_search_index_state WHERE message_rowid = old.rowid;
+            DELETE FROM email_search_short_fts WHERE rowid = old.rowid;
+            DELETE FROM email_search_short_index_state WHERE message_rowid = old.rowid;
         END;",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[derive(Clone)]
@@ -86,16 +100,101 @@ fn clear_index(conn: &mut Connection, rowid: i64) -> Result<(), String> {
         [rowid],
     )
     .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM email_search_short_fts WHERE rowid = ?1",
+        [rowid],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM email_search_short_index_state WHERE message_rowid = ?1",
+        [rowid],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+fn short_token(first: char, second: Option<char>) -> u64 {
+    // Unicode scalars fit in 21 bits; pairs occupy a separate range from single characters.
+    let first = first.to_ascii_lowercase() as u64;
+    match second {
+        Some(second) => ((first + 1) << 21) | second.to_ascii_lowercase() as u64,
+        None => first,
+    }
+}
+
+fn short_terms(body: &str) -> String {
+    use std::fmt::Write;
+    let mut terms = HashSet::new();
+    // 128 singles + 128*128 pairs, avoiding repeated hashing of HTML/base64 characters.
+    let mut ascii_seen = [0u64; 258];
+    let mut insert = |first: char, second: Option<char>| {
+        let first = first.to_ascii_lowercase();
+        let second = second.map(|ch| ch.to_ascii_lowercase());
+        if first.is_ascii() && second.is_none_or(|ch| ch.is_ascii()) {
+            let bit = match second {
+                Some(ch) => 128 + first as usize * 128 + ch as usize,
+                None => first as usize,
+            };
+            let mask = 1 << (bit % 64);
+            if ascii_seen[bit / 64] & mask != 0 {
+                return;
+            }
+            ascii_seen[bit / 64] |= mask;
+        }
+        terms.insert(short_token(first, second));
+    };
+    let mut previous = None;
+    for ch in body.chars() {
+        insert(ch, None);
+        if let Some(first) = previous {
+            insert(first, Some(ch));
+        }
+        previous = Some(ch);
+    }
+    let mut text = String::new();
+    for term in terms {
+        write!(&mut text, "x{term:x} ").expect("writing to a String cannot fail");
+    }
+    text
+}
+
+fn store_short_index(conn: &Connection, rowid: i64, terms: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM email_search_short_fts WHERE rowid = ?1",
+        [rowid],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO email_search_short_fts(rowid, terms) VALUES (?1, ?2)",
+        params![rowid, terms],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR IGNORE INTO email_search_short_index_state(message_rowid) VALUES (?1)",
+        [rowid],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn store_index(
     conn: &mut Connection,
+    path: &Path,
     rowid: i64,
     indexed_file: &IndexedFile,
     body: &str,
 ) -> Result<(), String> {
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let terms = short_terms(body);
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let current: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM messages WHERE rowid = ?1 AND body_fetched = 1 AND eml_path = ?2)",
+        params![rowid, indexed_file.eml_path], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    if !current || file_state(path) != Some((indexed_file.file_size, indexed_file.file_mtime_ns)) {
+        return Ok(());
+    }
     tx.execute("DELETE FROM email_search_fts WHERE rowid = ?1", [rowid])
         .map_err(|e| e.to_string())?;
     tx.execute(
@@ -119,7 +218,66 @@ fn store_index(
         ],
     )
     .map_err(|e| e.to_string())?;
+    store_short_index(&tx, rowid, &terms)?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Populate the compact one/two-character index without rewriting the existing body index.
+pub(super) fn backfill_short_index(conn: &mut Connection) -> Result<(), String> {
+    let pending = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.message_rowid FROM email_search_index_state s
+             LEFT JOIN email_search_short_index_state short ON short.message_rowid = s.message_rowid
+             WHERE short.message_rowid IS NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let total = pending.len();
+    let mut indexed = 0;
+    let started = std::time::Instant::now();
+    log::info!("[email-search] 开始补建短词索引: {total} 封");
+    for rowid in pending {
+        let snapshot = conn.query_row(
+            "SELECT f.body, s.eml_path, s.file_size, s.file_mtime_ns
+             FROM email_search_index_state s JOIN email_search_fts f ON f.rowid = s.message_rowid
+             WHERE s.message_rowid = ?1
+               AND NOT EXISTS (SELECT 1 FROM email_search_short_index_state short WHERE short.message_rowid = s.message_rowid)",
+            [rowid], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        let Some((body, path, size, mtime)) = snapshot else {
+            continue;
+        };
+        let terms = short_terms(&body);
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let unchanged: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM email_search_index_state s
+             WHERE s.message_rowid = ?1 AND s.eml_path = ?2 AND s.file_size = ?3 AND s.file_mtime_ns = ?4
+               AND NOT EXISTS (SELECT 1 FROM email_search_short_index_state short WHERE short.message_rowid = s.message_rowid))",
+            params![rowid, path, size, mtime], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        if unchanged {
+            store_short_index(&tx, rowid, &terms)?;
+            indexed += 1;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    log::info!(
+        "[email-search] 本轮补建短词索引: {indexed} 封, {}ms",
+        started.elapsed().as_millis()
+    );
+    Ok(())
 }
 
 fn extract_search_body(bytes: &[u8], rowid: i64) -> Option<String> {
@@ -184,7 +342,7 @@ pub(super) fn refresh_body_index_for_message(
     let Some((file_size, file_mtime_ns)) = file_state(&path) else {
         return clear_index(conn, rowid);
     };
-    let bytes = match fs::read(path) {
+    let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(_) => return clear_index(conn, rowid),
     };
@@ -193,6 +351,7 @@ pub(super) fn refresh_body_index_for_message(
     };
     store_index(
         conn,
+        &path,
         rowid,
         &IndexedFile {
             eml_path: relative_path,
@@ -203,7 +362,43 @@ pub(super) fn refresh_body_index_for_message(
     )
 }
 
-fn ensure_body_indexed(conn: &mut Connection, root: &Path) -> Result<(), String> {
+pub(super) fn index_pending_bodies(
+    conn: &mut Connection,
+    root: &Path,
+    account_id: Option<&str>,
+    folder: Option<&str>,
+) -> Result<(), String> {
+    let pending = {
+        let mut statement = conn
+            .prepare(
+                "SELECT m.account_id, m.folder, m.uid FROM messages m
+             LEFT JOIN email_search_index_state s ON s.message_rowid = m.rowid
+             WHERE m.body_fetched = 1 AND m.eml_path != ''
+               AND (s.message_rowid IS NULL OR s.eml_path != m.eml_path)
+               AND (?1 IS NULL OR m.account_id = ?1) AND (?2 IS NULL OR m.folder = ?2)",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![account_id, folder], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    for (account, folder, uid) in pending {
+        refresh_body_index_for_message(conn, root, &account, &folder, &uid)?;
+    }
+    Ok(())
+}
+
+/// Full filesystem verification belongs to background startup/rebuild, not each query.
+pub(super) fn reconcile_body_index(conn: &mut Connection, root: &Path) -> Result<(), String> {
     let candidates = {
         let mut statement = conn
             .prepare(
@@ -222,36 +417,27 @@ fn ensure_body_indexed(conn: &mut Connection, root: &Path) -> Result<(), String>
     };
     let candidate_ids: HashSet<i64> = candidates.iter().map(|(rowid, _)| *rowid).collect();
 
-    // Repair an interrupted rebuild where one side of the derived index was lost.
-    conn.execute(
-        "DELETE FROM email_search_index_state
-         WHERE message_rowid NOT IN (SELECT rowid FROM email_search_fts)",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "DELETE FROM email_search_fts
-         WHERE rowid NOT IN (SELECT message_rowid FROM email_search_index_state)",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
-
+    // Point lookups avoid scanning the entire FTS table under a write lock on every search.
     let mut states = {
         let mut statement = conn
             .prepare(
-                "SELECT message_rowid, eml_path, file_size, file_mtime_ns
-                 FROM email_search_index_state",
+                "SELECT s.message_rowid, s.eml_path, s.file_size, s.file_mtime_ns,
+                        EXISTS (SELECT 1 FROM email_search_fts f WHERE f.rowid = s.message_rowid)
+                 FROM email_search_index_state s",
             )
             .map_err(|e| e.to_string())?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    IndexedFile {
-                        eml_path: row.get(1)?,
-                        file_size: row.get(2)?,
-                        file_mtime_ns: row.get(3)?,
-                    },
+                    (
+                        IndexedFile {
+                            eml_path: row.get(1)?,
+                            file_size: row.get(2)?,
+                            file_mtime_ns: row.get(3)?,
+                        },
+                        row.get::<_, bool>(4)?,
+                    ),
                 ))
             })
             .map_err(|e| e.to_string())?
@@ -277,13 +463,15 @@ fn ensure_body_indexed(conn: &mut Connection, root: &Path) -> Result<(), String>
 
     for (rowid, relative_path) in candidates {
         let Some(abs_path) = resolve_eml_path(root, &canonical_root, &relative_path) else {
-            clear_index(conn, rowid)?;
-            states.remove(&rowid);
+            if states.remove(&rowid).is_some() {
+                clear_index(conn, rowid)?;
+            }
             continue;
         };
         let Some((file_size, file_mtime_ns)) = file_state(&abs_path) else {
-            clear_index(conn, rowid)?;
-            states.remove(&rowid);
+            if states.remove(&rowid).is_some() {
+                clear_index(conn, rowid)?;
+            }
             continue;
         };
         let current = IndexedFile {
@@ -291,8 +479,9 @@ fn ensure_body_indexed(conn: &mut Connection, root: &Path) -> Result<(), String>
             file_size,
             file_mtime_ns,
         };
-        if states.get(&rowid).is_some_and(|indexed| {
-            indexed.eml_path == current.eml_path
+        if states.get(&rowid).is_some_and(|(indexed, present)| {
+            *present
+                && indexed.eml_path == current.eml_path
                 && indexed.file_size == current.file_size
                 && indexed.file_mtime_ns == current.file_mtime_ns
         }) {
@@ -302,18 +491,20 @@ fn ensure_body_indexed(conn: &mut Connection, root: &Path) -> Result<(), String>
         let bytes = match fs::read(&abs_path) {
             Ok(bytes) => bytes,
             Err(_) => {
-                clear_index(conn, rowid)?;
-                states.remove(&rowid);
+                if states.remove(&rowid).is_some() {
+                    clear_index(conn, rowid)?;
+                }
                 continue;
             }
         };
         let Some(body) = extract_search_body(&bytes, rowid) else {
-            clear_index(conn, rowid)?;
-            states.remove(&rowid);
+            if states.remove(&rowid).is_some() {
+                clear_index(conn, rowid)?;
+            }
             continue;
         };
-        store_index(conn, rowid, &current, &body)?;
-        states.insert(rowid, current);
+        store_index(conn, &abs_path, rowid, &current, &body)?;
+        states.insert(rowid, (current, true));
     }
     Ok(())
 }
@@ -341,8 +532,6 @@ pub(super) fn search_messages(
     root: &Path,
     req: &EmailSearchRequest,
 ) -> Result<Vec<EmailSearchResult>, String> {
-    ensure_body_indexed(conn, root)?;
-
     let mut conditions = Vec::<String>::new();
     let mut params = Vec::<Box<dyn ToSql>>::new();
     if let Some(keyword) = req
@@ -351,8 +540,10 @@ pub(super) fn search_messages(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
+        index_pending_bodies(conn, root, req.account_id.as_deref(), req.folder.as_deref())?;
         let placeholder = format!("?{}", params.len() + 1);
         let contains_wildcard = keyword.chars().any(|c| matches!(c, '%' | '_' | '\\'));
+        let mut index_query = None;
         let searchable_fields = [
             "m.uid",
             "m.account_id",
@@ -376,18 +567,56 @@ pub(super) fn search_messages(
             })
             .collect::<Vec<_>>()
             .join(" OR ");
-        let body_matches = if contains_wildcard {
-            format!("instr(lower(body_fts.body), lower({placeholder})) > 0")
+        let body_matches = if keyword.chars().count() <= 2 {
+            let mut chars = keyword.chars();
+            let first = chars.next().expect("keyword is not empty");
+            let token = short_token(first, chars.next());
+            let short_placeholder = format!("?{}", params.len() + 2);
+            index_query = Some(format!("x{token:x}"));
+            let comparison = if contains_wildcard {
+                format!("instr(lower(f.body), lower({placeholder})) > 0")
+            } else {
+                format!("f.body LIKE {placeholder} COLLATE NOCASE")
+            };
+            // During the background upgrade, only bodies without a short index need scanning.
+            format!(
+                "(m.rowid IN (SELECT rowid FROM email_search_short_fts
+                  WHERE email_search_short_fts MATCH {short_placeholder})
+                  OR (NOT EXISTS (SELECT 1 FROM email_search_short_index_state short
+                                  WHERE short.message_rowid = m.rowid)
+                      AND EXISTS (SELECT 1 FROM email_search_fts f
+                                  WHERE f.rowid = m.rowid AND {comparison})))"
+            )
+        } else if !contains_wildcard {
+            // Keep LIKE inside the FTS subquery so SQLite can use the trigram index.
+            format!(
+                "m.rowid IN (SELECT f.rowid FROM email_search_fts f
+                 JOIN email_search_index_state s ON s.message_rowid = f.rowid
+                 WHERE f.body LIKE {placeholder} COLLATE NOCASE)"
+            )
         } else {
-            format!("body_fts.body LIKE {placeholder} COLLATE NOCASE")
+            let literal_placeholder = format!("?{}", params.len() + 2);
+            index_query = Some(format!("\"{}\"", keyword.replace('"', "\"\"")));
+            format!(
+                "m.rowid IN (SELECT f.rowid FROM email_search_fts f
+                 JOIN email_search_index_state s ON s.message_rowid = f.rowid
+                 WHERE f.body MATCH {literal_placeholder}
+                   AND instr(lower(f.body), lower({placeholder})) > 0)"
+            )
         };
-        conditions.push(format!("({header_matches} OR {body_matches})"));
+        conditions.push(format!(
+            "({header_matches} OR (m.body_fetched = 1 AND m.eml_path != '' AND {body_matches}
+             AND EXISTS (SELECT 1 FROM email_search_index_state s WHERE s.message_rowid = m.rowid)))"
+        ));
         let value = if contains_wildcard {
             keyword.to_string()
         } else {
             format!("%{keyword}%")
         };
         params.push(Box::new(value));
+        if let Some(token) = index_query {
+            params.push(Box::new(token));
+        }
     }
     if let Some(value) = &req.account_id {
         conditions.push(format!("m.account_id = ?{}", params.len() + 1));
@@ -435,7 +664,6 @@ pub(super) fn search_messages(
         "SELECT m.uid, m.account_id, m.folder, m.subject, m.from_address, m.from_name,
                 m.to_addresses, m.date, m.has_attachments, m.is_read, m.is_starred, m.raw_size
          FROM messages AS m
-         LEFT JOIN email_search_fts AS body_fts ON body_fts.rowid = m.rowid
          {where_clause}"
     );
     let param_refs = params
@@ -464,14 +692,13 @@ pub(super) fn search_messages(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    messages.sort_by(|left, right| {
-        let left_time = parse_timestamp(&left.date).unwrap_or(i64::MIN);
-        let right_time = parse_timestamp(&right.date).unwrap_or(i64::MIN);
-        right_time
-            .cmp(&left_time)
-            .then_with(|| left.account_id.cmp(&right.account_id))
-            .then_with(|| left.folder.cmp(&right.folder))
-            .then_with(|| left.uid.cmp(&right.uid))
+    messages.sort_by_cached_key(|message| {
+        (
+            std::cmp::Reverse(parse_timestamp(&message.date).unwrap_or(i64::MIN)),
+            message.account_id.clone(),
+            message.folder.clone(),
+            message.uid.clone(),
+        )
     });
     let start = (req.offset as usize).min(messages.len());
     let end = start
@@ -482,7 +709,7 @@ pub(super) fn search_messages(
 
 #[cfg(test)]
 mod tests {
-    use super::search_messages;
+    use super::{backfill_short_index, reconcile_body_index, search_messages};
     use crate::email::search::init_schema;
     use crate::email::EmailSearchRequest;
     use rusqlite::{params, Connection};
@@ -658,6 +885,7 @@ mod tests {
             format!("From: sender@example.com\r\nSubject: Header\r\nDate: {date}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n替换后的新内容"),
         )
         .unwrap();
+        reconcile_body_index(&mut conn, temp.path()).unwrap();
         assert_eq!(
             search_messages(&mut conn, temp.path(), &request("旧正文", 0, 10))
                 .unwrap()
@@ -773,5 +1001,322 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn searching_an_indexed_message_does_not_require_a_write_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
+        add_message(
+            &conn,
+            temp.path(),
+            "1",
+            "account-a",
+            "INBOX",
+            &rfc_date(20_000),
+            true,
+            (false, false, false),
+            "本地正文搜索词",
+        );
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("正文", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let writer = Connection::open(temp.path().join("email.sqlite3")).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let found = search_messages(&mut conn, temp.path(), &request("正文", 0, 10)).unwrap();
+        assert_eq!(found.len(), 1);
+        writer.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn repairs_missing_index_entries_and_ignores_orphaned_bodies() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        add_message(
+            &conn,
+            temp.path(),
+            "1",
+            "account-a",
+            "INBOX",
+            &rfc_date(20_000),
+            true,
+            (false, false, false),
+            "索引恢复正文",
+        );
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("恢复", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+        conn.execute("DELETE FROM email_search_fts", []).unwrap();
+        reconcile_body_index(&mut conn, temp.path()).unwrap();
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("恢复", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        conn.execute("DELETE FROM email_search_index_state", [])
+            .unwrap();
+        std::fs::remove_file(temp.path().join("account-a/INBOX/1.eml")).unwrap();
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("恢复", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+
+        conn.execute("UPDATE messages SET body_fetched = 0 WHERE uid = '1'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO email_search_fts(rowid, body) VALUES (1, '过期正文')",
+            [],
+        )
+        .unwrap();
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("过期", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cached_search_does_not_visit_eml_files_or_index_other_mailboxes() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        for folder in ["INBOX", "Archive"] {
+            add_message(
+                &conn,
+                temp.path(),
+                "1",
+                "account-a",
+                folder,
+                &rfc_date(20_000),
+                true,
+                (false, false, false),
+                "中文正文搜索词",
+            );
+        }
+        let mut req = request("正文搜索", 0, 10);
+        req.account_id = Some("account-a".into());
+        req.folder = Some("INBOX".into());
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &req).unwrap().len(),
+            1
+        );
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM email_search_index_state", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(indexed, 1);
+        // An already-indexed query needs no access to the mail directory.
+        assert_eq!(
+            search_messages(&mut conn, &temp.path().join("unavailable"), &req)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn same_path_body_replacement_is_indexed_and_substrings_remain_literal() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        add_message(
+            &conn,
+            temp.path(),
+            "1",
+            "account-a",
+            "INBOX",
+            &rfc_date(20_000),
+            true,
+            (false, false, false),
+            "原始正文",
+        );
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("原始", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::write(temp.path().join("account-a/INBOX/1.eml"),
+            "Content-Type: text/plain; charset=UTF-8\r\n\r\n替换后正文 EnglishSubstring 50%_literal\\path").unwrap();
+        conn.execute(
+            "UPDATE messages SET eml_path = eml_path WHERE uid = '1'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("原始", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+        for keyword in [
+            "替",
+            "替换",
+            "替换后",
+            "lishSub",
+            "EN",
+            "%",
+            "%_",
+            "50%_literal\\path",
+        ] {
+            assert_eq!(
+                search_messages(&mut conn, temp.path(), &request(keyword, 0, 10))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("50__literal", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn short_index_backfill_keeps_results_complete_and_matches_adjacent_characters() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        for (uid, body) in [("1", "万里 𠮷野"), ("2", "万 中 里 𠮷 中 野")] {
+            add_message(
+                &conn,
+                temp.path(),
+                uid,
+                "account-a",
+                "INBOX",
+                &rfc_date(20_000),
+                true,
+                (false, false, false),
+                body,
+            );
+        }
+        for keyword in ["万里", "𠮷野"] {
+            assert_eq!(
+                search_messages(&mut conn, temp.path(), &request(keyword, 0, 10))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("万", 0, 10))
+                .unwrap()
+                .len(),
+            2
+        );
+        conn.execute("DELETE FROM email_search_short_fts", [])
+            .unwrap();
+        conn.execute("DELETE FROM email_search_short_index_state", [])
+            .unwrap();
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("万里", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+        backfill_short_index(&mut conn).unwrap();
+        assert_eq!(
+            search_messages(
+                &mut conn,
+                &temp.path().join("unavailable"),
+                &request("万里", 0, 10)
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        conn.execute("DELETE FROM messages WHERE uid='1'", [])
+            .unwrap();
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("万里", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM email_search_short_index_state",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn an_old_body_snapshot_cannot_replace_a_newer_or_deleted_message_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        add_message(
+            &conn,
+            temp.path(),
+            "1",
+            "account-a",
+            "INBOX",
+            &rfc_date(20_000),
+            true,
+            (false, false, false),
+            "旧版正文",
+        );
+        let path = temp.path().join("account-a/INBOX/1.eml");
+        let (size, mtime) = super::file_state(&path).unwrap();
+        let old = super::IndexedFile {
+            eml_path: "account-a/INBOX/1.eml".into(),
+            file_size: size,
+            file_mtime_ns: mtime,
+        };
+        std::fs::write(
+            &path,
+            "Content-Type: text/plain; charset=UTF-8\r\n\r\n更新后的最新正文",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages SET eml_path = eml_path WHERE uid = '1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("最新", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+        super::store_index(&mut conn, &path, 1, &old, "旧版正文").unwrap();
+        assert!(
+            search_messages(&mut conn, temp.path(), &request("旧版", 0, 10))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            search_messages(&mut conn, temp.path(), &request("最新", 0, 10))
+                .unwrap()
+                .len(),
+            1
+        );
+        let (size, mtime) = super::file_state(&path).unwrap();
+        let current = super::IndexedFile {
+            file_size: size,
+            file_mtime_ns: mtime,
+            ..old
+        };
+        conn.execute("DELETE FROM messages WHERE uid = '1'", [])
+            .unwrap();
+        super::store_index(&mut conn, &path, 1, &current, "更新后的最新正文").unwrap();
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM email_search_index_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(indexed, 0);
     }
 }

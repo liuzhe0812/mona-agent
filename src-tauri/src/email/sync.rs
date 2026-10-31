@@ -92,11 +92,12 @@ pub(super) fn complete_mark_all_read(
         AND NOT EXISTS(SELECT 1 FROM email_pending_flags p WHERE p.account_id=messages.account_id AND p.folder=messages.folder AND p.uid=messages.uid AND p.flag='\\Seen' AND COALESCE(p.last_error,'')!='stale')",
         params![account, folder]).map_err(|e| e.to_string())?;
     let records = {
-        let mut stmt = tx.prepare("SELECT uid,is_read,is_starred,has_attachments,body_fetched,COALESCE(message_id,'') FROM messages WHERE account_id=?1 AND folder=?2").map_err(|e| e.to_string())?;
+        let mut stmt = tx.prepare("SELECT uid,is_read,is_starred,has_attachments,body_fetched,COALESCE(message_id,''),received_at FROM messages WHERE account_id=?1 AND folder=?2").map_err(|e| e.to_string())?;
         let rows = stmt.query_map(params![account, folder], |row| Ok(EmlMeta {
             uid: row.get(0)?, account_id: account.into(), folder: folder.into(),
             is_read: row.get(1)?, is_starred: row.get(2)?, has_attachments: row.get(3)?,
             body_fetched: row.get(4)?, message_id: row.get(5)?, eml_mtime: 0,
+            received_at: row.get(6)?,
         })).map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
     };
@@ -403,6 +404,7 @@ mod tests {
             uid: "42".into(), account_id: account.clone(), folder: FOLDER.into(),
             is_read: false, is_starred: true, has_attachments: false, body_fetched: false,
             message_id: String::new(), eml_mtime: 123,
+            received_at: None,
         }).unwrap();
         let previous = seen_revisions(&state, &account, FOLDER).unwrap();
 

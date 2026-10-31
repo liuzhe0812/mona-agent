@@ -3,6 +3,7 @@ import { Loader2, Plus, Trash2, Star, Edit3, Check, X as XIcon, Filter, PlayCirc
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -36,7 +37,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEmailStore } from "./store/emailStore";
-import type { EmailAccount, EmailRule, EmailSignature } from "./lib/types";
+import { EMAIL_OFFLINE_SYNC_OPTIONS } from "./lib/types";
+import type { EmailAccount, EmailOfflineSyncDays, EmailRule, EmailSignature } from "./lib/types";
 import * as emailApi from "./lib/emailApi";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +69,7 @@ export function AccountSettingsDialog({
   const [smtpPort, setSmtpPort] = useState("587");
   const [smtpSsl, setSmtpSsl] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const [offlineSyncDays, setOfflineSyncDays] = useState<EmailOfflineSyncDays>(90);
   const [signatures, setSignatures] = useState<EmailSignature[]>([]);
   const [editingSigId, setEditingSigId] = useState<string | null>(null);
   const [sigDraft, setSigDraft] = useState<EmailSignature | null>(null);
@@ -92,6 +95,7 @@ export function AccountSettingsDialog({
     setSmtpPort(String(account.smtpPort));
     setSmtpSsl(account.smtpUseSsl);
     setNewPassword("");
+    setOfflineSyncDays(account.offlineSyncDays ?? 90);
     setSignatures(account.signatures ?? []);
     setEditingSigId(null);
     setSigDraft(null);
@@ -298,6 +302,7 @@ export function AccountSettingsDialog({
         smtpPort: parseInt(smtpPort, 10) || 587,
         smtpUseSsl: smtpSsl,
         signatures,
+        offlineSyncDays,
       };
       await updateAccount(updated, newPassword.trim() || null);
       onOpenChange(false);
@@ -377,6 +382,24 @@ export function AccountSettingsDialog({
                 />
               </div>
             </div>
+          </section>
+
+          <section className="space-y-1">
+            <Label className="text-caption">历史正文离线保存</Label>
+            <Select
+              aria-label="历史正文离线保存"
+              value={String(offlineSyncDays)}
+              onValueChange={(value) => setOfflineSyncDays(Number(value) as EmailOfflineSyncDays)}
+              options={EMAIL_OFFLINE_SYNC_OPTIONS}
+              className="h-8 text-ui"
+              disabled={submitting}
+            />
+            <p className="text-caption text-muted-foreground">
+              新邮件自动后台收取。历史邮件保留在列表中，范围外未下载的正文打开时需联网；已下载邮件会保留。正文搜索覆盖已下载的邮件。
+            </p>
+            {offlineSyncDays === 0 && (
+              <p className="text-caption text-muted-foreground">保存全部历史正文需要更多时间和磁盘空间。</p>
+            )}
           </section>
 
           {/* 服务器 */}

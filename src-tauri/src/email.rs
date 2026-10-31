@@ -4,6 +4,7 @@
 //! gateway HTTP 转发，避免引入 imap/lettre 等重型依赖。
 
 mod search;
+mod offline;
 
 use crate::settings::app_data_dir;
 mod outbox;
@@ -201,6 +202,8 @@ struct EmlMeta {
     message_id: String,
     #[serde(default)]
     eml_mtime: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    received_at: Option<i64>,
 }
 
 /// 计算 .meta.json 相对路径：<account_id>/<folder>/<uid>.eml.meta.json
@@ -616,6 +619,7 @@ impl Default for EmlMeta {
             body_fetched: false,
             message_id: String::new(),
             eml_mtime: 0,
+            received_at: None,
         }
     }
 }
@@ -676,6 +680,8 @@ fn rebuild_folder_index(state: &EmailState, account_id: &str, folder: &str) -> R
         let is_read = meta.as_ref().map(|m| m.is_read).unwrap_or(false);
         let is_starred = meta.as_ref().map(|m| m.is_starred).unwrap_or(false);
         let body_fetched = meta.as_ref().map(|m| m.body_fetched).unwrap_or(false);
+        let received_at = meta.as_ref().and_then(|m| m.received_at)
+            .or_else(|| search::parse_timestamp(&date));
         let has_attach = meta.as_ref().map(|m| m.has_attachments).unwrap_or(has_attachments);
         let mid = meta.as_ref().map(|m| m.message_id.clone()).unwrap_or(message_id);
         let eml_rel = eml_relative_path(account_id, folder, &uid);
@@ -693,6 +699,7 @@ fn rebuild_folder_index(state: &EmailState, account_id: &str, folder: &str) -> R
                 body_fetched: false,
                 message_id: mid.clone(),
                 eml_mtime: chrono::Utc::now().timestamp(),
+                received_at,
             };
             let _ = write_meta_json(&m);
         }
@@ -700,9 +707,9 @@ fn rebuild_folder_index(state: &EmailState, account_id: &str, folder: &str) -> R
         conn.execute(
             "INSERT INTO messages
              (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-              date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+              date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path, received_at)
              VALUES (?1, CASE WHEN ?1 LIKE 'L%' THEN 0 ELSE CAST(?1 AS INTEGER) END,
-                     ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                     ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 uid,
                 account_id,
@@ -720,6 +727,7 @@ fn rebuild_folder_index(state: &EmailState, account_id: &str, folder: &str) -> R
                 mid,
                 body_fetched as i32,
                 eml_rel,
+                received_at,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -774,6 +782,8 @@ pub fn rebuild_all_indexes(state: &EmailState) -> Result<usize, String> {
             }
         }
     }
+    let mut conn = state.conn()?;
+    search::reconcile_body_index(&mut conn, &mail_root)?;
     Ok(total)
 }
 
@@ -916,6 +926,8 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
                     let is_read = meta.as_ref().map(|m| m.is_read).unwrap_or(false);
                     let is_starred = meta.as_ref().map(|m| m.is_starred).unwrap_or(false);
                     let body_fetched = meta.as_ref().map(|m| m.body_fetched).unwrap_or(false);
+                    let received_at = meta.as_ref().and_then(|m| m.received_at)
+                        .or_else(|| search::parse_timestamp(&date));
                     let has_attach = meta.as_ref().map(|m| m.has_attachments).unwrap_or(has_attachments);
                     let mid = meta.as_ref().map(|m| m.message_id.clone()).unwrap_or(message_id);
                     let raw_size = eml_bytes.len() as u32;
@@ -932,6 +944,7 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
                             body_fetched: false,
                             message_id: mid.clone(),
                             eml_mtime: chrono::Utc::now().timestamp(),
+                            received_at,
                         };
                         let _ = write_meta_json(&m);
                     }
@@ -939,9 +952,9 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
                     if let Err(e) = conn.execute(
                         "INSERT OR REPLACE INTO messages
                          (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-                          date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+                          date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path, received_at)
                          VALUES (?1, CASE WHEN ?1 LIKE 'L%' THEN 0 ELSE CAST(?1 AS INTEGER) END,
-                                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                         params![
                             uid,
                             account_id,
@@ -959,6 +972,7 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
                             mid,
                             body_fetched as i32,
                             eml_rel,
+                            received_at,
                         ],
                     ) {
                         log::warn!("[email-verify] 重建索引失败 uid={}: {}", uid, e);
@@ -970,6 +984,12 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
         }
     }
 
+    if let Err(error) = state
+        .conn()
+        .and_then(|mut conn| search::reconcile_body_index(&mut conn, &mail_root))
+    {
+        log::warn!("[email-search] 启动时校验正文索引失败: {error}");
+    }
     log::info!(
         "[email-verify] 校验完成 in {:.1}s: 检查文件夹 {} 个, 重建索引 {} 条, 删除孤儿 {} 条",
         start.elapsed().as_secs_f32(),
@@ -977,6 +997,15 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
         total_rebuilt,
         total_orphans
     );
+}
+
+pub fn run_search_index_maintenance(state: &EmailState) {
+    loop {
+        if let Err(error) = state.conn().and_then(|mut conn| search::backfill_short_index(&mut conn)) {
+            log::warn!("[email-search] 补建短词索引失败，稍后自动继续: {error}");
+        }
+        std::thread::sleep(Duration::from_secs(60));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,6 +1046,12 @@ pub struct EmailAccount {
     /// 签名列表（JSON 序列化存储，每账号可有多条签名）
     #[serde(default)]
     pub signatures: Vec<EmailSignature>,
+    #[serde(default = "default_offline_sync_days")]
+    pub offline_sync_days: u16,
+}
+
+fn default_offline_sync_days() -> u16 {
+    offline::DEFAULT_DAYS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1142,6 +1177,8 @@ pub struct SyncRequest {
     pub use_ssl: bool,
     #[serde(default)]
     pub last_uid: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_history: bool,
 }
 
 /// email_sync 返回值：新增邮件数 + 新邮件列表（规则应用后仍在当前文件夹的）
@@ -1959,6 +1996,7 @@ impl EmailState {
             ",
         )
         .map_err(|e| e.to_string())?;
+        offline::init_schema(conn)?;
         search::init_schema(conn)?;
         sync::init_schema(conn)?;
         Ok(())
@@ -2056,7 +2094,7 @@ pub async fn email_list_accounts(
             "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
                     smtp_host, smtp_port, smtp_username, smtp_password, from_address,
                     from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl,
-                    signatures
+                    signatures, offline_sync_days
              FROM accounts ORDER BY sort_order, display_name, id",
         )
         .map_err(|e| e.to_string())?;
@@ -2082,6 +2120,7 @@ pub async fn email_list_accounts(
                 imap_use_ssl: row.get::<_, i32>(15)? != 0,
                 smtp_use_ssl: row.get::<_, i32>(16)? != 0,
                 signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
+                offline_sync_days: row.get(18)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -2095,6 +2134,7 @@ pub async fn email_add_account(
     state: tauri::State<'_, EmailState>,
     account: EmailAccount,
 ) -> Result<(), String> {
+    offline::validate_days(account.offline_sync_days)?;
     let conn = state.conn()?;
     let enc_imap = encrypt_password(&account.imap_password)?;
     let enc_smtp = encrypt_password(&account.smtp_password)?;
@@ -2109,8 +2149,8 @@ pub async fn email_add_account(
         "INSERT OR REPLACE INTO accounts
          (id, display_name, imap_host, imap_port, imap_username, imap_password,
           smtp_host, smtp_port, smtp_username, smtp_password, from_address, from_name,
-          last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl, signatures, sort_order)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+          last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl, signatures, sort_order, offline_sync_days)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             account.id,
             account.display_name,
@@ -2131,6 +2171,7 @@ pub async fn email_add_account(
             account.smtp_use_ssl as i32,
             serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
             next_sort_order,
+            account.offline_sync_days,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -2176,6 +2217,7 @@ pub async fn email_update_account_settings(
     account: EmailAccount,
     new_password: Option<String>,
 ) -> Result<(), String> {
+    offline::validate_days(account.offline_sync_days)?;
     let conn = state.conn()?;
     // 密码：仅在显式传入非空新密码时才更新（避免双重加密 / 误清空）
     let (imap_pwd, smtp_pwd) = match new_password.as_deref() {
@@ -2201,7 +2243,7 @@ pub async fn email_update_account_settings(
             imap_password = ?6, smtp_host = ?7, smtp_port = ?8, smtp_username = ?9,
             smtp_password = ?10, from_address = ?11, from_name = ?12,
             last_synced_uid = ?13, carddav_url = ?14, eas_url = ?15,
-            imap_use_ssl = ?16, smtp_use_ssl = ?17, signatures = ?18
+            imap_use_ssl = ?16, smtp_use_ssl = ?17, signatures = ?18, offline_sync_days = ?19
          WHERE id = ?1",
         params![
             account.id,
@@ -2222,6 +2264,7 @@ pub async fn email_update_account_settings(
             account.imap_use_ssl as i32,
             account.smtp_use_ssl as i32,
             serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
+            account.offline_sync_days,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -4018,7 +4061,7 @@ async fn sync_folder_internal(
     if let Some(obj) = req_json.as_object_mut() {
         obj.insert("refreshFlags".into(), Value::Bool(refresh_flags));
         obj.insert("background".into(), Value::Bool(background));
-        if refresh_flags {
+        if refresh_flags || req.include_history {
             let conn = state.conn()?;
             let mut stmt = conn.prepare("SELECT uid FROM messages WHERE account_id=?1 AND folder=?2 AND uid_int > 0").map_err(|e| e.to_string())?;
             let rows = stmt.query_map(params![req.account_id, req.mailbox], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
@@ -4260,11 +4303,13 @@ async fn sync_folder_internal(
                 |_| Ok(true),
             )
             .unwrap_or(false);
+        let mut previous_received_at = None;
         if existed {
-            let (read, star): (bool, bool) = tx.query_row(
-                "SELECT is_read, is_starred FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3",
-                params![uid, req.account_id, req.mailbox], |row| Ok((row.get(0)?, row.get(1)?)),
+            let (read, star, received): (bool, bool, Option<i64>) = tx.query_row(
+                "SELECT is_read, is_starred, received_at FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3",
+                params![uid, req.account_id, req.mailbox], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).map_err(|e| e.to_string())?;
+            previous_received_at = received;
             if protected_flags.contains(&(uid.clone(), "\\Seen".into())) { inherited_is_read = Some(read); }
             if protected_flags.contains(&(uid.clone(), "\\Flagged".into())) { inherited_is_starred = Some(star); }
         }
@@ -4294,6 +4339,7 @@ async fn sync_folder_internal(
             has_attachments: msg["hasAttachments"].as_bool().unwrap_or(false),
             body_fetched: gw_body_fetched, message_id: message_id_str.to_string(),
             eml_mtime: chrono::Utc::now().timestamp(),
+            received_at: None,
         };
         // 用 Rust 的 parse_eml_header 从 .eml 字节重新解析 header（subject/from/to/cc/date/message_id/has_attachments）
         // 不直接用 gateway 返回的 JSON 字段，确保 gb2312/gbk 编码的中文（含"喆"等扩展字符）正确解码
@@ -4313,6 +4359,16 @@ async fn sync_folder_internal(
                     msg["hasAttachments"].as_bool().unwrap_or(false),
                 )
             };
+        let received_at = msg.get("receivedAt").and_then(Value::as_i64).filter(|value| *value > 0)
+            .or(previous_received_at)
+            .or_else(|| {
+                if msg.get("isHistorical").and_then(Value::as_bool).unwrap_or(false) {
+                    search::parse_timestamp(&hdr_date)
+                } else {
+                    Some(chrono::Utc::now().timestamp())
+                }
+            });
+        meta.received_at = received_at;
         // 收集正确的 header（用重新解析的值，而非 gateway 返回的可能含乱码的 JSON 字段）
         corrected_messages.push(serde_json::json!({
             "uid": uid,
@@ -4329,9 +4385,9 @@ async fn sync_folder_internal(
         tx.execute(
             "INSERT INTO messages
              (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-              date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+              date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path, received_at)
              VALUES (?1, CASE WHEN ?1 LIKE 'L%' THEN 0 ELSE CAST(?1 AS INTEGER) END,
-                     ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                     ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(uid, account_id, folder) DO UPDATE SET
               uid_int=CASE WHEN excluded.uid LIKE 'L%' THEN 0 ELSE CAST(excluded.uid AS INTEGER) END,
               subject=excluded.subject,
@@ -4343,6 +4399,7 @@ async fn sync_folder_internal(
               has_attachments=excluded.has_attachments,
               raw_size=excluded.raw_size,
               message_id=excluded.message_id,
+              received_at=COALESCE(excluded.received_at, messages.received_at),
               eml_path=CASE WHEN excluded.eml_path != '' THEN excluded.eml_path ELSE messages.eml_path END,
               body_fetched=CASE WHEN excluded.eml_path != '' THEN excluded.body_fetched ELSE messages.body_fetched END,
               is_read=CASE WHEN EXISTS(SELECT 1 FROM email_pending_flags p WHERE p.account_id=messages.account_id AND p.folder=messages.folder AND p.uid=messages.uid AND p.flag='\\Seen' AND COALESCE(p.last_error,'')!='stale') THEN messages.is_read ELSE excluded.is_read END,
@@ -4366,6 +4423,7 @@ async fn sync_folder_internal(
                 &hdr_msg_id,
                 body_fetched_value,
                 eml_path_value,
+                received_at,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -4608,6 +4666,28 @@ async fn sync_folder_internal(
         }
     }
 
+    if !new_messages.is_empty() {
+        let index_state = state.clone();
+        let index_account = req.account_id.clone();
+        let index_folder = req.mailbox.clone();
+        let index_uids: Vec<String> = new_messages.iter()
+            .filter_map(|message| message["uid"].as_str().map(str::to_owned))
+            .collect();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut conn = index_state.conn()?;
+            let root = mail_root();
+            for uid in index_uids {
+                search::refresh_body_index_for_message(&mut conn, &root, &index_account, &index_folder, &uid)?;
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("邮件索引任务失败: {e}"))
+        .and_then(|result| result);
+        if let Err(error) = result {
+            log::warn!("[email-search] 同步邮件后更新正文索引失败: {error}");
+        }
+    }
     Ok(SyncResult {
         new_count,
         new_messages: new_messages_in_folder,
@@ -4659,6 +4739,7 @@ async fn trigger_schedule_extract(gateway_url: &str, account_id: &str, folder: &
 
 const BG_SYNC_INITIAL_DELAY_SECS: u64 = 30;
 const BG_SYNC_INTERVAL_SECS: u64 = 60;
+const BG_HISTORY_BUDGET_SECS: u64 = 10;
 
 /// 检查账号是否在冷却期内（IMAP 认证失败后 1 小时不再尝试）
 /// 返回 Some(剩余秒数) 表示在冷却期内，None 表示可以尝试
@@ -4811,7 +4892,7 @@ async fn run_bg_sync_cycle(
                 "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
                         smtp_host, smtp_port, smtp_username, smtp_password, from_address,
                         from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl,
-                        smtp_use_ssl, signatures
+                        smtp_use_ssl, signatures, offline_sync_days
                  FROM accounts ORDER BY sort_order, display_name, id",
             )
             .map_err(|e| e.to_string())?;
@@ -4837,6 +4918,7 @@ async fn run_bg_sync_cycle(
                     imap_use_ssl: row.get::<_, i32>(15)? != 0,
                     smtp_use_ssl: row.get::<_, i32>(16)? != 0,
                     signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
+                    offline_sync_days: row.get(18)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -4963,6 +5045,7 @@ async fn run_bg_sync_cycle(
             continue;
         }
 
+        folders.sort_by_key(|folder| !folder.eq_ignore_ascii_case("INBOX"));
         let filtered_folders = folders;
 
         for folder in &filtered_folders {
@@ -5008,11 +5091,12 @@ async fn run_bg_sync_cycle(
                 mailbox: folder.clone(),
                 use_ssl: account.imap_use_ssl,
                 last_uid,
+                include_history: false,
             };
 
             match sync_folder_internal(&email_state, gateway_url, req.clone(), true, true, true).await {
                 Ok(result) => {
-                    if result.has_more && result.processed_count > 0 {
+                    if result.has_more {
                         history_queue.push_back(req.clone());
                     }
                     start_body_prefetch(email_state.inner().clone(), app_handle.clone(), gateway_url.into(), account.id.clone(), folder.clone());
@@ -5093,7 +5177,15 @@ async fn run_bg_sync_cycle(
         }
     }
 
-    while let Some(req) = history_queue.pop_front() {
+    // Saved folder watermarks resume unfinished history on the next cycle.
+    if !history_queue.is_empty() {
+        let offset = cycle as usize % history_queue.len();
+        history_queue.rotate_left(offset);
+    }
+    let history_started = std::time::Instant::now();
+    while history_started.elapsed() < Duration::from_secs(BG_HISTORY_BUDGET_SECS) {
+        let Some(mut req) = history_queue.pop_front() else { break; };
+        req.include_history = true;
         if check_account_cooldown(email_state.inner(), &req.account_id, "imap").is_some() {
             continue;
         }
@@ -5289,12 +5381,12 @@ fn cache_prefetched_body_under(
 
     let mut conn = state.conn()?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| format!("开启邮件缓存事务失败: {e}"))?;
-    let (is_read, is_starred, _has_attachments, message_id): (i32, i32, i32, Option<String>) = tx
+    let (is_read, is_starred, _has_attachments, message_id, received_at): (i32, i32, i32, Option<String>, Option<i64>) = tx
         .query_row(
-            "SELECT is_read, is_starred, has_attachments, message_id FROM messages
+            "SELECT is_read, is_starred, has_attachments, message_id, received_at FROM messages
              WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
             params![uid, account_id, folder],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .map_err(|e| format!("读取邮件缓存状态失败: {e}"))?;
     let parsed = mailparse::parse_mail(bytes).map_err(|e| format!("解析完整邮件失败: {e}"))?;
@@ -5326,6 +5418,7 @@ fn cache_prefetched_body_under(
         body_fetched: true,
         message_id: message_id.unwrap_or_default(),
         eml_mtime: chrono::Utc::now().timestamp(),
+        received_at,
     };
     write_meta_json_under(mail_root, &meta)?;
     if let Err(e) = tx.commit() {
@@ -5352,13 +5445,15 @@ fn next_prefetch_uid(
     snapshot_max_uid: i64,
     snapshot_uids: &[String],
     attempted_uids: &std::collections::HashSet<String>,
+    cutoff: Option<i64>,
 ) -> Result<Option<String>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT uid FROM messages
          WHERE account_id = ?1 AND folder = ?2 AND body_fetched = 0 AND uid_int > ?3
+           AND (?4 IS NULL OR received_at >= ?4)
          ORDER BY uid_int DESC",
     )?;
-    let rows = stmt.query_map(params![account_id, folder, snapshot_max_uid], |row| {
+    let rows = stmt.query_map(params![account_id, folder, snapshot_max_uid, cutoff], |row| {
         row.get::<_, String>(0)
     })?;
     for row in rows {
@@ -5373,7 +5468,7 @@ fn next_prefetch_uid(
         .cloned())
 }
 
-/// 逐步下载当前文件夹所有缺失的完整正文，优先下载最新邮件。
+/// 按账号离线范围逐步下载缺失正文，优先下载最新邮件。
 /// 单封失败不影响其他，整体不阻塞同步主流程。
 ///
 /// 抢占机制：检测到用户主动 fetch_body 进行中时，sleep 让出 IMAP 锁窗口，
@@ -5391,37 +5486,9 @@ async fn prefetch_mail_bodies(
     let worker_lock = sync::mail_lock(state, &account.id, folder, "prefetch")?;
     let Ok(_worker_guard) = worker_lock.try_lock() else { return Ok(()); };
     let connection_lock = sync::mail_lock(state, &account.id, "", "prefetch-connection")?;
-    // 已读邮件也需要完整离线副本。
-    let (uids_to_prefetch, snapshot_max_uid): (Vec<String>, i64) = {
-        let conn = state.conn()?;
-        let snapshot_max_uid = conn
-            .query_row(
-                "SELECT COALESCE(MAX(uid_int), 0) FROM messages
-                 WHERE account_id = ?1 AND folder = ?2",
-                params![&account.id, folder],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare(
-            "SELECT uid FROM messages
-             WHERE account_id = ?1 AND folder = ?2 AND body_fetched = 0 AND uid_int > 0
-             ORDER BY uid_int DESC",
-        ).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![&account.id, folder], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| e.to_string())?;
-        let mut uids: Vec<String> = Vec::new();
-        for r in rows {
-            if let Ok(u) = r {
-                uids.push(u);
-            }
-        }
-        (uids, snapshot_max_uid)
-    };
+    let mut plan = offline::PrefetchPlan::load(&state.conn()?, &account.id, folder, chrono::Utc::now().timestamp())?;
 
-    if uids_to_prefetch.is_empty() {
+    if plan.uids.is_empty() {
         return Ok(());
     }
 
@@ -5429,7 +5496,7 @@ async fn prefetch_mail_bodies(
         "[email-bg] account={} folder={} prefetching {} bodies",
         account.id,
         folder,
-        uids_to_prefetch.len()
+        plan.uids.len()
     );
 
     let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
@@ -5463,13 +5530,17 @@ async fn prefetch_mail_bodies(
         }
         let uid = {
             let conn = state.conn()?;
+            if offline::read_days(&conn, &account.id)? != plan.days {
+                plan = offline::PrefetchPlan::load(&conn, &account.id, folder, chrono::Utc::now().timestamp())?;
+            }
             next_prefetch_uid(
                 &conn,
                 &account.id,
                 folder,
-                snapshot_max_uid,
-                &uids_to_prefetch,
+                plan.max_uid,
+                &plan.uids,
                 &attempted_uids,
+                plan.cutoff,
             )
             .map_err(|e| e.to_string())?
         };
@@ -5478,13 +5549,18 @@ async fn prefetch_mail_bodies(
         let body_guard = body_lock.lock().await;
         let latest_uid = {
             let conn = state.conn()?;
+            if offline::read_days(&conn, &account.id)? != plan.days {
+                drop(body_guard);
+                continue;
+            }
             next_prefetch_uid(
                 &conn,
                 &account.id,
                 folder,
-                snapshot_max_uid,
-                &uids_to_prefetch,
+                plan.max_uid,
+                &plan.uids,
                 &attempted_uids,
+                plan.cutoff,
             )
             .map_err(|e| e.to_string())?
         };
@@ -5493,15 +5569,16 @@ async fn prefetch_mail_bodies(
             continue;
         }
         attempted_uids.insert(uid.clone());
-        let already_cached = match state.conn()?.query_row(
-            "SELECT body_fetched=1 AND eml_path!='' FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
-            params![account.id, folder, &uid], |row| row.get::<_, bool>(0),
+        let (already_cached, eligible) = match state.conn()?.query_row(
+            "SELECT body_fetched=1 AND eml_path!='', (?4 IS NULL OR COALESCE(received_at,0)>=?4)
+             FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account.id, folder, &uid, plan.cutoff], |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
         ) {
             Ok(value) => value,
             Err(rusqlite::Error::QueryReturnedNoRows) => continue,
             Err(error) => return Err(error.to_string()),
         };
-        if already_cached { continue; }
+        if already_cached || !eligible { continue; }
         let mut req = base_req.clone();
         req["uid"] = serde_json::Value::String(uid.clone());
         match client.post(&url).json(&req).send().await {
@@ -5664,6 +5741,7 @@ mod prefetch_cache_tests {
                 snapshot_max_uid,
                 &snapshot_uids,
                 &attempted_uids,
+                None,
             )
             .unwrap()
             .as_deref(),
@@ -5688,6 +5766,7 @@ mod prefetch_cache_tests {
                 snapshot_max_uid,
                 &snapshot_uids,
                 &attempted_uids,
+                None,
             )
             .unwrap()
             .as_deref(),
@@ -5702,6 +5781,7 @@ mod prefetch_cache_tests {
                 snapshot_max_uid,
                 &snapshot_uids,
                 &attempted_uids,
+                None,
             )
             .unwrap()
             .as_deref(),
@@ -5716,10 +5796,43 @@ mod prefetch_cache_tests {
                 snapshot_max_uid,
                 &snapshot_uids,
                 &attempted_uids,
+                None,
             )
             .unwrap(),
             None,
         );
+    }
+
+    #[test]
+    fn a_newer_uid_outside_the_offline_range_is_not_prefetched() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let conn = state.conn().unwrap();
+        for (uid, received) in [(43, 1_500_000_000_i64), (44, 1_800_000_000_i64)] {
+            conn.execute("INSERT INTO messages(uid,uid_int,account_id,folder,subject,from_address,to_addresses,date,received_at)
+                          VALUES(?1,?2,'test-account','INBOX','test','sender@example.test','','',?3)",
+                params![uid.to_string(),uid,received]).unwrap();
+        }
+        let mut attempted = HashSet::new();
+        let snapshot = vec!["42".into()];
+        assert_eq!(next_prefetch_uid(&conn,"test-account","INBOX",42,&snapshot,&attempted,Some(1_700_000_000)).unwrap().as_deref(), Some("44"));
+        attempted.insert("44".into());
+        assert_eq!(next_prefetch_uid(&conn,"test-account","INBOX",42,&snapshot,&attempted,Some(1_700_000_000)).unwrap().as_deref(), Some("42"));
+        assert_eq!(next_prefetch_uid(&conn,"test-account","INBOX",42,&snapshot,&attempted,None).unwrap().as_deref(), Some("43"));
+    }
+
+    #[test]
+    fn opening_an_old_message_can_cache_it_outside_the_background_range() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        state.conn().unwrap().execute("UPDATE messages SET received_at=1420070400 WHERE uid='42'", []).unwrap();
+        let root = temp.path().join("mail");
+        let raw = b"From: sender@example.test\r\nSubject: old message\r\n\r\nold body";
+        cache_prefetched_body_under(&state, &root, "test-account", "INBOX", "42", raw).unwrap();
+        let meta = super::read_meta_json_under(&root, "test-account", "INBOX", "42").unwrap();
+        assert!(meta.body_fetched);
+        assert_eq!(meta.received_at, Some(1_420_070_400));
+        assert_eq!(std::fs::read(root.join(eml_relative_path("test-account", "INBOX", "42"))).unwrap(), raw);
     }
 
     #[test]
@@ -6306,6 +6419,7 @@ pub async fn email_send(
                             body_fetched: true,
                             message_id: if msg_id.is_empty() { gw_message_id.clone() } else { msg_id.clone() },
                             eml_mtime: chrono::Utc::now().timestamp(),
+                            received_at: Some(chrono::Utc::now().timestamp()),
                         };
                         let _ = write_meta_json(&meta);
                         // 写 SQLite 索引
@@ -6348,9 +6462,9 @@ pub async fn email_send(
                             match conn.execute(
                                 "INSERT OR REPLACE INTO messages
                                  (uid, uid_int, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-                                  date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+                                  date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path, received_at)
                                  VALUES (?1, CASE WHEN ?1 LIKE 'L%' THEN 0 ELSE CAST(?1 AS INTEGER) END,
-                                         ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                         ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                                 params![
                                     &uid,
                                     &req.account_id,
@@ -6368,6 +6482,7 @@ pub async fn email_send(
                                     &msg_id_value,
                                     1, // body_fetched: 本地有完整 .eml
                                     &eml_rel,
+                                    meta.received_at,
                                 ],
                             ) {
                                 Ok(_) => {
@@ -6467,6 +6582,7 @@ pub async fn email_send(
             mailbox: sent_folder.clone(),
             use_ssl: account.imap_use_ssl,
             last_uid,
+            include_history: true,
         };
         sync_folder_internal(&state_inner, &gw, sync_req, false, true, true).await
     }
@@ -6999,11 +7115,19 @@ pub async fn email_search_messages(
     state: tauri::State<'_, EmailState>,
     req: EmailSearchRequest,
 ) -> Result<Vec<EmailSearchResult>, String> {
-    let mut conn = state.conn()?;
+    let state = state.inner().clone();
     let root = mail_root();
-    tokio::task::spawn_blocking(move || search::search_messages(&mut conn, &root, &req))
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = state.conn()?;
+        search::search_messages(&mut conn, &root, &req)
+    })
         .await
-        .map_err(|e| format!("邮件搜索任务失败: {e}"))?
+        .map_err(|e| format!("邮件搜索任务失败: {e}"))
+        .and_then(|result| result);
+    if let Err(error) = &result {
+        log::warn!("[email-search] 搜索失败: {error}");
+    }
+    result
 }
 
 // ==================== 批量操作 ====================
@@ -7039,7 +7163,7 @@ fn get_imap_credentials(conn: &Connection, account_id: &str) -> Result<EmailAcco
         "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
                 smtp_host, smtp_port, smtp_username, smtp_password, from_address,
                 from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl,
-                signatures
+                signatures, offline_sync_days
          FROM accounts WHERE id = ?1",
         params![account_id],
         |row| {
@@ -7063,6 +7187,7 @@ fn get_imap_credentials(conn: &Connection, account_id: &str) -> Result<EmailAcco
                 imap_use_ssl: row.get::<_, i32>(15)? != 0,
                 smtp_use_ssl: row.get::<_, i32>(16)? != 0,
                 signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
+                offline_sync_days: row.get(18)?,
             })
         },
     )
@@ -7481,6 +7606,7 @@ async fn update_local_cache(
                     mailbox: dest.to_string(),
                     use_ssl: account.imap_use_ssl,
                     last_uid,
+                    include_history: true,
                 };
                 // Box::pin 打破 async fn 静态递归：sync_folder_internal 内部会调用
                 // update_local_cache（应用规则时），不 pin 会报 E0733。
@@ -7972,6 +8098,7 @@ async fn fetch_body_via_gateway(
                 mailbox: mailbox.to_string(),
                 use_ssl: account.imap_use_ssl,
                 last_uid: None,
+                include_history: true,
             };
             let sync_fut = sync_folder_internal(state, gateway_url, sync_req, false, true, false);
             if let Err(e) = Box::pin(sync_fut).await {

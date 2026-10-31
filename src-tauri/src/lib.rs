@@ -1484,6 +1484,7 @@ pub fn run() {
                     .clone();
                 std::thread::spawn(move || {
                     email::verify_consistency_on_startup(&email_state);
+                    email::run_search_index_maintenance(&email_state);
                 });
             }
 

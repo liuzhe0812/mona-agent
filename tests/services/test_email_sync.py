@@ -2,11 +2,30 @@ from __future__ import annotations
 
 import imaplib
 import json
+from datetime import datetime, timezone
 from email.message import EmailMessage
 
 import pytest
+from pydantic import ValidationError
 
 from mona.api import server as api
+from mona.config.schema import EmailOfflineSyncSettings
+
+
+def test_offline_sync_defaults_to_ninety_days():
+    assert EmailOfflineSyncSettings().model_dump(by_alias=True) == {"offlineSyncDays": 90}
+
+
+@pytest.mark.parametrize("days", [0, 90, 365])
+def test_offline_sync_accepts_account_options(days):
+    policy = EmailOfflineSyncSettings.model_validate({"offlineSyncDays": days})
+    assert policy.model_dump(by_alias=True) == {"offlineSyncDays": days}
+
+
+@pytest.mark.parametrize("days", [-1, 30, False, 90.0, "90"])
+def test_offline_sync_rejects_invalid_account_options(days):
+    with pytest.raises(ValidationError):
+        EmailOfflineSyncSettings.model_validate({"offlineSyncDays": days})
 
 
 def test_sync_repairs_gaps_above_the_oldest_local_uid():
@@ -29,6 +48,22 @@ def test_sync_repairs_gaps_above_the_oldest_local_uid():
 def test_header_flags_preserve_server_read_state_across_response_forms(fetched, seen, starred):
     assert api._email_extract_seen_flag(fetched) is seen
     assert api._email_extract_flagged_flag(fetched) is starred
+
+
+@pytest.mark.parametrize(("fetched", "expected"), [
+    ([(b'1 (INTERNALDATE "30-Oct-2026 18:16:00 +0800" BODY[HEADER] {5}', b"a: b\n")],
+     int(datetime(2026, 10, 30, 10, 16, tzinfo=timezone.utc).timestamp())),
+    ([(b"1 (BODY[HEADER] {5}", b"a: b\n"), b' INTERNALDATE " 1-Feb-2026 03:04:05 -0500")'],
+     int(datetime(2026, 2, 1, 8, 4, 5, tzinfo=timezone.utc).timestamp())),
+    ([(b'1 (INTERNALDATE "31-Feb-2026 18:16:00 +0800" BODY[HEADER] {5}', b"a: b\n")], None),
+    ([(b'1 (INTERNALDATE "30-Xxx-2026 18:16:00 +0800" BODY[HEADER] {5}', b"a: b\n")], None),
+    ([(b'1 (INTERNALDATE "30-Oct-2026 18:16:00 +2460" BODY[HEADER] {5}', b"a: b\n")], None),
+    ([(b"1 (BODY[HEADER] {5}", b'Subject: INTERNALDATE "30-Oct-2026 18:16:00 +0800"')], None),
+    ([b'Subject: INTERNALDATE "30-Oct-2026 18:16:00 +0800"'], None),
+    ([(b"1 (BODY[HEADER] {5}", b"a: b\n")], None),
+])
+def test_internaldate_uses_metadata_and_preserves_timezone(fetched, expected):
+    assert api._email_extract_internal_timestamp(fetched) == expected
 
 
 @pytest.mark.asyncio
@@ -262,6 +297,97 @@ def mailbox(monkeypatch, client):
         lambda _body, op, *, background=False: op(client),
     )
     return {"imapHost": "mail.example.test", "imapUsername": "reader", "mailbox": "INBOX"}
+
+
+@pytest.mark.parametrize(("last_uid", "known_uids", "expected"), [
+    ("5", ["5"], []),
+    ("2", ["2"], ["3", "4", "5"]),
+])
+def test_regular_sync_defers_history_but_reports_remaining_work(monkeypatch, last_uid, known_uids, expected):
+    client = Mailbox(5)
+    body = {
+        **mailbox(monkeypatch, client),
+        "lastUid": last_uid,
+        "beforeUid": last_uid,
+        "knownUids": known_uids,
+        "includeHistory": False,
+    }
+
+    result = api._imap_fetch_recent(body)
+
+    assert [message["uid"] for message in result["messages"]] == expected
+    assert all(not message["isHistorical"] for message in result["messages"])
+    assert result["hasMore"] is True
+
+
+def test_regular_first_sync_still_loads_latest_headers_as_history(monkeypatch):
+    client = Mailbox(25)
+    result = api._imap_fetch_recent({**mailbox(monkeypatch, client), "includeHistory": False})
+
+    assert [message["uid"] for message in result["messages"]] == [str(n) for n in range(25, 5, -1)]
+    assert all(message["isHistorical"] for message in result["messages"])
+    assert result["hasMore"] is True
+
+
+def test_history_batch_repairs_a_known_uid_gap_without_refreshing_flags(monkeypatch):
+    class TrackingMailbox(Mailbox):
+        def __init__(self):
+            super().__init__(3)
+            self.flag_fetches = 0
+
+        def uid(self, operation, *args):
+            if operation == "FETCH" and args[1] == "(UID FLAGS)":
+                self.flag_fetches += 1
+            return super().uid(operation, *args)
+
+    client = TrackingMailbox()
+    body = {
+        **mailbox(monkeypatch, client),
+        "lastUid": "3",
+        "beforeUid": "1",
+        "knownUids": ["1", "3"],
+        "uidValidity": "8",
+    }
+    regular = api._imap_fetch_recent({**body, "includeHistory": False})
+    assert regular["messages"] == []
+    assert regular["hasMore"] is True
+    assert client.flag_fetches == 1
+
+    history = api._imap_fetch_recent({**body, "includeHistory": True, "refreshFlags": False})
+    assert [message["uid"] for message in history["messages"]] == ["2"]
+    assert history["messages"][0]["isHistorical"] is True
+    assert history["flags"] == []
+    assert history["hasMore"] is False
+    assert client.flag_fetches == 1
+
+
+def test_sync_returns_server_received_time_with_short_header_only(monkeypatch):
+    class DatedMailbox(Mailbox):
+        def uid(self, operation, *args):
+            if operation == "FETCH" and args[1] != "(UID FLAGS)":
+                self.fetch_command = args[1]
+                return "OK", [(
+                    b'1 (UID 1 FLAGS () RFC822.SIZE 20 INTERNALDATE "30-Oct-2026 18:16:00 +0800" BODY[HEADER] {15}',
+                    b"Subject: hi\r\n\r\n",
+                )]
+            return super().uid(operation, *args)
+
+    client = DatedMailbox(1)
+    result = api._imap_fetch_recent(mailbox(monkeypatch, client))
+    message = result["messages"][0]
+
+    assert message["subject"] == "hi"
+    assert message["receivedAt"] == int(datetime(2026, 10, 30, 10, 16, tzinfo=timezone.utc).timestamp())
+    assert message["bodyFetched"] is False
+    assert "INTERNALDATE" in client.fetch_command
+    assert "BODY.PEEK[HEADER]" in client.fetch_command
+    assert "BODY.PEEK[]" not in client.fetch_command
+    assert client.select_readonly == [True]
+
+
+def test_sync_missing_internaldate_does_not_invent_a_received_time(monkeypatch):
+    result = api._imap_fetch_recent(mailbox(monkeypatch, Mailbox(1)))
+    assert result["messages"][0]["receivedAt"] is None
 
 
 def test_sync_backfills_all_history_without_announcing_it_as_new_mail(monkeypatch):

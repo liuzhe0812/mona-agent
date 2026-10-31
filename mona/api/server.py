@@ -27,7 +27,7 @@ from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import formataddr, formatdate, getaddresses, parseaddr
+from email.utils import formataddr, formatdate, getaddresses, parseaddr, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, TypeVar
 from urllib.parse import quote, unquote
@@ -1834,6 +1834,41 @@ def _email_extract_rfc822_size(fetched: list[Any]) -> int | None:
     return None
 
 
+def _email_extract_internal_timestamp(fetched: list[Any]) -> int | None:
+    """Read INTERNALDATE from FETCH metadata, excluding message literal bytes."""
+    has_literal = any(isinstance(item, tuple) and item for item in fetched)
+    for item in fetched:
+        if isinstance(item, tuple) and item:
+            header = item[0]
+        elif has_literal:
+            header = item
+        else:
+            continue
+        if not isinstance(header, (bytes, bytearray)):
+            continue
+        match = re.search(rb'\bINTERNALDATE\s+"([^"]+)"', bytes(header), re.IGNORECASE)
+        if not match:
+            continue
+        value = re.fullmatch(
+            rb"\s*(\d{1,2})-([A-Za-z]{3})-(\d{4}) "
+            rb"(\d{2}:\d{2}:\d{2}) ([+-])(\d{2})(\d{2})",
+            match.group(1),
+        )
+        if not value or int(value[6]) > 23 or int(value[7]) > 59:
+            return None
+        day, month, year, clock, sign, hours, minutes = (
+            group.decode("ascii") for group in value.groups()
+        )
+        try:
+            received = parsedate_to_datetime(
+                f"{day} {month} {year} {clock} {sign}{hours}{minutes}"
+            )
+            return int(received.timestamp()) if received.tzinfo is not None else None
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
+    return None
+
+
 def _imap_uid_validity(client: imaplib.IMAP4) -> str:
     """读取 SELECT 后由 imaplib 缓存的 UIDVALIDITY 响应。"""
     _name, data = client.response("UIDVALIDITY")
@@ -2142,6 +2177,7 @@ def _validate_mail_host(imap_host: str, smtp_host: str = "") -> None:
 def _email_sync_uid_batch(
     all_uids: list[bytes], last_uid: int | None, before_uid: int | None,
     known_uids: set[bytes] | None = None,
+    include_history: bool = True,
 ) -> tuple[list[bytes], set[bytes], bool]:
     ordered = sorted(set(all_uids), key=int)
     if not last_uid:
@@ -2154,7 +2190,7 @@ def _email_sync_uid_batch(
         and (uid not in known_uids if known_uids is not None else int(uid) < (before_uid or last_uid + 1))
     ]
     remaining = 50 - len(selected_new)
-    selected_old = list(reversed(older[-remaining:])) if remaining else []
+    selected_old = list(reversed(older[-remaining:])) if remaining and include_history else []
     return selected_new + selected_old, set(selected_old), len(newer) > len(selected_new) or len(older) > len(selected_old)
 
 
@@ -2183,7 +2219,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
 
     - 校验 UIDVALIDITY：变化时返回 uidValidityChanged=true，调用方废弃旧 UID 映射
     - 新邮件按 UID 递增补收，历史邮件从 beforeUid 向前补齐
-    - FETCH HEADER + FLAGS，避免大附件阻塞整个同步请求
+    - FETCH HEADER + FLAGS + INTERNALDATE，避免大附件阻塞整个同步请求
     - 首次同步限制为最近 20 封，增量同步单次最多 50 封
     - 复用持久连接池，避免频繁 login 触发邮箱风控
     - 返回 dict：{"messages": [...], "uidValidity": str, "uidValidityChanged": bool}
@@ -2194,6 +2230,9 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
     before_uid = int(before_uid_raw) if before_uid_raw is not None else None
     known_uids_raw = body.get("knownUids")
     known_uids = {str(uid).encode("ascii") for uid in known_uids_raw if str(uid).isdigit()} if isinstance(known_uids_raw, list) else None
+    include_history = body.get("includeHistory", True)
+    if not isinstance(include_history, bool):
+        raise ValueError("includeHistory must be a boolean")
     # 调用方传入的本地已知 UIDVALIDITY（用于检测变化）
     known_uid_validity = str(body.get("uidValidity", "") or "").strip()
 
@@ -2230,6 +2269,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
         history_before = None if uid_validity_changed else before_uid
         uids, historical_uids, has_more = _email_sync_uid_batch(
             all_uids, sync_after_uid, history_before, None if uid_validity_changed else known_uids,
+            include_history,
         )
         known = [u for u in all_uids if sync_after_uid and int(u) <= sync_after_uid
                  and (known_uids is None or u in known_uids)
@@ -2243,7 +2283,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
             # 同步主流程只取信头和标志。正文由 /email/fetch_body 按需读取，
             # 后台逐步补齐所有正文，避免一个大附件拖慢整批信头同步。
             uid_str = uid.decode("utf-8", errors="ignore")
-            fetch_cmd = "(BODY.PEEK[HEADER] UID FLAGS RFC822.SIZE)"
+            fetch_cmd = "(BODY.PEEK[HEADER] UID FLAGS RFC822.SIZE INTERNALDATE)"
             raw_bytes: bytes | None = None
             fetched: list[Any] = []
 
@@ -2254,7 +2294,16 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                         f"[imap-sync] FETCH header uid={uid_str} failed: status={status}"
                     )
                     break
-                raw_bytes = _email_extract_message_bytes(fetched)
+                raw_bytes = next(
+                    (
+                        bytes(item[1]) for item in fetched
+                        if isinstance(item, tuple) and len(item) > 1
+                        and isinstance(item[1], (bytes, bytearray, memoryview)) and item[1]
+                    ),
+                    None,
+                )
+                if raw_bytes is None:
+                    raw_bytes = _email_extract_message_bytes(fetched)
             except imaplib.IMAP4.error as e:
                 # 连接已被服务器关闭（LOGOUT 状态）：后续 FETCH 都会失败。
                 # 抛出可重试异常，让 imap_pool.run 重连并重试整个 op，
@@ -2300,6 +2349,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                     "to": ", ".join(to_addrs),
                     "cc": ", ".join(cc_addrs),
                     "date": date_value,
+                    "receivedAt": _email_extract_internal_timestamp(fetched),
                     "bodyText": "",
                     "bodyHtml": None,
                     "bodyFetched": False,

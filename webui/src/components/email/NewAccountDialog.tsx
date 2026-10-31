@@ -3,12 +3,14 @@ import { X, Loader2, Check, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { openExternalUrl } from "@/lib/tauri";
 import { useEmailStore } from "./store/emailStore";
 import { testConnection } from "./lib/emailApi";
 import { inferEasUrl } from "./contacts/lib/types";
-import type { EmailAccount } from "./lib/types";
+import { EMAIL_OFFLINE_SYNC_OPTIONS } from "./lib/types";
+import type { EmailAccount, EmailOfflineSyncDays } from "./lib/types";
 
 interface NewAccountDialogProps {
   open: boolean;
@@ -51,6 +53,7 @@ export function NewAccountDialog({
   const [smtpPort, setSmtpPort] = useState("587");
   const [carddavUrl, setCarddavUrl] = useState("");
   const [easUrl, setEasUrl] = useState("");
+  const [offlineSyncDays, setOfflineSyncDays] = useState<EmailOfflineSyncDays>(90);
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
@@ -73,6 +76,7 @@ export function NewAccountDialog({
       setSmtpPort(String(editAccount.smtpPort));
       setCarddavUrl(editAccount.carddavUrl ?? "");
       setEasUrl(editAccount.easUrl ?? "");
+      setOfflineSyncDays(editAccount.offlineSyncDays ?? 90);
       setError(null);
       setTestResult(null);
       setTestMsg(null);
@@ -110,6 +114,7 @@ export function NewAccountDialog({
     setSmtpPort("587");
     setCarddavUrl("");
     setEasUrl("");
+    setOfflineSyncDays(90);
     setError(null);
     setTestResult(null);
     setTestMsg(null);
@@ -144,6 +149,7 @@ export function NewAccountDialog({
       imapUseSsl: editAccount?.imapUseSsl ?? imapPortNum === 993,
       smtpUseSsl: editAccount?.smtpUseSsl ?? smtpPortNum === 465,
       signatures: editAccount?.signatures ?? [],
+      offlineSyncDays,
     };
   };
 
@@ -215,7 +221,7 @@ export function NewAccountDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm"
     >
       <div
-        className="w-full max-w-[460px] rounded-2xl border border-border bg-background p-5 shadow-lg"
+        className="max-h-[90vh] w-full max-w-[460px] overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -327,6 +333,22 @@ export function NewAccountDialog({
               />
             </Field>
           </div>
+          <Field label="历史正文离线保存">
+            <Select
+              aria-label="历史正文离线保存"
+              value={String(offlineSyncDays)}
+              onValueChange={(value) => setOfflineSyncDays(Number(value) as EmailOfflineSyncDays)}
+              options={EMAIL_OFFLINE_SYNC_OPTIONS}
+              className="h-8 text-ui"
+              disabled={submitting}
+            />
+            <p className="text-caption text-muted-foreground">
+              新邮件自动后台收取。历史邮件保留在列表中，范围外未下载的正文打开时需联网；已下载邮件会保留。正文搜索覆盖已下载的邮件。
+            </p>
+            {offlineSyncDays === 0 && (
+              <p className="text-caption text-muted-foreground">保存全部历史正文需要更多时间和磁盘空间。</p>
+            )}
+          </Field>
           <Field label="CardDAV 通讯录地址（可选）">
             <Input
               value={carddavUrl}

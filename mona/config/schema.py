@@ -38,6 +38,22 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
+class EmailOfflineSyncSettings(Base):
+    """Desktop mailbox policy, stored per account in email.sqlite3.
+
+    A value of 0 caches all history; 90 and 365 cache the recent days specified.
+    """
+
+    offline_sync_days: Literal[0, 90, 365] = 90
+
+    @field_validator("offline_sync_days", mode="before")
+    @classmethod
+    def _validate_offline_sync_days(cls, value: Any) -> Any:
+        if type(value) is not int:
+            raise ValueError("offlineSyncDays must be an integer")
+        return value
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels.
 

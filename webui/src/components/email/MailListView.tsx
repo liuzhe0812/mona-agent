@@ -120,20 +120,23 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
   const [searchLoadingMore, setSearchLoadingMore] = useState(false);
   const [searchHasMore, setSearchHasMore] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchMailboxUpdateVersion, setSearchMailboxUpdateVersion] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchRequestIdRef = useRef(0);
   const searchOffsetRef = useRef(0);
   const searchLoadingMoreRef = useRef(false);
+  const searchInFlightRef = useRef<Promise<EmailSearchResult[]> | null>(null);
   const searchTerm = searchQuery.trim();
   const isSearchActive = searchTerm.length > 0;
-  const searchMailboxUpdateVersion = lastMailboxUpdate && (
-    isUnifiedInbox
+
+  useEffect(() => {
+    if (!lastMailboxUpdate) return;
+    const matchesScope = isUnifiedInbox
       ? lastMailboxUpdate.folder === "INBOX"
-      : lastMailboxUpdate.accountId === selectedAccountId && lastMailboxUpdate.folder === selectedFolder
-  )
-    ? lastMailboxUpdate.version
-    : 0;
+      : lastMailboxUpdate.accountId === selectedAccountId && lastMailboxUpdate.folder === selectedFolder;
+    if (matchesScope) setSearchMailboxUpdateVersion(lastMailboxUpdate.version);
+  }, [isUnifiedInbox, lastMailboxUpdate, selectedAccountId, selectedFolder]);
 
   const buildSearchRequest = useCallback((offset: number): EmailSearchRequest => {
     const request: EmailSearchRequest = {
@@ -148,6 +151,26 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
     if (filterKey === "attachments") request.hasAttachments = true;
     return request;
   }, [filterKey, isUnifiedInbox, searchTerm, selectedAccountId, selectedFolder]);
+
+  const runSearch = useCallback(async (requestId: number, request: EmailSearchRequest) => {
+    const previous = searchInFlightRef.current;
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        // The previous caller handles its own error.
+      }
+    }
+    if (requestId !== searchRequestIdRef.current) return null;
+
+    const current = searchMessages(request);
+    searchInFlightRef.current = current;
+    try {
+      return await current;
+    } finally {
+      if (searchInFlightRef.current === current) searchInFlightRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const requestId = ++searchRequestIdRef.current;
@@ -169,14 +192,14 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const page = await searchMessages(buildSearchRequest(0));
-          if (requestId !== searchRequestIdRef.current) return;
+          const page = await runSearch(requestId, buildSearchRequest(0));
+          if (!page || requestId !== searchRequestIdRef.current) return;
           setSearchResults(page);
           searchOffsetRef.current = page.length;
           setSearchHasMore(page.length === SEARCH_PAGE_SIZE);
-        } catch (e) {
+        } catch {
           if (requestId === searchRequestIdRef.current) {
-            setSearchError(e instanceof Error ? e.message : String(e));
+            setSearchError("搜索失败，请重新输入关键词重试。");
           }
         } finally {
           if (requestId === searchRequestIdRef.current) setSearching(false);
@@ -188,7 +211,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
       window.clearTimeout(timer);
       if (requestId === searchRequestIdRef.current) searchRequestIdRef.current += 1;
     };
-  }, [buildSearchRequest, isSearchActive, isUnifiedInbox, searchMailboxUpdateVersion, searchTerm, selectedAccountId]);
+  }, [buildSearchRequest, isSearchActive, isUnifiedInbox, runSearch, searchMailboxUpdateVersion, searchTerm, selectedAccountId]);
 
   const loadMoreSearch = useCallback(async () => {
     if (!isSearchActive || !searchHasMore || searchLoadingMoreRef.current) return;
@@ -197,8 +220,8 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
     searchLoadingMoreRef.current = true;
     setSearchLoadingMore(true);
     try {
-      const page = await searchMessages(buildSearchRequest(offset));
-      if (requestId !== searchRequestIdRef.current) return;
+      const page = await runSearch(requestId, buildSearchRequest(offset));
+      if (!page || requestId !== searchRequestIdRef.current) return;
       setSearchResults((current) => {
         const seen = new Set(current.map((result) => messageKey(result)));
         const next = [...current];
@@ -212,9 +235,10 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
       });
       searchOffsetRef.current = offset + page.length;
       setSearchHasMore(page.length === SEARCH_PAGE_SIZE);
-    } catch (e) {
+      setSearchError(null);
+    } catch {
       if (requestId === searchRequestIdRef.current) {
-        setSearchError(e instanceof Error ? e.message : String(e));
+        setSearchError("加载更多搜索结果失败，请滚动重试。");
       }
     } finally {
       if (requestId === searchRequestIdRef.current) {
@@ -222,7 +246,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
         setSearchLoadingMore(false);
       }
     }
-  }, [buildSearchRequest, isSearchActive, searchHasMore]);
+  }, [buildSearchRequest, isSearchActive, runSearch, searchHasMore]);
 
   // 滚动接近底部时自动加载当前列表的下一页。
   useEffect(() => {
@@ -445,7 +469,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             加载中...
           </div>
-        ) : filteredMessages.length === 0 ? (
+        ) : filteredMessages.length === 0 && displayError ? null : filteredMessages.length === 0 ? (
           <EmptyHint
             text={
               isSearchActive || filterKey !== "all"

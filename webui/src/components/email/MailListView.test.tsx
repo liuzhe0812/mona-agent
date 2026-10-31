@@ -208,6 +208,18 @@ describe("MailListView search", () => {
     expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a search failure without claiming that there are no matches", async () => {
+    mocks.searchMessages.mockRejectedValue(new Error("database is locked"));
+    render(<MailListView />);
+    fireEvent.change(screen.getByPlaceholderText("搜索邮件..."), {
+      target: { value: "search needle" },
+    });
+
+    expect(await screen.findByText("搜索失败，请重新输入关键词重试。")).toBeVisible();
+    expect(screen.queryByText("database is locked")).not.toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的邮件")).not.toBeInTheDocument();
+  });
+
   it("ignores an older search response after the query changes", async () => {
     let resolveOld!: (results: EmailSearchResult[]) => void;
     const oldRequest = new Promise<EmailSearchResult[]>((resolve) => {
@@ -227,15 +239,123 @@ describe("MailListView search", () => {
     await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(1));
     fireEvent.change(input, { target: { value: "new needle" } });
 
-    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(2));
-    fireEvent.scroll(scroller);
-    expect(await screen.findByText("New query result")).toBeVisible();
     await act(async () => {
       resolveOld([makeSearchResult("old", { subject: "Old query result" })]);
       await oldRequest;
     });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(2));
+    fireEvent.scroll(scroller);
+    expect(await screen.findByText("New query result")).toBeVisible();
     expect(screen.queryByText("Old query result")).not.toBeInTheDocument();
     expect(screen.getByText("New query result")).toBeVisible();
+  });
+
+  it("runs only the latest query after an in-flight search finishes", async () => {
+    let resolveFirst!: (results: EmailSearchResult[]) => void;
+    const first = new Promise<EmailSearchResult[]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let active = 0;
+    let maxActive = 0;
+    mocks.searchMessages.mockImplementation((request: EmailSearchRequest) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      const result = request.keyword === "first"
+        ? first
+        : Promise.resolve([makeSearchResult("latest", { subject: "Latest result" })]);
+      return result.finally(() => { active -= 1; });
+    });
+
+    render(<MailListView />);
+    primeScroller();
+    const input = screen.getByPlaceholderText("搜索邮件...");
+    fireEvent.change(input, { target: { value: "first" } });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(input, { target: { value: "intermediate" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    fireEvent.change(input, { target: { value: "latest" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst([makeSearchResult("old", { subject: "Old result" })]);
+      await first;
+    });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(2));
+    expect(mocks.searchMessages).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: "latest", offset: 0 }));
+    expect(maxActive).toBe(1);
+    expect(await screen.findByText("Latest result")).toBeVisible();
+    expect(screen.queryByText("Old result")).not.toBeInTheDocument();
+  });
+
+  it("runs the latest queued query after an older request fails", async () => {
+    let rejectFirst!: (error: Error) => void;
+    const first = new Promise<EmailSearchResult[]>((_, reject) => {
+      rejectFirst = reject;
+    });
+    mocks.searchMessages.mockImplementation((request: EmailSearchRequest) =>
+      request.keyword === "first"
+        ? first
+        : Promise.resolve([makeSearchResult("latest", { subject: "Latest result" })]),
+    );
+
+    render(<MailListView />);
+    primeScroller();
+    const input = screen.getByPlaceholderText("搜索邮件...");
+    fireEvent.change(input, { target: { value: "first" } });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: "latest" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectFirst(new Error("database is locked"));
+      await first.catch(() => undefined);
+    });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Latest result")).toBeVisible();
+    expect(screen.queryByText("搜索失败，请重新输入关键词重试。")).not.toBeInTheDocument();
+  });
+
+  it("waits for an in-flight page before starting a new search", async () => {
+    let resolvePage!: (results: EmailSearchResult[]) => void;
+    const nextPage = new Promise<EmailSearchResult[]>((resolve) => {
+      resolvePage = resolve;
+    });
+    const firstPage = Array.from({ length: 50 }, (_, index) => makeSearchResult(String(index + 1)));
+    let active = 0;
+    let maxActive = 0;
+    mocks.searchMessages.mockImplementation((request: EmailSearchRequest) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      const result = request.keyword === "first"
+        ? request.offset === 0 ? Promise.resolve(firstPage) : nextPage
+        : Promise.resolve([makeSearchResult("new", { subject: "New search result" })]);
+      return result.finally(() => { active -= 1; });
+    });
+
+    render(<MailListView />);
+    const scroller = primeScroller();
+    const input = screen.getByPlaceholderText("搜索邮件...");
+    fireEvent.change(input, { target: { value: "first" } });
+    expect(await screen.findByText("Search 1")).toBeVisible();
+    scroller.scrollTop = 2300;
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(input, { target: { value: "new" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolvePage([makeSearchResult("old-page", { subject: "Old page result" })]);
+      await nextPage;
+    });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(3));
+    expect(mocks.searchMessages).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: "new", offset: 0 }));
+    expect(maxActive).toBe(1);
+    expect(await screen.findByText("New search result")).toBeVisible();
+    expect(screen.queryByText("Old page result")).not.toBeInTheDocument();
   });
 
   it("refreshes an active search when its mailbox is updated", async () => {
@@ -266,5 +386,20 @@ describe("MailListView search", () => {
       limit: 50,
       offset: 0,
     });
+
+    act(() => {
+      useEmailStore.setState({
+        lastMailboxUpdate: { accountId: "account-a", folder: "Archive", version: 2 },
+      });
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      useEmailStore.setState({
+        lastMailboxUpdate: { accountId: "account-a", folder: "INBOX", version: 3 },
+      });
+    });
+    await waitFor(() => expect(mocks.searchMessages).toHaveBeenCalledTimes(3));
   });
 });

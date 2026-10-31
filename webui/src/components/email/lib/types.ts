@@ -1,3 +1,11 @@
+export type EmailOfflineSyncDays = 0 | 90 | 365;
+
+export const EMAIL_OFFLINE_SYNC_OPTIONS = [
+  { value: "90", label: "近三个月" },
+  { value: "365", label: "近一年" },
+  { value: "0", label: "全部" },
+];
+
 export interface EmailAccount {
   id: string;
   displayName: string;
@@ -23,6 +31,8 @@ export interface EmailAccount {
   smtpUseSsl: boolean;
   /** 签名列表 */
   signatures?: EmailSignature[];
+  /** 自动离线保存的历史正文范围，0 表示全部。 */
+  offlineSyncDays?: EmailOfflineSyncDays;
 }
 
 export interface EmailSignature {
