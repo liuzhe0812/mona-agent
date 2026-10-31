@@ -1,0 +1,31 @@
+{
+  "release": "suggestions-labels-20261031-v4",
+  "baseline_source_sha256": "bfce24c9a39f971df8429e9117d53cd33cac50d62e0f9d84157207c73127e535",
+  "source_archive_sha256": "2de1259bab756ba210fb370e71f7590a35fa401876497a6a96fd0ecb17b74d96",
+  "changed_files": {
+    "official-site/app/suggestions/page.tsx": {
+      "before_sha256": "26ecbfedb9cbf3248f354786d671bb1245552c39c89f00656e07f0c129d52474",
+      "after_sha256": "18411416baf1a297f59db36ec2595203b634105a4a1298def7393328cab9a798"
+    },
+    "official-site/app/page.tsx": {
+      "before_sha256": "17c9dd5c152240d00c342e80d1e3419a2e7d880886cc51608d0cee647e1d83d7",
+      "after_sha256": "8feaf2c0e5788c31f05d593d9a722dcf2a895d26074f0fb6ee315b4aaa08ba20"
+    },
+    "official-site/app/account/AccountNav.tsx": {
+      "before_sha256": "3f768b35fe58ac8b62718b6047eee898429051dfff29cf7c32063ff3a18f4a6e",
+      "after_sha256": "3fb69273a0ad2c10cdddccbdc4e5e013c738ba9fed50ad9187d890a66f0e1b2e"
+    }
+  },
+  "patch_sha256": "7134e4739d09faaf49738917801356588ea6976174061850176fde24c84b2da0",
+  "website_archive_sha256": "466b66deca440f053f8260d0761af5525eec44d322ee13ba2239def1f777edde",
+  "validation": {
+    "typecheck": "passed",
+    "build": "passed",
+    "cumulative_patch_byte_replay": "all 93 files match",
+    "source_scope": "only three text replacements",
+    "production_html_js_css": "hashes match",
+    "auth_and_suggestions_processes": "unchanged"
+  },
+  "production_root": "/var/www/mona/site-releases/suggestions-labels-20261031-v4/content",
+  "backup": "/var/www/mona/backups/suggestions-labels-20261031-v4"
+}

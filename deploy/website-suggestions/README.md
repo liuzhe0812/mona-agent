@@ -1,6 +1,6 @@
 # 官网产品建议交付
 
-已发布页面：[产品建议](https://mona-ai.cn/suggestions)。注册用户使用现有网站会话发布，访客可阅读。业务和认证边界见 [架构说明](../../docs/architecture/website-suggestions.md)。
+已发布页面：[给Mona的建议](https://mona-ai.cn/suggestions)，官网导航入口为“建议”。注册用户使用现有网站会话发布，访客可阅读。业务和认证边界见 [架构说明](../../docs/architecture/website-suggestions.md)。
 
 ## 生产入口
 
@@ -12,7 +12,7 @@
 | 依赖 | `/opt/mona-website-suggestions/venv`，`requirements.txt` 和 `constraints.txt` 固定版本，不修改 Auth 环境 |
 | 配置 | `/etc/mona-website-suggestions/operator.json`，不包含凭据 |
 | 数据 | `/var/lib/mona-website-suggestions/suggestions.sqlite3`，包含 WAL，独立于发布目录 |
-| 网站 | `/var/www/mona/site-releases/suggestions-admin-redesign-20261031-v3/content` |
+| 网站 | `/var/www/mona/site-releases/suggestions-labels-20261031-v4/content` |
 | 后台 | `https://mona-ai.cn/admin/` → “建议管理” |
 | Auth | `/opt/mona-auth-releases/20261031-suggestions-admin-v3/content`，通用 `/auth/identity/admin` 核验原管理员角色 |
 | 本轮备份 | `/var/www/mona/backups/suggestions-admin-redesign-20261031-v3` |

@@ -244,7 +244,7 @@ new file mode 100644
 +    <main className="suggestions-main">
 +      <section className="suggestions-intro" aria-labelledby="suggestions-title">
 +        <p className="suggestions-kicker">MONA / PRODUCT IDEAS</p>
-+        <h1 id="suggestions-title">产品建议</h1>
++        <h1 id="suggestions-title">给Mona的建议</h1>
 +        <p>有什么想法，告诉我们。一起让 Mona 变得更好。</p>
 +      </section>
 +      {notice && <p className="suggestions-notice" role="status">{notice}</p>}
@@ -365,7 +365,7 @@ diff --git a/official-site/app/page.tsx b/official-site/app/page.tsx
    { label: "Mona Pro", href: "#pricing", group: "primary" },
    { label: "帮助中心", href: "/manual.html", group: "support" },
    { label: "更新日志", href: "/changelog", group: "support" },
-+  { label: "产品建议", href: "/suggestions", group: "support" },
++  { label: "建议", href: "/suggestions", group: "support" },
  ] as const;
  
  export default function Home() {
@@ -376,7 +376,7 @@ diff --git a/official-site/app/account/AccountNav.tsx b/official-site/app/accoun
        </summary>
        <div className="account-menu-panel" aria-label="账户菜单">
          <a href="/account">账户设置</a>
-+        <a href="/suggestions">产品建议</a>
++        <a href="/suggestions">建议</a>
          {workReady ? <a href="/work/">进入在线 Work</a>
            : <span className="account-menu-unavailable">{workReady === null ? "正在检查在线 Work…" : "在线 Work 暂未开放"}</span>}
          <button disabled={busy || disabled} onClick={async () => {
