@@ -32,6 +32,7 @@ import { TerminalView } from "../terminal/TerminalView";
 import { SessionTabBar } from "../terminal/SessionTabBar";
 import { useTerminalStore } from "../terminal/store/terminalStore";
 import { OperationsConnectionList } from "../operations/OperationsConnectionList";
+import { OperationsCreateMenu } from "../operations/OperationsCreateMenu";
 
 export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal = false }: {
   onOpenSubscribe?: () => void; visible?: boolean; preferTerminal?: boolean;
@@ -45,6 +46,7 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
   const [terminalActive, setTerminalActive] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(true);
   const connectionsPanel = useRef<PanelImperativeHandle | null>(null);
+  const connectionsGroup = useRef<HTMLDivElement | null>(null);
   const terminalId = useTerminalStore((s) => s.activeSessionId);
   const terminalAgentOpen = useTerminalStore((s) => s.aiPanelVisible);
   const activeTerminal = useTerminalStore((s) => s.sessions.find((session) => session.id === s.activeSessionId));
@@ -52,15 +54,22 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
   const terminalAgentAvailable = !!activeTerminal && !["batch", "desktop", "docker"].includes(activeTerminal.type);
   const currentAgentOpen = terminalActive ? terminalAgentOpen : agentOpen;
   const selectedDatabaseConnected = !!objectScope && connections.some((connection) => connection.id === objectScope.connectionId);
+  const queryTarget = terminalActive ? null : currentView === "table" ? tabs.find((tab) => tab.id === activeId) : objectScope;
   const [closeTab, setCloseTab] = useState<QueryTab | null>(null);
   const initialized = useRef(false);
   const tabBar = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setConnectionsOpen(!batchActive); }, [batchActive]);
   useEffect(() => {
-    if (connectionsOpen) connectionsPanel.current?.expand();
-    else connectionsPanel.current?.collapse();
-  }, [connectionsOpen]);
+    if (!visible) return;
+    const frame = requestAnimationFrame(() => {
+      const panel = connectionsPanel.current;
+      if (!panel || !connectionsGroup.current?.clientWidth) return;
+      if (!connectionsOpen) panel.collapse();
+      else if (panel.getSize().inPixels === 0) panel.resize("240px");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [connectionsOpen, visible]);
 
   useEffect(() => {
     if (!initialized.current) {
@@ -104,8 +113,11 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
 
   return <TooltipProvider delayDuration={250}>
     <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
-      <ResizablePanelGroup direction="horizontal">
-        <ResizablePanel id="db-connections" panelRef={connectionsPanel} collapsible collapsedSize="0px" defaultSize="240px" minSize="180px" maxSize="420px">
+      <ResizablePanelGroup direction="horizontal" elementRef={connectionsGroup}>
+        <ResizablePanel id="db-connections" panelRef={connectionsPanel} collapsible collapsedSize="0px" defaultSize="240px" minSize="180px" maxSize="420px"
+          onResize={(size, _id, previous) => {
+            if (previous && visible && connectionsGroup.current?.clientWidth) setConnectionsOpen(size.inPixels > 0);
+          }}>
           <div className="h-full overflow-hidden" aria-hidden={!connectionsOpen} inert={!connectionsOpen}>
             <ConnectionTree terminalActive={terminalActive} onOpenTerminal={() => setTerminalActive(true)} onActivateDatabase={() => setTerminalActive(false)} />
           </div>
@@ -114,13 +126,13 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
         <ResizablePanel id="db-content" minSize="400px" className="min-h-0 min-w-0 overflow-hidden">
           <div className="flex h-full min-h-0 min-w-0 flex-col">
             <div className="flex h-8 shrink-0 items-center border-b border-border">
-              {batchActive && <Tooltip><TooltipTrigger asChild>
+              <Tooltip><TooltipTrigger asChild>
                 <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
                   aria-label={connectionsOpen ? "收起连接列表" : "展开连接列表"} aria-expanded={connectionsOpen} aria-controls="db-connections"
                   onClick={() => setConnectionsOpen(!connectionsOpen)}>
                   {connectionsOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
                 </Button>
-              </TooltipTrigger><TooltipContent>{connectionsOpen ? "收起连接列表" : "展开连接列表"}</TooltipContent></Tooltip>}
+              </TooltipTrigger><TooltipContent>{connectionsOpen ? "收起连接列表" : "展开连接列表"}</TooltipContent></Tooltip>
               <div ref={tabBar} role="tablist" aria-label="运维工作标签" className="flex min-w-0 flex-1 overflow-x-auto scrollbar-none">
                 <Button role="tab" aria-selected={!terminalActive && currentView === "objects"} variant="ghost"
                   className={cn("h-8 shrink-0 gap-2 rounded-none border-b-2 px-3 text-caption", !terminalActive && currentView === "objects" ? "border-info bg-muted/20" : "border-transparent")}
@@ -136,7 +148,13 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
                   <DbToolButton icon="close" label={`关闭 ${tab.title}`} className="absolute right-1 top-1/2 z-10 h-6 w-6 -translate-y-1/2 rounded-sm bg-background/90 opacity-0 pointer-events-none shadow-none transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100" disabled={tab.isExecuting || tab.isSaving} onClick={() => requestClose(tab)} />
                 </div>)}
                 <SessionTabBar embedded active={terminalActive} onActivate={() => setTerminalActive(true)} />
-                <DbToolButton icon="add" label="新建查询" onClick={() => { setTerminalActive(false); useDbStore.getState().addQueryTab(); }} />
+                <OperationsCreateMenu onOpenTerminal={() => setTerminalActive(true)} queryConnectionId={queryTarget?.connectionId}
+                  onNewQuery={(connectionId) => {
+                    const state = useDbStore.getState();
+                    if (!state.activeConnections.some((connection) => connection.id === connectionId && connection.status === "connected")) return;
+                    state.addQueryTab(connectionId, queryTarget?.connectionId === connectionId ? queryTarget.database : null);
+                    setTerminalActive(false);
+                  }} />
               </div>
               <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={currentAgentOpen ? "收起 Mona" : "展开 Mona"} disabled={terminalActive && !terminalAgentAvailable} onClick={() => { if (terminalActive) useTerminalStore.getState().toggleAIPanel(); else setAgentOpen((open) => !open); }}>
                 <AgentLogo state="idle" className="h-5 w-5" />

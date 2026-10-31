@@ -16,8 +16,11 @@ import type { TransferTask } from "./types";
 
 interface TransferPanelProps {
   task: TransferTask | null;
+  cancelling?: boolean;
+  showEmpty?: boolean;
   onCancel: () => void;
   onClear: () => void;
+  onCollapse?: () => void;
 }
 
 function formatSize(bytes: number): string {
@@ -32,10 +35,25 @@ function formatSize(bytes: number): string {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
-export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
+export function TransferPanel({ task, cancelling = false, showEmpty = false, onCancel, onClear, onCollapse }: TransferPanelProps) {
   const [expanded, setExpanded] = useState(false);
 
-  if (!task) return null;
+  const collapseButton = onCollapse && (
+    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onCollapse}
+      aria-label="收起传输记录" title="收起传输记录">
+      <ChevronDown className="h-3.5 w-3.5" />
+    </Button>
+  );
+
+  if (!task) return showEmpty ? (
+    <div className="border-t bg-secondary/30">
+      <div className="flex items-center justify-between border-b px-3 py-1.5">
+        <span className="text-caption font-medium">传输任务</span>
+        {collapseButton}
+      </div>
+      <p className="px-3 py-2 text-caption text-muted-foreground">暂无传输记录</p>
+    </div>
+  ) : null;
 
   const isActive = task.status === "transferring" || task.status === "waiting";
   const isCompleted = task.status === "completed";
@@ -59,6 +77,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
               size="sm"
               className="h-6 text-caption gap-1 text-destructive hover:text-destructive"
               onClick={onCancel}
+              disabled={cancelling}
             >
               <X className="h-3 w-3" />
               取消
@@ -74,6 +93,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
               清理
             </Button>
           )}
+          {collapseButton}
         </div>
       </div>
 
@@ -90,21 +110,37 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
             {isError && <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
             {isCancelled && <XCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
             <span className="truncate">
-              {isCompleted
+              {cancelling
+                ? "正在取消…"
+                : isCompleted
                 ? task.type === "upload"
                   ? "上传完成"
                   : "下载完成"
                 : isError
-                  ? `失败: ${task.error || "未知错误"}`
+                  ? task.type === "upload" ? "上传失败" : "下载失败"
                   : isCancelled
-                    ? "已取消"
+                    ? "已取消，部分内容可能已传输"
                     : task.status === "waiting"
                       ? `等待中: ${task.totalFiles} 个文件`
                       : task.currentFile}
             </span>
           </div>
-          <div className="text-caption text-muted-foreground shrink-0 ml-2">
-            {isActive && task.status === "transferring" ? task.speed : ""}
+          <div className="flex shrink-0 items-center gap-2 ml-2">
+            {isActive && task.status === "transferring" && (
+              <span className="text-caption text-muted-foreground">{task.speed}</span>
+            )}
+            {task.files.length > 1 && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="h-6 gap-1 px-1 text-caption text-muted-foreground hover:bg-transparent hover:text-foreground"
+                onClick={() => setExpanded(!expanded)}
+                aria-expanded={expanded}
+              >
+                {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                文件列表
+              </Button>
+            )}
           </div>
         </div>
 
@@ -136,22 +172,6 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
           <div className="text-micro text-muted-foreground mt-1">
             {formatSize(task.bytesTransferred)} / {formatSize(task.totalBytes)}
           </div>
-        )}
-
-        {task.files.length > 1 && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="mt-1 h-auto gap-1 px-0 text-micro text-muted-foreground hover:bg-transparent hover:text-foreground"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            文件列表
-          </Button>
         )}
 
         {expanded && (

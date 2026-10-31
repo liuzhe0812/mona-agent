@@ -226,103 +226,57 @@ export const useBatchStore = create<BatchState>()(
       clearClipboard: () => set({ clipboard: [] }),
 
       handleBatchProgress: (progress) => {
-        const { sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
-
-        const statusMap: Record<string, TransferSessionNode["status"]> = {
-          pending: "waiting",
-          connecting: "waiting",
-          transferring: "transferring",
-          completed: "completed",
-          error: "error",
-          cancelled: "cancelled",
-        };
-
-        let sessionProgress = 0;
-        if (bytesTotal > 0) {
-          sessionProgress = Math.round((bytesTransferred / bytesTotal) * 100);
-        } else if (filesTotal > 0) {
-          sessionProgress = Math.round((filesCompleted / filesTotal) * 100);
-        }
-
-        const fileStatus =
-          status === "completed" ? "completed"
-          : status === "error" ? "error"
-          : status === "cancelled" ? "cancelled"
-          : "transferring";
-
+        const { batchId, sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
+        const isTerminal = (value: string) => ["completed", "error", "cancelled"].includes(value);
+        const isFinalEvent = currentFile == null && isTerminal(status);
         const formattedSpeed = formatSpeed(speed);
         const formattedEta = formatEta(etaSeconds);
 
         set((state) => {
+          if (batchId !== state.activeBatchId) return state;
           const sessionIdx = state.transferSessions.findIndex((s) => s.id === sessionId);
           if (sessionIdx === -1) return state;
-
           const session = state.transferSessions[sessionIdx];
-          const isFinalEvent = currentFile === null || currentFile === undefined;
+          if (isTerminal(session.status)) return state;
 
-          let nextFiles = session.files;
-          if (isFinalEvent) {
-            nextFiles = session.files.map((f) => ({ ...f, status: fileStatus as TransferFileNode["status"] }));
-          } else {
-            const fileIdx = session.files.findIndex((f) => f.filename === currentFile);
-            if (fileIdx !== -1) {
-              const file = session.files[fileIdx];
-              if (
-                file.status === fileStatus &&
-                file.speed === formattedSpeed &&
-                file.eta === formattedEta
-              ) {
-                nextFiles = session.files;
-              } else {
-                nextFiles = session.files.slice();
-                nextFiles[fileIdx] = {
-                  ...file,
-                  status: fileStatus as TransferFileNode["status"],
-                  speed: formattedSpeed,
-                  eta: formattedEta,
-                };
-              }
+          const fileStatus: TransferFileNode["status"] = isTerminal(status)
+            ? status as "completed" | "error" | "cancelled"
+            : session.status === "paused" ? "paused" : "transferring";
+          const nextFiles = session.files.map((file) => {
+            if (isFinalEvent) {
+              if (isTerminal(file.status)) return file;
+              return { ...file, status: fileStatus, speed: "-", eta: "-" };
             }
-          }
-
-          const allFilesDone = nextFiles.every(
-            (f) => f.status === "completed" || f.status === "error" || f.status === "cancelled",
-          );
+            if (file.filename !== currentFile || isTerminal(file.status)) return file;
+            return { ...file, status: fileStatus, speed: formattedSpeed, eta: formattedEta };
+          });
           const sessionStatus: TransferSessionNode["status"] = isFinalEvent
-            ? (statusMap[status] || "waiting")
-            : allFilesDone && status === "completed" ? "completed" : session.status;
-
-          if (
-            session.status === sessionStatus &&
-            session.progress === sessionProgress &&
-            session.completedCount === filesCompleted &&
-            session.totalCount === filesTotal &&
-            session.transferredBytes === bytesTransferred &&
-            session.totalBytes === bytesTotal &&
-            session.speed === formattedSpeed &&
-            session.eta === formattedEta &&
-            session.error === (error || undefined) &&
-            nextFiles === session.files
-          ) {
-            return state;
-          }
-
+            ? status as "completed" | "error" | "cancelled"
+            : session.status === "paused" ? "paused"
+            : status === "connecting" ? "waiting" : "transferring";
+          const completedCount = isFinalEvent ? filesCompleted : Math.max(session.completedCount, filesCompleted);
+          const transferredBytes = isFinalEvent ? bytesTransferred : Math.max(session.transferredBytes, bytesTransferred);
+          const sessionProgress = isFinalEvent && status === "completed" ? 100
+            : bytesTotal > 0 ? Math.round(transferredBytes / bytesTotal * 100)
+            : filesTotal > 0 ? Math.round(completedCount / filesTotal * 100) : 0;
           const nextSessions = state.transferSessions.slice();
           nextSessions[sessionIdx] = {
             ...session,
             status: sessionStatus,
-            progress: sessionProgress,
-            completedCount: filesCompleted,
+            progress: Math.min(100, Math.max(0, sessionProgress)),
+            completedCount,
             totalCount: filesTotal,
-            transferredBytes: bytesTransferred,
+            transferredBytes,
             totalBytes: bytesTotal,
-            speed: formattedSpeed,
-            eta: formattedEta,
+            speed: isFinalEvent ? "-" : formattedSpeed,
+            eta: isFinalEvent ? "-" : formattedEta,
             error: error || undefined,
             files: nextFiles,
           };
-
-          return { transferSessions: nextSessions };
+          return {
+            transferSessions: nextSessions,
+            activeBatchId: nextSessions.every((item) => isTerminal(item.status)) ? null : state.activeBatchId,
+          };
         });
       },
     }),

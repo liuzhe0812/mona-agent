@@ -42,38 +42,23 @@ export interface UnifiedFileItem {
 async function readDirEntries(
   entry: FileSystemDirectoryEntry,
   prefix: string,
-): Promise<{ file: File; relativePath: string }[]> {
-  return new Promise((resolve, reject) => {
-    const reader = entry.createReader();
-    const allEntries: FileSystemEntry[] = [];
-    const readBatch = () => {
-      reader.readEntries(async (batch) => {
-        if (batch.length === 0) {
-          const results: { file: File; relativePath: string }[] = [];
-          for (const e of allEntries) {
-            if (e.isFile) {
-              const fileEntry = e as FileSystemFileEntry;
-              const file = await new Promise<File>((res, rej) =>
-                fileEntry.file(res, rej),
-              );
-              results.push({ file, relativePath: `${prefix}${e.name}` });
-            } else if (e.isDirectory) {
-              const sub = await readDirEntries(
-                e as FileSystemDirectoryEntry,
-                `${prefix}${e.name}/`,
-              );
-              results.push(...sub);
-            }
-          }
-          resolve(results);
-        } else {
-          allEntries.push(...batch);
-          readBatch();
-        }
-      }, reject);
-    };
-    readBatch();
-  });
+): Promise<UnifiedFileItem[]> {
+  const reader = entry.createReader();
+  const files: UnifiedFileItem[] = [];
+  while (true) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+    if (batch.length === 0) return files;
+    for (const item of batch) {
+      const name = `${prefix}${item.name}`;
+      if (item.isDirectory) {
+        files.push({ name, path: "", isDir: true, size: null, modified: null, permissions: null });
+        files.push(...await readDirEntries(item as FileSystemDirectoryEntry, `${name}/`));
+      } else if (item.isFile) {
+        const file = await new Promise<File>((resolve, reject) => (item as FileSystemFileEntry).file(resolve, reject));
+        files.push({ name, path: "", isDir: false, size: file.size, modified: null, permissions: null, _rawFile: file });
+      }
+    }
+  }
 }
 
 interface Props {
@@ -102,6 +87,7 @@ interface Props {
   onSelectionChange?: (paths: Set<string>) => void;
   onFocus?: () => void;
   onDropFiles?: (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => void;
+  onDropError?: () => void;
   isTransferring?: boolean;
 }
 
@@ -140,6 +126,7 @@ export function FilePane({
   onSelectionChange,
   onFocus,
   onDropFiles,
+  onDropError,
   isTransferring,
 }: Props) {
   const [editing, setEditing] = useState(false);
@@ -235,7 +222,7 @@ export function FilePane({
       e.preventDefault();
       dragCounterRef.current = 0;
       setIsDragOver(false);
-      if (!onDropFiles) return;
+      if (!onDropFiles || isTransferring) return;
       const sftpData = e.dataTransfer.getData("application/x-sftp-files");
       if (sftpData) {
         try {
@@ -271,7 +258,7 @@ export function FilePane({
           const filePath = f
             ? (f as File & { path?: string }).path
             : undefined;
-          const hasValidPath = !!(filePath && filePath.includes(":"));
+          const hasValidPath = !!(filePath && /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(filePath));
 
           if (isDir && dirEntry && !hasValidPath) {
             pendingDirs.push({
@@ -293,34 +280,26 @@ export function FilePane({
 
         for (const { entry, name } of pendingDirs) {
           try {
-            const subFiles = await readDirEntries(entry, "");
-            for (const { file, relativePath } of subFiles) {
-              files.push({
-                name: `${name}/${relativePath}`,
-                path: "",
-                isDir: false,
-                size: file.size,
-                modified: null,
-                permissions: null,
-                _rawFile: file,
-              });
-            }
-          } catch (err) {
-            console.error("[FilePane] failed to read directory:", err);
+            files.push({ name, path: "", isDir: true, size: null, modified: null, permissions: null });
+            files.push(...await readDirEntries(entry, `${name}/`));
+          } catch {
+            onDropError?.();
+            return;
           }
         }
       } else if (e.dataTransfer.files.length > 0) {
         for (let i = 0; i < e.dataTransfer.files.length; i++) {
           const f = e.dataTransfer.files[i];
           const filePath = (f as File & { path?: string }).path;
+          const hasValidPath = !!(filePath && /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(filePath));
           files.push({
             name: f.name,
-            path: filePath && filePath.includes(":") ? filePath : f.name,
+            path: hasValidPath ? filePath! : f.name,
             isDir: false,
             size: f.size,
             modified: null,
             permissions: null,
-            _rawFile: filePath ? undefined : f,
+            _rawFile: hasValidPath ? undefined : f,
           });
         }
       }
@@ -329,7 +308,7 @@ export function FilePane({
         onDropFiles(files, "system");
       }
     },
-    [onDropFiles],
+    [onDropFiles, onDropError, isTransferring],
   );
 
   const getSelectedFilesForContextMenu = useCallback(

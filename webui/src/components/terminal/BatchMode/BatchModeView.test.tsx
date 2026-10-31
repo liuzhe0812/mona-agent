@@ -1,12 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { BatchTransferProgress, FileInfo } from "../types/terminal";
+import type { TransferProgressEvent } from "../ipc";
 import { useBatchStore } from "../store/batchStore";
 import { useTerminalStore } from "../store/terminalStore";
 
 const choose = vi.hoisted(() => vi.fn());
 const ipc = vi.hoisted(() => ({
   sshConnectWithId: vi.fn(), sshDisconnect: vi.fn(), sshSendInput: vi.fn(), sshTrustHostKey: vi.fn(),
-  sftpList: vi.fn(), sftpDownload: vi.fn(), sftpBatchUpload: vi.fn(), sftpBatchCancel: vi.fn(), sftpBatchPause: vi.fn(), sftpBatchResume: vi.fn(),
+  sftpList: vi.fn(), sftpBatchUpload: vi.fn(), sftpBatchCancel: vi.fn(), sftpBatchPause: vi.fn(), sftpBatchResume: vi.fn(),
   sftpRemove: vi.fn(), sftpRename: vi.fn(), sftpMkdir: vi.fn(), sftpDownloadFile: vi.fn(), sftpDownloadDir: vi.fn(),
   sftpCancelTransfer: vi.fn(), sftpPaste: vi.fn(), expandUploadPaths: vi.fn(), onBatchTransferProgress: vi.fn(), onTransferProgress: vi.fn(),
   onTerminalOutput: vi.fn().mockResolvedValue(() => {}),
@@ -25,21 +27,117 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 import { BatchModeView } from "./BatchModeView";
 const batchInitial = useBatchStore.getInitialState();
 const terminalInitial = useTerminalStore.getInitialState();
+const files: FileInfo[] = [
+  { name: "data.txt", path: "/home/fixture/data.txt", isDir: false, size: 10, permissions: null, mtime: null, owner: null, group: null },
+  { name: "assets", path: "/home/fixture/assets", isDir: true, size: null, permissions: null, mtime: null, owner: null, group: null },
+];
+let batchProgress: (event: BatchTransferProgress) => void;
+let transferProgress: Map<string, (event: TransferProgressEvent) => void>;
+
 beforeEach(() => {
   vi.clearAllMocks();
-  ipc.sshConnectWithId.mockReset().mockResolvedValue("session");
-  ipc.sshTrustHostKey.mockReset().mockResolvedValue(undefined);
-  ipc.sftpList.mockReset().mockResolvedValue([]);
-  ipc.onTerminalSessionStatus.mockReset().mockResolvedValue(() => {});
-  ipc.onBatchTransferProgress.mockReset().mockResolvedValue(() => {});
+  ipc.onTerminalSessionStatus.mockResolvedValue(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
-  useBatchStore.setState({ ...batchInitial }, true);
+  useBatchStore.setState({ ...batchInitial, activeTab: "sftp", activeSessionId: "host-one", sessions: [
+    { id: "host-one", host: "fixture-host", port: 22, username: "fixture", status: "connected", selected: true },
+  ], selectedFilePaths: new Set() }, true);
   useTerminalStore.setState({ ...terminalInitial, activeSessionId: "batch-tab", sessions: [
     { id: "batch-tab", configId: "", type: "batch", status: "connected", title: "SSH 批量管理" },
   ] }, true);
+  ipc.sshConnectWithId.mockReset().mockResolvedValue("session");
+  ipc.sshTrustHostKey.mockReset().mockResolvedValue(undefined);
+  ipc.sshSendInput.mockReset().mockResolvedValue(undefined);
+  ipc.sftpList.mockResolvedValue(files);
+  ipc.sftpDownloadFile.mockResolvedValue(undefined);
+  ipc.sftpDownloadDir.mockResolvedValue(undefined);
+  ipc.sftpCancelTransfer.mockResolvedValue(undefined);
+  ipc.sftpBatchPause.mockResolvedValue(undefined);
+  ipc.sftpBatchResume.mockResolvedValue(undefined);
+  ipc.sftpBatchCancel.mockResolvedValue(undefined);
+  ipc.expandUploadPaths.mockResolvedValue([
+    { localPath: "D:\\a.txt", relPrefix: "", displayName: "a.txt" },
+    { localPath: "D:\\b.txt", relPrefix: "", displayName: "b.txt" },
+  ]);
+  transferProgress = new Map();
+  ipc.onTransferProgress.mockImplementation(async (_session, taskId, callback) => {
+    transferProgress.set(taskId, callback);
+    return () => transferProgress.delete(taskId);
+  });
+  ipc.onBatchTransferProgress.mockImplementation(async (callback) => { batchProgress = callback; return () => {}; });
+  choose.mockResolvedValue("D:\\Transfers");
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+async function download(file: string) {
+  fireEvent.contextMenu(await screen.findByText(file));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^下载/ }));
+}
+
+it("downloads a selected folder through the native streaming directory command", async () => {
+  render(<BatchModeView />);
+  await download("assets");
+  await waitFor(() => expect(ipc.sftpDownloadDir).toHaveBeenCalledWith("host-one", "/home/fixture/assets", "D:\\Transfers\\assets", expect.any(String)));
+  expect(choose).toHaveBeenCalledWith({ directory: true, multiple: false, title: "选择下载位置" });
+  expect(ipc.sftpDownloadFile).not.toHaveBeenCalled();
+  expect(await screen.findByText("下载完成")).toBeInTheDocument();
+});
+
+it("rejects top-level downloads whose names differ only by case", async () => {
+  const conflicting = ["Foo", "foo"].map((name) => ({ ...files[0], name, path: `/home/fixture/${name}` }));
+  ipc.sftpList.mockResolvedValue(conflicting);
+  render(<BatchModeView />);
+  await screen.findByText("Foo");
+  act(() => useBatchStore.getState().selectFile(conflicting[0].path));
+  act(() => useBatchStore.getState().selectFile(conflicting[1].path, true));
+  await download("Foo");
+  expect(await screen.findByRole("dialog")).toHaveTextContent("所选项目的名称在本地会重复");
+  expect(ipc.sftpDownloadFile).not.toHaveBeenCalled();
+  expect(ipc.sftpDownloadDir).not.toHaveBeenCalled();
+});
+
+it("reports real download progress and cancels the active item before queued folders", async () => {
+  let rejectDownload!: (error: Error) => void;
+  ipc.sftpDownloadFile.mockImplementation((_session, _path, _local, id) => {
+    expect(transferProgress.has(id)).toBe(true);
+    return new Promise((_resolve, reject) => { rejectDownload = reject; });
+  });
+  render(<BatchModeView />);
+  await screen.findByText("data.txt");
+  act(() => useBatchStore.getState().selectFile(files[0].path));
+  act(() => useBatchStore.getState().selectFile(files[1].path, true));
+  await download("data.txt");
+  await waitFor(() => expect(ipc.sftpDownloadFile).toHaveBeenCalledOnce());
+  const taskId = ipc.sftpDownloadFile.mock.calls[0][3];
+  act(() => transferProgress.get(taskId)!({ taskId, sessionId: "host-one", type: "download", path: files[0].path, bytesTransferred: 3, totalBytes: 10, percentage: 30, speed: 30 }));
+  expect(screen.getByText("15%")).toBeInTheDocument();
+  const header = screen.getByText("(0/2)").parentElement!.parentElement!;
+  fireEvent.click(within(header).getByRole("button", { name: "取消", exact: true }));
+  await waitFor(() => expect(ipc.sftpCancelTransfer).toHaveBeenCalledWith(taskId));
+  await act(async () => rejectDownload(new Error("Transfer cancelled")));
+  expect(ipc.sftpDownloadDir).not.toHaveBeenCalled();
+  expect(await screen.findByText(/^已取消/)).toBeInTheDocument();
+});
+
+it("replays every early file event and preserves successful files on final upload failure", async () => {
+  choose.mockResolvedValue(["D:\\a.txt", "D:\\b.txt"]);
+  ipc.sftpBatchUpload.mockImplementation(async () => {
+    const event = (updates: Partial<BatchTransferProgress>) => batchProgress({ batchId: "batch-fast", sessionId: "host-one", host: "fixture-host",
+      status: "connecting", currentFile: null, filesCompleted: 0, filesTotal: 2, bytesTransferred: 0, bytesTotal: 20, speed: null, etaSeconds: null, error: null, ...updates });
+    event({});
+    event({ status: "completed", currentFile: "a.txt", filesCompleted: 1, bytesTransferred: 10 });
+    event({ status: "error", currentFile: "b.txt", filesCompleted: 1, bytesTransferred: 10, error: "fixture write failed" });
+    event({ status: "error", filesCompleted: 1, bytesTransferred: 10, error: "fixture summary" });
+    return "batch-fast";
+  });
+  render(<BatchModeView />);
+  fireEvent.click(screen.getByRole("button", { name: "上传", exact: true }));
+  await waitFor(() => expect(useBatchStore.getState().transferSessions[0]?.status).toBe("error"));
+  expect(useBatchStore.getState().transferSessions[0].files.map((file) => file.status)).toEqual(["completed", "error"]);
+  expect(useBatchStore.getState().activeBatchId).toBeNull();
+  expect(await screen.findByRole("dialog")).toHaveTextContent("部分主机上传失败");
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+});
 
 function prepareBatch(startIp = "192.0.2.20", count = 1) {
   useBatchStore.setState({ ...batchInitial, startIp, count, username: "fixture", port: 22, activeTab: "terminal",

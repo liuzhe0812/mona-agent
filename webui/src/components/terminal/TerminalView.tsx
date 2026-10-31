@@ -107,7 +107,7 @@ export function TerminalView({ onOpenSubscribe, embedded = false, visible = true
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar onOpenSubscribe={onOpenSubscribe} embedded={embedded} />
+        {activeSession?.type !== "batch" && <Toolbar onOpenSubscribe={onOpenSubscribe} embedded={embedded} />}
         {!embedded && <SessionTabBar />}
         <div className="min-h-0 flex-1">
           <div

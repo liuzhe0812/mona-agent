@@ -32,6 +32,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import terminalIcon from "@/assets/icons/sidebar-terminal.png";
+import batchSshIcon from "@/assets/icons/sidebar-ssh-batch.png";
 
 export function SessionTabBar({ embedded = false, active = true, onActivate }: {
   embedded?: boolean; active?: boolean; onActivate?: () => void;
@@ -296,7 +297,7 @@ export function SessionTabBar({ embedded = false, active = true, onActivate }: {
                     <span className="absolute bottom-0 left-0 right-0 h-px bg-foreground/60" />
                   )}
                   {embedded ? (
-                    <img src={terminalIcon} alt="" draggable={false} className="h-4 w-4 shrink-0 object-contain" />
+                    <img src={session.type === "batch" ? batchSshIcon : terminalIcon} alt="" draggable={false} className="h-4 w-4 shrink-0 object-contain" />
                   ) : (
                     <span
                       className={`h-1.5 w-1.5 rounded-full shrink-0 ${

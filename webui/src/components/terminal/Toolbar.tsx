@@ -4,6 +4,7 @@ import {
   Monitor,
   Activity,
   Container,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
@@ -99,33 +100,33 @@ export function Toolbar({ embedded = false }: { onOpenSubscribe?: () => void; em
           Docker
         </Button>
       )}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1.5"
-        onClick={() => setSettingsDialogOpen(true)}
-      >
-        <Settings className="h-3.5 w-3.5" />
-        设置
-      </Button>
-      <div className="flex-1" />
       {activeSession?.type === "ssh" && (
-        <>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "h-7 w-7 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              systemMonitorVisible && "text-foreground",
-            )}
-            onClick={toggleSystemMonitor}
-            aria-label={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
-            title={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
-          >
-            <Activity className="h-4 w-4" />
-          </Button>
-        </>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("gap-1.5", systemMonitorVisible && "bg-accent text-foreground")}
+          onClick={toggleSystemMonitor}
+          aria-label={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
+          aria-pressed={systemMonitorVisible}
+          title={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
+        >
+          <Activity className="h-3.5 w-3.5" />
+          系统监控
+        </Button>
       )}
+      {(activeSession?.type === "ssh" || activeSession?.type === "sftp") && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1.5"
+          disabled={activeSession.status !== "connected"}
+          onClick={() => useTerminalStore.getState().updateSession(activeSession.id, { sftpVisible: true, transferPanelVisible: true })}
+        >
+          <ListChecks className="h-3.5 w-3.5" />
+          传输记录
+        </Button>
+      )}
+      <div className="flex-1" />
       {!embedded && activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (
         <Button
           variant="ghost"
@@ -141,6 +142,16 @@ export function Toolbar({ embedded = false }: { onOpenSubscribe?: () => void; em
           />
         </Button>
       )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7"
+        onClick={() => setSettingsDialogOpen(true)}
+        aria-label="设置"
+        title="设置"
+      >
+        <Settings className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

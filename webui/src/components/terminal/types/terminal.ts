@@ -29,6 +29,7 @@ export interface Session {
   title: string;
   /** Visibility belongs to this SSH tab, not the shared connection config. */
   sftpVisible?: boolean;
+  transferPanelVisible?: boolean;
   /** Docker tool tabs reuse this SSH session instead of owning a connection. */
   parentSessionId?: string;
   /** VNC: WebSocket URL for noVNC to connect to */

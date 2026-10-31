@@ -34,7 +34,10 @@ import {
   sftpRemove,
   sftpRename,
   sftpMkdir,
-  sftpDownload,
+  sftpDownloadFile,
+  sftpDownloadDir,
+  sftpCancelTransfer,
+  onTransferProgress,
   sftpPaste,
   expandUploadPaths,
   onBatchTransferProgress,
@@ -77,6 +80,8 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { memo } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { TransferPanel } from "../FileManager/TransferPanel";
+import type { TransferTask } from "../FileManager/types";
 
 const TransferFileItem = memo(function TransferFileItem({
   status,
@@ -180,12 +185,22 @@ export function BatchModeView() {
   const sftpAreaRef = useRef<HTMLDivElement>(null);
   const uploadLockRef = useRef(false);
   const progressQueueRef = useRef<BatchTransferProgress[]>([]);
-  const rafRef = useRef<number | null>(null);
+  const batchListenerRef = useRef<Promise<void> | null>(null);
+  const startingUploadRef = useRef(false);
+  const uploadBatchRef = useRef<string | null>(null);
+  const reportedUploadRef = useRef<string | null>(null);
+  const [batchAction, setBatchAction] = useState<"pause" | "resume" | "cancel" | null>(null);
+  const [transferError, setTransferError] = useState<string | null>(null);
   const [connectionActionError, setConnectionActionError] = useState<string | null>(null);
   const [acceptNewHostKey, setAcceptNewHostKey] = useState(true);
   const [trustSessionId, setTrustSessionId] = useState<string | null>(null);
   const [trusting, setTrusting] = useState(false);
   const [trustError, setTrustError] = useState("");
+  const [downloadTask, setDownloadTask] = useState<TransferTask | null>(null);
+  const [downloadCancelling, setDownloadCancelling] = useState(false);
+  const downloadDialogRef = useRef(false);
+  const downloadRef = useRef<{ id: string; currentFileId: string | null; cancelled: boolean } | null>(null);
+  const uploadBusy = transferSessions.some((item) => ["waiting", "transferring", "paused"].includes(item.status));
 
   const terminalStoreActiveId = useTerminalStore((s) => s.activeSessionId);
   const terminalStoreSessions = useTerminalStore((s) => s.sessions);
@@ -631,21 +646,96 @@ export function BatchModeView() {
 
   const handleBatchDownload = async (file: FileInfo) => {
     const session = getActiveSession();
-    const targets = getSelectedFiles(file).filter((f) => !f.isDir);
-    if (targets.length === 0 || !session) return;
-    for (const f of targets) {
+    const files = getSelectedFiles(file);
+    if (!session || files.length === 0 || downloadRef.current || downloadDialogRef.current) return;
+    downloadDialogRef.current = true;
+    let directory: string | null = null;
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "选择下载位置" });
+      directory = Array.isArray(selected) ? selected[0] : selected;
+    } catch (error) {
+      console.error("选择下载位置失败:", error);
+      setTransferError("无法选择下载位置，请重试。");
+    } finally {
+      downloadDialogRef.current = false;
+    }
+    if (!directory) return;
+
+    const names = files.map((item) => item.name.replace(/[<>:"|?*\/\\\x00-\x1F]/g, "_").replace(/[ .]+$/, "") || "_");
+    if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
+      setTransferError("所选项目的名称在本地会重复，请分别下载或重命名后重试。");
+      return;
+    }
+    const control = { id: `download-${crypto.randomUUID()}`, currentFileId: null as string | null, cancelled: false };
+    downloadRef.current = control;
+    const separator = directory.includes("\\") ? "\\" : "/";
+    const destinations = names.map((name) => directory!.replace(/[\\/]$/, "") + separator + name);
+    setDownloadTask({
+      id: control.id, type: "download", status: "waiting", currentFile: files[0].name,
+      currentFileIndex: 0, totalFiles: files.length, progress: 0, speed: "-", bytesTransferred: 0, totalBytes: 0,
+      files: files.map((item, index) => ({ name: item.name, localPath: destinations[index], remotePath: item.path, size: item.size ?? 0, status: "pending" })),
+    });
+    let failed = false;
+    for (let index = 0; index < files.length; index++) {
+      if (control.cancelled) break;
+      const item = files[index];
+      const fileId = `${control.id}-${index}`;
+      control.currentFileId = fileId;
+      setDownloadTask((task) => task && ({ ...task, status: "transferring", currentFile: item.name, currentFileIndex: index,
+        bytesTransferred: 0, totalBytes: item.isDir ? 0 : item.size ?? 0,
+        files: task.files.map((entry, position) => position === index ? { ...entry, status: "transferring" } : entry) }));
+      let unlisten: (() => void) | undefined;
       try {
-        const data = await sftpDownload(session.id, f.path);
-        const blob = new Blob([new Uint8Array(data)]);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = f.name;
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (err) {
-        console.error(`下载 ${f.name} 失败:`, err);
+        unlisten = await onTransferProgress(session.id, fileId, (event) => {
+          if (downloadRef.current !== control || control.cancelled) return;
+          setDownloadTask((task) => task && task.id === control.id ? { ...task,
+            progress: Math.round((index + Math.min(100, Math.max(0, event.percentage)) / 100) / files.length * 100),
+            bytesTransferred: event.bytesTransferred, totalBytes: event.totalBytes,
+            speed: `${formatSize(event.speed)}/s`,
+          } : task);
+        });
+        if (control.cancelled) break;
+        if (item.isDir) await sftpDownloadDir(session.id, item.path, destinations[index], fileId);
+        else await sftpDownloadFile(session.id, item.path, destinations[index], fileId);
+        setDownloadTask((task) => task && task.id === control.id ? { ...task,
+          progress: Math.round((index + 1) / files.length * 100),
+          files: task.files.map((entry, position) => position === index ? { ...entry, status: "completed" } : entry),
+        } : task);
+      } catch (error) {
+        if (control.cancelled || /transfer cancelled/i.test(String(error))) {
+          control.cancelled = true;
+          break;
+        }
+        failed = true;
+        console.error(`下载 ${item.name} 失败:`, error);
+        setDownloadTask((task) => task && task.id === control.id ? { ...task,
+          files: task.files.map((entry, position) => position === index ? { ...entry, status: "error" } : entry),
+        } : task);
+      } finally {
+        unlisten?.();
+        control.currentFileId = null;
       }
+    }
+    setDownloadTask((task) => task && task.id === control.id ? { ...task,
+      status: control.cancelled ? "cancelled" : failed ? "error" : "completed",
+      progress: failed || control.cancelled ? task.progress : 100,
+      error: failed ? "部分项目未下载完成" : undefined, speed: "-",
+    } : task);
+    if (downloadRef.current === control) downloadRef.current = null;
+    setDownloadCancelling(false);
+    if (failed && !control.cancelled) setTransferError("部分项目下载失败。请检查下载位置的写入权限和服务器连接后重试，已完成的文件会保留。");
+  };
+
+  const cancelDownload = async () => {
+    const control = downloadRef.current;
+    if (!control || control.cancelled) return;
+    control.cancelled = true;
+    setDownloadCancelling(true);
+    try {
+      if (control.currentFileId) await sftpCancelTransfer(control.currentFileId);
+    } catch (error) {
+      console.error("取消下载失败:", error);
+      setTransferError("未能确认取消下载，当前项目可能仍在传输。请等待任务结果后重试。");
     }
   };
 
@@ -673,22 +763,6 @@ export function BatchModeView() {
     setRenameValue(fileName);
   };
 
-  const handleDownloadFile = async (file: FileInfo) => {
-    const session = getActiveSession();
-    if (!session || file.isDir) return;
-    try {
-      const data = await sftpDownload(session.id, file.path);
-      const blob = new Blob([new Uint8Array(data)]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("下载失败:", err);
-    }
-  };
 
   const handleMkdir = async () => {
     const session = getActiveSession();
@@ -739,67 +813,85 @@ export function BatchModeView() {
     return [clickedFile];
   };
 
-  const startUpload = async (files: string[]) => {
-    const selectedSessions = sessions.filter(
-      (s) => s.selected && s.status === "connected",
-    );
+  const startUpload = useCallback(async (files: string[]) => {
+    const state = useBatchStore.getState();
+    if (startingUploadRef.current || state.transferSessions.some((item) => ["waiting", "transferring", "paused"].includes(item.status))) return;
+    const selectedSessions = sessions.filter((item) => item.selected && item.status === "connected");
     if (selectedSessions.length === 0 || files.length === 0) return;
-
-    // 调用后端展开文件夹，获取完整文件列表用于展示
-    let expandedEntries: { localPath: string; relPrefix: string; displayName: string }[] = [];
+    startingUploadRef.current = true;
+    uploadBatchRef.current = null;
+    reportedUploadRef.current = null;
+    progressQueueRef.current = [];
+    setActiveBatchId(null);
+    let planned = false;
     try {
-      expandedEntries = await expandUploadPaths(files);
-    } catch (err) {
-      console.error("展开文件列表失败:", err);
-      expandedEntries = files.map((p) => {
-        const name = p.split(/[\\/]/).pop() || "";
-        return { localPath: p, relPrefix: "", displayName: name };
-      });
-    }
-
-    const newTransferSessions: TransferSessionNode[] = selectedSessions.map(
-      (session) => ({
-        id: session.id,
-        host: session.host,
-        status: "transferring",
-        expanded: true,
-        files: expandedEntries.map((entry) => ({
-          id: `upload-${session.id}-${entry.displayName}`,
-          filename: entry.displayName,
-          status: "waiting",
-          speed: "0 B/s",
-          eta: "等待中...",
-        })),
-        progress: 0,
-        completedCount: 0,
-        totalCount: expandedEntries.length,
-        totalBytes: 0,
-        transferredBytes: 0,
-        speed: "0 B/s",
-        eta: "计算中...",
-      }),
-    );
-    setTransferSessions(newTransferSessions);
-
-    const batchSessionInfos = selectedSessions.map((s) => ({
-      sessionId: s.id,
-      host: s.host,
-      port: s.port,
-      username: s.username,
-    }));
-
-    try {
+      const expandedEntries = await expandUploadPaths(files);
+      const newTransferSessions: TransferSessionNode[] = selectedSessions.map((session) => ({
+        id: session.id, host: session.host, status: "waiting", expanded: true,
+        files: expandedEntries.map((entry) => ({ id: `upload-${session.id}-${entry.displayName}`, filename: entry.displayName, status: "waiting", speed: "0 B/s", eta: "等待中..." })),
+        progress: 0, completedCount: 0, totalCount: expandedEntries.length,
+        totalBytes: 0, transferredBytes: 0, speed: "0 B/s", eta: "计算中...",
+      }));
+      setTransferSessions(newTransferSessions);
+      planned = true;
+      await batchListenerRef.current;
       const batchId = await sftpBatchUpload({
-        sessions: batchSessionInfos,
-        files,
-        targetDirectory: remotePath,
-        maxConcurrent,
+        sessions: selectedSessions.map((session) => ({ sessionId: session.id, host: session.host, port: session.port, username: session.username })),
+        files, targetDirectory: remotePath, maxConcurrent,
       });
+      uploadBatchRef.current = batchId;
       setActiveBatchId(batchId);
-    } catch (err) {
-      console.error("批量上传失败:", err);
+      startingUploadRef.current = false;
+      const queued = progressQueueRef.current;
+      progressQueueRef.current = [];
+      queued.forEach(handleBatchProgress);
+    } catch (error) {
+      console.error("批量上传失败:", error);
+      if (planned) setTransferSessions(useBatchStore.getState().transferSessions.map((session) => ({ ...session, status: "error",
+        files: session.files.map((item) => item.status === "completed" ? item : { ...item, status: "error" }),
+      })));
+      setActiveBatchId(null);
+      setTransferError("无法开始上传，请检查所选文件、目标目录权限和服务器连接后重试。");
+    } finally {
+      startingUploadRef.current = false;
+      progressQueueRef.current = [];
+    }
+  }, [sessions, remotePath, maxConcurrent, setActiveBatchId, setTransferSessions, handleBatchProgress]);
+
+  const controlUpload = async (action: "pause" | "resume" | "cancel") => {
+    if (!activeBatchId || batchAction) return;
+    const batchId = activeBatchId;
+    setBatchAction(action);
+    try {
+      if (action === "pause") await sftpBatchPause(batchId);
+      else if (action === "resume") await sftpBatchResume(batchId);
+      else await sftpBatchCancel(batchId);
+      if (action !== "cancel") useBatchStore.setState((current) => current.activeBatchId !== batchId ? current : ({
+        transferSessions: current.transferSessions.map((session) => ["waiting", "transferring", "paused"].includes(session.status) ? {
+          ...session, status: action === "pause" ? "paused" : "transferring",
+          files: session.files.map((file) => action === "pause" && file.status === "transferring" ? { ...file, status: "paused" }
+            : action === "resume" && file.status === "paused" ? { ...file, status: "transferring" } : file),
+        } : session),
+      }));
+    } catch (error) {
+      console.error("操作上传任务失败:", error);
+      setTransferError("无法更新上传任务，请检查连接后重试。当前传输结果以任务列表为准。");
+      setBatchAction(null);
+    } finally {
+      if (action !== "cancel" || !useBatchStore.getState().activeBatchId) setBatchAction(null);
     }
   };
+
+  useEffect(() => {
+    if (!activeBatchId) setBatchAction(null);
+    if (!uploadBatchRef.current || startingUploadRef.current || transferSessions.length === 0) return;
+    const finished = transferSessions.every((session) => ["completed", "error", "cancelled"].includes(session.status));
+    if (finished && transferSessions.some((session) => session.status === "error") && reportedUploadRef.current !== uploadBatchRef.current) {
+      reportedUploadRef.current = uploadBatchRef.current;
+      console.error("批量上传未完成:", transferSessions.filter((session) => session.error).map((session) => ({ host: session.host, error: session.error })));
+      setTransferError("部分主机上传失败。请检查目标目录权限和服务器连接后重试，已成功的文件会保留。");
+    }
+  }, [activeBatchId, transferSessions]);
 
   const handleUpload = async () => {
     if (uploadLockRef.current) return;
@@ -826,6 +918,7 @@ export function BatchModeView() {
 
   useEffect(() => {
     if (!isTauri()) return;
+    let disposed = false;
     let unlisten: (() => void) | null = null;
 
     const isInsideSftpArea = (pos: { x: number; y: number }) => {
@@ -869,53 +962,24 @@ export function BatchModeView() {
           break;
       }
     }).then((fn) => {
-      unlisten = fn;
+      if (disposed) fn();
+      else unlisten = fn;
     });
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, [activeTab, sessions, startUpload]);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-
-    const flushProgress = () => {
-      const queue = progressQueueRef.current;
-      if (queue.length === 0) {
-        rafRef.current = null;
-        return;
-      }
-      const latestBySession = new Map<string, BatchTransferProgress>();
-      for (const p of queue) {
-        latestBySession.set(p.sessionId, p);
-      }
-      progressQueueRef.current = [];
-      for (const p of latestBySession.values()) {
-        handleBatchProgress(p);
-      }
-      rafRef.current = null;
-    };
-
-    const enqueueProgress = (progress: BatchTransferProgress) => {
-      progressQueueRef.current.push(progress);
-      if (rafRef.current === null) {
-        rafRef.current = requestAnimationFrame(flushProgress);
-      }
-    };
-
-    onBatchTransferProgress((progress: BatchTransferProgress) => {
-      enqueueProgress(progress);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    batchListenerRef.current = onBatchTransferProgress((progress) => {
+      if (startingUploadRef.current) progressQueueRef.current.push(progress);
+      else handleBatchProgress(progress);
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
   }, [handleBatchProgress]);
 
   useEffect(() => {
@@ -939,7 +1003,7 @@ export function BatchModeView() {
           )}
         >
           <div className="flex items-center justify-between">
-            <h3 className="text-caption font-medium">批量连接配置</h3>
+            <h3 className="text-caption font-medium">SSH 批量管理配置</h3>
             <Button
               variant="ghost"
               size="icon"
@@ -1260,7 +1324,7 @@ export function BatchModeView() {
                       <RefreshCw className={cn("h-3 w-3", loadingFiles && "animate-spin")} />
                     </Button>
                     <div className="border-l pl-2 flex gap-1">
-                      <Button variant="outline" size="sm" className="h-6 text-caption gap-1" onClick={handleUpload} disabled={sessions.filter((s) => s.selected).length === 0}>
+                      <Button variant="outline" size="sm" className="h-6 text-caption gap-1" onClick={handleUpload} disabled={uploadBusy || sessions.filter((s) => s.selected).length === 0}>
                         <Upload className="h-3 w-3" /> 上传
                       </Button>
                     </div>
@@ -1381,11 +1445,9 @@ export function BatchModeView() {
                                               <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开
                                             </ContextMenuItem>
                                           )}
-                                          {!file.isDir && (
-                                            <ContextMenuItem onClick={() => handleDownloadFile(file)}>
-                                              <Download className="mr-2 h-3.5 w-3.5" /> 下载
-                                            </ContextMenuItem>
-                                          )}
+                                          <ContextMenuItem onClick={() => handleBatchDownload(file)}>
+                                            <Download className="mr-2 h-3.5 w-3.5" /> 下载
+                                          </ContextMenuItem>
                                           <ContextMenuSeparator />
                                           <ContextMenuItem onClick={() => handleCopyFiles(getSelectedFiles(file))}>
                                             <Copy className="mr-2 h-3.5 w-3.5" /> 复制
@@ -1449,7 +1511,7 @@ export function BatchModeView() {
                     <span className="text-caption font-medium">传输任务</span>
                     <div className="flex items-center gap-1">
                       <Label className="text-caption text-muted-foreground">并发</Label>
-                      <Input type="number" min={1} max={10} value={maxConcurrent} onChange={(e) => setMaxConcurrent(parseInt(e.target.value) || 3)} className="h-5 w-12 text-caption px-1 text-center" />
+                      <Input type="number" min={1} max={10} value={maxConcurrent} onChange={(e) => setMaxConcurrent(Math.min(10, Math.max(1, parseInt(e.target.value) || 3)))} className="h-5 w-12 text-caption px-1 text-center" />
                     </div>
                   </div>
                   {transferSessions.length > 0 ? (
@@ -1514,16 +1576,16 @@ export function BatchModeView() {
                       })()}
                     </div>
                   )}
-                  {activeBatchId && transferSessions.some((s) => s.status === "transferring" || s.status === "paused") && (
+                  {activeBatchId && uploadBusy && (
                     <div className="flex items-center gap-1 px-2 py-1.5 border-t">
-                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" onClick={() => sftpBatchPause(activeBatchId)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" disabled={!!batchAction || transferSessions.every((session) => session.status === "paused" || ["completed", "error", "cancelled"].includes(session.status))} onClick={() => controlUpload("pause")}>
                         <Pause className="h-3 w-3" /> 暂停
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" onClick={() => sftpBatchResume(activeBatchId)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" disabled={!!batchAction || !transferSessions.some((session) => session.status === "paused")} onClick={() => controlUpload("resume")}>
                         <Play className="h-3 w-3" /> 恢复
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1 text-destructive" onClick={() => sftpBatchCancel(activeBatchId)}>
-                        <X className="h-3 w-3" /> 取消
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1 text-destructive" disabled={!!batchAction} onClick={() => controlUpload("cancel")}>
+                        <X className="h-3 w-3" /> {batchAction === "cancel" ? "取消中..." : "取消"}
                       </Button>
                     </div>
                   )}
@@ -1532,10 +1594,10 @@ export function BatchModeView() {
             ) : (
               <div className="flex-1 flex items-center justify-center text-caption text-muted-foreground">请先连接至少一个会话</div>
             )}
+            <TransferPanel task={downloadTask} cancelling={downloadCancelling} onCancel={() => { void cancelDownload(); }} onClear={() => setDownloadTask(null)} />
           </div>
         </div>
       </div>
-
       <Dialog open={!!trustSession?.hostKey} onOpenChange={(value) => { if (!value && !trusting) setTrustSessionId(null); }}>
         <DialogContent>
           <DialogHeader>
@@ -1558,10 +1620,10 @@ export function BatchModeView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!connectionActionError} onOpenChange={(value) => { if (!value) setConnectionActionError(null); }}>
+      <Dialog open={!!transferError || !!connectionActionError} onOpenChange={(value) => { if (!value) { setTransferError(null); setConnectionActionError(null); } }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>操作未完成</DialogTitle><DialogDescription>{connectionActionError}</DialogDescription></DialogHeader>
-          <DialogFooter><Button onClick={() => setConnectionActionError(null)}>知道了</Button></DialogFooter>
+          <DialogHeader><DialogTitle>{connectionActionError ? "操作未完成" : "文件传输未完成"}</DialogTitle><DialogDescription>{connectionActionError || transferError}</DialogDescription></DialogHeader>
+          <DialogFooter><Button onClick={() => { setTransferError(null); setConnectionActionError(null); }}>知道了</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

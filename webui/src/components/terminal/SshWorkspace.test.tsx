@@ -38,6 +38,21 @@ function workspace() {
 }
 
 describe("SSH shell with an embedded SFTP file area", () => {
+  it("opens and closes this session's transfer panel from the toolbar", async () => {
+    workspace();
+    await screen.findByRole("button", { name: "远程路径" });
+    fireEvent.click(screen.getByRole("button", { name: "传输记录" }));
+    expect(screen.getByText("暂无传输记录")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "收起传输记录" }));
+    expect(screen.queryByText("暂无传输记录")).not.toBeInTheDocument();
+    expect(useTerminalStore.getState().sessions[0].transferPanelVisible).toBe(false);
+    expect(useTerminalStore.getState().sessions[1].transferPanelVisible).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "收起文件区" }));
+    fireEvent.click(screen.getByRole("button", { name: "传输记录" }));
+    expect(screen.getByText("暂无传输记录")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起文件区" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("renders shell and local/remote files together with one toolbar per side and no old file tree", async () => {
     workspace();
     await screen.findByRole("button", { name: "远程路径" });

@@ -1,10 +1,25 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::{Notify, RwLock};
 use tokio_util::sync::CancellationToken;
+
+pub async fn wait_until_ready(
+    cancel: &CancellationToken,
+    paused: &AtomicBool,
+    resume: &Notify,
+) -> bool {
+    while paused.load(Ordering::Relaxed) {
+        tokio::select! {
+            _ = cancel.cancelled() => return false,
+            _ = resume.notified() => {},
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
+        }
+    }
+    !cancel.is_cancelled()
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +96,6 @@ impl BatchTransferManager {
         }
         Ok(())
     }
-
 }
 
 impl Clone for BatchTransferManager {
@@ -89,5 +103,34 @@ impl Clone for BatchTransferManager {
         Self {
             active_transfers: self.active_transfers.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn cancellation_ends_a_paused_transfer() {
+        let cancel = CancellationToken::new();
+        let paused = AtomicBool::new(true);
+        let resume = Notify::new();
+        let wait = super::wait_until_ready(&cancel, &paused, &resume);
+        tokio::pin!(wait);
+
+        tokio::select! {
+            _ = &mut wait => panic!("paused transfer must wait for cancellation or resume"),
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {},
+        }
+        cancel.cancel();
+        let ready = tokio::time::timeout(Duration::from_secs(2), &mut wait)
+            .await
+            .expect("cancellation should end the paused wait promptly");
+        assert!(!ready);
+        assert!(paused.load(Ordering::Relaxed));
     }
 }

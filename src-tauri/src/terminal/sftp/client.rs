@@ -71,40 +71,127 @@ pub fn remote_parent_dirs(remote_path: &str) -> Vec<String> {
     dirs
 }
 
-/// Write one remote file, creating any missing parent directory first.
-///
-/// `SftpSession::write` opens with `WRITE` alone, so it can create neither a
-/// new file nor a missing parent — an upload to a fresh path always failed.
-/// This creates the parents and opens with `CREATE | TRUNCATE | WRITE`, which
-/// is what the GUI upload path already does.
+pub async fn ensure_remote_dir(
+    session: &russh_sftp::client::SftpSession,
+    path: &str,
+) -> Result<(), TerminalError> {
+    match session.create_dir(path).await {
+        Ok(()) => Ok(()),
+        Err(error) => match session.metadata(path).await {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            _ => Err(TerminalError::SftpOperation(format!(
+                "无法创建远程文件夹 '{}': {}",
+                path, error
+            ))),
+        },
+    }
+}
+
+pub async fn validate_remote_destination(
+    session: &russh_sftp::client::SftpSession,
+    root: &str,
+    target: &str,
+) -> Result<(), TerminalError> {
+    let mut candidate = target;
+    loop {
+        match session.symlink_metadata(candidate).await {
+            Ok(_) => {
+                let resolved = session.canonicalize(candidate).await.map_err(|e| {
+                    TerminalError::SftpOperation(format!("无法解析上传目标 '{}': {}", target, e))
+                })?;
+                if resolved == root
+                    || resolved.starts_with(&format!("{}/", root.trim_end_matches('/')))
+                {
+                    return Ok(());
+                }
+                return Err(TerminalError::SftpOperation(format!(
+                    "上传目标 '{}' 指向所选文件夹之外，已停止上传",
+                    target
+                )));
+            }
+            Err(russh_sftp::client::error::Error::Status(status))
+                if status.status_code == russh_sftp::protocol::StatusCode::NoSuchFile =>
+            {
+                candidate = candidate
+                    .rsplit_once('/')
+                    .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                    .ok_or_else(|| {
+                        TerminalError::SftpOperation(format!("无法解析上传目标 '{}'", target))
+                    })?;
+            }
+            Err(error) => {
+                return Err(TerminalError::SftpOperation(format!(
+                    "无法检查上传目标 '{}': {}",
+                    target, error
+                )))
+            }
+        }
+    }
+}
+
+pub async fn ensure_remote_parent_dirs(
+    session: &russh_sftp::client::SftpSession,
+    remote_path: &str,
+) -> Result<(), TerminalError> {
+    let parents = remote_parent_dirs(remote_path);
+    if let Some(parent) = parents.last() {
+        if let Ok(metadata) = session.metadata(parent).await {
+            if metadata.is_dir() {
+                return Ok(());
+            }
+        }
+    }
+    for parent in parents {
+        ensure_remote_dir(session, &parent).await?;
+    }
+    Ok(())
+}
+
 pub async fn write_file_creating_parents(
     session: &russh_sftp::client::SftpSession,
     remote_path: &str,
     data: &[u8],
 ) -> Result<(), TerminalError> {
-    let parent_dirs = remote_parent_dirs(remote_path);
-    for dir in &parent_dirs {
-        // An existing directory is the common case and reports an error here;
-        // a real permission/transport problem surfaces from the open below.
-        let _ = session.create_dir(dir).await;
-    }
+    ensure_remote_parent_dirs(session, remote_path).await?;
     let mut file = session.create(remote_path).await.map_err(|e| {
-        if parent_dirs.is_empty() {
-            TerminalError::SftpOperation(format!("无法创建文件: {}", e))
-        } else {
-            TerminalError::SftpOperation(format!(
-                "无法创建文件（已尝试自动创建父目录 {}）: {}",
-                parent_dirs.join("、"),
-                e
+        TerminalError::SftpOperation(format!("无法创建远程文件 '{}': {}", remote_path, e))
+    })?;
+    file.write_all(data)
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("写入失败: {}", e)))?;
+    file.shutdown()
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("关闭文件失败: {}", e)))
+}
+
+pub async fn remove_remote_path(
+    session: &russh_sftp::client::SftpSession,
+    path: &str,
+    is_dir: bool,
+) -> Result<(), TerminalError> {
+    let metadata = session.symlink_metadata(path).await.map_err(|e| {
+        TerminalError::SftpOperation(format!("无法读取待删除路径 '{}': {}", path, e))
+    })?;
+    if is_dir && metadata.is_dir() {
+        let entries = session.read_dir(path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("无法读取待删除文件夹 '{}': {}", path, e))
+        })?;
+        for entry in entries {
+            Box::pin(remove_remote_path(
+                session,
+                &entry.path(),
+                entry.file_type().is_dir(),
             ))
+            .await?;
         }
-    })?;
-    file.write_all(data).await.map_err(|e| {
-        TerminalError::SftpOperation(format!("写入失败: {}", e))
-    })?;
-    file.shutdown().await.map_err(|e| {
-        TerminalError::SftpOperation(format!("关闭文件失败: {}", e))
-    })
+        session.remove_dir(path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("无法删除远程文件夹 '{}': {}", path, e))
+        })
+    } else {
+        session.remove_file(path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("无法删除远程文件 '{}': {}", path, e))
+        })
+    }
 }
 
 impl SftpClient {
@@ -219,22 +306,34 @@ impl SftpClient {
 
     pub async fn list_dir(&self, path: &str) -> Result<Vec<FileInfo>, TerminalError> {
         let guard = self.session.lock().await;
-        let session = guard.as_ref().ok_or_else(|| {
-            TerminalError::SftpOperation("SFTP session not connected".into())
-        })?;
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| TerminalError::SftpOperation("SFTP session not connected".into()))?;
 
-        let read_dir = session.read_dir(path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("read_dir failed: {}", e))
-        })?;
+        let read_dir = session
+            .read_dir(path)
+            .await
+            .map_err(|e| TerminalError::SftpOperation(format!("read_dir failed: {}", e)))?;
 
         let mut entries = Vec::new();
         for entry in read_dir {
             let metadata = entry.metadata();
             let file_type = entry.file_type();
+            let is_dir = if file_type.is_symlink() {
+                match session.metadata(entry.path()).await {
+                    Ok(target) => target.is_dir(),
+                    Err(error) => {
+                        log::warn!("Cannot resolve SFTP link '{}': {}", entry.path(), error);
+                        false
+                    }
+                }
+            } else {
+                file_type.is_dir()
+            };
             entries.push(FileInfo {
                 name: entry.file_name(),
                 path: entry.path(),
-                is_dir: file_type.is_dir(),
+                is_dir,
                 size: metadata.size,
                 permissions: metadata.permissions,
                 mtime: metadata.mtime,
@@ -264,54 +363,11 @@ impl SftpClient {
 
     pub async fn mkdir_if_not_exists(&self, path: &str) -> Result<(), TerminalError> {
         let guard = self.session.lock().await;
-        let session = guard.as_ref().ok_or_else(|| {
-            TerminalError::SftpOperation("SFTP session not connected".into())
-        })?;
-        match session.create_dir(path).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let err_str = format!("{}", e).to_lowercase();
-                if err_str.contains("exist") || err_str.contains("failure") {
-                    Ok(())
-                } else {
-                    Err(TerminalError::SftpOperation(format!(
-                        "mkdir failed: {}",
-                        e
-                    )))
-                }
-            }
-        }
-    }
-
-    pub async fn remove_dir_recursive(
-        &self,
-        sftp: &russh_sftp::client::SftpSession,
-        path: &str,
-    ) -> Result<(), TerminalError> {
-        let entries = sftp.read_dir(path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("read_dir failed: {}", e))
-        })?;
-        for entry in entries {
-            let name = entry.file_name();
-            if name == "." || name == ".." {
-                continue;
-            }
-            let entry_path = if path.ends_with('/') {
-                format!("{}{}", path, name)
-            } else {
-                format!("{}/{}", path, name)
-            };
-            if entry.file_type().is_dir() {
-                Box::pin(self.remove_dir_recursive(sftp, &entry_path)).await?;
-            } else {
-                sftp.remove_file(&entry_path).await.map_err(|e| {
-                    TerminalError::SftpOperation(format!("remove failed: {}", e))
-                })?;
-            }
-        }
-        sftp.remove_dir(path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("rmdir failed: {}", e))
-        })
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| TerminalError::SftpOperation("SFTP session not connected".into()))?;
+        ensure_remote_parent_dirs(session, path).await?;
+        ensure_remote_dir(session, path).await
     }
 
     pub async fn remove(&self, path: &str) -> Result<(), TerminalError> {
@@ -589,21 +645,26 @@ pub async fn upload_file_streaming(
     cancel_token: Option<CancellationToken>,
     is_paused: Option<Arc<AtomicBool>>,
 ) -> Result<(), TerminalError> {
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
+    }
     let metadata = tokio::fs::metadata(local_path).await.map_err(|e| {
-        TerminalError::SftpOperation(format!(
-            "Failed to read local file metadata: {}",
-            e
-        ))
+        TerminalError::SftpOperation(format!("Failed to read local file metadata: {}", e))
     })?;
     let total_bytes = metadata.len();
-    let mut local_file = tokio::fs::File::open(local_path).await.map_err(
-        |e| {
-            TerminalError::SftpOperation(format!(
-                "Failed to open local file: {}",
-                e
-            ))
-        },
-    )?;
+    let mut local_file = tokio::fs::File::open(local_path)
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("Failed to open local file: {}", e)))?;
+    ensure_remote_parent_dirs(sftp, remote_path).await?;
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
+    }
     let mut remote_file = sftp.create(remote_path).await.map_err(|e| {
         TerminalError::SftpOperation(format!("Failed to create remote file: {}", e))
     })?;
@@ -612,9 +673,7 @@ pub async fn upload_file_streaming(
     loop {
         if let Some(ref token) = cancel_token {
             if token.is_cancelled() {
-                return Err(TerminalError::SftpOperation(
-                    "Transfer cancelled".into(),
-                ));
+                return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
             }
         }
         if let Some(ref paused) = is_paused {
@@ -630,10 +689,7 @@ pub async fn upload_file_streaming(
             break;
         }
         remote_file.write_all(&buffer[..n]).await.map_err(|e| {
-            TerminalError::SftpOperation(format!(
-                "Failed to write remote file: {}",
-                e
-            ))
+            TerminalError::SftpOperation(format!("Failed to write remote file: {}", e))
         })?;
         bytes_transferred += n as u64;
         if let Some(ref tx) = progress_tx {
@@ -643,14 +699,15 @@ pub async fn upload_file_streaming(
             });
         }
     }
-    remote_file.shutdown().await.map_err(|e| {
-        TerminalError::SftpOperation(format!("Failed to close remote file: {}", e))
-    })?;
+    remote_file
+        .shutdown()
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("Failed to close remote file: {}", e)))?;
     Ok(())
 }
 
-fn sanitize_filename(name: &str) -> String {
-    let invalid_chars = ['<', '>', ':', '"', '|', '?', '*'];
+pub(crate) fn sanitize_filename(name: &str) -> String {
+    let invalid_chars = ['<', '>', ':', '"', '|', '?', '*', '/', '\\'];
     let result: String = name
         .chars()
         .map(|c| {
@@ -677,6 +734,12 @@ pub async fn download_file_streaming(
     cancel_token: Option<CancellationToken>,
     is_paused: Option<Arc<AtomicBool>>,
 ) -> Result<(), TerminalError> {
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
+    }
     let local_path = std::path::Path::new(local_path).to_path_buf();
     let local_path = if let Some(name) = local_path.file_name() {
         let name_str = name.to_string_lossy();
@@ -699,32 +762,38 @@ pub async fn download_file_streaming(
         })?;
     }
     let metadata = sftp.metadata(remote_path).await.map_err(|e| {
+        TerminalError::SftpOperation(format!("Failed to get remote file metadata: {}", e))
+    })?;
+    if metadata.is_dir() {
+        return Err(TerminalError::SftpOperation(format!(
+            "远程路径 '{}' 是文件夹，请按文件夹下载",
+            remote_path
+        )));
+    }
+    let total_bytes = metadata.len();
+    let mut remote_file = sftp
+        .open(remote_path)
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("Failed to open remote file: {}", e)))?;
+    let parent = local_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
         TerminalError::SftpOperation(format!(
-            "Failed to get remote file metadata: {}",
+            "无法准备本地下载文件 '{}': {}",
+            local_path.display(),
             e
         ))
     })?;
-    let total_bytes = metadata.len();
-    let mut remote_file = sftp.open(remote_path).await.map_err(|e| {
-        TerminalError::SftpOperation(format!("Failed to open remote file: {}", e))
-    })?;
-    let mut local_file = tokio::fs::File::create(&local_path).await.map_err(
-        |e| {
-            TerminalError::SftpOperation(format!(
-                "Failed to create local file '{}': {}",
-                local_path.display(),
-                e
-            ))
-        },
-    )?;
+    let (file, temporary_path) = temporary.into_parts();
+    let mut local_file = tokio::fs::File::from_std(file);
     let mut buffer = vec![0u8; 65536];
     let mut bytes_transferred: u64 = 0;
     loop {
         if let Some(ref token) = cancel_token {
             if token.is_cancelled() {
-                return Err(TerminalError::SftpOperation(
-                    "Transfer cancelled".into(),
-                ));
+                return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
             }
         }
         if let Some(ref paused) = is_paused {
@@ -734,19 +803,13 @@ pub async fn download_file_streaming(
             }
         }
         let n = remote_file.read(&mut buffer).await.map_err(|e| {
-            TerminalError::SftpOperation(format!(
-                "Failed to read remote file: {}",
-                e
-            ))
+            TerminalError::SftpOperation(format!("Failed to read remote file: {}", e))
         })?;
         if n == 0 {
             break;
         }
         local_file.write_all(&buffer[..n]).await.map_err(|e| {
-            TerminalError::SftpOperation(format!(
-                "Failed to write local file: {}",
-                e
-            ))
+            TerminalError::SftpOperation(format!("Failed to write local file: {}", e))
         })?;
         bytes_transferred += n as u64;
         if let Some(ref tx) = progress_tx {
@@ -756,8 +819,29 @@ pub async fn download_file_streaming(
             });
         }
     }
-    local_file.shutdown().await.map_err(|e| {
-        TerminalError::SftpOperation(format!("Failed to close local file: {}", e))
+    local_file
+        .shutdown()
+        .await
+        .map_err(|e| TerminalError::SftpOperation(format!("Failed to close local file: {}", e)))?;
+    drop(local_file);
+    if metadata.size.is_some_and(|size| size != bytes_transferred) {
+        return Err(TerminalError::SftpOperation(format!(
+            "远程文件 '{}' 在下载期间发生变化，请重试",
+            remote_path
+        )));
+    }
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(TerminalError::SftpOperation("Transfer cancelled".into()));
+    }
+    temporary_path.persist(&local_path).map_err(|e| {
+        TerminalError::SftpOperation(format!(
+            "无法保存下载文件 '{}': {}",
+            local_path.display(),
+            e
+        ))
     })?;
     Ok(())
 }

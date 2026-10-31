@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -14,10 +15,10 @@ import type { UnifiedFileItem } from "./FilePane";
 import {
   sftpList,
   sftpMkdir,
+  sftpStat,
   sftpRemove,
   sftpRename,
   sftpCanonicalize,
-  sftpDownload,
   sftpUpload,
   sftpUploadFile,
   sftpDownloadFile,
@@ -34,6 +35,7 @@ import type { LocalFileInfo } from "../ipc";
 import { PropertiesDialog } from "./PropertiesDialog";
 import { PermissionsDialog } from "./PermissionsDialog";
 import { TransferPanel } from "./TransferPanel";
+import { useTerminalStore } from "../store/terminalStore";
 import type { TransferTask, TransferFileInfo } from "./types";
 
 interface Props {
@@ -46,6 +48,13 @@ interface ClipboardEntry {
   side: "local" | "remote";
   files: UnifiedFileItem[];
   mode: "copy" | "cut";
+}
+
+interface TransferControl {
+  id: string;
+  cancelled: boolean;
+  currentFileId: string | null;
+  cancelPromise: Promise<void> | null;
 }
 
 function localToUnified(f: LocalFileInfo): UnifiedFileItem {
@@ -84,6 +93,7 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
   const [localError, setLocalError] = useState<string | null>(null);
   const localRequest = useRef(0);
   const localInitialized = useRef(false);
+  const localPathRef = useRef<string | null>(null);
   const [localShowHidden, setLocalShowHidden] = useState(false);
   const [localSelectedPaths, setLocalSelectedPaths] = useState<Set<string>>(new Set());
 
@@ -128,9 +138,17 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
   const [permissionsTarget, setPermissionsTarget] = useState<UnifiedFileItem | null>(null);
 
   const [transferTask, setTransferTask] = useState<TransferTask | null>(null);
-  const taskIdRef = useRef<string | null>(null);
+  const transferPanelVisible = useTerminalStore((state) => state.sessions.find((session) => session.id === sessionId)?.transferPanelVisible ?? false);
+  const setTransferPanelVisible = useCallback((visible: boolean) => {
+    useTerminalStore.getState().updateSession(sessionId, { transferPanelVisible: visible });
+  }, [sessionId]);
+  const [cancelling, setCancelling] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const transferRef = useRef<TransferControl | null>(null);
 
-  useEffect(() => () => { taskIdRef.current = null; }, []);
+  useEffect(() => () => {
+    if (transferRef.current) transferRef.current.cancelled = true;
+  }, []);
 
   function formatSpeed(bytesPerSec: number): string {
     if (bytesPerSec === 0) return "-";
@@ -153,6 +171,7 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
       if (request !== localRequest.current) return;
       setLocalFiles(entries.map(localToUnified));
       setLocalPath(path);
+      localPathRef.current = path;
     } catch (error) {
       if (request === localRequest.current) setLocalError("读取本地目录失败：" + String(error));
     } finally {
@@ -370,215 +389,55 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
     }
   }, [sessionId, renameTarget, renameValue, renameSide, remotePath, localPath, loadRemoteDir, loadLocalDir]);
 
-  const handleUploadByPicker = useCallback(async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: true,
-        title: "选择要上传的文件",
-      });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
-      for (const filePath of paths) {
-        const fp = typeof filePath === "string" ? filePath : String(filePath);
-        const fileName = fp.split(/[/\\]/).pop() ?? "upload";
-        const remoteFilePath =
-          remotePath === "/" ? `/${fileName}` : `${remotePath}/${fileName}`;
-        try {
-          const { readFile } = await import("@tauri-apps/plugin-fs");
-          const data = await readFile(fp as `${string}/${string}`);
-          await sftpUpload(sessionId, remoteFilePath, Array.from(data));
-        } catch {}
+  const runTransfer = useCallback(
+    async (
+      type: "upload" | "download",
+      files: UnifiedFileItem[],
+      fromSide: "local" | "remote" | "system",
+      destination?: string,
+    ): Promise<boolean> => {
+      if (files.length === 0 || transferRef.current) return false;
+      if (type === "upload" && !remotePathRef.current) {
+        setOperationError("远程目录尚未加载，请稍后重试。");
+        return false;
       }
-      loadRemoteDir(remotePath);
-    } catch {}
-  }, [sessionId, remotePath, loadRemoteDir]);
-
-  const handleDownloadFile = useCallback(
-    async (file: UnifiedFileItem) => {
-      if (file.isDir) return;
-      try {
-        const { save } = await import("@tauri-apps/plugin-dialog");
-        const savePath = await save({
-          defaultPath: file.name,
-          title: "保存文件",
-        });
-        if (!savePath) return;
-        const data = await sftpDownload(sessionId, file.path);
-        const { writeFile } = await import("@tauri-apps/plugin-fs");
-        await writeFile(savePath as `${string}/${string}`, new Uint8Array(data));
-      } catch {}
-    },
-    [sessionId],
-  );
-
-  const handleDropToRemote = useCallback(
-    async (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
-      if (fromSide === "remote" || taskIdRef.current) return;
-
-      const taskId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      taskIdRef.current = taskId;
-
-      const fileInfos: TransferFileInfo[] = files.map((f) => ({
-        name: f.name,
-        localPath: f.path,
-        remotePath: remotePath === "/" ? `/${f.name}` : `${remotePath}/${f.name}`,
-        size: f.size ?? 0,
-        status: "pending" as const,
-      }));
-
-      const task: TransferTask = {
-        id: taskId,
-        type: "upload",
-        status: "waiting",
-        currentFile: fileInfos[0]?.name ?? "",
-        currentFileIndex: 0,
-        totalFiles: fileInfos.length,
-        progress: 0,
-        speed: "-",
-        bytesTransferred: 0,
-        totalBytes: 0,
-        files: fileInfos,
-      };
-      setTransferTask(task);
-
-      for (let i = 0; i < files.length; i++) {
-        if (taskIdRef.current !== taskId) break;
-
-        const file = files[i];
-        const remoteFilePath = remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`;
-        const fileTaskId = `${taskId}-${i}`;
-
-        setTransferTask((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: "transferring",
-                currentFile: file.name,
-                currentFileIndex: i,
-                files: prev.files.map((f, idx) =>
-                  idx === i ? { ...f, status: "transferring" as const } : f,
-                ),
-              }
-            : prev,
-        );
-
-        const cleanup = { fn: null as (() => void) | null };
-        const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
-          setTransferTask((prev) => {
-            if (!prev || prev.id !== taskId || prev.status === "cancelled") return prev;
-            return {
-              ...prev,
-              progress: event.percentage,
-              speed: formatSpeed(event.speed),
-              bytesTransferred: event.bytesTransferred,
-              totalBytes: event.totalBytes,
-            };
-          });
-        }).then((fn) => {
-          cleanup.fn = fn;
-        });
-
-        try {
-          if (file.isDir) {
-            await sftpUploadDir(sessionId, file.path, remoteFilePath, fileTaskId);
-          } else if (fromSide === "system" && file._rawFile) {
-            if (file.name.includes("/")) {
-              const dirPart = file.name.substring(0, file.name.lastIndexOf("/"));
-              const segments = dirPart.split("/").filter(Boolean);
-              let acc = remotePath === "/" ? "" : remotePath;
-              for (const seg of segments) {
-                acc = acc ? `${acc}/${seg}` : `/${seg}`;
-                try {
-                  await sftpMkdir(sessionId, acc);
-                } catch {}
-              }
-            }
-            const buf = await file._rawFile.arrayBuffer();
-            await sftpUpload(sessionId, remoteFilePath, Array.from(new Uint8Array(buf)), fileTaskId);
-          } else {
-            await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
-          }
-
-          setTransferTask((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  files: prev.files.map((f, idx) =>
-                    idx === i ? { ...f, status: "completed" as const } : f,
-                  ),
-                  progress: Math.round(((i + 1) / files.length) * 100),
-                }
-              : prev,
-          );
-        } catch (err: unknown) {
-          const errStr = String(err);
-          if (errStr.includes("cancel") || errStr.includes("Cancel")) {
-            setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
-            break;
-          }
-          setTransferTask((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  files: prev.files.map((f, idx) =>
-                    idx === i ? { ...f, status: "error" as const } : f,
-                  ),
-                  error: errStr,
-                }
-              : prev,
-          );
-        } finally {
-          await progressPromise;
-          cleanup.fn?.();
-        }
+      if (type === "download" && !destination && !localPathRef.current) {
+        setOperationError("本地目录尚未加载，请稍后重试。");
+        return false;
       }
 
-      setTransferTask((prev) => {
-        if (!prev || prev.id !== taskId) return prev;
-        if (prev.status === "cancelled") return prev;
-        const hasError = prev.files.some((f) => f.status === "error");
-        if (hasError) {
-          return { ...prev, status: "error", speed: "-" };
-        }
-        return { ...prev, status: "completed", progress: 100, speed: "-" };
-      });
+      const taskId = `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const control: TransferControl = { id: taskId, cancelled: false, currentFileId: null, cancelPromise: null };
+      transferRef.current = control;
+      setCancelling(false);
 
-      taskIdRef.current = null;
-      loadRemoteDir(remotePath);
-    },
-    [sessionId, remotePath, loadRemoteDir],
-  );
-
-  const sanitizeFileName = (name: string): string => {
-    const invalidChars = /[<>:"|?*\x00-\x1F]/g;
-    let result = name.replace(invalidChars, "_");
-    result = result.replace(/[\s.]+$/, "");
-    return result || "_";
-  };
-
-  const handleDropToLocal = useCallback(
-    async (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
-      if (fromSide === "local" || fromSide === "system" || taskIdRef.current) return;
-
-      const taskId = `download-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      taskIdRef.current = taskId;
-
-      const fileInfos: TransferFileInfo[] = files.map((f) => {
+      const fileInfos: TransferFileInfo[] = files.map((file) => {
+        const safeName = file.name.replace(/[<>:"|?*\\/\x00-\x1F]/g, "_").replace(/[\s.]+$/, "") || "_";
         const sep = localPath.includes("\\") ? "\\" : "/";
-        const safeName = sanitizeFileName(f.name);
         return {
-          name: f.name,
-          localPath: `${localPath}${sep}${safeName}`,
-          remotePath: f.path,
-          size: f.size ?? 0,
+          name: file.name,
+          localPath: type === "download" ? (destination ?? `${localPath}${sep}${safeName}`) : file.path,
+          remotePath: type === "upload"
+            ? (remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`)
+            : file.path,
+          size: file.size ?? 0,
           status: "pending" as const,
         };
       });
-
-      const task: TransferTask = {
+      if (type === "upload" && new Set(fileInfos.map((file) => file.remotePath)).size !== fileInfos.length) {
+        transferRef.current = null;
+        setOperationError("部分文件或文件夹的远程目标相同，请分别上传或先重命名。");
+        return false;
+      }
+      if (type === "download" && new Set(fileInfos.map((file) => file.localPath.toLowerCase())).size !== fileInfos.length) {
+        transferRef.current = null;
+        setOperationError("部分文件名在本地会重复，请分别下载并选择不同的名称。");
+        return false;
+      }
+      setTransferPanelVisible(true);
+      setTransferTask({
         id: taskId,
-        type: "download",
+        type,
         status: "waiting",
         currentFile: fileInfos[0]?.name ?? "",
         currentFileIndex: 0,
@@ -588,118 +447,168 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
         bytesTransferred: 0,
         totalBytes: 0,
         files: fileInfos,
-      };
-      setTransferTask(task);
+      });
 
+      let completed = 0;
+      let failed = false;
       for (let i = 0; i < files.length; i++) {
-        if (taskIdRef.current !== taskId) break;
-
+        if (control.cancelled) break;
         const file = files[i];
-        const sep = localPath.includes("\\") ? "\\" : "/";
-        const localFilePath = `${localPath}${sep}${sanitizeFileName(file.name)}`;
+        const info = fileInfos[i];
         const fileTaskId = `${taskId}-${i}`;
+        setTransferTask((prev) => prev?.id === taskId ? {
+          ...prev,
+          status: "transferring",
+          currentFile: file.name,
+          currentFileIndex: i,
+          progress: 0,
+          speed: "-",
+          bytesTransferred: 0,
+          totalBytes: 0,
+          files: prev.files.map((f, idx) => idx === i ? { ...f, status: "transferring" } : f),
+        } : prev);
 
-        setTransferTask((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: "transferring",
-                currentFile: file.name,
-                currentFileIndex: i,
-                files: prev.files.map((f, idx) =>
-                  idx === i ? { ...f, status: "transferring" as const } : f,
-                ),
-              }
-            : prev,
-        );
-
-        const cleanup = { fn: null as (() => void) | null };
-        const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
-          setTransferTask((prev) => {
-            if (!prev || prev.id !== taskId || prev.status === "cancelled") return prev;
-            return {
-              ...prev,
-              progress: event.percentage,
-              speed: formatSpeed(event.speed),
-              bytesTransferred: event.bytesTransferred,
-              totalBytes: event.totalBytes,
-            };
-          });
-        }).then((fn) => {
-          cleanup.fn = fn;
-        });
-
+        let unlisten: (() => void) | undefined;
         try {
-          if (file.isDir) {
-            await sftpDownloadDir(sessionId, file.path, localFilePath, fileTaskId);
-          } else {
-            await sftpDownloadFile(sessionId, file.path, localFilePath, fileTaskId);
-          }
+          unlisten = await onTransferProgress(sessionId, fileTaskId, (event) => {
+            setTransferTask((prev) => {
+              if (!prev || prev.id !== taskId || control.cancelled || control.currentFileId !== fileTaskId) return prev;
+              return {
+                ...prev,
+                progress: event.percentage,
+                speed: formatSpeed(event.speed),
+                bytesTransferred: event.bytesTransferred,
+                totalBytes: event.totalBytes,
+              };
+            });
+          });
+          if (control.cancelled) break;
 
-          setTransferTask((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  files: prev.files.map((f, idx) =>
-                    idx === i ? { ...f, status: "completed" as const } : f,
-                  ),
-                  progress: Math.round(((i + 1) / files.length) * 100),
-                }
-              : prev,
-          );
-        } catch (err: unknown) {
-          const errStr = String(err);
-          if (errStr.includes("cancel") || errStr.includes("Cancel")) {
-            setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
-            break;
+          if (type === "upload" && fromSide === "system" && file.isDir && !file.path) {
+            try {
+              await sftpMkdir(sessionId, info.remotePath);
+            } catch (error) {
+              const existing = await sftpStat(sessionId, info.remotePath);
+              if (!existing.isDir) throw error;
+            }
+          } else if (type === "upload" && fromSide === "system" && file._rawFile) {
+            const buf = await file._rawFile.arrayBuffer();
+            if (control.cancelled) break;
+            control.currentFileId = fileTaskId;
+            await sftpUpload(sessionId, info.remotePath, Array.from(new Uint8Array(buf)), fileTaskId);
+          } else {
+            control.currentFileId = fileTaskId;
+            if (type === "upload") {
+              if (file.isDir) await sftpUploadDir(sessionId, file.path, info.remotePath, fileTaskId);
+              else await sftpUploadFile(sessionId, file.path, info.remotePath, fileTaskId);
+            } else {
+              if (file.isDir) await sftpDownloadDir(sessionId, file.path, info.localPath, fileTaskId);
+              else await sftpDownloadFile(sessionId, file.path, info.localPath, fileTaskId);
+            }
           }
-          setTransferTask((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  files: prev.files.map((f, idx) =>
-                    idx === i ? { ...f, status: "error" as const } : f,
-                  ),
-                  error: errStr,
-                }
-              : prev,
-          );
+          completed++;
+          setTransferTask((prev) => prev?.id === taskId ? {
+            ...prev,
+            files: prev.files.map((f, idx) => idx === i ? { ...f, status: "completed" } : f),
+            progress: 100,
+          } : prev);
+        } catch (error: unknown) {
+          if (control.cancelled && (!control.currentFileId || String(error).toLowerCase().includes("cancel"))) break;
+          failed = true;
+          setTransferTask((prev) => prev?.id === taskId ? {
+            ...prev,
+            files: prev.files.map((f, idx) => idx === i ? { ...f, status: "error" } : f),
+          } : prev);
         } finally {
-          await progressPromise;
-          cleanup.fn?.();
+          control.currentFileId = null;
+          unlisten?.();
         }
       }
 
-      setTransferTask((prev) => {
-        if (!prev || prev.id !== taskId) return prev;
-        if (prev.status === "cancelled") return prev;
-        const hasError = prev.files.some((f) => f.status === "error");
-        if (hasError) {
-          return { ...prev, status: "error", speed: "-" };
-        }
-        return { ...prev, status: "completed", progress: 100, speed: "-" };
-      });
-
-      taskIdRef.current = null;
-      loadLocalDir(localPath);
+      if (control.cancelPromise) await control.cancelPromise;
+      const success = !control.cancelled && !failed && completed === files.length;
+      setTransferTask((prev) => prev?.id === taskId ? {
+        ...prev,
+        status: success ? "completed" : failed ? "error" : "cancelled",
+        progress: success ? 100 : prev.progress,
+        speed: "-",
+      } : prev);
+      if (failed) {
+        setOperationError(`${type === "upload" ? "上传" : "下载"}失败，部分内容可能已传输。请检查连接和目标路径后重试。`);
+      }
+      if (transferRef.current === control) transferRef.current = null;
+      setCancelling(false);
+      if (type === "upload" && remotePathRef.current === remotePath) void loadRemoteDir(remotePath);
+      else if (type === "download" && localPathRef.current === localPath) void loadLocalDir(localPath);
+      return success;
     },
-    [sessionId, localPath, loadLocalDir],
+    [sessionId, localPath, remotePath, loadLocalDir, loadRemoteDir, setTransferPanelVisible],
   );
 
-  const handleCancelTransfer = useCallback(async () => {
-    if (taskIdRef.current) {
-      try {
-        await sftpCancelTransfer(taskIdRef.current);
-      } catch {}
-      setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
-      taskIdRef.current = null;
+  const handleDropToRemote = useCallback((files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
+    if (fromSide !== "remote") void runTransfer("upload", files, fromSide);
+  }, [runTransfer]);
+
+  const handleDropToLocal = useCallback((files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
+    if (fromSide === "remote") void runTransfer("download", files, fromSide);
+  }, [runTransfer]);
+
+  const handleUploadByPicker = useCallback(async () => {
+    if (transferRef.current) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ multiple: true, title: "选择要上传的文件" });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const files: UnifiedFileItem[] = paths.map((path) => ({
+        name: String(path).split(/[/\\]/).pop() ?? "upload",
+        path: String(path),
+        isDir: false,
+        size: null,
+        modified: null,
+        permissions: null,
+      }));
+      await runTransfer("upload", files, "local");
+    } catch {
+      setOperationError("选择上传文件失败，请重试。");
     }
+  }, [runTransfer]);
+
+  const handleDownloadFile = useCallback(async (file: UnifiedFileItem) => {
+    if (file.isDir || transferRef.current) return;
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const savePath = await save({ defaultPath: file.name, title: "保存文件" });
+      if (savePath) await runTransfer("download", [file], "remote", String(savePath));
+    } catch {
+      setOperationError("选择保存位置失败，请重试。");
+    }
+  }, [runTransfer]);
+
+  const handleCancelTransfer = useCallback(() => {
+    const control = transferRef.current;
+    if (!control || control.cancelPromise) return;
+    control.cancelled = true;
+    setCancelling(true);
+    if (!control.currentFileId) return;
+    const request = sftpCancelTransfer(control.currentFileId).catch(() => {
+      if (transferRef.current === control) {
+        setCancelling(false);
+        setOperationError("取消传输失败，请等待当前文件处理结束后核对结果，也可以重试取消。");
+      }
+    });
+    control.cancelPromise = request;
+    void request.finally(() => {
+      if (control.cancelPromise === request) control.cancelPromise = null;
+    });
   }, []);
 
   const handleClearTransfer = useCallback(() => {
-    setTransferTask(null);
-    taskIdRef.current = null;
-  }, []);
+    if (!transferRef.current) {
+      setTransferTask(null);
+      setTransferPanelVisible(false);
+    }
+  }, [setTransferPanelVisible]);
 
   const handleCopy = useCallback(
     (side: "local" | "remote", files: UnifiedFileItem[]) => {
@@ -722,43 +631,51 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
       if (!clipboard) return;
       const isCrossSide = clipboard.side !== targetSide;
 
+      if (isCrossSide) {
+        const uploaded = clipboard.side === "local";
+        const success = await runTransfer(uploaded ? "upload" : "download", clipboard.files, clipboard.side);
+        if (!success || clipboard.mode !== "cut") return;
+
+        for (let i = 0; i < clipboard.files.length; i++) {
+          const file = clipboard.files[i];
+          try {
+            if (uploaded) {
+              const { remove } = await import("@tauri-apps/plugin-fs");
+              await remove(file.path as `${string}/${string}`, { recursive: file.isDir });
+            } else {
+              await sftpRemove(sessionId, file.path, file.isDir);
+            }
+          } catch {
+            setClipboard((current) => current === clipboard ? { ...clipboard, files: clipboard.files.slice(i) } : current);
+            setOperationError("传输完成，但删除源文件失败。请先检查源文件，再决定如何处理。");
+            if (uploaded) void loadLocalDir(localPath);
+            else void loadRemoteDir(remotePath);
+            return;
+          }
+        }
+        setClipboard((current) => current === clipboard ? null : current);
+        if (uploaded) void loadLocalDir(localPath);
+        else void loadRemoteDir(remotePath);
+        return;
+      }
+
       for (const file of clipboard.files) {
         try {
-          if (isCrossSide) {
-            if (clipboard.side === "local" && targetSide === "remote") {
-              if (!file.isDir) {
-                const { readFile } = await import("@tauri-apps/plugin-fs");
-                const data = await readFile(file.path as `${string}/${string}`);
-                const remoteFilePath =
-                  remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`;
-                await sftpUpload(sessionId, remoteFilePath, Array.from(data));
-              }
-            } else {
-              if (!file.isDir) {
-                const sep = localPath.includes("\\") ? "\\" : "/";
-                const localFilePath = `${localPath}${sep}${file.name}`;
-                const data = await sftpDownload(sessionId, file.path);
-                const { writeFile } = await import("@tauri-apps/plugin-fs");
-                await writeFile(localFilePath as `${string}/${string}`, new Uint8Array(data));
-              }
+          if (targetSide === "remote") {
+            if (clipboard.mode === "cut") {
+              const newPath =
+                remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`;
+              await sftpRename(sessionId, file.path, newPath);
             }
           } else {
-            if (targetSide === "remote") {
-              if (clipboard.mode === "cut") {
-                const newPath =
-                  remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`;
-                await sftpRename(sessionId, file.path, newPath);
-              }
+            const sep = localPath.includes("\\") ? "\\" : "/";
+            const dest = `${localPath}${sep}${file.name}`;
+            if (clipboard.mode === "copy") {
+              const { copyFile } = await import("@tauri-apps/plugin-fs");
+              await copyFile(file.path as `${string}/${string}`, dest as `${string}/${string}`);
             } else {
-              const sep = localPath.includes("\\") ? "\\" : "/";
-              const dest = `${localPath}${sep}${file.name}`;
-              if (clipboard.mode === "copy") {
-                const { copyFile } = await import("@tauri-apps/plugin-fs");
-                await copyFile(file.path as `${string}/${string}`, dest as `${string}/${string}`);
-              } else {
-                const { rename } = await import("@tauri-apps/plugin-fs");
-                await rename(file.path as `${string}/${string}`, dest as `${string}/${string}`);
-              }
+              const { rename } = await import("@tauri-apps/plugin-fs");
+              await rename(file.path as `${string}/${string}`, dest as `${string}/${string}`);
             }
           }
         } catch {}
@@ -771,7 +688,7 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
       if (targetSide === "local") loadLocalDir(localPath);
       else loadRemoteDir(remotePath);
     },
-    [clipboard, sessionId, localPath, remotePath, loadLocalDir, loadRemoteDir],
+    [clipboard, sessionId, localPath, remotePath, loadLocalDir, loadRemoteDir, runTransfer],
   );
 
   const handleProperties = useCallback(
@@ -865,6 +782,7 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
             onSelectionChange={setLocalSelectedPaths}
             onFocus={() => { activeSideRef.current = "local"; }}
             onDropFiles={handleDropToLocal}
+            onDropError={() => setOperationError("读取拖入的文件夹失败，请检查文件是否可访问后重试。")}
             isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
         </ResizablePanel>
@@ -896,16 +814,30 @@ export function FileManager({ sessionId, active = true, connected = true }: Prop
             onSelectionChange={setRemoteSelectedPaths}
             onFocus={() => { activeSideRef.current = "remote"; }}
             onDropFiles={handleDropToRemote}
+            onDropError={() => setOperationError("读取拖入的文件夹失败，请检查文件是否可访问后重试。")}
             isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      <TransferPanel
+      {transferPanelVisible && <TransferPanel
         task={transferTask}
+        showEmpty
+        cancelling={cancelling}
         onCancel={handleCancelTransfer}
         onClear={handleClearTransfer}
-      />
+        onCollapse={() => setTransferPanelVisible(false)}
+      />}
+
+      <Dialog open={operationError !== null} onOpenChange={(open) => { if (!open) setOperationError(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>操作未完成</DialogTitle>
+            <DialogDescription>{operationError}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter><Button onClick={() => setOperationError(null)}>知道了</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={mkdirDialogOpen} onOpenChange={setMkdirDialogOpen}>
         <DialogContent className="sm:max-w-sm">

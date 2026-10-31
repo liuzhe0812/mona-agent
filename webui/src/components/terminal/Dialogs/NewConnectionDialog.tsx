@@ -216,7 +216,7 @@ export function NewConnectionDialog({ fixedType }: { fixedType?: "ssh" }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{fixedType ? "新建 SSH 连接" : "新建连接"}</DialogTitle>
+          <DialogTitle>{fixedType ? "新建 SSH 会话" : "新建连接"}</DialogTitle>
           <DialogDescription>{fixedType ? "填写主机地址和认证信息" : "选择连接类型并配置参数"}</DialogDescription>
         </DialogHeader>
 

@@ -10,6 +10,7 @@ import { dbConnection, dbTab } from "@/tests/db-fixtures";
 import { ConnectionTree } from "../db/ConnectionTree";
 import terminalIcon from "@/assets/icons/sidebar-terminal.png";
 import databaseIcon from "@/assets/icons/sidebar-database.png";
+import batchSshIcon from "@/assets/icons/sidebar-ssh-batch.png";
 
 const native = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native }));
@@ -62,7 +63,7 @@ async function openSsh() {
 async function openBatch() {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "新建连接", exact: true }));
-  await user.click(screen.getByRole("menuitem", { name: "批量连接" }));
+  await user.click(screen.getByRole("menuitem", { name: "SSH 批量管理" }));
 }
 
 function addDraft() {
@@ -72,15 +73,19 @@ function addDraft() {
 }
 
 describe("operations workspace reuses database and SSH views", () => {
-  it("uses bundled image icons for SSH connections and SSH/database creation choices", async () => {
+  it("uses bundled image icons for SSH connections and creation choices", async () => {
     const user = userEvent.setup();
     render(<ConnectionTree onOpenTerminal={() => {}} />);
     const row = screen.getByRole("button", { name: "打开 SSH 测试 SSH" });
     expect(row.querySelector("img")).toHaveAttribute("src", terminalIcon);
     expect(row.querySelector("img")).toHaveAttribute("alt", "");
     await user.click(screen.getByRole("button", { name: "新建连接", exact: true }));
-    expect(screen.getByRole("menuitem", { name: "SSH 连接" }).querySelector("img")).toHaveAttribute("src", terminalIcon);
+    expect(screen.getByRole("menuitem", { name: "SSH 会话" }).querySelector("img")).toHaveAttribute("src", terminalIcon);
     expect(screen.getByRole("menuitem", { name: "数据库" }).querySelector("img")).toHaveAttribute("src", databaseIcon);
+    const batchIcon = screen.getByRole("menuitem", { name: "SSH 批量管理" }).querySelector("img");
+    expect(batchIcon).toHaveAttribute("src", batchSshIcon);
+    expect(batchIcon).toHaveAttribute("alt", "");
+    expect(batchIcon).toHaveClass("h-4", "w-4");
     expect(screen.getAllByRole("menuitem")).toHaveLength(3);
     expect(native).not.toHaveBeenCalled();
   });
@@ -136,9 +141,9 @@ describe("operations workspace reuses database and SSH views", () => {
   it("offers SSH, database and batch connections, then opens the existing typed dialogs", async () => {
     const user = userEvent.setup(); render(<DbClientView />);
     await user.click(screen.getByRole("button", { name: "新建连接", exact: true }));
-    expect(screen.getAllByRole("menuitem").map((row) => row.textContent)).toEqual(["SSH 连接", "数据库", "批量连接"]);
-    await user.click(screen.getByRole("menuitem", { name: "SSH 连接" }));
-    const dialog = await screen.findByRole("dialog", { name: "新建 SSH 连接" });
+    expect(screen.getAllByRole("menuitem").map((row) => row.textContent)).toEqual(["SSH 会话", "数据库", "SSH 批量管理"]);
+    await user.click(screen.getByRole("menuitem", { name: "SSH 会话" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建 SSH 会话" });
     expect(within(dialog).queryByRole("button", { name: "VNC" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "SFTP" })).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -153,17 +158,33 @@ describe("operations workspace reuses database and SSH views", () => {
     render(<DbClientView />);
     await openBatch();
     const session = useTerminalStore.getState().sessions[0];
-    expect(session).toMatchObject({ type: "batch", title: "批量模式" });
-    expect(screen.getByRole("tab", { name: "批量模式" })).toHaveAttribute("aria-selected", "true");
+    expect(session).toMatchObject({ type: "batch", title: "SSH 批量管理" });
+    expect(screen.getByRole("tab", { name: "SSH 批量管理" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "SSH 批量管理" }).querySelector("img")).toHaveAttribute("src", batchSshIcon);
     expect(screen.queryByRole("button", { name: "批量", exact: true })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "列表" }));
-    expect(screen.getByRole("tab", { name: "批量模式" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "SSH 批量管理" })).toHaveAttribute("aria-selected", "false");
     await openBatch();
     expect(useTerminalStore.getState().sessions).toEqual([session]);
     expect(useTerminalStore.getState().activeSessionId).toBe(session.id);
-    expect(screen.getByRole("tab", { name: "批量模式" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "SSH 批量管理" })).toHaveAttribute("aria-selected", "true");
     expect(native.mock.calls.some(([cmd]) => /shell_spawn|ssh_connect|db_connect/.test(cmd))).toBe(false);
+  });
+
+  it("keeps the connection sidebar recoverable in the list and after batch mode", async () => {
+    render(<DbClientView />);
+    await screen.findByRole("button", { name: "打开 SSH 测试 SSH" });
+    fireEvent.click(screen.getByRole("button", { name: "收起连接列表" }));
+    expect(screen.queryByRole("button", { name: "打开 SSH 测试 SSH" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开连接列表" }));
+    expect(screen.getByRole("button", { name: "打开 SSH 测试 SSH" })).toBeInTheDocument();
+
+    await openBatch();
+    expect(screen.getByRole("button", { name: "展开连接列表" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "列表" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "收起连接列表" })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "打开 SSH 测试 SSH" })).toBeInTheDocument();
   });
 
   it("always exposes the disconnect hover affordance and disables it while offline", async () => {
@@ -304,5 +325,101 @@ describe("operations workspace reuses database and SSH views", () => {
     expect(useTerminalStore.getState().hostKeyDialog.pendingSessionId).toBe(useTerminalStore.getState().activeSessionId);
     expect(useTerminalStore.getState().sessions[0].status).toBe("connecting");
     expect(native.mock.calls.filter(([cmd]) => cmd === "ssh_connect_with_id")).toHaveLength(1);
+  });
+});
+
+describe("operations tab creation", () => {
+  const otherDb = {
+    ...dbConnection,
+    id: "db-other",
+    config: { ...dbConnection.config, id: "db-other", name: "Analytics", database: "analytics" },
+  };
+
+  it("keeps an SSH session active when opening the menu and starts the SSH dialog without creating SQL", async () => {
+    useDbStore.setState({ activeConnections: [] });
+    const user = userEvent.setup();
+    render(<DbClientView />);
+    const sessionId = await openSsh();
+    const tab = screen.getByRole("tab", { name: /测试 SSH/ });
+    const newTab = screen.getByRole("button", { name: "新建标签" });
+    expect(newTab).toHaveAttribute("title", "新建标签");
+    await user.click(newTab);
+
+    expect(screen.getByRole("menuitem", { name: /数据库查询/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("请先连接数据库")).toBeVisible();
+    expect(useDbStore.getState().queryTabs).toHaveLength(0);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(useTerminalStore.getState().activeSessionId).toBe(sessionId);
+
+    await user.click(screen.getByRole("menuitem", { name: "SSH 会话" }));
+    expect(await screen.findByRole("dialog", { name: "新建 SSH 会话" })).toBeInTheDocument();
+    expect(useDbStore.getState().queryTabs).toHaveLength(0);
+    expect(useTerminalStore.getState().activeSessionId).toBe(sessionId);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("creates a query for the only connected database without relying on stale selection", async () => {
+    useDbStore.setState({ selectedConnectionId: "stale", selectedDatabase: "stale", objectScope: null });
+    const user = userEvent.setup();
+    render(<DbClientView />);
+    await user.click(screen.getByRole("button", { name: "新建标签" }));
+    await user.click(screen.getByRole("menuitem", { name: "数据库查询" }));
+
+    expect(useDbStore.getState().queryTabs).toEqual([
+      expect.objectContaining({ kind: "query", connectionId: dbConnection.id }),
+    ]);
+    expect(useDbStore.getState().queryTabs[0].database).not.toBe("stale");
+  });
+
+  it("preserves the active database tab's connection and database when creating a query", async () => {
+    const active = dbTab({ id: "db-context", kind: "query", title: "当前查询", tableName: undefined,
+      tableInfo: null, result: null, connectionId: dbConnection.id, database: "main" });
+    useDbStore.setState({ activeConnections: [dbConnection, otherDb], queryTabs: [active], activeTabId: active.id,
+      currentView: "table", selectedConnectionId: otherDb.id, selectedDatabase: "analytics", objectScope: null });
+    const user = userEvent.setup();
+    render(<DbClientView />);
+    await user.click(screen.getByRole("button", { name: "新建标签" }));
+    await user.click(screen.getByRole("menuitem", { name: "数据库查询" }));
+
+    expect(useDbStore.getState().queryTabs).toHaveLength(2);
+    expect(useDbStore.getState().queryTabs[1]).toMatchObject({ kind: "query", connectionId: dbConnection.id, database: "main" });
+  });
+
+  it.each(["list", "ssh"] as const)("asks for a database when multiple connections exist in %s view", async (view) => {
+    useDbStore.setState({ activeConnections: [dbConnection, otherDb], selectedConnectionId: dbConnection.id,
+      selectedDatabase: "stale", objectScope: null });
+    const user = userEvent.setup();
+    render(<DbClientView />);
+    const sessionId = view === "ssh" ? await openSsh() : null;
+    await user.click(screen.getByRole("button", { name: "新建标签" }));
+    const queryItem = screen.getByRole("menuitem", { name: "数据库查询" });
+    act(() => queryItem.focus());
+    await user.keyboard("{ArrowRight}");
+    const target = await screen.findByRole("menuitem", { name: /Analytics/ });
+
+    expect(useDbStore.getState().queryTabs).toHaveLength(0);
+    if (sessionId) expect(useTerminalStore.getState().activeSessionId).toBe(sessionId);
+    await user.click(target);
+    expect(useDbStore.getState().queryTabs).toEqual([
+      expect.objectContaining({ kind: "query", connectionId: otherDb.id }),
+    ]);
+    expect(useDbStore.getState().queryTabs[0].database).not.toBe("stale");
+  });
+
+  it("reuses the existing batch tab from the new tab menu", async () => {
+    const user = userEvent.setup();
+    render(<DbClientView />);
+    await user.click(screen.getByRole("button", { name: "新建标签" }));
+    await user.click(screen.getByRole("menuitem", { name: "SSH 批量管理" }));
+    const batch = useTerminalStore.getState().sessions.find((session) => session.type === "batch");
+    expect(batch).toBeDefined();
+    fireEvent.click(screen.getByRole("tab", { name: "列表" }));
+    await user.click(screen.getByRole("button", { name: "新建标签" }));
+    await user.click(screen.getByRole("menuitem", { name: "SSH 批量管理" }));
+
+    expect(useTerminalStore.getState().sessions.filter((session) => session.type === "batch")).toEqual([batch]);
+    expect(useTerminalStore.getState().activeSessionId).toBe(batch!.id);
+    expect(screen.getByRole("tab", { name: "SSH 批量管理" })).toHaveAttribute("aria-selected", "true");
+    expect(useDbStore.getState().queryTabs).toHaveLength(0);
   });
 });
