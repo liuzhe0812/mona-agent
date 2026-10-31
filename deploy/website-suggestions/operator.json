@@ -1,0 +1,6 @@
+{
+  "database": "/var/lib/mona-website-suggestions/suggestions.sqlite3",
+  "origin": "https://mona-ai.cn",
+  "auth_origin": "http://127.0.0.1:8000",
+  "port": 8002
+}

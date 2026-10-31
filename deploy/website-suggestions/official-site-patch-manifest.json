@@ -1,0 +1,30 @@
+{
+  "scope": "Suggestions only, applied to captured production website source",
+  "baseline_source_sha256": "97a753e2adb05919f459f10813a27513aa48d801c740709eb8d178811c16d8e9",
+  "files": {
+    "official-site/app/suggestions/page.tsx": {
+      "before_sha256": null,
+      "after_sha256": "15c865eb8239db39208d08a58c7338fc0dde0959ea0915e03e6c5550db39764c"
+    },
+    "official-site/app/suggestions/suggestions.css": {
+      "before_sha256": null,
+      "after_sha256": "0e3d0a3c30038de6f758a98c070bc6f7e99395b6aa9c47598e403e2af1afe9a9"
+    },
+    "official-site/app/page.tsx": {
+      "before_sha256": "3b870933bddf9993b92be7da77978da75cbdbf9a2a4d4c014a6b7928346906fe",
+      "after_sha256": "17c9dd5c152240d00c342e80d1e3419a2e7d880886cc51608d0cee647e1d83d7"
+    },
+    "official-site/app/account/AccountNav.tsx": {
+      "before_sha256": "f7b9b287fdffd2f886d90382d090b26b1da0649d9bdade7535a38b28ecc9e65c",
+      "after_sha256": "3f768b35fe58ac8b62718b6047eee898429051dfff29cf7c32063ff3a18f4a6e"
+    },
+    "official-site/static-main.tsx": {
+      "before_sha256": "a960b87d9c1ddd17b1cffaacf10bc2d089165202e3f5e917e3948fdfad7f83d3",
+      "after_sha256": "8c465b8decb49512d14dd8ef2dbd242763c9ce1bfe91f29f500f9707c250ca78"
+    },
+    "official-site/tests/suggestions-browser.test.mjs": {
+      "before_sha256": null,
+      "after_sha256": "ce2fa6e72a625da8b93bd9ac8bedeab530ace05f8500585c7350da373cd18038"
+    }
+  }
+}

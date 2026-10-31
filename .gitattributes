@@ -14,3 +14,4 @@
 /mona/skills/mona-design/** -text
 /mona/skills/mona-motion/assets/huashu-motion/** -text
 /mona/skills/mona-motion/references/huashu-motion/** -text
+/deploy/website-suggestions/official-site.patch -text whitespace=cr-at-eol

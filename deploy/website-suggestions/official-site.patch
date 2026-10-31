@@ -1,0 +1,573 @@
+diff --git a/official-site/app/suggestions/page.tsx b/official-site/app/suggestions/page.tsx
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/suggestions/page.tsx
+@@ -0,0 +1,229 @@
++"use client";
++
++import { useEffect, useRef, useState, type FormEvent } from "react";
++import { MonaWordmark } from "../brand-wordmark";
++import { AccountFeedback } from "../account/AccountFeedback";
++import { AccountNav } from "../account/AccountNav";
++import { clearSession, readSession, type AccountSession } from "../account/client";
++import "./suggestions.css";
++
++type Suggestion = { id: string; body: string; display_name: string; created_at: string };
++type Draft = { body: string; requestId: string | null };
++type ListReply = { items: Suggestion[]; next_before: string | null };
++
++const draftKey = (accountId: string) => `mona-suggestion-draft-v2:${accountId}`;
++const emptyDraft: Draft = { body: "", requestId: null };
++const emoji = ["😊", "💡", "👍", "🎉", "❤️", "🙏"];
++
++function initialDraft(accountId: string): Draft {
++  try {
++    const draft = JSON.parse(sessionStorage.getItem(draftKey(accountId)) || "null");
++    if (typeof draft?.body === "string" && (draft.requestId === null || typeof draft.requestId === "string")) return draft;
++  } catch { /* A blocked or invalid draft does not prevent reading suggestions. */ }
++  return emptyDraft;
++}
++
++function formatDate(value: string) {
++  const date = new Date(value);
++  return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date);
++}
++
++export default function SuggestionsPage() {
++  const [session, setSession] = useState<AccountSession | null>(null);
++  const [sessionState, setSessionState] = useState<"checking" | "guest" | "ready" | "unavailable">("checking");
++  const [draft, setDraft] = useState<Draft>(emptyDraft);
++  const [items, setItems] = useState<Suggestion[]>([]);
++  const [nextBefore, setNextBefore] = useState<string | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [listError, setListError] = useState("");
++  const [sending, setSending] = useState(false);
++  const [fieldError, setFieldError] = useState("");
++  const [error, setError] = useState("");
++  const [notice, setNotice] = useState("");
++  const [draftStored, setDraftStored] = useState(true);
++  const textarea = useRef<HTMLTextAreaElement>(null);
++  const activeSession = useRef<AccountSession | null>(null);
++  const sessionRevision = useRef(0);
++  const refreshSession = useRef<() => void>(() => {});
++
++  useEffect(() => {
++    let mounted = true;
++    let controller: AbortController | null = null;
++    const refresh = () => {
++      const candidate = readSession();
++      const revision = ++sessionRevision.current;
++      controller?.abort();
++      controller = new AbortController();
++      activeSession.current = null;
++      setSession(null); setDraft(emptyDraft); setFieldError(""); setError(""); setNotice(""); setSending(false); setDraftStored(true);
++      if (!candidate) { setSessionState("guest"); return; }
++      setSessionState("checking");
++      void fetch("/auth/identity", { headers: { Accept: "application/json", Authorization: `Bearer ${candidate.token}` },
++        credentials: "omit", cache: "no-store", redirect: "error", signal: controller.signal }).then(async response => {
++        if (!mounted || revision !== sessionRevision.current) return;
++        const current = readSession();
++        if (current?.token !== candidate.token || current.user.id !== candidate.user.id) { refresh(); return; }
++        if (response.status === 401) {
++          clearSession(candidate.token);
++          setError("登录状态已失效，请重新登录后继续。你的建议草稿会保留。");
++          return;
++        }
++        if (!response.ok || !response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) throw new Error();
++        const identity = await response.json();
++        if (!mounted || revision !== sessionRevision.current) return;
++        const latest = readSession();
++        if (latest?.token !== candidate.token || latest.user.id !== candidate.user.id) { refresh(); return; }
++        if (identity?.account_id !== candidate.user.id) {
++          clearSession(candidate.token);
++          setError("登录状态无法确认，请重新登录后继续。");
++          return;
++        }
++        activeSession.current = candidate;
++        setDraft(initialDraft(identity.account_id)); setSession(candidate); setSessionState("ready");
++      }).catch(() => {
++        if (mounted && revision === sessionRevision.current) setSessionState("unavailable");
++      });
++    };
++    refreshSession.current = refresh;
++    refresh();
++    window.addEventListener("mona-account-changed", refresh);
++    window.addEventListener("pageshow", refresh);
++    return () => {
++      mounted = false; ++sessionRevision.current; controller?.abort(); activeSession.current = null;
++      window.removeEventListener("mona-account-changed", refresh); window.removeEventListener("pageshow", refresh);
++    };
++  }, []);
++
++  async function load(before: string | null = null, signal?: AbortSignal) {
++    setLoading(true); setListError("");
++    try {
++      const query = before ? `?before=${encodeURIComponent(before)}` : "";
++      const response = await fetch(`/api/suggestions${query}`, { headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", redirect: "error", signal });
++      if (!response.ok || !response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) throw new Error();
++      const value: ListReply = await response.json();
++      if (!Array.isArray(value?.items) || (value.next_before !== null && typeof value.next_before !== "string")) throw new Error();
++      if (signal?.aborted) return;
++      setItems(current => before ? [...current, ...value.items.filter(item => !current.some(existing => existing.id === item.id))]
++        : [...current.filter(item => !value.items.some(fetched => fetched.id === item.id)), ...value.items]);
++      setNextBefore(value.next_before);
++    } catch {
++      if (!signal?.aborted) setListError("暂时无法加载建议，请稍后重试。");
++    } finally {
++      if (!signal?.aborted) setLoading(false);
++    }
++  }
++
++  useEffect(() => {
++    const controller = new AbortController();
++    void load(null, controller.signal);
++    return () => controller.abort();
++  }, []);
++
++  function saveDraft(accountId: string, value: Draft) {
++    setDraft(value);
++    try {
++      if (value.body || value.requestId) sessionStorage.setItem(draftKey(accountId), JSON.stringify(value));
++      else sessionStorage.removeItem(draftKey(accountId));
++      setDraftStored(true);
++    } catch { setDraftStored(false); }
++  }
++
++  function changeBody(body: string) {
++    if (!session || activeSession.current?.token !== session.token) return;
++    saveDraft(session.user.id, { body, requestId: body === draft.body ? draft.requestId : null });
++    setFieldError(""); setNotice("");
++  }
++
++  function insertEmoji(value: string) {
++    const input = textarea.current;
++    if (!input) return;
++    const start = input.selectionStart, end = input.selectionEnd;
++    changeBody(draft.body.slice(0, start) + value + draft.body.slice(end));
++    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(start + value.length, start + value.length); });
++  }
++
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++    if (!session || sending || activeSession.current?.token !== session.token) return;
++    const revision = sessionRevision.current;
++    const stillCurrent = () => {
++      const current = readSession();
++      return revision === sessionRevision.current && activeSession.current?.token === session.token
++        && current?.token === session.token && current.user.id === session.user.id;
++    };
++    if (!stillCurrent()) return;
++    const body = draft.body.trim();
++    if (!body || Array.from(body).length > 1000) {
++      setFieldError(body ? "建议请控制在 1000 字以内。" : "请先填写建议。" );
++      textarea.current?.focus();
++      return;
++    }
++    const requestId = draft.requestId || crypto.randomUUID();
++    saveDraft(session.user.id, { ...draft, requestId });
++    setFieldError(""); setNotice(""); setSending(true);
++    try {
++      const response = await fetch("/api/suggestions", { method: "POST", credentials: "omit", cache: "no-store", redirect: "error",
++        headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
++        body: JSON.stringify({ body, request_id: requestId }) });
++      if (!response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) throw new Error("提交结果未确认，请保留内容并重试。");
++      const value = await response.json();
++      if (!stillCurrent()) return;
++      if (!response.ok) {
++        if (response.status === 401) {
++          clearSession(session.token);
++          setError("登录状态已失效，请重新登录后继续。你的建议草稿会保留。");
++        } else if (response.status === 422) setFieldError(typeof value?.message === "string" ? value.message : "请检查建议内容后重试。");
++        else setError(typeof value?.message === "string" ? value.message : response.status === 429 ? "提交过于频繁，请稍后再试。" : "提交未完成，请稍后重试。");
++        return;
++      }
++      if (typeof value?.id !== "string" || typeof value?.body !== "string" || typeof value?.display_name !== "string" || typeof value?.created_at !== "string") throw new Error("提交结果未确认，请保留内容并重试。");
++      setItems(current => [value, ...current.filter(item => item.id !== value.id)]);
++      saveDraft(session.user.id, emptyDraft);
++      setNotice("建议已发布，谢谢你的分享。");
++    } catch (value) {
++      if (stillCurrent()) setError(value instanceof Error && value.message === "提交结果未确认，请保留内容并重试。" ? value.message : "连接中断，提交结果未确认。请保留内容并重试。");
++    } finally { if (stillCurrent()) setSending(false); }
++  }
++
++  const count = Array.from(draft.body).length;
++  return <div className="account-shell suggestions-shell">
++    <header className="account-topbar">
++      <a className="account-brand" href="/" aria-label="Mona 首页"><img src="/img/mona-brand/mona-app-icon.png?v=a829e97b8751" alt="" /><MonaWordmark /></a>
++      <div className="account-topbar-actions"><a className="account-back" href="/">返回官网</a><AccountNav disabled={sending} /></div>
++    </header>
++    <main className="suggestions-main">
++      <section className="suggestions-intro" aria-labelledby="suggestions-title">
++        <p className="suggestions-kicker">MONA / PRODUCT IDEAS</p>
++        <h1 id="suggestions-title">产品建议</h1>
++        <p>有什么想法，告诉我们。一起让 Mona 变得更好。</p>
++      </section>
++      <section className="account-panel suggestions-composer" aria-labelledby="suggestions-compose-title">
++        <h2 id="suggestions-compose-title">分享你的建议</h2>
++        <p className="account-help">发布后所有人可见，请勿填写个人隐私。</p>
++        {session ? <form onSubmit={event => void submit(event)}>
++          <label className="account-field" htmlFor="suggestion-body"><span className="suggestions-visually-hidden">建议内容</span>
++            <textarea id="suggestion-body" ref={textarea} rows={4} value={draft.body} onChange={event => changeBody(event.target.value)} disabled={sending}
++              placeholder="你希望 Mona 做得更好的地方…" aria-invalid={Boolean(fieldError)} aria-describedby={fieldError ? "suggestion-hint suggestion-error" : "suggestion-hint"} /></label>
++          <div className="suggestions-compose-meta"><div className="suggestions-emoji" aria-label="插入表情">{emoji.map(value => <button key={value} type="button" disabled={sending} onClick={() => insertEmoji(value)} aria-label={`插入表情 ${value}`}>{value}</button>)}</div><span id="suggestion-hint">{count} / 1000</span></div>
++          {fieldError && <p className="account-field-error" id="suggestion-error" role="alert">{fieldError}</p>}
++          {!draftStored && <p className="account-help">草稿仅保留在当前页面，离开后会清除。</p>}
++          <div className="suggestions-submit"><button className="account-button primary" type="submit" disabled={sending}>{sending ? "正在发布…" : "发布建议"}</button>{notice && <p className="account-success" role="status">{notice}</p>}</div>
++        </form> : sessionState === "checking" ? <div className="suggestions-signin"><p className="account-help" role="status">正在确认登录状态…</p></div>
++          : sessionState === "unavailable" ? <div className="suggestions-signin"><p className="account-help">暂时无法确认登录状态，请稍后重试。</p><button className="account-button" type="button" onClick={() => refreshSession.current()}>重新尝试</button></div>
++            : <div className="suggestions-signin"><p className="account-help">登录后即可分享你的建议。</p><a className="account-button primary" href="/account">登录 / 注册</a></div>}
++      </section>
++      <section className="suggestions-list" aria-labelledby="suggestions-list-title">
++        <h2 id="suggestions-list-title">大家的建议</h2>
++        {items.length > 0 && <ol>{items.map(item => <li className="suggestions-item" key={item.id}>
++          <div className="suggestions-item-meta"><strong>{item.display_name}</strong><time dateTime={item.created_at}>{formatDate(item.created_at)}</time></div>
++          <p>{item.body}</p>
++        </li>)}</ol>}
++        {loading && <p className="account-help" role="status">正在加载建议…</p>}
++        {!loading && listError && <div className="suggestions-list-status"><p className="account-help">{listError}</p><button className="account-link" type="button" onClick={() => void load(items.length ? nextBefore : null)}>重新加载</button></div>}
++        {!loading && !listError && !items.length && <p className="suggestions-empty account-help">还没有建议，欢迎分享第一个想法。</p>}
++        {!loading && !listError && nextBefore && <button className="account-button suggestions-more" type="button" onClick={() => void load(nextBefore)}>查看更多</button>}
++      </section>
++    </main>
++    {error && <AccountFeedback message={error} close={() => setError("")} />}
++  </div>;
++}
+diff --git a/official-site/app/suggestions/suggestions.css b/official-site/app/suggestions/suggestions.css
+new file mode 100644
+--- /dev/null
++++ b/official-site/app/suggestions/suggestions.css
+@@ -0,0 +1,36 @@
++.suggestions-main { width: min(100% - 40px, 760px); margin: 0 auto; padding: 64px 0 80px; }
++.suggestions-intro { margin-bottom: 32px; }
++.suggestions-kicker { margin: 0 0 12px; color: var(--account-muted); font-size: 13px; letter-spacing: .08em; }
++.suggestions-intro h1 { margin: 0 0 12px; font-size: clamp(32px, 4vw, 48px); line-height: 1.3; }
++.suggestions-intro > p:last-child { margin: 0; color: var(--account-muted); font-size: 16px; line-height: 1.8; }
++.suggestions-composer h2 { margin-bottom: 8px; font-size: 20px; }
++.suggestions-composer form { margin-top: 20px; }
++.suggestions-composer textarea { width: 100%; min-height: 124px; padding: 12px; resize: vertical; border: 1px solid color-mix(in srgb, var(--paper) 25%, transparent); border-radius: 8px; background: var(--ink); color: var(--paper); font: inherit; line-height: 1.7; }
++.suggestions-composer textarea[aria-invalid="true"] { border-color: var(--red); }
++.suggestions-compose-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 8px 0; color: var(--account-muted); font-size: 13px; }
++.suggestions-compose-meta > span { flex-shrink: 0; white-space: nowrap; }
++.suggestions-emoji { display: flex; flex-wrap: wrap; gap: 4px; }
++.suggestions-emoji button { min-width: 36px; min-height: 36px; padding: 4px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-size: 18px; }
++.suggestions-emoji button:hover:not(:disabled) { background: var(--account-hover); }
++.suggestions-emoji button:disabled { cursor: wait; }
++.suggestions-submit { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 16px; }
++.suggestions-submit .account-success { margin: 0; }
++.suggestions-signin { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; }
++.suggestions-list { margin-top: 48px; }
++.suggestions-list h2 { margin: 0 0 20px; font-size: 20px; }
++.suggestions-list ol { list-style: none; margin: 0; padding: 0; }
++.suggestions-item { padding: 22px 0; border-top: 1px solid var(--account-line); }
++.suggestions-item-meta { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 14px; }
++.suggestions-item-meta strong { overflow-wrap: anywhere; }
++.suggestions-item-meta time { color: var(--account-muted); font-size: 13px; }
++.suggestions-item p { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; }
++.suggestions-empty, .suggestions-list-status { padding: 22px 0; border-top: 1px solid var(--account-line); }
++.suggestions-list-status { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
++.suggestions-more { margin-top: 16px; }
++.suggestions-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
++.suggestions-shell textarea:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
++@media (max-width: 800px) {
++  .suggestions-main { padding-top: 36px; }
++  .suggestions-intro { margin-bottom: 24px; }
++  .suggestions-list { margin-top: 36px; }
++}
+diff --git a/official-site/app/page.tsx b/official-site/app/page.tsx
+--- a/official-site/app/page.tsx
++++ b/official-site/app/page.tsx
+@@ -19,6 +19,7 @@
+   { label: "Mona Pro", href: "#pricing", group: "primary" },
+   { label: "帮助中心", href: "/manual.html", group: "support" },
+   { label: "更新日志", href: "/changelog", group: "support" },
++  { label: "产品建议", href: "/suggestions", group: "support" },
+ ] as const;
+ 
+ export default function Home() {
+diff --git a/official-site/app/account/AccountNav.tsx b/official-site/app/account/AccountNav.tsx
+--- a/official-site/app/account/AccountNav.tsx
++++ b/official-site/app/account/AccountNav.tsx
+@@ -57,6 +57,7 @@
+       </summary>
+       <div className="account-menu-panel" aria-label="账户菜单">
+         <a href="/account">账户设置</a>
++        <a href="/suggestions">产品建议</a>
+         {workReady ? <a href="/work/">进入在线 Work</a>
+           : <span className="account-menu-unavailable">{workReady === null ? "正在检查在线 Work…" : "在线 Work 暂未开放"}</span>}
+         <button disabled={busy || disabled} onClick={async () => {
+diff --git a/official-site/static-main.tsx b/official-site/static-main.tsx
+--- a/official-site/static-main.tsx
++++ b/official-site/static-main.tsx
+@@ -1,38 +1,40 @@
+-import { StrictMode } from "react";
+-import { createRoot } from "react-dom/client";
+-import {
+-  BrowserRouter,
+-  Routes,
+-  Route,
+-  Navigate,
+-} from "react-router-dom";
+-import Home from "./app/page";
+-import Changelog from "./app/changelog/page";
+-import Tutorial from "./app/tutorial/page";
+-import AccountPage from "./app/account/page";
+-import "./app/globals.css";
+-
+-// quick-start 在 Next.js 原生里是 redirect("/manual.html")
+-// 静态路由里直接用 Navigate 组件跳转到 manual.html（外部静态文件）
+-function QuickStartRedirect() {
+-  return <Navigate to="/manual.html" replace />;
+-}
+-
+-const root = document.getElementById("root");
+-if (!root) throw new Error("root element not found");
+-
+-createRoot(root).render(
+-  <StrictMode>
+-    <BrowserRouter>
+-      <Routes>
+-        <Route path="/" element={<Home />} />
+-        <Route path="/changelog" element={<Changelog />} />
+-        <Route path="/tutorial" element={<Tutorial />} />
+-        <Route path="/account" element={<AccountPage />} />
+-        <Route path="/account/wechat" element={<AccountPage />} />
+-        <Route path="/quick-start" element={<QuickStartRedirect />} />
+-        <Route path="*" element={<Home />} />
+-      </Routes>
+-    </BrowserRouter>
+-  </StrictMode>,
+-);
++import { StrictMode } from "react";
++import { createRoot } from "react-dom/client";
++import {
++  BrowserRouter,
++  Routes,
++  Route,
++  Navigate,
++} from "react-router-dom";
++import Home from "./app/page";
++import Changelog from "./app/changelog/page";
++import Tutorial from "./app/tutorial/page";
++import AccountPage from "./app/account/page";
++import SuggestionsPage from "./app/suggestions/page";
++import "./app/globals.css";
++
++// quick-start 在 Next.js 原生里是 redirect("/manual.html")
++// 静态路由里直接用 Navigate 组件跳转到 manual.html（外部静态文件）
++function QuickStartRedirect() {
++  return <Navigate to="/manual.html" replace />;
++}
++
++const root = document.getElementById("root");
++if (!root) throw new Error("root element not found");
++
++createRoot(root).render(
++  <StrictMode>
++    <BrowserRouter>
++      <Routes>
++        <Route path="/" element={<Home />} />
++        <Route path="/changelog" element={<Changelog />} />
++        <Route path="/tutorial" element={<Tutorial />} />
++        <Route path="/account" element={<AccountPage />} />
++        <Route path="/account/wechat" element={<AccountPage />} />
++        <Route path="/suggestions" element={<SuggestionsPage />} />
++        <Route path="/quick-start" element={<QuickStartRedirect />} />
++        <Route path="*" element={<Home />} />
++      </Routes>
++    </BrowserRouter>
++  </StrictMode>,
++);
+diff --git a/official-site/tests/suggestions-browser.test.mjs b/official-site/tests/suggestions-browser.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/official-site/tests/suggestions-browser.test.mjs
+@@ -0,0 +1,189 @@
++// Edge browser tests with local synthetic identity and suggestion APIs.
++import assert from "node:assert/strict";
++import { spawn } from "node:child_process";
++import { createServer } from "node:http";
++import { mkdtemp, readFile, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join, resolve, sep } from "node:path";
++import { fileURLToPath } from "node:url";
++import test from "node:test";
++
++const dist = process.env.SUGGESTIONS_DIST ? resolve(process.env.SUGGESTIONS_DIST) : fileURLToPath(new URL("../dist-static/", import.meta.url));
++const edge = process.env.CHROMIUM_PATH || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
++const delay = ms => new Promise(done => setTimeout(done, ms));
++
++class CDP {
++  constructor(socket) {
++    this.socket = socket; this.serial = 0; this.pending = new Map(); this.errors = [];
++    socket.addEventListener("message", ({ data }) => {
++      const message = JSON.parse(data);
++      if (message.method === "Runtime.exceptionThrown") this.errors.push(message.params.exceptionDetails.text);
++      if (!message.id) return;
++      const entry = this.pending.get(message.id);
++      if (!entry) return;
++      this.pending.delete(message.id); clearTimeout(entry.timeout);
++      message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result);
++    });
++  }
++  send(method, params = {}) {
++    const id = ++this.serial;
++    return new Promise((resolve, reject) => {
++      const timeout = setTimeout(() => { this.pending.delete(id); reject(new Error("CDP timeout: " + method)); }, 12000);
++      this.pending.set(id, { resolve, reject, timeout }); this.socket.send(JSON.stringify({ id, method, params }));
++    });
++  }
++  async eval(expression) {
++    const result = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
++    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
++    return result.result.value;
++  }
++  async wait(expression) {
++    for (let i = 0; i < 150; i++) { if (await this.eval(expression)) return; await delay(80); }
++    throw new Error("Browser condition not met: " + expression);
++  }
++}
++
++test("suggestions UI with synthetic API edges", { timeout: 120000 }, async t => {
++  const users = { a: { id: "1001", name: "用户 A" }, b: { id: "1002", name: "用户 B" } };
++  const requests = [], records = new Map();
++  let serial = 0, mode = "normal", releaseHeld = null;
++  const server = createServer(async (request, response) => {
++    const route = new URL(request.url, "http://localhost").pathname;
++    const json = (value, status = 200) => { response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); response.end(JSON.stringify(value)); };
++    const user = users[(request.headers.authorization || "").replace("Bearer browser-token-", "")];
++    try {
++      if (route === "/auth/identity") return user ? json({ account_id: user.id }) : json({ error: "invalid_session" }, 401);
++      if (route === "/api/work/models") return json({ models: [] });
++      if (route === "/api/suggestions" && request.method === "GET") return json({ items: [...records.values()].reverse(), next_before: null });
++      if (route === "/api/suggestions" && request.method === "POST") {
++        let raw = ""; for await (const chunk of request) raw += chunk;
++        const body = JSON.parse(raw), key = user && user.id + ":" + body.request_id;
++        requests.push({ user: user?.id, body });
++        if (mode === "unauthorized" || !user) return json({ error: "invalid_session" }, 401);
++        let record = records.get(key);
++        if (!record) {
++          record = { id: String(++serial), body: body.body, display_name: user.name, created_at: "2026-10-31T12:00:00Z" };
++          records.set(key, record);
++        }
++        if (mode === "disconnect") { response.destroy(); return; }
++        if (mode === "hold") { releaseHeld = () => json(record, 201); return; }
++        return json(record, 201);
++      }
++      if (route === "/favicon.ico") { response.writeHead(204).end(); return; }
++      const file = resolve(dist, route === "/" || route === "/suggestions" ? "static-index.html" : decodeURIComponent(route).slice(1));
++      if (!file.startsWith(resolve(dist) + sep)) { response.writeHead(403).end(); return; }
++      const bytes = await readFile(file);
++      const ext = file.split(".").at(-1);
++      response.writeHead(200, { "Content-Type": ({ html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", webp: "image/webp", svg: "image/svg+xml" })[ext] || "application/octet-stream" });
++      response.end(bytes);
++    } catch { if (!response.headersSent) json({ error: "fixture_error" }, 500); }
++  });
++  await new Promise(done => server.listen(0, "127.0.0.1", done));
++  const origin = `http://127.0.0.1:${server.address().port}`;
++  const profile = await mkdtemp(join(tmpdir(), "mona-suggestions-browser-"));
++  const browser = spawn(edge, ["--headless=new", "--no-first-run", "--disable-background-networking", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" });
++  let spawnError; browser.on("error", error => { spawnError = error; });
++  let cdp;
++  try {
++    let port;
++    for (let i = 0; i < 100; i++) {
++      if (spawnError) throw spawnError;
++      try { port = Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]); break; } catch { await delay(100); }
++    }
++    assert.ok(port, "browser did not start");
++    const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
++    const socket = new WebSocket(pages.find(page => page.type === "page").webSocketDebuggerUrl);
++    await new Promise((done, reject) => { socket.addEventListener("open", done, { once: true }); socket.addEventListener("error", reject, { once: true }); });
++    cdp = new CDP(socket);
++    await cdp.send("Page.enable"); await cdp.send("Runtime.enable");
++    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
++    const nav = async () => { await cdp.send("Page.navigate", { url: origin + "/suggestions" }); await cdp.wait("document.querySelector('.suggestions-list') && document.readyState === 'complete'"); };
++    const click = async label => cdp.eval(`[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(label)}).click()`);
++    const setText = async value => cdp.eval(`(() => {const e=document.querySelector('#suggestion-body');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
++    const setSession = async name => {
++      const user = users[name];
++      await cdp.eval(`sessionStorage.setItem('mona-website-session-v1', JSON.stringify({token:'browser-token-${name}',user:{id:'${user.id}',email:'test@example.invalid',display_name:'${user.name}'}}));window.dispatchEvent(new Event('mona-account-changed'))`);
++      await cdp.wait("document.querySelector('#suggestion-body')!==null");
++    };
++    const closeError = async () => { await cdp.wait("document.querySelector('dialog[open]')!==null"); await click("知道了"); await cdp.wait("document.querySelector('dialog[open]')===null"); };
++
++    await t.test("guests can read but cannot submit", async () => {
++      await nav();
++      await cdp.wait("document.body.innerText.includes('登录后即可分享')");
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body')"), null);
++      assert.equal(await cdp.eval("document.querySelector('.suggestions-signin a').getAttribute('href')"), "/account");
++      assert.equal(requests.length, 0);
++    });
++    await t.test("plain text, newline and emoji are posted and displayed as text", async () => {
++      await setSession("a");
++      await setText("希望有\n<b>更好的功能</b> ");
++      await cdp.eval("document.querySelector('#suggestion-body').focus();document.querySelector('#suggestion-body').setSelectionRange(999,999);document.querySelector('[aria-label=\"插入表情 💡\"]').click()");
++      await cdp.wait("document.querySelector('#suggestion-body').value.endsWith('💡')");
++      await click("发布建议");
++      await cdp.wait("document.body.innerText.includes('建议已发布')");
++      assert.equal(requests.at(-1).body.body, "希望有\n<b>更好的功能</b> 💡");
++      assert.equal(await cdp.eval("document.querySelector('.suggestions-item p').textContent"), "希望有\n<b>更好的功能</b> 💡");
++      assert.equal(await cdp.eval("document.querySelector('.suggestions-item p b')"), null);
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "");
++    });
++    await t.test("unknown write retains the id and retries without duplicate", async () => {
++      mode = "disconnect";
++      await setText("网络中断后继续 💡"); await click("发布建议"); await closeError();
++      const first = requests.at(-1).body;
++      assert.ok(first.request_id);
++      await nav(); await cdp.wait("document.querySelector('#suggestion-body')?.value==='网络中断后继续 💡'");
++      mode = "normal"; await click("发布建议"); await cdp.wait("document.body.innerText.includes('建议已发布')");
++      assert.equal(requests.at(-1).body.request_id, first.request_id);
++      assert.equal([...records.values()].filter(record => record.body === first.body).length, 1);
++    });
++    await t.test("401 preserves the draft for the verified account only", async () => {
++      mode = "unauthorized";
++      await setText("A 的草稿"); await click("发布建议"); await closeError();
++      await cdp.wait("document.body.innerText.includes('登录后即可分享')");
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body')"), null);
++      const saved = await cdp.eval("JSON.parse(sessionStorage.getItem('mona-suggestion-draft-v2:1001'))");
++      assert.equal(saved.body, "A 的草稿"); assert.ok(saved.requestId);
++      await setSession("b"); assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "");
++      await setText("B 的草稿");
++      await setSession("a"); assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "A 的草稿");
++      mode = "normal"; await click("发布建议"); await cdp.wait("document.body.innerText.includes('建议已发布')");
++      assert.equal(requests.at(-1).body.request_id, saved.requestId);
++      await setSession("b"); assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "B 的草稿");
++    });
++    await t.test("the identity response must match the stored account", async () => {
++      await cdp.eval("sessionStorage.setItem('mona-website-session-v1',JSON.stringify({token:'browser-token-a',user:{id:'1002',display_name:'B'}}));window.dispatchEvent(new Event('mona-account-changed'))");
++      await cdp.wait("document.querySelector('dialog[open]')!==null");
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body')"), null);
++      await closeError();
++      assert.equal(await cdp.eval("sessionStorage.getItem('mona-website-session-v1')"), null);
++      await setSession("b"); assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "B 的草稿");
++    });
++    await t.test("an in-flight result cannot update a different login", async () => {
++      await setSession("a"); await setText("A 尚未返回的建议"); mode = "hold"; await click("发布建议");
++      for (let i = 0; i < 100 && !releaseHeld; i++) await delay(50);
++      assert.ok(releaseHeld, "fixture did not receive the request");
++      await setSession("b");
++      releaseHeld(); releaseHeld = null;
++      await delay(250);
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "B 的草稿");
++      assert.equal(await cdp.eval("document.body.innerText.includes('建议已发布')"), false);
++      assert.equal(await cdp.eval("[...document.querySelectorAll('.suggestions-item p')].some(e=>e.textContent==='A 尚未返回的建议')"), false);
++      await setSession("a"); assert.equal(await cdp.eval("document.querySelector('#suggestion-body').value"), "A 尚未返回的建议");
++      const last = requests.at(-1).body;
++      mode = "normal"; await click("发布建议"); await cdp.wait("document.body.innerText.includes('建议已发布')");
++      assert.equal(requests.at(-1).body.request_id, last.request_id);
++      assert.equal([...records.values()].filter(record => record.body === last.body).length, 1);
++    });
++    await t.test("mobile page has no horizontal overflow", async () => {
++      await cdp.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
++      assert.equal(await cdp.eval("document.documentElement.scrollWidth <= window.innerWidth + 1"), true);
++      assert.equal(await cdp.eval("document.querySelector('#suggestion-body').getBoundingClientRect().right <= window.innerWidth"), true);
++    });
++    assert.deepEqual(cdp.errors, []);
++  } finally {
++    if (releaseHeld) releaseHeld();
++    if (cdp) { try { await cdp.send("Browser.close"); } catch {} cdp.socket.close(); }
++    browser.kill(); await new Promise(done => server.close(done));
++    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }).catch(() => {});
++  }
++});
