@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-31",
+  "production_urls": {
+    "suggestions": "https://mona-ai.cn/suggestions",
+    "admin": "https://mona-ai.cn/admin/"
+  },
+  "checks": [
+    "guest_fab_and_login_prompt",
+    "verified_session_and_preserved_draft",
+    "fixed_composer_desktop_mobile",
+    "user_post_created",
+    "public_refresh_and_literal_html",
+    "regular_user_admin_forbidden",
+    "admin_row_located_and_literal_html",
+    "admin_hide",
+    "admin_restore",
+    "admin_delete_confirmed",
+    "both_sessions_revoked"
+  ],
+  "test_suggestion_id": "3",
+  "test_request_id": "94363da8-5699-4a16-9be3-4f54fc48c4f1",
+  "session_method": "Operator issued ten-minute revocable website sessions for the existing dedicated acceptance user and an existing administrator; no account roles changed. Both sessions were revoked and further requests returned 401.",
+  "password_form_login_retested": false,
+  "preexisting_suggestion_rows_preserved": 1,
+  "test_content_cleanup": "Deleted through the actual admin page; internal deleted state retained for audit, excluded from both lists.",
+  "restart_retains_deleted_state": true,
+  "sqlite_online_backup_restore_integrity": "ok",
+  "auth_manifest_verified_files": 130,
+  "counts_users_wallets_subscriptions_payments": [
+    16,
+    16,
+    10,
+    30
+  ],
+  "processes": {
+    "mona-auth": 379445,
+    "mona-website-suggestions": 379764,
+    "one-api": 310825,
+    "nginx_master": 343378,
+    "mariadb": 310721,
+    "frps": 743,
+    "notebook-relay-tunnel": 275482,
+    "mona-work-visitor": 367299
+  },
+  "docker_or_ubuntu_operations": false,
+  "ui_browser_synthetic_checks": {
+    "account_and_suggestions": 21,
+    "admin": 8
+  },
+  "production_runtime_tests": {
+    "auth_identity_and_admin_paths": 8,
+    "suggestions": 12
+  },
+  "scope_limit": "No whole-server reboot or physical mobile keyboard test; mobile layout and simulated visual-viewport keyboard avoidance were checked."
+}
