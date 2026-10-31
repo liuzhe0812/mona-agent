@@ -226,7 +226,7 @@ class ToolRegistry:
         try:
             assert tool is not None  # guarded by prepare_call()
             if _is_retired_stock_tool(tool):
-                return "Error: 旧股票模块已移除，请使用 stock_vibe_task。" + hint
+                return "Error: 旧股票模块已移除，请在股票工作台中进行研究。" + hint
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 return result + hint

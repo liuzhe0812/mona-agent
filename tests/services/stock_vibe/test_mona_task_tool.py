@@ -12,7 +12,6 @@ from aiohttp.test_utils import TestServer
 
 from mona.agent.tools.context import RequestContext, ToolContext
 from mona.agent.tools.loader import ToolLoader
-from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.stock_vibe import StockVibeTaskTool
 from mona.config import loader as config_loader
 from mona.config.schema import Config, _resolve_tool_config_refs
@@ -62,7 +61,7 @@ def _research_args() -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_tool_is_discovered_without_owner_state_and_requires_trusted_write_identity(
+async def test_tool_is_not_discovered_and_internal_adapter_requires_trusted_write_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app_data = _private_app_data(tmp_path, monkeypatch)
@@ -74,12 +73,8 @@ async def test_tool_is_discovered_without_owner_state_and_requires_trusted_write
 
     async with _host(handler) as port:
         ctx = _context(port)
-        assert StockVibeTaskTool in ToolLoader().discover()
-        loader = ToolLoader(test_classes=[StockVibeTaskTool])
-        for scope in ("core", "subagent"):
-            registry = ToolRegistry()
-            assert loader.load(ctx, registry, scope=scope) == ["stock_vibe_task"]
-        tool = registry.get("stock_vibe_task")
+        assert StockVibeTaskTool not in ToolLoader().discover()
+        tool = StockVibeTaskTool(ctx)
         tool.set_context(RequestContext(channel="test", chat_id="chat", message_id=None,
                                         metadata={"job_id": "untrusted-model-field"}))
         result = await tool.execute(**_research_args())

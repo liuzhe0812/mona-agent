@@ -74,6 +74,7 @@ class StockVibeTaskTool(Tool, ContextAware):
     """Submit, inspect, or cancel work through the authenticated local host API."""
 
     _scopes = {"core", "subagent"}
+    _plugin_discoverable = False
 
     def __init__(self, tool_context: Any):
         self._tool_context = tool_context
