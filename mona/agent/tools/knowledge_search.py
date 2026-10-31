@@ -7,6 +7,7 @@ one product concept. Legacy materials/wiki tools remain internal adapters.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -34,18 +35,33 @@ def _vault_ready() -> bool:
     return _get_vault_path() is not None
 
 
-async def _search_notes_async(query: str, limit: int) -> list[dict[str, Any]]:
+async def _search_notes_async(
+    query: str, limit: int, *, strict: bool = False,
+) -> list[dict[str, Any]]:
     """Async note search so the Tauri IPC request cannot block the loop."""
     try:
         results = await tauri_invoke_async(
             "notes_search_all",
             {"query": query, "limit": limit},
         )
-    except RuntimeError as e:
+    except Exception as e:
+        if not strict and not isinstance(e, RuntimeError):
+            raise
         logger.warning("knowledge_search: notes_search_all failed: {}", e)
+        if strict:
+            raise RuntimeError(f"notes_search_all failed ({type(e).__name__})") from e
         return []
     if not isinstance(results, list):
+        if strict:
+            raise RuntimeError("notes_search_all returned an invalid response: expected a list")
         return []
+    if strict and any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("noteId"), str)
+        or not item["noteId"].strip()
+        for item in results
+    ):
+        raise RuntimeError("notes_search_all returned an invalid note result")
     return [r for r in results if isinstance(r, dict)]
 
 
@@ -57,10 +73,11 @@ def _search_materials(
     *,
     agent_id: str = "mona",
     knowledge_base_id: str | None = None,
+    strict: bool = False,
 ) -> list[dict[str, Any]]:
     """走 FTS5 chunk 索引检索资料，返回结构化 chunk（ref/location/stale）。
 
-    索引不可用时返回空列表（reconcile 与写入点同步负责索引新鲜度）。
+    索引不可用时默认返回空列表；strict 模式向调用方报告错误。
     """
     kinds_map = {
         "text": ("source",),
@@ -86,14 +103,17 @@ def _search_materials(
                     limit,
                     scope,
                     agent_id=agent_id,
+                    strict=strict,
                 )
         index = MaterialsIndex(
             root / "index.db", vault=get_data_dir(), library_root=root
         )
         try:
-            sync_index(get_data_dir(), index, library_root=root)
+            sync_index(get_data_dir(), index, library_root=root, **({"strict": True} if strict else {}))
             search_count = min(150, limit * 3) if scope == "materials" else limit
             rows = index.search(query, count=search_count, kinds=kinds)
+            if strict:
+                _validate_material_results(rows)
         finally:
             index.close()
         from mona.materials.knowledge import ready_knowledge_access
@@ -115,6 +135,10 @@ def _search_materials(
             results.append(item)
     except Exception as e:
         logger.warning("knowledge_search: Agent {} search failed: {}", agent_id, e)
+        if strict:
+            raise RuntimeError(
+                f"knowledge_search failed for Agent {agent_id} ({type(e).__name__})"
+            ) from e
 
     results.sort(
         key=lambda item: (
@@ -132,6 +156,7 @@ def _search_legacy_materials(
     scope: str,
     *,
     agent_id: str,
+    strict: bool = False,
 ) -> list[dict[str, Any]]:
     """Read old scoped libraries until that Agent has migrated knowledge state."""
     from mona.materials.index import MaterialsIndex, sync_index
@@ -148,8 +173,10 @@ def _search_legacy_materials(
         root = get_library_root(vault, library_id)
         index = MaterialsIndex(root / "index.db", vault=vault, library_root=root)
         try:
-            sync_index(vault, index, library_root=root)
+            sync_index(vault, index, library_root=root, **({"strict": True} if strict else {}))
             rows = index.search(query, count=limit, kinds=kinds)
+            if strict:
+                _validate_material_results(rows)
         finally:
             index.close()
         for item in rows:
@@ -159,6 +186,17 @@ def _search_legacy_materials(
             results.append(item)
     results.sort(key=lambda item: -float(item.get("score", 0.0)))
     return results[:limit]
+
+
+def _validate_material_results(rows: Any) -> None:
+    if not isinstance(rows, list) or any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("ref"), str)
+        or not item["ref"].strip()
+        or item.get("kind") not in {"material_source", "material_wiki"}
+        for item in rows
+    ):
+        raise ValueError("Knowledge search index returned an invalid result")
 
 
 def _encode_material_ref(library_id: str, ref: str) -> str:
@@ -330,6 +368,10 @@ class MaterialsReadTool(Tool):
         return "materials_search"
 
     async def execute(self, **kwargs: Any) -> Any:
+        result = await self.read_result(**kwargs)
+        return result["content"] if isinstance(result, dict) else result
+
+    async def read_result(self, **kwargs: Any) -> dict[str, Any] | str:
         encoded_ref = str(kwargs.get("ref", "")).strip()
         if not encoded_ref:
             return "Error: ref is required."
@@ -475,7 +517,15 @@ class MaterialsReadTool(Tool):
             f"path={quote(link_path, safe='')}&location={quote(label, safe='')})"
         )
         lines.append(f"引用链接（在回答中原样使用）: {cite_link}")
-        return "\n".join(lines)
+        references = [
+            {
+                "ref": "ak:" + item["ref"] if agent_scoped else _encode_material_ref(str(knowledge_base_id), item["ref"]),
+                "title": item["title"], "location": item["locationLabel"],
+            }
+            for item in [*neighbors, *evidence_chunks]
+        ]
+        return {"content": "\n".join(lines), "references": references,
+                "kind": "document" if kind_label == "source" else "summary", "citation": cite_link}
 
 
 @tool_parameters(_READ_PARAMETERS)
@@ -525,6 +575,18 @@ class NotesSearchTool(Tool):
             "when full content is needed."
         )
 
+    async def search_results(
+        self, query: str, limit: int, *, strict: bool = True,
+    ) -> list[dict[str, Any]]:
+        query = str(query).strip()
+        if not query:
+            raise ValueError("Notes search query is required.")
+        if not _vault_ready():
+            raise RuntimeError("Notes vault is not configured.")
+        if strict:
+            return await _search_notes_async(query, _search_limit(limit), strict=True)
+        return await _search_notes_async(query, _search_limit(limit))
+
     async def execute(self, **kwargs: Any) -> Any:
         query = str(kwargs.get("query", "")).strip()
         if not query:
@@ -533,7 +595,7 @@ class NotesSearchTool(Tool):
             return "Error: Notes vault is not configured."
         return _format_notes_results(
             query,
-            await _search_notes_async(query, _search_limit(kwargs.get("limit"))),
+            await self.search_results(query, _search_limit(kwargs.get("limit")), strict=False),
         )
 
 
@@ -682,6 +744,29 @@ class KnowledgeSearchTool(Tool):
             "tool never searches the user's Notes."
         )
 
+    async def search_results(
+        self,
+        query: str,
+        limit: int,
+        *,
+        scope: str = "materials",
+        strict: bool = True,
+    ) -> list[dict[str, Any]]:
+        query = str(query).strip()
+        if not query:
+            raise ValueError("Knowledge search query is required.")
+        if scope not in {"all", "materials", "wiki", "text"}:
+            raise ValueError("Invalid legacy knowledge scope.")
+        return await asyncio.to_thread(
+            _search_materials,
+            get_data_dir(),
+            query,
+            _search_limit(limit),
+            "materials" if scope == "all" else scope,
+            agent_id=self._agent_id,
+            strict=strict,
+        )
+
     async def execute(self, **kwargs: Any) -> Any:
         query = str(kwargs.get("query", "")).strip()
         if not query:
@@ -693,12 +778,8 @@ class KnowledgeSearchTool(Tool):
         if scope not in {"all", "materials", "wiki", "text"}:
             return "Error: invalid legacy knowledge scope."
         limit = _search_limit(kwargs.get("limit"))
-        results = _search_materials(
-            get_data_dir(),
-            query,
-            limit,
-            "materials" if scope == "all" else scope,
-            agent_id=self._agent_id,
+        results = await self.search_results(
+            query, limit, scope=scope, strict=False,
         )
         if not results:
             return f"No Agent Knowledge found for '{query}'."

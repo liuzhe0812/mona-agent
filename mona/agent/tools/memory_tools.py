@@ -8,9 +8,12 @@ named agents use their private memory directory.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from mona.agent.tools.base import Tool
 from mona.agent.tools.schema import (
@@ -88,6 +91,13 @@ class MemoryReadTool(Tool):
             required=["file"],
         )
 
+    async def read_result(self, file: str) -> dict[str, Any]:
+        """Read private content without mixing an error message into the body."""
+        _memory_file_path(file, self._agent_id)
+        from mona.agent.agent_management import read_instruction
+
+        return read_instruction(self._agent_id, file)
+
     async def execute(self, file: str | None = None, **kwargs: Any) -> str:
         if not file:
             return "Error: file parameter is required."
@@ -96,9 +106,7 @@ class MemoryReadTool(Tool):
         except ValueError as e:
             return f"Error: {e}"
         try:
-            from mona.agent.agent_management import read_instruction
-
-            content = read_instruction(self._agent_id, file)["content"]
+            content = (await self.read_result(file))["content"]
         except Exception as e:
             return f"Error reading {path.name}: {e}"
         if not content.strip():
@@ -241,6 +249,85 @@ class MemorySearchTool(Tool):
             required=["query"],
         )
 
+    def _event_ref(self, entry: dict[str, Any]) -> str:
+        canonical = json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(f"{self._agent_id}\0{canonical}".encode("utf-8")).hexdigest()
+        return f"event:{digest}"
+
+    def _history_entries(self) -> Iterator[dict[str, Any]]:
+        path = _history_path(self._agent_id)
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                for line_number, line in enumerate(stream, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(f"Invalid history entry on line {line_number}.") from exc
+                    if not isinstance(entry, dict):
+                        raise RuntimeError(f"Invalid history entry on line {line_number}.")
+                    yield entry
+        except FileNotFoundError:
+            return
+        except UnicodeError as exc:
+            raise RuntimeError("History log is not valid UTF-8.") from exc
+        except OSError as exc:
+            raise RuntimeError(f"Cannot read history log ({type(exc).__name__}).") from exc
+
+    @staticmethod
+    def _event_text(entry: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for field in ("timestamp", "role"):
+            if field in entry:
+                parts.append(str(entry[field]))
+        content = entry.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and "text" in part:
+                    parts.append(str(part["text"]))
+                elif isinstance(part, str):
+                    parts.append(part)
+        return " ".join(parts)
+
+    def _search_results(
+        self, query: str, limit: int, fixed_strings: bool,
+    ) -> list[dict[str, Any]]:
+        if not query:
+            raise ValueError("query parameter is required.")
+        try:
+            pattern = re.compile(re.escape(query) if fixed_strings else query, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(f"invalid regex query: {exc}") from exc
+        limit = max(1, min(limit, self._MAX_LIMIT))
+        matches: list[dict[str, Any]] = []
+        for entry in self._history_entries():
+            text = self._event_text(entry)
+            if len(matches) < limit and pattern.search(text):
+                preview = text[:500] + ("..." if len(text) > 500 else "")
+                matches.append({**entry, "ref": self._event_ref(entry), "preview": preview})
+        return matches
+
+    async def search_results(
+        self, query: str, limit: int, fixed_strings: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Search real entries and return stable references for the current Agent."""
+        return await asyncio.to_thread(self._search_results, query, limit, fixed_strings)
+
+    def _read_result(self, ref: str) -> dict[str, Any]:
+        if not re.fullmatch(r"event:[0-9a-f]{64}", ref):
+            raise ValueError("Invalid history event reference.")
+        for entry in self._history_entries():
+            if self._event_ref(entry) == ref:
+                return entry
+        raise ValueError("History event reference is stale or unavailable.")
+
+    async def read_result(self, ref: str) -> dict[str, Any]:
+        """Read one matching entry from the current Agent's current history log."""
+        return await asyncio.to_thread(self._read_result, ref)
+
     async def execute(
         self,
         query: str | None = None,
@@ -255,53 +342,18 @@ class MemorySearchTool(Tool):
         if not history_path.exists():
             return "No history found (history.jsonl does not exist yet)."
 
-        import re
-
         try:
-            pattern = re.compile(re.escape(query), re.IGNORECASE) if fixed_strings else re.compile(query, re.IGNORECASE)
-        except re.error as e:
-            return f"Error: invalid regex query: {e}"
-
-        matches: list[str] = []
-        try:
-            with history_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    # Search in message content
-                    text_parts = []
-                    if "timestamp" in entry:
-                        text_parts.append(str(entry["timestamp"]))
-                    if "role" in entry:
-                        text_parts.append(str(entry["role"]))
-                    if "content" in entry:
-                        content = entry["content"]
-                        if isinstance(content, str):
-                            text_parts.append(content)
-                        elif isinstance(content, list):
-                            for part in content:
-                                if isinstance(part, dict):
-                                    if "text" in part:
-                                        text_parts.append(str(part["text"]))
-                                elif isinstance(part, str):
-                                    text_parts.append(part)
-                    blob = " ".join(text_parts)
-                    if pattern.search(blob):
-                        ts = entry.get("timestamp", "?")
-                        role = entry.get("role", "?")
-                        # Truncate long content for display
-                        display = blob[:500] + ("..." if len(blob) > 500 else "")
-                        matches.append(f"[{ts}] {role}: {display}")
-                        if len(matches) >= limit:
-                            break
+            entries = await self.search_results(query, limit, fixed_strings)
+        except ValueError as e:
+            return f"Error: {e}"
         except Exception as e:
             return f"Error searching history: {e}"
 
+        matches: list[str] = []
+        for entry in entries:
+            ts = entry.get("timestamp", "?")
+            role = entry.get("role", "?")
+            matches.append(f"[{ts}] {role}: {entry['preview']}")
         if not matches:
             return f"No matches found for query: {query}"
 

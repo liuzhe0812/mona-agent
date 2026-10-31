@@ -47,11 +47,17 @@ def _get_vault_path() -> Path | None:
     return None
 
 
-async def _get_vault_path_async() -> Path | None:
+async def _get_vault_path_async(*, strict: bool = False) -> Path | None:
     """Async counterpart that keeps IPC off the agent event loop."""
     try:
         result = await tauri_invoke_async("notes_vault_get_path")
-    except RuntimeError:
+    except Exception as e:
+        if strict:
+            raise ConnectionError(
+                f"notes_vault_get_path failed ({type(e).__name__})"
+            ) from e
+        if not isinstance(e, RuntimeError):
+            raise
         return None
     if result is None:
         return None
@@ -61,6 +67,8 @@ async def _get_vault_path_async() -> Path | None:
         v = result.get("path") or result.get("result")
         if isinstance(v, str) and v.strip():
             return Path(v.strip())
+    if strict and not isinstance(result, (str, dict)):
+        raise ConnectionError("notes_vault_get_path returned an invalid response.")
     return None
 
 
@@ -216,22 +224,38 @@ class NotesReadTool(Tool):
             "the preview, 'full' notes return the complete content."
         )
 
-    async def execute(self, **kwargs: Any) -> Any:
-        note_id = str(kwargs.get("note_id", "")).strip()
-        if not note_id:
-            return "Error: note_id is required."
-        if not await _vault_ready_async():
-            return "Error: Notes vault is not configured."
-
+    async def read_result(self, note_id: str) -> dict[str, Any]:
+        if not isinstance(note_id, str) or not note_id.strip():
+            raise ValueError("note_id is required.")
+        note_id = note_id.strip()
+        if await _get_vault_path_async(strict=True) is None:
+            raise FileNotFoundError("Notes vault is not configured.")
         try:
             result = await tauri_invoke_async(
                 "notes_read_note_content", {"noteId": note_id}
             )
-        except RuntimeError as e:
-            return f"Error reading note: {e}"
-
+        except Exception as e:
+            raise RuntimeError(
+                f"notes_read_note_content failed ({type(e).__name__}): {e}"
+            ) from e
         if not isinstance(result, dict):
-            return f"Unexpected response: {result}"
+            raise ValueError("notes_read_note_content returned an invalid response; expected an object.")
+        if not isinstance(result.get("contentMarkdown"), str):
+            raise ValueError("notes_read_note_content returned invalid contentMarkdown.")
+        return result
+
+    async def execute(self, **kwargs: Any) -> Any:
+        note_id = str(kwargs.get("note_id", "")).strip()
+        if not note_id:
+            return "Error: note_id is required."
+        try:
+            result = await self.read_result(note_id)
+        except (ConnectionError, FileNotFoundError):
+            return "Error: Notes vault is not configured."
+        except ValueError as e:
+            return f"Unexpected response: {e}"
+        except RuntimeError as e:
+            return f"Error reading note: {e.__cause__ or e}"
 
         title = result.get("title", "(untitled)")
         content = result.get("contentMarkdown", "")

@@ -130,7 +130,10 @@ def test_mona_tool_catalog_does_not_restore_removed_tools_from_an_old_selection(
 def test_expert_tool_catalogs_share_common_tools_and_isolate_exclusive_tools(
     tmp_path: Path,
 ) -> None:
-    registry = AgentRegistry()
+    registry = AgentRegistry(
+        builtin_dir=Path(__file__).resolve().parents[2] / "expert-library" / "agents",
+        installed_dir=tmp_path / "installed",
+    )
     academic = registry.require("com.mona.academic-researcher")
     musician = registry.require("com.mona.musician")
 

@@ -17,6 +17,11 @@ _RETIRED_STOCK_TOOL_MODULES = frozenset({
     "mona.agent.tools.stock_diagnosis_submit",
 })
 
+_MEMORY_SOURCE_TOOLS = frozenset({
+    "notes_search", "notes_read", "knowledge_search", "knowledge_read",
+    "conversation_search", "conversation_read", "memory_search", "memory_read",
+})
+
 
 def _is_retired_stock_tool(tool: Tool) -> bool:
     return type(tool).__module__ in _RETIRED_STOCK_TOOL_MODULES
@@ -80,6 +85,10 @@ class ToolRegistry:
             or tool.name in self._allowed_tool_names
         )
 
+    def is_permitted(self, name: str) -> bool:
+        """Check source authorization independently of its model-facing schema."""
+        return self._is_allowed(self._tools.get(name))
+
     @staticmethod
     def _schema_name(schema: dict[str, Any]) -> str:
         """Extract a normalized tool name from either OpenAI or flat schemas."""
@@ -132,6 +141,8 @@ class ToolRegistry:
         for tool in self._tools.values():
             if not self._is_allowed(tool):
                 continue
+            if self.has("search_memory") and tool.name in _MEMORY_SOURCE_TOOLS:
+                continue
             if not getattr(tool, "model_visible", True):
                 continue
             definitions.append(tool.to_schema())
@@ -154,6 +165,8 @@ class ToolRegistry:
         self,
         name: str,
         params: dict[str, Any],
+        *,
+        memory_source: bool = False,
     ) -> tuple[Tool | None, dict[str, Any], str | None]:
         """Resolve, cast, and validate one tool call."""
         tool = self._tools.get(name)
@@ -161,6 +174,8 @@ class ToolRegistry:
             return None, params, f"Error: Tool '{name}' is not permitted for this agent."
         if tool is not None and not getattr(tool, "model_visible", True):
             return None, params, f"Error: Tool '{name}' is internal and not model-callable."
+        if self.has("search_memory") and name in _MEMORY_SOURCE_TOOLS and not memory_source:
+            return None, params, "Error: use search_memory to search local information, then read_memory(ref) to read it."
         # Guard against invalid parameter types (e.g., list instead of dict)
         if not isinstance(params, dict) and name in ('write_file', 'read_file'):
             return None, params, (

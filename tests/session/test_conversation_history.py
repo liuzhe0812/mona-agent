@@ -166,6 +166,9 @@ def test_session_file_cap_does_not_remove_transcript_source(tmp_path, monkeypatc
     for index in range(2_010):
         session.add_message("user" if index % 2 == 0 else "assistant", str(index))
     session.enforce_file_cap(limit=2_000)
+    assert len(session.messages) == 2_010
+    session.last_consolidated = 10
+    session.enforce_file_cap(limit=2_000)
     manager.save(session)
     assert len(session.messages) <= 2_000
     assert all(message["content"] != "0" for message in session.messages)

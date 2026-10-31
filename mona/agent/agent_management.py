@@ -116,7 +116,7 @@ def _tool_category(name: str) -> str:
         "apply_patch", "deliver_file", "edit_file", "exec", "find_files", "grep", "list_dir",
     }:
         return "files"
-    if name.startswith("memory_") or name.startswith("hoard_"):
+    if name.startswith("memory_") or name.startswith("hoard_") or name in {"search_memory", "read_memory"}:
         return "memory"
     if name.startswith("skill_"):
         return "skills"

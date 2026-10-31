@@ -320,18 +320,21 @@ def _parse_text_document(content: str) -> tuple[dict[str, Any], list[tuple[dict[
 
 
 def _index_text_md(
-    vault: Path, index: MaterialsIndex, md_file: Path
+    vault: Path, index: MaterialsIndex, md_file: Path, *, strict: bool = False,
 ) -> tuple[str | None, int | None]:
     """索引单个 text/ 文件。
 
     返回 (material_id, chunks)：chunks 为 None 表示指纹未变跳过；
     material_id 为 None 表示文件不可索引（读取失败/无 id/状态非 ok），
     调用方不应把它计入存活集合（其旧 chunks 会被 remove_except 清理）。
+    strict 模式的读取错误直接上抛，避免将不可读文件当成已删除。
     """
     del vault  # 路径推导只依赖 md_file 内容与索引
     try:
         content = md_file.read_text(encoding="utf-8")
     except OSError:
+        if strict:
+            raise
         return None, None
     fm, segments = _parse_text_document(content)
     material_id = fm.get("id")
@@ -377,12 +380,14 @@ def _index_text_md(
 
 
 def _index_wiki_md(
-    index: MaterialsIndex, wiki_root: Path, md_file: Path
+    index: MaterialsIndex, wiki_root: Path, md_file: Path, *, strict: bool = False,
 ) -> tuple[str | None, int | None]:
     """索引单个 wiki/ 文件，返回约定同 `_index_text_md`。"""
     try:
         content = md_file.read_text(encoding="utf-8")
     except OSError:
+        if strict:
+            raise
         return None, None
     fm, body = _parse_frontmatter(content)
     wiki_rel = str(md_file.relative_to(wiki_root)).replace("\\", "/")
@@ -424,10 +429,12 @@ def sync_index(
     index: MaterialsIndex,
     *,
     library_root: Path | None = None,
+    strict: bool = False,
 ) -> dict[str, int]:
     """把 text/ 与 wiki/ 的最新状态增量同步进索引。
 
     返回 {"indexed": n, "skipped": n, "removed": n}。
+    strict 模式读取失败时中止同步，不清理未扫描到的旧索引。
     """
     root = library_root or index._library_root
     text_root = root / "text"
@@ -438,7 +445,7 @@ def sync_index(
 
     if text_root.exists():
         for md_file in sorted(text_root.rglob("*.md")):
-            material_id, chunks = _index_text_md(vault, index, md_file)
+            material_id, chunks = _index_text_md(vault, index, md_file, strict=strict)
             if material_id is None:
                 continue
             seen.add(material_id)
@@ -449,7 +456,7 @@ def sync_index(
 
     if wiki_root.exists():
         for md_file in sorted(wiki_root.rglob("*.md")):
-            material_id, chunks = _index_wiki_md(index, wiki_root, md_file)
+            material_id, chunks = _index_wiki_md(index, wiki_root, md_file, strict=strict)
             if material_id is None:
                 continue
             seen.add(material_id)

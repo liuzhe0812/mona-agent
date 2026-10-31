@@ -142,6 +142,8 @@ design-assets/
 !tests/tools/test_scientific_backend.py
 !tests/tools/test_video_workbench.py
 !tests/tools/test_visualizer.py
+!tests/tools/test_unified_memory.py
+!tests/tools/test_memory_retrieval_quality.py
 !/tests/agent/
 /tests/agent/*
 !/tests/agent/test_ask_user_question.py

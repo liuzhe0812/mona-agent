@@ -112,6 +112,8 @@ class ToolLoader:
         # Mona agent). A concrete list restricts registration to the
         # intersection of the allowlist and the platform-safe table — Mona-only
         # tools are stripped even when named (multi-agent guide 7.2 steps 4-5).
+        if ctx is not None:
+            ctx.registry = registry
         allow = set(tool_allowlist) if tool_allowlist is not None else None
         registered: list[str] = []
         builtin_names: set[str] = set()
