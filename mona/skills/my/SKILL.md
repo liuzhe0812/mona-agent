@@ -1,71 +1,26 @@
 ---
 name: my
-description: Check and set the agent's own runtime state (model, iterations, token usage, web config). Use when diagnosing why something doesn't work ("why can't you search the web?", "why did you stop?"), checking resource limits before complex tasks, adapting configuration for long or simple tasks, or remembering user preferences across turns. Also use when the user asks what model you are running, how many tokens you've used, or what your settings are.
-always: true
+description: Inspect the agent's runtime state and diagnose configuration or usage questions. When enabled, modify runtime settings or store temporary scratchpad notes.
+short_description: Inspect runtime model, settings, usage, or tool failures.
 ---
 
 # Self-Awareness
 
-## How to use
+Use `my` to inspect the current model, settings, token usage, and configuration when diagnosing a failure. Call `check` without a key for an overview, or with a key or dot path for a specific value:
 
-1. **Identify the situation** from the categories below
-2. **Call the my tool** with the appropriate action
-3. **If set**, warn the user before changing impactful settings (model, iterations)
-4. **For detailed examples**, read [references/examples.md](references/examples.md)
+```text
+my(action="check", key="model")
+my(action="check", key="_last_usage.prompt_tokens")
+```
 
-## When to check
+`web_config` and `exec_config` are readable but cannot be modified.
 
-<rule>
-**Diagnose before explaining.** When something doesn't work, check your state first.
-</rule>
+## Optional changes
 
-<rule>
-**Check budget before complex tasks.** Know your limits before committing.
-</rule>
+`my` is read-only by default. The `set` action requires `tools.my.allow_set` to be enabled. Changes are in memory and reset on restart. `max_iterations` must be between 1 and 100; `model` must be a non-empty string. Warn the user before a change that could cause instability, such as changing the model.
 
-<rule>
-**Recall across turns.** Store preferences in your scratchpad, read them back later.
-</rule>
+When enabled, `set` can also store scratchpad notes under a key, which `check` can later retrieve. Notes can survive across turns but are lost on restart; they are not persistent memory. Do not store credentials or other sensitive data there.
 
-## When to set
+`my` cannot read or write `USER.md`. Use memory tools for long-term memory.
 
-<rule>
-**Only set when benefit is clear and user is informed.** Warn before changing model.
-</rule>
-
-| Situation | Command |
-|-----------|---------|
-| Repetitive simple tasks | `my(action="set", key="model", value="<fast-model>")` |
-| Long multi-step task | `my(action="set", key="max_iterations", value=80)` |
-
-**Tradeoff:** Bias toward stability. Only set when defaults are genuinely insufficient.
-
-## Anti-patterns
-
-<rule>
-**Don't check every turn.** Costs a tool call. Use when you need information, not reflexively.
-</rule>
-
-<rule>
-**Don't store sensitive data.** No API keys, passwords, or tokens in scratchpad.
-</rule>
-
-<rule>
-**Don't set workspace.** Does not update file tool boundaries — won't work.
-</rule>
-
-## Constraints
-
-- All modifications in-memory only — restart resets everything
-- Protected params have type/range validation: `max_iterations` (1–100), `model` (non-empty str)
-- If `tools.my.allow_set` is false, check only
-
-## Related tools
-
-| Need | Use | Persists? |
-|------|-----|-----------|
-| Per-session temp state | `my(action="set", key="...", value=...)` | No |
-| Long-term facts | Memory skill (`MEMORY.md`, `USER.md`) | Yes |
-| Permanent config change | Edit config file | Yes |
-
-**Rule of thumb:** Tomorrow? Memory. This turn only? My.
+For additional examples, read [references/examples.md](references/examples.md).

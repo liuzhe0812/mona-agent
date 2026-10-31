@@ -101,10 +101,10 @@ class _UniversalTool(Tool):
         return "ok"
 
 
-class _ForgedStockTool(_SubagentOnlyTool):
+class _ForgedAcademicTool(_SubagentOnlyTool):
     @property
     def name(self):
-        return "stock_quote"
+        return "scientific_tool"
 
 
 class _ForgedTerminalTool(_SubagentOnlyTool):
@@ -129,7 +129,7 @@ async def test_loader_filters_by_scope():
 
 
 def test_exclusive_tool_ownership_rejects_a_forged_expert_allowlist():
-    loader = ToolLoader(test_classes=[_ForgedStockTool])
+    loader = ToolLoader(test_classes=[_ForgedAcademicTool])
     forged = ToolRegistry()
     owner = ToolRegistry()
 
@@ -137,18 +137,18 @@ def test_exclusive_tool_ownership_rejects_a_forged_expert_allowlist():
         ToolContext(config={}, workspace="/tmp", agent_id="com.example.forged"),
         forged,
         scope="subagent",
-        tool_allowlist=["stock_quote"],
+        tool_allowlist=["scientific_tool"],
     )
     loader.load(
-        ToolContext(config={}, workspace="/tmp", agent_id="com.mona.a-share-analyst"),
+        ToolContext(config={}, workspace="/tmp", agent_id="com.mona.academic-researcher"),
         owner,
         scope="subagent",
-        tool_allowlist=["stock_quote"],
+        tool_allowlist=["scientific_tool"],
     )
 
-    assert not forged.has("stock_quote")
-    assert owner.has("stock_quote")
-    assert tool_available_to_agent("stock_quote", "com.mona.a-share-analyst")
+    assert not forged.has("scientific_tool")
+    assert owner.has("scientific_tool")
+    assert tool_available_to_agent("scientific_tool", "com.mona.academic-researcher")
 
 
 def test_terminal_module_tools_are_reserved_for_mona():
@@ -251,8 +251,8 @@ def test_subagent_tools_config_inherits_notes_controls(tmp_path):
 
 def test_spawn_registry_keeps_local_knowledge_available(tmp_path):
     registry = _subagent_manager(tmp_path)._build_tools()
-    assert "knowledge_search" in _definition_names(registry.get_definitions())
-    tool, _, error = registry.prepare_call("knowledge_search", {"query": "paper"})
+    assert {"search_memory", "read_memory"} <= _definition_names(registry.get_definitions())
+    tool, _, error = registry.prepare_call("knowledge_search", {"query": "paper"}, memory_source=True)
     assert tool is not None
     assert error is None
 
@@ -273,9 +273,9 @@ def test_named_agent_registry_keeps_granted_knowledge_available(tmp_path):
 
     manager = _subagent_manager(tmp_path)
     tools = manager._build_named_agent_tools(definition, job)
-    assert {"knowledge_search", "knowledge_read"} <= _definition_names(tools.get_definitions())
+    assert {"search_memory", "read_memory"} <= _definition_names(tools.get_definitions())
     tool, _, error = tools.prepare_call(
-        "knowledge_read", {"ref": "paper:1"}
+        "knowledge_read", {"ref": "paper:1"}, memory_source=True,
     )
     assert tool is not None
     assert error is None

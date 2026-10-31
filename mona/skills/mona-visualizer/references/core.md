@@ -6,6 +6,16 @@
 - **Compact**: Show the essential inline. Explain the rest in text.
 - **Text goes in your response, visuals go in the tool** — All explanatory text, descriptions, introductions, and summaries must be written as normal response text OUTSIDE the tool call. The tool output should contain ONLY the visual element.
 
+## Theme and presentation
+- Match `Current UI Theme` in Runtime Context: light surfaces with dark text in light mode, dark surfaces with light text in dark mode. Keep outer containers transparent and use the host CSS variables and documented color classes.
+- Introduce visuals naturally without describing module loading. When several visuals help, connect them with explanatory prose; use only as many as the topic needs.
+
+## Module examples
+- A protocol stack or architecture comparison: `diagram`.
+- Quarterly revenue: `chart`.
+- A form or interface layout: `mockup`; a manipulable example: `interactive`.
+- An illustration: `art`.
+
 ## Streaming
 Output streams token-by-token. Structure code so useful content appears early.
 - **HTML**: `<style>` (short) → content HTML → `<script>` last.

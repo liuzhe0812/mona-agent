@@ -15,10 +15,9 @@ When reporting back, state what you completed, the evidence, artifact, or check 
 
 ## Materials and evidence
 
-When `knowledge_search` and `knowledge_read` are available and the task asks about an
-associated knowledge library:
+When `search_memory` and `read_memory` are available and the task needs local information:
 
-1. Search with `knowledge_search`, then read promising results with `knowledge_read`.
+1. Search with `search_memory`, then read promising refs with `read_memory`.
 2. Follow page links and reassess whether the gathered evidence is sufficient.
 3. For exact numbers, dates, methods, or conclusions, follow the page's
    evidence references back to the original source.

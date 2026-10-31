@@ -169,12 +169,12 @@ def test_visualizer_remains_available_with_old_work_permissions_and_is_excluded_
         AgentDefinition(id="mona", display_name="Mona"),
         AgentUserConfig(granted_tools=["read_file"]),
     )
-    assert {"read_me", "show_widget"} <= set(effective.allowed_tools)
+    assert "show_widget" in effective.allowed_tools
     loader = ToolLoader()
     ctx = ToolContext(config=ToolsConfig(), workspace=str(tmp_path))
     work = ToolRegistry()
     names = loader.load(ctx, work, scope="core", tool_allowlist={"read_me", "show_widget"})
-    assert set(names) == {"read_me", "show_widget"}
+    assert set(names) == {"show_widget"}
     work.set_allowed_tool_names(set(effective.allowed_tools))
     for name in names:
         work.get(name).set_context(RequestContext(channel="websocket", chat_id="chat"))
@@ -199,9 +199,6 @@ def test_widget_theme_is_runtime_metadata_and_does_not_change_system_prompt(tmp_
 
 
 def test_work_visualizer_prompt_is_injected_verbatim_only_for_visible_work_tools(tmp_path):
-    import hashlib
-    from pathlib import Path
-
     from mona.agent.context import ContextBuilder
     from mona.agent.tools.context import RequestContext, ToolContext
     from mona.agent.tools.loader import ToolLoader
@@ -210,10 +207,6 @@ def test_work_visualizer_prompt_is_injected_verbatim_only_for_visible_work_tools
     from mona.utils.prompt_templates import render_template
 
     builder = ContextBuilder(tmp_path)
-    source_path = Path(__file__).resolve().parents[2] / "mona" / "templates" / "agent" / "visualizer.md"
-    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == (
-        "7b7806dc391017dda8d6d9687ffad945bbacdf48125a85ac321d2f4f87b3cd66"
-    )
     visualizer_prompt = render_template("agent/visualizer.md", productName="Mona")
     tool_context = ToolContext(config=ToolsConfig(), workspace=str(tmp_path))
     registry = ToolRegistry()
@@ -228,7 +221,7 @@ def test_work_visualizer_prompt_is_injected_verbatim_only_for_visible_work_tools
     for name in names:
         registry.get(name).set_context(RequestContext(channel="websocket", chat_id="chat"))
     visible_work_tools = {schema["function"]["name"] for schema in registry.get_definitions()}
-    assert visible_work_tools == {"read_me", "show_widget"}
+    assert visible_work_tools == {"show_widget"}
 
     # This matches the Dev prompt renderer, which supplies visible tools without a channel.
     dev_function_contract = render_template("agent/tool_contract.md", tool_names=visible_work_tools)
@@ -243,10 +236,11 @@ def test_work_visualizer_prompt_is_injected_verbatim_only_for_visible_work_tools
     assert visualizer_prompt in dev_function_contract
     assert visualizer_prompt in with_tools
     assert with_tools.count(visualizer_prompt) == 1
-    assert "Always use the Visualizer for educational topics" in visualizer_prompt
-    assert "pure dictionary-style" in visualizer_prompt
-    assert 'Request: "Explain how TCP/IP works"' in visualizer_prompt
-    assert "→ Proactively use the Visualizer" in visualizer_prompt
+    assert "materially improves understanding" in visualizer_prompt
+    assert "simple facts and lookups usually need only text" in visualizer_prompt
+    assert 'skill_read(name="mona-visualizer")' in visualizer_prompt
+    assert "`read_me`" not in visualizer_prompt
+    assert "Current UI Theme" in visualizer_prompt
     assert "{{ productName }}" not in visualizer_prompt
     assert visualizer_prompt not in development_prompt
     assert "Use a focused Mermaid diagram only when relationships are materially clearer than prose" in development_prompt

@@ -16,6 +16,7 @@ from mona.agent.tools.schema import (
 )
 
 CAPABILITY_TOOL_GROUPS: dict[str, frozenset[str]] = {
+    "diagnostics": frozenset({"my"}),
     "development": frozenset(
         {"apply_patch", "edit_file", "write_file", "grep", "exec", "write_stdin", "list_exec_sessions"}
     ),
@@ -159,6 +160,8 @@ def activate_capabilities_for_history(history: list[dict[str, Any]]) -> None:
                     active.add("office")
                 if isinstance(arguments, dict) and arguments.get("name") == "mona-motion":
                     active.update(VIDEO_CREATION_CAPABILITIES)
+                if isinstance(arguments, dict) and arguments.get("name") == "my":
+                    active.add("diagnostics")
             else:
                 groups = capabilities_for_tool(name)
                 # Shared delivery tools do not imply that every media pack was used.
@@ -199,6 +202,7 @@ class LoadCapabilityTool(Tool):
     description = (
         "Load specialized tools from natural-language intent without asking the user "
         "to name a tool or mode. Packs: development (edit/write files, search code, run commands), "
+        "diagnostics (inspect model, settings, and previous-run usage), "
         "skill_resources (skill references/scripts/assets; also enabled by skill_read), "
         "http (direct API requests), office (documents/spreadsheets/slides/PDF), image (generate/edit images), "
         "video, email, database, terminal, notes_write (create/save notes), saved_memory "

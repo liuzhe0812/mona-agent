@@ -102,7 +102,7 @@ def test_fixed_prompt_sections_stay_compact_and_keep_required_contracts() -> Non
         "terminal_task",
         "independent verify step",
         "db_sql_draft",
-        "Dream-only `memory_edit`",
+        "shared user profile is a separate read-only snapshot",
     )
     for rule in required_rules:
         assert rule in contract
@@ -111,10 +111,61 @@ def test_fixed_prompt_sections_stay_compact_and_keep_required_contracts() -> Non
     assert "Wait for the tool results, then answer once" not in identity
     assert "Attached images are part of the conversation" in contract
     assert "Start by observing the available windows" not in contract
-    assert "knowledge_read(ref)" in identity
+    assert "read_memory(ref)" in identity
     assert "mona-docx" in skills
     assert "mona-xlsx" in skills
     assert "mona-pptx" in skills
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "max_tokens"),
+    [([], 3_000), (["development"], 3_600), (["diagnostics"], 3_000)],
+    ids=["default-work", "loaded-development", "loaded-diagnostics"],
+)
+def test_work_system_prompt_budget_uses_visible_tools(
+    tmp_path, monkeypatch, capabilities, max_tokens,
+) -> None:
+    monkeypatch.setattr("mona.config.loader._current_config_path", tmp_path / "config.json")
+    loop = AgentLoop(
+        bus=MessageBus(), provider=MagicMock(), workspace=tmp_path, model="test-model",
+    )
+    for name in ("SOUL.md", "memory/MEMORY.md"):
+        source = pkg_files("mona") / "templates" / name
+        target = loop.context.memory.memory_dir / source.name
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    session = loop.sessions.get_or_create("websocket:prompt-budget")
+    loop._set_tool_context("websocket", "prompt-budget", session=session)
+    if capabilities:
+        asyncio.run(loop.tools.execute("load_capability", {"capabilities": capabilities}))
+
+    messages = loop._build_initial_messages(
+        InboundMessage(
+            channel="websocket", sender_id="user", chat_id="prompt-budget", content="hello",
+        ),
+        session, [], None,
+    )
+    visible_tools = {item["function"]["name"] for item in loop.tools.get_definitions()}
+    assert {"search_memory", "read_memory", "show_widget"} <= visible_tools
+    assert not {"read_me", "memory_read", "memory_search", "notes_search", "notes_read", "knowledge_search", "knowledge_read", "conversation_search", "conversation_read"} & visible_tools
+    assert not loop.tools.has("stock_vibe_task")
+    assert ("my" in visible_tools) == ("diagnostics" in capabilities)
+    my_description = loop.tools.get("my").description
+    assert "READ-ONLY MODE" in my_description
+    assert "scratchpad" not in my_description
+    prompt = messages[0]["content"]
+    assert "<instructions_for_visualizer>" in prompt
+    assert "### Skill: memory" in prompt
+    assert "### Skill: my" not in prompt
+    assert "**my**" in prompt
+    assert "search_memory" in prompt and "read_memory" in prompt
+    if "diagnostics" in capabilities:
+        assert loop.tools.get("my").parameters["properties"]["action"]["enum"] == ["check"]
+    if "development" in capabilities:
+        assert {"exec", "apply_patch"} <= visible_tools
+        assert "## Process Execution" in prompt
+    else:
+        assert "## Process Execution" not in prompt
+    assert _text_tokens(prompt) < max_tokens
 
 
 def test_email_search_schema_keeps_fields_and_constraints_with_compact_text() -> None:
@@ -419,8 +470,8 @@ def test_capability_loader_keeps_core_tools_and_loads_image_skill(tmp_path) -> N
     for tool in (
         loader,
         _NamedTool("my"),
-        _NamedTool("notes_search"),
-        _NamedTool("knowledge_search"),
+        _NamedTool("search_memory"),
+        _NamedTool("read_memory"),
         _NamedTool("generate_image"),
         _NamedTool("message"),
     ):
@@ -429,10 +480,9 @@ def test_capability_loader_keeps_core_tools_and_loads_image_skill(tmp_path) -> N
 
     initial = [item["function"]["name"] for item in registry.get_definitions()]
     assert initial == [
-        "knowledge_search",
         "load_capability",
-        "my",
-        "notes_search",
+        "read_memory",
+        "search_memory",
     ]
     assert tool_enabled_by_capability("office") is False
     assert "natural-language intent" in loader.description
@@ -443,11 +493,10 @@ def test_capability_loader_keeps_core_tools_and_loads_image_skill(tmp_path) -> N
     assert "### Skill: image-generation" in result
     assert [item["function"]["name"] for item in registry.get_definitions()] == [
         "generate_image",
-        "knowledge_search",
         "load_capability",
         "message",
-        "my",
-        "notes_search",
+        "read_memory",
+        "search_memory",
     ]
 
 
@@ -814,11 +863,14 @@ def test_skill_read_unlocks_resources_only_after_success(monkeypatch, tmp_path) 
     registry.register(LoadCapabilityTool(workspace=tmp_path, agent_id="mona", registry=registry))
     registry.register(SkillReadTool(track_usage=False))
     registry.register(SkillReferenceReadTool(track_usage=False))
+    registry.register(_NamedTool("my"))
     bind_capability_context(RequestContext(channel="websocket", chat_id="skill"))
+    assert not registry.is_visible("my")
     assert not registry.is_visible("skill_reference_read")
     assert "not found" in asyncio.run(registry.execute("skill_read", {"name": "absent-skill"}))
     assert not registry.is_visible("skill_reference_read")
     assert "# Self-Awareness" in asyncio.run(registry.execute("skill_read", {"name": "my"}))
+    assert registry.is_visible("my")
     assert registry.is_visible("skill_reference_read")
     result = asyncio.run(registry.execute("skill_reference_read", {"skill": "my", "ref_path": "examples.md"}))
     assert not result.startswith("Error")

@@ -124,6 +124,8 @@ class SkillReadTool(Tool):
         from mona.agent.tools.capabilities import activate_capabilities
 
         activate_capabilities({"skill_resources"})
+        if name == "my":
+            activate_capabilities({"diagnostics"})
         if name in {"pdf", "mona-docx", "mona-xlsx", "mona-pptx"}:
             activate_capabilities({"office"})
         if name == "mona-motion":

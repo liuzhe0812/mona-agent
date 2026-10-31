@@ -127,27 +127,17 @@ class MyTool(Tool, ContextAware):
     @property
     def description(self) -> str:
         base = (
-            "Check and set your own runtime state.\n"
-            "Actions: check, set.\n"
-            "- check (no key): full config overview — start here.\n"
-            "- check (key): drill into a value. Dot-paths allowed "
-            "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
-            "- set (key, value): change config or store notes in your scratchpad. "
-            "Scratchpad keys persist across turns but not restarts.\n"
-            "Key values: _current_iteration (current progress), "
-            "max_iterations - _current_iteration = remaining iterations.\n"
-            "Note: web_config and exec_config are readable but read-only.\n"
-            "\n"
-            "When to use:\n"
-            "- User asks about your model, settings, or token usage → check that key.\n"
-            "- A tool fails or behaves unexpectedly → check the related config to diagnose.\n"
-            "- User asks you to remember a preference for this session → set to store it in your scratchpad.\n"
-            "- About to start a large task → check max_iterations first."
+            "Inspect configured model, settings, or the last completed run's token usage when diagnosing a failure. "
+            "Use check without a key for an overview, or with a key or dot path "
+            "(e.g. '_last_usage.prompt_tokens', 'web_config.enable'). "
+            "web_config and exec_config are read-only."
         )
         if not self._modify_allowed:
             base += "\nREAD-ONLY MODE: set is disabled."
         else:
             base += (
+                "\nUse set to change runtime state or store scratchpad notes; "
+                "notes persist across turns but are lost on restart."
                 "\nIMPORTANT: Before setting state, predict the potential impact. "
                 "If the operation could cause crashes or instability "
                 "(e.g. changing model), warn the user first."
@@ -156,23 +146,29 @@ class MyTool(Tool, ContextAware):
 
     @property
     def parameters(self) -> dict[str, Any]:
+        properties: dict[str, Any] = {
+            "action": {
+                "type": "string",
+                "enum": ["check", "set"] if self._modify_allowed else ["check"],
+                "description": "Action to perform",
+            },
+            "key": {
+                "type": "string",
+                "description": "Runtime key or dot-path. Examples: 'max_iterations', 'workspace', 'provider_retry_mode'. "
+                "For check without key, shows all config values.",
+            },
+        }
+        if self._modify_allowed:
+            properties["value"] = {"description": "New value (for set). Type must match target (int for max_iterations, str for model)."}
         return {
             "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["check", "set"],
-                    "description": "Action to perform",
-                },
-                "key": {
-                    "type": "string",
-                    "description": "Dot-path for check/set. Examples: 'max_iterations', 'workspace', 'provider_retry_mode'. "
-                    "For check without key, shows all config values.",
-                },
-                "value": {"description": "New value (for set). Type must match target (int for max_iterations, str for model)."},
-            },
+            "properties": properties,
             "required": ["action"],
         }
+
+    @property
+    def read_only(self) -> bool:
+        return not self._modify_allowed
 
     def _audit(self, action: str, detail: str) -> None:
         session = f"{self._channel}:{self._chat_id}" if self._channel else "unknown"

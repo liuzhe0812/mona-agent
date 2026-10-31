@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from contextvars import copy_context
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,13 +11,9 @@ import pytest
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.visualizer import (
-    ReadMeTool,
     ShowWidgetTool,
     VisualizerToolConfig,
 )
-
-_ROOT = Path(__file__).resolve().parents[2]
-_REFERENCES = _ROOT / "mona" / "skills" / "mona-visualizer" / "references"
 
 
 def _payload(result: str) -> dict:
@@ -38,21 +33,20 @@ def test_tool_scope_config_and_request_context_isolation() -> None:
     config = VisualizerToolConfig()
     assert config.enable is True
     assert config.max_widget_chars == 128_000
-    for tool_type in (ReadMeTool, ShowWidgetTool):
-        assert tool_type.config_cls() is VisualizerToolConfig
-        assert tool_type._scopes == {"core"}
-        assert tool_type.config_key == "visualizer"
-        assert tool_type.system_managed is True
-        assert tool_type.enabled(SimpleNamespace(config=SimpleNamespace(visualizer=config)))
-        instance = tool_type.create(SimpleNamespace(config=SimpleNamespace(visualizer=config)))
-        assert instance.config is config
-        assert instance.read_only is True
-        assert instance.available_in_context() is False
-    assert not ReadMeTool.enabled(
+    assert ShowWidgetTool.config_cls() is VisualizerToolConfig
+    assert ShowWidgetTool._scopes == {"core"}
+    assert ShowWidgetTool.config_key == "visualizer"
+    assert ShowWidgetTool.system_managed is True
+    assert ShowWidgetTool.enabled(SimpleNamespace(config=SimpleNamespace(visualizer=config)))
+    instance = ShowWidgetTool.create(SimpleNamespace(config=SimpleNamespace(visualizer=config)))
+    assert instance.config is config
+    assert instance.read_only is True
+    assert instance.available_in_context() is False
+    assert not ShowWidgetTool.enabled(
         SimpleNamespace(config=SimpleNamespace(visualizer=VisualizerToolConfig(enable=False)))
     )
 
-    tool = ReadMeTool(config)
+    tool = ShowWidgetTool(config)
     assert tool.available_in_context() is False
     tool.set_context(RequestContext(channel="email", chat_id="mail"))
     assert tool.available_in_context() is False
@@ -66,45 +60,27 @@ def test_tool_scope_config_and_request_context_isolation() -> None:
     assert tool.available_in_context() is False
 
 
-def test_read_me_combines_complete_module_guidance_once() -> None:
-    tool = ReadMeTool()
-    tool.set_context(RequestContext(channel="websocket", chat_id="chat"))
-    result = _run(tool.execute(modules=["chart", "diagram", "mockup", "interactive", "art", "chart"]))
-    payload = _payload(result)
-    assert payload["type"] == "visualizer_read_me_result"
+def test_visualizer_guidance_loads_from_skill_references(tmp_path, monkeypatch) -> None:
+    from mona.agent.skills import SkillsLoader
+    from mona.agent.tools import skill_tools
+    from mona.agent.tools.capabilities import LoadCapabilityTool, bind_capability_context
+    from mona.agent.tools.skill_tools import SkillReadTool, SkillReferenceReadTool
 
-    filenames = [
-        "core.md", "colors.md", "ui.md", "chart.md", "maps.md",
-        "svg.md", "diagram.md", "interactive.md", "art.md",
-    ]
-    expected = "\n\n".join((_REFERENCES / filename).read_text(encoding="utf-8").strip() for filename in filenames)
-    assert payload["content"] == expected
-    assert payload["content"].count((_REFERENCES / "core.md").read_text(encoding="utf-8").strip()) == 1
-    assert payload["content"].count((_REFERENCES / "art.md").read_text(encoding="utf-8").strip()) == 1
-
-
-def test_read_me_schema_and_registry_accept_arrays_and_comma_string() -> None:
-    tool = ReadMeTool()
-    tool.set_context(RequestContext(channel="websocket", chat_id="chat"))
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: SkillsLoader(tmp_path))
     registry = ToolRegistry()
-    registry.register(tool)
-    schema = registry.get_definitions()[0]["function"]["parameters"]["properties"]["modules"]
-    assert schema["type"] == "array"
-    assert schema["items"]["enum"] == ["diagram", "mockup", "interactive", "chart", "art"]
+    registry.register(LoadCapabilityTool(workspace=tmp_path, agent_id="mona", registry=registry))
+    registry.register(SkillReadTool(track_usage=False))
+    registry.register(SkillReferenceReadTool(track_usage=False))
+    bind_capability_context(RequestContext(channel="websocket", chat_id="chat"))
 
-    comma_result = _payload(_run(registry.execute("read_me", {"modules": "chart, diagram"})))
-    json_result = _payload(_run(registry.execute("read_me", {"modules": '["art"]'})))
-    assert "# Charts (Chart.js)" in comma_result["content"]
-    assert "# Diagram Guidance" in comma_result["content"]
-    assert "# Art and illustration" in json_result["content"]
-    assert "# Charts (Chart.js)" not in json_result["content"]
-
-
-def test_read_me_rejects_empty_and_unknown_modules() -> None:
-    tool = ReadMeTool()
-    assert _run(tool.execute(modules=[])).startswith("Error:")
-    assert _run(tool.execute(modules="")).startswith("Error:")
-    assert "unsupported" in _run(tool.execute(modules=["unknown"])).lower()
+    assert not registry.is_visible("skill_reference_read")
+    skill = _run(registry.execute("skill_read", {"name": "mona-visualizer"}))
+    assert "skill_reference_read" in skill
+    assert registry.is_visible("skill_reference_read")
+    core = _run(registry.execute("skill_reference_read", {"skill": "mona-visualizer", "ref_path": "core.md"}))
+    diagram = _run(registry.execute("skill_reference_read", {"skill": "mona-visualizer", "ref_path": "diagram.md"}))
+    assert "# Visualizer Core Design System" in core
+    assert "# Diagram Guidance" in diagram
 
 
 def test_show_widget_returns_svg_and_interactive_html_protocol() -> None:

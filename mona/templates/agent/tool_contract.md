@@ -26,12 +26,10 @@ Tool signatures are authoritative. Follow these non-obvious rules.
 - Reply directly in the current conversation. Use `message` for proactive/cross-channel sends or explicitly attaching existing local media, not the normal current-chat reply.
 - `read_file` does not deliver a file. Use `deliver_file` for newly created user-facing artifacts and the message/media mechanism for existing attachments.
 - Generated images are delivered through `message` with the returned artifact paths in `media`.
-{% if tool_names and 'read_me' in tool_names and 'show_widget' in tool_names %}
+{% if tool_names and 'show_widget' in tool_names %}
 {% with productName='Mona' %}
 {% include 'agent/visualizer.md' %}
 {% endwith %}
-
-- Mona integration: use the `UI Theme` field in Runtime Context for the `IDE Theme` field above. Mona implements the color classes documented by `read_me`.
 {% else %}
 - For numeric charts use `chart`, preserve its complete fenced result, and keep the requested chart type.
 - Use a focused Mermaid diagram only when relationships are materially clearer than prose; do not add one for simple information.
@@ -44,6 +42,6 @@ Tool signatures are authoritative. Follow these non-obvious rules.
 
 ## Global Resources (Outside Workspace)
 
-- Memory/profile/personality/instructions use `memory_read`, `memory_search`, and Dream-only `memory_edit`.
+- Search local information with `search_memory`, then `read_memory(ref)`; private memory and persona are automatically managed by Dream, not edited in ordinary chats. The shared user profile is a separate read-only snapshot.
 - Skills use `skill_read`, which also enables `skill_script_run`, `skill_reference_read`, and `skill_asset_copy`. Use `load_capability(capabilities=["skill_resources"])` for already-loaded skills when needed.
 - These resources and HEARTBEAT.md are outside workspace file-tool boundaries; use `heartbeat_update` for heartbeat content.

@@ -7,8 +7,13 @@ description: "为解释、比较、架构讨论或数据探索生成聊天内嵌
 
 用于在普通对话中呈现有助于理解的 SVG、HTML 图形或互动图表。文字解释留在聊天正文，widget 只呈现视觉内容；图中文字使用用户的语言。
 
-绘制前只读取当前任务需要的指南：[core](references/core.md) 是基础；按需读取 [colors](references/colors.md)、[svg](references/svg.md)、[diagram](references/diagram.md)、[ui](references/ui.md)、[interactive](references/interactive.md)、[chart](references/chart.md)、[maps](references/maps.md) 或 [art](references/art.md)。地理图表同时参考 `maps.md`。
+首次绘制前，通过 `skill_reference_read(skill="mona-visualizer", ref_path="...")` 读取公共指南 [core.md](references/core.md)、[colors.md](references/colors.md)，以及当前任务需要的指南：
 
-第一次绘图前，从 `diagram`、`mockup`、`interactive`、`chart`、`art` 中选择当前需要的模块调用 `read_me(modules=[...])`，再调用 `show_widget(title, widget_code, loading_messages)`。只选择相关模块；切换到另一个模块时再次读取相应指南。不要把整套指南常驻到系统提示词。
+- 关系图：[svg.md](references/svg.md)、[diagram.md](references/diagram.md)。
+- 互动内容或界面示意：[ui.md](references/ui.md)、[interactive.md](references/interactive.md)。
+- 图表：[ui.md](references/ui.md)、[chart.md](references/chart.md)；地理图表还需 [maps.md](references/maps.md)。
+- 插画：[svg.md](references/svg.md)、[art.md](references/art.md)。
+
+已有指南若仍在当前上下文中，直接复用，无需为每张图重复读取；需要新的指南时只读取缺少的文件。使用 `show_widget(title, widget_code, loading_messages)` 展示图形。
 
 用户要求原型图、模拟图或线框图时，使用图像生成能力；已有可编辑画布、Office 文件或文档任务交给相应专用 Skill。

@@ -60,9 +60,9 @@ def test_system_prompt_reflects_current_dream_memory_contract(tmp_path) -> None:
 
     prompt = builder.build_system_prompt()
 
-    assert "history.jsonl" in prompt
+    assert 'sources=["events"]' in prompt
     assert "automatically managed by Dream" in prompt
-    assert "Dream-only `memory_edit`" in prompt
+    assert "do not edit them in normal chats" in prompt
     assert "outside workspace file-tool boundaries" in prompt
     assert "memory/HISTORY.md" not in prompt
     assert "write important facts here" not in prompt
