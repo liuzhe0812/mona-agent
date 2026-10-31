@@ -34,6 +34,8 @@ jobs:
   build:
     name: Build Apple Silicon
     runs-on: macos-15
+    outputs:
+      source_sha: ${{ steps.release_source.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +60,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Select release source
+        id: release_source
+        env:
+          PUBLISH_MODE: ${{ inputs.publish || 'none' }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_MODE" == "ad-hoc" || "$PUBLISH_MODE" == "notarized" ]]; then
+            source_sha="$(python - <<'PY'
+          import json, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          release = json.loads(Path("official-site/public/changelog.json").read_text(encoding="utf-8"))["releases"][0]
+          sha = release.get("gitHash", "")
+          if release.get("version") != version or not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("published changelog does not identify the current release source")
+          print(sha)
+          PY
+            )"
+            git fetch --no-tags --depth=1 origin "$source_sha"
+            git checkout --detach "$source_sha"
+          else
+            source_sha="$(git rev-parse HEAD)"
+          fi
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "Release source: $source_sha"
 
       - name: Install frontend dependencies
         run: |
@@ -112,6 +141,68 @@ jobs:
             exit "$status"
           fi
 
+      - name: Verify Apple Silicon package and DMG
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          app="dist/macos/arm64/Mona.app"
+          dmg="dist/macos/arm64/Mona_${version}_arm64.dmg"
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+          main="$app/Contents/MacOS/$executable"
+          gateway="$(find "$app" -type f -path '*/mona-gateway/mona-gateway' -print -quit)"
+          manifest="$(find "$app" -type f -path '*/desktop-resources/office-editor/manifest.json' -print -quit)"
+          test -n "$gateway" && test -n "$manifest" && test -f "$dmg"
+          sidecar="$(dirname "$manifest")/sheets/xlsx-sidecar"
+          for binary in "$main" "$gateway" "$sidecar"; do
+            test -f "$binary"
+            test "$(lipo -archs "$binary")" = "arm64"
+            codesign --verify --strict "$binary"
+          done
+          codesign --verify --deep --strict "$app"
+          gateway_version="$("$gateway" --version)"
+          [[ "$gateway_version" == *" v$version" ]]
+          "$gateway" --help >/dev/null
+          python - "$manifest" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          manifest_path = Path(sys.argv[1]).resolve()
+          office = manifest_path.parent
+          manifest = json.loads(manifest_path.read_text())
+          entry = manifest.get("xlsxSidecar", {})
+          sidecar = office / "sheets/xlsx-sidecar"
+          if (manifest.get("schemaVersion") != 1 or manifest.get("platform") != "macos"
+                  or manifest.get("arch") != "arm64" or entry.get("path") != "sheets/xlsx-sidecar"
+                  or not sidecar.is_file() or entry.get("size") != sidecar.stat().st_size
+                  or entry.get("sha256") != hashlib.sha256(sidecar.read_bytes()).hexdigest()):
+              raise SystemExit("packaged Office sidecar does not match its manifest")
+          if not all((office / "templates" / name).is_file() for name in ("blank.docx", "blank.xlsx", "blank.pptx")):
+              raise SystemExit("packaged Office templates are incomplete")
+          if not any(path.is_file() for path in (office / "licenses").iterdir()):
+              raise SystemExit("packaged Office licenses are missing")
+          PY
+          mount="$(mktemp -d "$RUNNER_TEMP/mona-dmg.XXXXXX")"
+          mounted=false
+          cleanup() {
+            if [[ "$mounted" == true ]]; then hdiutil detach "$mount" -quiet; fi
+            if [[ -d "$mount" ]]; then rmdir "$mount"; fi
+          }
+          trap cleanup EXIT
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount" -quiet
+          mounted=true
+          dmg_app="$mount/Mona.app"
+          test -d "$dmg_app"
+          codesign --verify --deep --strict "$dmg_app"
+          dmg_gateway="$(find "$dmg_app" -type f -path '*/mona-gateway/mona-gateway' -print -quit)"
+          dmg_manifest="$(find "$dmg_app" -type f -path '*/desktop-resources/office-editor/manifest.json' -print -quit)"
+          test -n "$dmg_gateway" && test -n "$dmg_manifest"
+          cmp "$app/Contents/Info.plist" "$dmg_app/Contents/Info.plist"
+          cmp "$main" "$dmg_app/Contents/MacOS/$executable"
+          cmp "$gateway" "$dmg_gateway"
+          cmp "$manifest" "$dmg_manifest"
+          cmp "$sidecar" "$(dirname "$dmg_manifest")/sheets/xlsx-sidecar"
+          echo "Verified arm64 app, gateway, Office sidecar and DMG contents."
+
       - name: Verify notarization
         if: ${{ inputs.publish == 'notarized' }}
         run: |
@@ -123,14 +214,18 @@ jobs:
       - name: Record release metadata
         env:
           SIGNING_MODE: ${{ inputs.publish == 'notarized' && 'notarized' || 'ad-hoc' }}
+          SOURCE_GIT_HASH: ${{ steps.release_source.outputs.sha }}
         run: |
           python - <<'PY'
-          import hashlib, json, os, tomllib
+          import hashlib, json, os, subprocess, tomllib
           from pathlib import Path
           version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
           root = Path("dist/macos/arm64")
           dmg = root / f"Mona_{version}_arm64.dmg"
-          metadata = {"version": version, "git_hash": os.environ["GITHUB_SHA"], "platform": "macos", "arch": "arm64", "signing": os.environ["SIGNING_MODE"], "file": dmg.name, "size": dmg.stat().st_size, "sha256": hashlib.sha256(dmg.read_bytes()).hexdigest()}
+          source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if source_sha != os.environ["SOURCE_GIT_HASH"]:
+              raise SystemExit("release source changed during the build")
+          metadata = {"version": version, "git_hash": source_sha, "platform": "macos", "arch": "arm64", "signing": os.environ["SIGNING_MODE"], "file": dmg.name, "size": dmg.stat().st_size, "sha256": hashlib.sha256(dmg.read_bytes()).hexdigest()}
           (root / "release-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
           PY
 
@@ -148,6 +243,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
 
       - name: Download DMG artifact
         uses: actions/download-artifact@v4
