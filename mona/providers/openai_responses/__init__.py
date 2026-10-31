@@ -1,4 +1,4 @@
-﻿"""Shared helpers for OpenAI Responses API providers (Codex, Azure OpenAI)."""
+﻿
 
 from mona.providers.openai_responses.converters import (
     convert_messages,

@@ -1,4 +1,3 @@
-// Compile ZCode's original Tailwind 4 stylesheet without changing Mona's Tailwind 3 build.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -22,8 +21,6 @@ const output = path.join(cache, "output.css");
 await fs.writeFile(input, source);
 execFileSync(process.execPath, [path.join(cliRoot, "dist/index.mjs"), "-i", input, "-o", output], { cwd: root, stdio: "inherit" });
 const tree = postcss.parse(await fs.readFile(output, "utf8"));
-// Mona's Tailwind 3 output is unlayered. Keep the scoped upstream rules at that
-// same cascade level; otherwise the host's utilities override ZCode's tokens.
 tree.walkAtRules("layer", (rule) => { if (rule.nodes) rule.replaceWith(...rule.nodes); else rule.remove(); });
 const keyframes = new Map();
 tree.walkAtRules(/keyframes$/, (rule) => {
@@ -61,4 +58,4 @@ const hostTransformReset = `.zcode-stream, .zcode-stream * {
   --tw-rotate: 0 !important; --tw-skew-x: 0 !important; --tw-skew-y: 0 !important;
   --tw-scale-x: 1 !important; --tw-scale-y: 1 !important;
 }`;
-await fs.writeFile(path.join(sourceDir, "zcode-stream.css"), `/* Generated from local ZCode styles.css. Run npm run build:zcode-stream-css. */\n${compiled}\n/* Neutralize host Tailwind 3 transforms so upstream translate/rotate/scale applies once. */\n${hostTransformReset}\n`);
+await fs.writeFile(path.join(sourceDir, "zcode-stream.css"), `${compiled}\n/* Neutralize host Tailwind 3 transforms so upstream translate/rotate/scale applies once. */\n${hostTransformReset}\n`);

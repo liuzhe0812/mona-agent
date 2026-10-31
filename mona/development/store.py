@@ -949,7 +949,6 @@ class DevelopmentStore:
             if value.intent != "steering":
                 continue
             if value.follow_up_allowed:
-                # ZCode fallbackPendingGuidesToQueue：保留原输入；仅成功轮次允许自动续接。
                 value.requested_intent = value.requested_intent or value.intent
                 value.intent = "follow_up"
                 value.revision += 1

@@ -1,5 +1,4 @@
-// Virtual history / normal-flow live tail from ZCode ConversationTimeline.tsx.
-// Mona supplies already projected turn content and its existing scroll element.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { splitConversationTimelineLiveTail } from "./conversationTimelineLiveTail";

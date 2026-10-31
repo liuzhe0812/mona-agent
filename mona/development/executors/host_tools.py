@@ -19,7 +19,6 @@ WORK_TOOL = "mona_tool"
 WORK_SERVER = "mona_work"
 SDK_WORK_TOOL = f"mcp__{WORK_SERVER}__{WORK_TOOL}"
 COLLABORATION_POLICY_TAG = ":mona-collaboration-v1"
-# Third-party delegation guidance notices: see ../CODEX-NOTICE.
 DELEGATION_INSTRUCTIONS = """Use the provided Mona collaboration tool to delegate to enabled project presets. Their enabled configuration authorizes suitable delegation without an additional user request.
 Coordinate planning, task assignment, result integration and final verification. Prefer configured roles for substantive exploration and implementation, including work whose result you need before continuing.
 Subtasks must be concrete, well-defined, and self-contained.
@@ -27,7 +26,6 @@ Do not redo delegated subagent tasks yourself; focus on integrating results or t
 Call `wait` very sparingly. Only call `wait` when you need the result immediately for the next critical-path step and you are blocked until it returns.
 Keep simple tasks local. If no suitable preset is enabled, continue locally. Follow explicit user and project constraints; delegation does not expand the task's permissions.
 """
-# Third-party notices: see ../CINDY-NOTICE.
 SUBAGENT_INSTRUCTIONS = "Do not expand scope or spawn another subagent."
 HOST_DESCRIPTION = (
     "Coordinate project subagents through their configured engines and models.\n"

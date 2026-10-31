@@ -1,5 +1,4 @@
-// Copied from local ZCode ConversationRowView.tsx. Clipboard uses the host API;
-// ZCode-only telemetry is omitted and the row identity accepts Mona string IDs.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { memo, useCallback, useState } from "react";
 import { CheckIcon, CopyIcon } from "zcode-lucide-react";
 import { MessageAction } from "./markdown/ai-elements/message";

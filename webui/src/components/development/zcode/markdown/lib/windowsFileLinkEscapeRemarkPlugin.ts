@@ -45,17 +45,6 @@ function extractRawDestination(node: MarkdownNode, slice: string): string | null
   return marker < 0 ? null : slice.slice(marker + 2, -1).trim();
 }
 
-/**
- * 从 VFile 原文里取回该节点未被反转义的 destination 原文。
- *
- * `[x](C:\Users\developer\.zcode\a.png)` 在 remark-parse 阶段就会把 `\.`
- * 当成标点转义吃掉（`\U` `\z` `\w` 这些因为后面不是标点而幸存），mdast 拿到的
- * 是 `C:\Users\developer.zcode\a.png`。丢失发生在解析期，rehype 阶段的既有改写插件
- * 看到的已经是丢失后的字符串，无从还原——所以必须在 remark 阶段做。
- *
- * 只有「原文按 CommonMark 规则反转义后恰好等于 node.url」才认为切片正确且还原
- * 无歧义；否则宁可保持现状，不写入可能错误的路径。
- */
 function recoverRawDestination(node: MarkdownNode, source: string): string | null {
   const url = node.url;
   if (typeof url !== "string" || !windowsDestinationPattern.test(url)) return null;

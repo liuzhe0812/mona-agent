@@ -316,7 +316,7 @@ class ProvidersConfig(Base):
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
     byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
     byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
@@ -647,7 +647,6 @@ class ToolsConfig(Base):
 
 
 BUILTIN_DEVELOPMENT_SUBAGENT_IDS = ("builtin_explorer", "builtin_worker")
-# Verbatim Codex role descriptions (Apache-2.0); see development/CODEX-NOTICE.
 BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS = {
     "builtin_explorer": """Use `explorer` for specific codebase questions.
 Explorers are fast and authoritative.
@@ -940,7 +939,6 @@ class Config(BaseSettings):
                 dynamic_specs.append(spec)
         registry_specs = PROVIDERS + tuple(dynamic_specs)
 
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in registry_specs:
             p = self.providers.get_provider_config(spec.name)
             if p and model_prefix and normalized_prefix == spec.name:

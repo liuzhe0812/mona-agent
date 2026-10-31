@@ -20,8 +20,6 @@ async def _release_native(adapter, binding) -> None:
     try:
         receipt = await asyncio.wait_for(adapter.interrupt(binding), timeout=1)
     finally:
-        # SDK workers are owned per session. Codex releases only this thread,
-        # never its project-wide App Server or other users' running threads.
         await adapter.close_runtime(binding, force=True)
     if adapter.id == ExecutorId.CODEX and receipt.outcome not in {"confirmed", "already_finished"}:
         raise DevelopmentError("native_stop_unconfirmed", "执行者尚未确认任务已停止。")

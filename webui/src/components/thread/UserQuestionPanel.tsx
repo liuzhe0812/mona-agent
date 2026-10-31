@@ -157,7 +157,6 @@ function QuestionForm({
   );
 }
 
-/** Structured answer panel based on the DSH ask_user_question contract (MIT; see mona/bus/DSH-ASK-USER-NOTICE.md). */
 export function UserQuestionPanel({ chatId }: UserQuestionPanelProps) {
   const client = useClientContextOrNull()?.client;
   const [snapshot, setSnapshot] = useState<{ chatId: string | null; requests: UserQuestionRequest[] }>({

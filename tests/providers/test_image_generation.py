@@ -1255,9 +1255,6 @@ async def test_openai_compat_task_timeout_keeps_task_id() -> None:
     assert error.retry_safe is False
 
 
-# ---------------------------------------------------------------------------
-# OpenAI Codex (Responses API)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -1289,9 +1289,6 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
         return GeneratedImageResponse(images=images, content="", raw=payload)
 
 
-# ---------------------------------------------------------------------------
-# OpenAI Codex image generation
-# ---------------------------------------------------------------------------
 
 
 def _image_task_id(payload: dict[str, Any]) -> str | None:
@@ -1479,18 +1476,9 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
                 raise ImageGenerationError("Image task completed but returned no images")
 
 
-# ---------------------------------------------------------------------------
-# OpenAI Codex image generation (original)
-# ---------------------------------------------------------------------------
 
 
 class CodexImageGenerationClient(ImageGenerationProvider):
-    """OpenAI image generation via Codex subscription OAuth.
-
-    Uses the Codex Responses API with the ``image_generation`` tool
-    (the same mechanism ChatGPT uses internally).  No API key required —
-    the Codex OAuth token from ``oauth_cli_kit`` is used instead.
-    """
 
     provider_name = "openai_codex"
     missing_key_message = (
@@ -1502,7 +1490,6 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         return "https://chatgpt.com/backend-api"
 
     def _codex_model(self, model: str) -> str:
-        """Strip the ``openai-codex/`` prefix if present."""
         if model.startswith(("openai-codex/", "openai_codex/")):
             return model.split("/", 1)[1]
         return model
@@ -1731,10 +1718,6 @@ async def _openai_images_from_payload(
 async def _parse_codex_sse_images(
     response: httpx.Response,
 ) -> tuple[list[str], str]:
-    """Parse a Codex Responses API SSE stream for image generation output.
-
-    Returns ``(images, content_text)``.
-    """
     import json as _json
 
     images: list[str] = []

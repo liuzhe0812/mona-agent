@@ -99,7 +99,6 @@ function readQuestions(input: unknown): unknown[] {
   if (Array.isArray(questions)) {
     return questions;
   }
-  // ZCode Agent 的单题输入与交互请求的多题输入共用展示管线。
   return typeof input.question === "string" && Array.isArray(input.options) ? [input] : [];
 }
 

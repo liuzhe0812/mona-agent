@@ -1,4 +1,4 @@
-// Copied from local ZCode; only the intl type import is adapted.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import type { useZCodeIntl } from "./primitives/intl";
 type IntlInstance = ReturnType<typeof useZCodeIntl>["intl"];
 

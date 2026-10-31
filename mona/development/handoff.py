@@ -1,8 +1,3 @@
-"""Project-scoped handoff, not shared private memory or a second agent planner.
-
-Uses Cindy's full/delta and accepted-only consumption ideas. The actual delivery
-journal is stored on the native binding by DevelopmentStore.
-"""
 
 from __future__ import annotations
 

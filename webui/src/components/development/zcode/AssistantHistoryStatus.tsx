@@ -1,4 +1,4 @@
-// Copied from local ZCode ConversationTurnGroup.tsx; Mona imports, test IDs and run-state labels adapted.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import type { ReactNode } from "react";
 import { ChevronRightIcon } from "zcode-lucide-react";
 import { cn } from "@/components/development/zcode/utils";

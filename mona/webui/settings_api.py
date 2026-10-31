@@ -2558,7 +2558,6 @@ async def probe_provider_model_details(
         raise WebUISettingsError("unknown provider")
     catalog_entry = CHAT_SOURCE_PROVIDER_BY_ID.get(spec.name)
 
-    # OAuth / non-HTTP providers (Codex, Copilot, Bedrock) can't be probed.
     if spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai"):
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
 

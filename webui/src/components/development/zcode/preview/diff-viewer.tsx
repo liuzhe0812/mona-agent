@@ -1,4 +1,4 @@
-// Copied from local ZCode; only host imports adapted.
+// Modified for local integration. See the accompanying NOTICE for license information.
 "use client";
 
 import type { CSSProperties, HTMLAttributes } from "react";

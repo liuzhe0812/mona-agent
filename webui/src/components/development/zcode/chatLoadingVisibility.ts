@@ -1,4 +1,4 @@
-// Copied from ZCode chatLoadingVisibility; structural protocol types are the host boundary.
+// Modified for local integration. See the accompanying NOTICE for license information.
 type ActiveWorkSummary = { kind: string };
 type PendingInteraction = { payload: { kind: string; toolName?: string } };
 type ConversationRow = { kind: "toolCall"; status?: string } | { kind: "timelineMarker"; marker: { type: string; status?: string; outcome?: string } } | { kind: "userInput" | "assistantText" | "reasoning" };

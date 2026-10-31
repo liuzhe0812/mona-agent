@@ -1,4 +1,3 @@
-"""Codex v2 events -> developer-facing events; no reconstruction of reasoning."""
 
 from __future__ import annotations
 
@@ -130,7 +129,6 @@ def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bo
     done = method == "item/completed"
     item_type = item.get("type")
     if item_type == "userMessage":
-        # Mona already stores the submitted message; Codex echoes are not tools.
         return None
     if item_type == "agentMessage":
         if not done:

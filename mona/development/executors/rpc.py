@@ -1,8 +1,3 @@
-"""Bounded, bidirectional NDJSON RPC for native agents; no shell or request replay.
-
-The separation of transport, pending requests and session routing follows Cindy's
-app-server client/host design. See docs/design/development-native-executors.md.
-"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-// Copied from local ZCode ConversationTimeline.tsx.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { resolveChatSessionScrollRestoreTop, type ChatSessionScrollMemoryState } from "./chatSessionScrollMemory";
 const SCROLL_MEMORY_RESTORE_TOLERANCE_PX = 1;
 interface ConversationScrollMemoryScopeSnapshot {

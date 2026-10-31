@@ -143,8 +143,6 @@ export function nativeTimeline(messages: DevMessage[], events: DevEvent[], runs:
   return { before, tail, streaming };
 }
 
-// The flow/segment builders below are copied from ZCode; this layer only maps
-// Mona's exact message/event identities to their row contract and React content.
 function WorkSegment({ segment, run, showHeader }: { segment: ConversationTurnWorkSegment; run?: DevRun; showHeader: boolean }) {
   const [historyOpen, setHistoryOpen] = useState(segment.assistantHistoryDefaultOpen);
   useEffect(() => { setHistoryOpen(segment.assistantHistoryDefaultOpen); }, [segment.assistantHistoryDefaultOpen, segment.key]);

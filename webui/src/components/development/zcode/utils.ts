@@ -1,4 +1,4 @@
-// Copied from local ZCode; its Tailwind 4 merge stays isolated from Mona.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "zcode-tailwind-merge";
 

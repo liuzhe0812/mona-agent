@@ -10,7 +10,6 @@ import type { StreamPreviewSource } from "./DevelopmentStreamContext";
 import { useDevelopmentStore } from "./store";
 import { ZCodeSurface } from "./zcode/Surface";
 
-// Mona owns the right pane; the preview bodies are ZCode's original components.
 export function DevelopmentStreamPreview({ source, sessionId }: { source: StreamPreviewSource; sessionId: string }) {
   const theme = useThemeValue();
   const resolvedTheme = theme;

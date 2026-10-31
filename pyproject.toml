@@ -121,6 +121,7 @@ exclude = ["mona/web/**"]
 artifacts = ["mona/skills/mona-motion/runtime/**", "mona/skills/mona-design/**"]
 include = [
     "mona/**/*.py",
+    "mona/bus/DSH-ASK-USER-NOTICE.md",
     "mona/templates/**/*.md",
     "mona/development/sandbox_node/**",
     "mona/development/CINDY-LICENSE",

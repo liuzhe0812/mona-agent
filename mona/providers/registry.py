@@ -38,7 +38,6 @@ class ProviderSpec:
     display_name: str = ""  # shown in `mona status`
 
     # which provider implementation to use
-    # "openai_compat" | "mona_managed" | "anthropic" | "azure_openai" | "openai_codex" | "github_copilot" | "bedrock"
     backend: str = "openai_compat"
     allow_auto_fallback: bool = True
 
@@ -60,7 +59,6 @@ class ProviderSpec:
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
-    # OAuth-based providers (e.g., OpenAI Codex) don't use API keys
     is_oauth: bool = False
 
     # Direct providers skip API-key validation (user supplies everything)
@@ -362,7 +360,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             "dall-e-3",
         ),
     ),
-    # OpenAI Codex: OAuth-based, dedicated provider
     ProviderSpec(
         name="openai_codex",
         keywords=("openai-codex",),
@@ -630,9 +627,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
 )
 
-# Dynamic chat presets are OpenAI-compatible runtime providers. Keep them in
-# the same registry so default-provider selection and the factory can resolve
-# them, while their hyphenated IDs are persisted in ``providers.cindy``.
 PROVIDERS = PROVIDERS + tuple(
     ProviderSpec(
         name=provider.id,

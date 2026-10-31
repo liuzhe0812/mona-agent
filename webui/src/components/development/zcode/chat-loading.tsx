@@ -1,4 +1,4 @@
-// Copied from local ZCode; only host imports adapted. See NOTICE.md.
+// Modified for local integration. See the accompanying NOTICE for license information.
 "use client";
 
 import type { ComponentPropsWithoutRef } from "react";

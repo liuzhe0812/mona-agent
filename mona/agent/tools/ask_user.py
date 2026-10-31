@@ -1,4 +1,3 @@
-"""Ask the user through the DSH-compatible blocking question contract."""
 
 from __future__ import annotations
 

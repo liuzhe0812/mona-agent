@@ -1,20 +1,3 @@
-"""Config agent tools.
-
-Lets the agent configure LLM provider credentials on the user's behalf so
-they don't have to open the BYOK settings panel manually. Writes reuse the
-same settings update path as the WebUI, so ``~/.mona/config.json`` stays the
-single source of truth.
-
-Design notes:
-- Only providers registered in ``mona.providers.registry.PROVIDERS`` are
-  writable; OAuth-based providers (openai_codex, github_copilot) are rejected
-  because they don't accept API keys.
-- API keys are masked in logs to avoid leaking secrets to log files.
-- The tool runs exclusively (no parallel tool calls) because it mutates the
-  shared config file.
-- Restart of Mona (or the gateway) is required for the change to take effect;
-  the tool return value makes this explicit so the agent can surface it.
-"""
 
 from __future__ import annotations
 
@@ -38,9 +21,6 @@ from mona.webui.settings_api import (
     update_provider_settings,
 )
 
-# Provider names the agent is allowed to write. Excludes OAuth-based providers
-# (openai_codex, github_copilot) since those need an interactive login instead
-# of an API key.
 _ALLOWED_PROVIDER_NAMES: frozenset[str] = frozenset(
     spec.name for spec in PROVIDERS if not spec.is_oauth
 )

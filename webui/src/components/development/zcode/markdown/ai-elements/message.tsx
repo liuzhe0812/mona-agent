@@ -1,4 +1,4 @@
-/* Derived from ZCode packages/ui/src/components/ai-elements/message.tsx. */
+// Modified for local integration. See the accompanying NOTICE for license information.
 import type { ComponentProps } from "react";
 import { Button } from "@/components/development/zcode/primitives/button";
 import { cn } from "@/components/development/zcode/utils";

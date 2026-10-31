@@ -1,4 +1,4 @@
-// Copied from local ZCode ConversationRowView; only host types/test IDs adapted.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import type * as React from "react";
 export function MarkerDividerRow({
   rowId,

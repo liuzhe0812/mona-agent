@@ -1,5 +1,4 @@
 /*
- * Derived from ZCode packages/ui/src/components/ai-elements/tool.tsx.
  * The ToolInput implementation originated in vercel/ai-elements and is licensed under Apache-2.0.
  * Adapted to Mona's copied CodeBlock import and hides empty parameters.
  */

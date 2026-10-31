@@ -1,4 +1,4 @@
-// Copied from local ZCode, with its host-only panel type inlined.
+// Modified for local integration. See the accompanying NOTICE for license information.
 type ChatViewSummaryPanelVariant = "panel" | "mini";
 
 const CONVERSATION_DRAFT_CONTENT_WIDTH_CLASS_NAME = "max-w-2xl";

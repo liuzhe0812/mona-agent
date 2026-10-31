@@ -1,9 +1,3 @@
-"""Development permission modes and bounded authorization review.
-
-Adapted from Cindy's shared auto-review decision flow (Apache-2.0).
-Source: packages/maker-core/src/agents/shared/auto-review-decision.ts and
-apps/desktop/src/main/maker-host/auto-permission-reviewer.ts.
-"""
 
 from __future__ import annotations
 

@@ -1,4 +1,3 @@
-"""Public account/usage fields from Codex; credentials never cross this boundary."""
 from __future__ import annotations
 
 import math

@@ -1,9 +1,3 @@
-"""Native Codex App Server adapter with per-thread ownership and shared transport.
-
-Cindy reference: app-server/{host,client,stdioTransport}.ts. This implementation
-keeps Mona's project-only policy instead of Cindy's user config/MCP injection.
-No model Provider is used here and no product transcript is written by adapters.
-"""
 
 from __future__ import annotations
 
@@ -80,19 +74,14 @@ _CAPABILITIES = Capabilities(resume=True, turn_history=True, steering=True, inte
 
 
 def _thread_permissions(permission_mode: PermissionMode, readonly: bool) -> tuple[str, str, str]:
-    """Resolve the selected product mode to Codex's session-level policy."""
     if readonly:
         return "on-request", "user", "read-only"
     if permission_mode == PermissionMode.FULL_ACCESS:
         return "never", "user", "danger-full-access"
-    # Both ask and auto use the same native gate. Auto review is supplied by
-    # Mona's approval handler, so Codex must continue routing requests to it.
     return "on-request", "user", "workspace-write"
 
 
 def _missing_resume(error: dict[str, Any], native_id: str) -> RpcError | None:
-    # Codex also uses -32600 for invalid project configuration. Do not classify
-    # by error number, substrings, stderr, or a different thread's identifier.
     if error.get("code") == -32600 and error.get("message") == f"no rollout found for thread id {native_id}":
         return MissingNativeSessionError()
     return None

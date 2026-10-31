@@ -1,6 +1,5 @@
 /*
- * Derived from ZCode packages/ui/src/components/ai-elements/message.tsx.
- * That module derives from Vercel AI Elements (Apache-2.0). See ../NOTICE.md.
+ * Derived from Vercel AI Elements (Apache-2.0). See ../NOTICE.md.
  */
 
 import { Component, forwardRef, isValidElement, memo, useCallback, useMemo } from "react";
@@ -98,7 +97,6 @@ export type MessageResponseProps = {
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
   onOpenExternalUrl?: (url: string) => void;
-  /** 仅 Assistant 正文开启：把完整 zcode-file-citation 投影为现有文件链接。 */
   renderZCodeFileCitations?: boolean;
 };
 

@@ -1,4 +1,4 @@
-﻿"""OpenAI Codex Responses Provider."""
+﻿
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ DEFAULT_ORIGINATOR = "mona"
 
 
 class OpenAICodexProvider(LLMProvider):
-    """Use Codex OAuth to call the Responses API."""
 
     supports_progress_deltas = True
 

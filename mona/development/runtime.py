@@ -775,7 +775,6 @@ class DevelopmentRuntime:
                 if run.executor.value not in self.config_loader().development.enabled_engines:
                     raise DevelopmentError("engine_disabled", "此模型来源已停用，原消息仍保留在队列。")
                 self.native.service.check_steering(run)
-            # 与 ZCode 的准入顺序一致：保留同一输入，确认目标后原子变更投递方式。
             guided = self.store.guide_input(session_id, input_id, expected_revision, target_run_id)
             if run.executor != ExecutorId.MONA:
                 guided = await self.native.service.steer(guided, message["content"])

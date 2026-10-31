@@ -1,11 +1,3 @@
-"""Private stdio bridge to official Python Agent SDKs in a clean process.
-
-The SDK client connects/disconnects in the same owner task (AnyIO task-group
-requirement). Only this worker inherits the allowlisted execution environment.
-No model API, login impersonation, shell wrapper or user MCP is used.
-The only optional SDK server contains Mona's explicit session-bound host tools.
-Read-only pre-tool checks are adapted from Cindy's claude-code adapter (Apache-2.0).
-"""
 
 from __future__ import annotations
 

@@ -1,4 +1,3 @@
-// DSH ask_user_question wire contract; see mona/bus/DSH-ASK-USER-NOTICE.md.
 export interface UserQuestion {
   id: string;
   question: string;

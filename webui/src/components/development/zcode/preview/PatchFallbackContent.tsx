@@ -1,4 +1,4 @@
-// Copied from local ZCode previewPanePatchFallbackContent.tsx.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { useMemo } from "react";
 import { DiffViewer } from "./diff-viewer";
 import { HighlightedLightweightDiffPreview } from "../tools/ui/highlighted-lightweight-diff-preview";

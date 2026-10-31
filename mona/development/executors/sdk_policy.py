@@ -1,8 +1,3 @@
-"""Vendor SDK isolation happens in a child process, not by mutating Gateway env.
-
-Cindy's env-builder documents SDKs merging process.env a second time. A clean
-options.env alone is therefore insufficient. The worker starts with this allowlist.
-"""
 
 from __future__ import annotations
 

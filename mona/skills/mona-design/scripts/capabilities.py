@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-capabilities.py — 看用户手里实际有什么，决定素材走哪一档（见 references/materials.md）。
-
-只读：查 skill 目录、环境变量里有没有 key（只看有无，不打印值）、几个命令在不在。
-探测不到不代表没有（例如 Codex 自带 image_gen），用户说有就以用户为准。
-
-用法：python3 scripts/capabilities.py [--json]
-"""
 
 import json
 import os

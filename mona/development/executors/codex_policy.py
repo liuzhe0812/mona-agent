@@ -1,8 +1,3 @@
-"""Codex project-only launch policy; never copies the user's CLI home/config.
-
-Authentication belongs to the managed native home or an explicit auth flow, not
-this resource loader. Effective configuration is checked before starting threads.
-"""
 
 from __future__ import annotations
 
@@ -103,8 +98,6 @@ def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
     if executable.suffix.lower() in {".cmd", ".bat", ".ps1"}:
         raise RpcError("unsupported_launcher", "请选择 Codex 原生可执行文件，而非终端包装脚本。")
     home.mkdir(parents=True, exist_ok=True)
-    # The caller provides a Mona-owned directory, never ~/.codex. Refuse an
-    # unrelated existing directory instead of treating its config as trusted.
     marker = home / ".mona-native-home"
     if not marker.exists():
         if any(home.iterdir()):

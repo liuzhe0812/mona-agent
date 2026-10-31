@@ -1,4 +1,4 @@
-// Adapted from ZCode (Apache-2.0). See NOTICE.md for source and changes.
+// Modified for local integration. See the accompanying NOTICE for license information.
 type Locale = string;
 type IntlInstance = { formatMessage: (message: { id: string }) => string };
 

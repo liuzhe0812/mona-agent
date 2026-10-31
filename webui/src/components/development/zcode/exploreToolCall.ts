@@ -1,4 +1,4 @@
-// Adapted from ZCode (Apache-2.0). See NOTICE.md for source and changes.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { resolveToolCallIdentity } from "./tools/toolIdentity";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

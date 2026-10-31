@@ -89,7 +89,6 @@ def read_design_resource(path: str, *, offset: int = 0, limit: int = 16000,
 
 
 def design_resource_result(arguments: dict[str, Any]) -> dict:
-    """MCP/Codex host result; model images remain images, never base64 text."""
     try:
         request = DesignResourceCall.model_validate(arguments)
         value = read_design_resource(**request.model_dump())

@@ -1,8 +1,3 @@
-"""DSH's blocking user-question contract adapted to Mona's message bus.
-
-Source: deepseek-harness 687f282e8625, interaction/user-questions and tool-ask-user.
-Copyright (c) 2026 DeepSeek. MIT; see DSH-ASK-USER-NOTICE.md.
-"""
 
 from __future__ import annotations
 

@@ -14,7 +14,6 @@ interface Props {
   loadOlder: () => Promise<void>;
 }
 
-/** Same rail/preview interaction as ZCode; anchors belong to Mona's shared transcript. */
 export function DevelopmentTurnNavigator({ items, scrollRef, contentRef, onJump, hasOlder, loadOlder }: Props) {
   const [active, setActive] = useState<string>();
   const [hover, setHover] = useState<number>();

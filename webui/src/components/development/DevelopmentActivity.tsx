@@ -86,8 +86,6 @@ export function DevelopmentActivityRow({ row, running = false, detail, rowId = r
   if (row.kind === "context") return <MarkerDividerRow rowId={rowId} markerType="compact" markerStatus="completed" markerOrigin="auto"
     icon={<ArchiveIcon aria-hidden="true" className="size-3.5 shrink-0 text-foreground-subtle" />}
     label={intl.formatMessage({ id: "chat.contextCompaction.completedAuto" })} />;
-  // ReasoningRowView, copied from ZCode ConversationRowView. The event adapter
-  // supplies only displayable model output, never signatures/redacted content.
   if (row.kind === "reasoning") {
     if (!row.reasoningText?.trim()) return null;
     const durationSeconds = row.durationMs !== undefined ? Math.max(1, Math.ceil(row.durationMs / 1000)) : undefined;
@@ -124,8 +122,6 @@ function DevelopmentToolNode({ node, running, fullOutputContent, getFullOutputCo
   </div>;
 }
 
-// ConversationAssistantWorkItems rendering from ZCode. The builder and tool
-// components own grouping, lifecycle summaries and disclosure state.
 export function DevelopmentWorkItems({ rows, items, running }: {
   rows: WorkRow[]; items: ConversationAssistantWorkRenderItem[]; running: boolean;
 }) {

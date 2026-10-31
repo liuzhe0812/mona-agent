@@ -294,7 +294,6 @@ def verify_install(
     test_root: Path,
     base_runtime_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Install the package and build its offline environment under ``.codex_tmp`` only."""
     package_input = Path(package)
     if package_input.is_symlink() or not package_input.is_file():
         raise VerificationError("package must be a regular file")

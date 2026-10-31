@@ -1,8 +1,3 @@
-"""Real workbench/runtime + production Codex adapter + independent pipe peer.
-
-Only the upstream native process is a fixture. This is not vendor binary or
-account acceptance, and never invokes an LLM to stand in for a CLI.
-"""
 from __future__ import annotations
 
 import asyncio

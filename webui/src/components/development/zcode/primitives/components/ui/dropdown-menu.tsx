@@ -1,4 +1,4 @@
-// Copied from local ZCode; only imports and portal scope adapted.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import * as React from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "zcode-lucide-react";

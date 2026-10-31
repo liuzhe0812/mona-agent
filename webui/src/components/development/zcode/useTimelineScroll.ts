@@ -1,5 +1,4 @@
-// Scroll handlers from ZCode ConversationTimeline.tsx. The adapter supplies Mona's
-// scroll/content elements and history loader; all intent decisions use the copied state machine.
+// Modified for local integration. See the accompanying NOTICE for license information.
 import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject,
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
   type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from "react";
