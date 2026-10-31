@@ -14,6 +14,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -33,6 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { copyImageToClipboard } from "@/lib/copy-image";
 import { formatTurnLatency } from "@/lib/format";
 import { deriveNoteTitle } from "@/lib/note-title";
 import { formatToolCallTrace, isCommandTrace } from "@/lib/tool-traces";
@@ -717,13 +719,14 @@ function UserImages({
           return (
             <div
               key={`${img.url ?? "placeholder"}-${i}`}
-              className={cn(isGallery && "relative min-w-0")}
+              className={cn("group/image relative", isGallery && "min-w-0")}
             >
               <UserImageCell
                 image={img}
                 size={isGallery ? "gallery" : size}
                 placeholderLabel={t("message.imageAttachment")}
                 openLabel={t("lightbox.open")}
+                showActions={align === "left"}
                 covered={coveredByExpand}
                 onOpen={
                   originalToViewable.has(i)
@@ -782,6 +785,7 @@ function UserImageCell({
   placeholderLabel,
   openLabel,
   onOpen,
+  showActions = false,
   covered = false,
 }: {
   image: UIImage;
@@ -789,11 +793,18 @@ function UserImageCell({
   placeholderLabel: string;
   openLabel: string;
   onOpen?: () => void;
+  showActions?: boolean;
   covered?: boolean;
 }) {
   const { t } = useTranslation();
   const hasUrl = typeof image.url === "string" && image.url.length > 0;
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState<"copy" | "export" | null>(null);
+  const copyResetRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+  }, []);
   const tileClasses = cn(
     "relative overflow-hidden border border-border/60 bg-muted/40",
     size === "large"
@@ -805,20 +816,42 @@ function UserImageCell({
   );
 
   const handleSave = useCallback(
-    (reveal: boolean) => {
+    async (reveal: boolean) => {
       if (!image.url || busy) return;
       setBusy(true);
-      const filename = suggestMediaFilename(image.url, image.name, "image");
-      downloadMediaUrl(image.url, filename)
-        .then((saved) => (reveal && saved ? revealItemInDir(saved) : Promise.resolve()))
-        .catch((err) => console.error("[MessageBubble] image save failed:", err))
-        .finally(() => setBusy(false));
+      try {
+        const filename = suggestMediaFilename(image.url, image.name, "image");
+        const saved = await downloadMediaUrl(image.url, filename);
+        if (reveal && saved) await revealItemInDir(saved);
+      } catch (error) {
+        console.error("[MessageBubble] image export failed:", error instanceof Error ? error.name : "Error");
+        setActionError("export");
+      } finally {
+        setBusy(false);
+      }
     },
     [busy, image.name, image.url],
   );
 
+  const handleCopy = useCallback(async () => {
+    if (!image.url || busy) return;
+    setBusy(true);
+    try {
+      await copyImageToClipboard(image.url);
+      setCopied(true);
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("[MessageBubble] image copy failed:", error instanceof Error ? error.name : "Error");
+      setActionError("copy");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, image.url]);
+
   if (hasUrl && onOpen) {
     return (
+      <>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
@@ -867,6 +900,36 @@ function UserImageCell({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {showActions && !covered ? (
+        <TooltipProvider delayDuration={250}>
+          <div className="absolute right-2 top-2 z-10 flex items-center rounded-md border border-border/60 bg-background/95 p-0.5 text-foreground opacity-0 shadow-sm transition-opacity group-hover/image:opacity-100 group-focus-within/image:opacity-100">
+            <MessageActionTooltip label={t(copied ? "message.imageCopied" : "message.copyImage")}>
+              <button type="button" disabled={busy} onClick={() => void handleCopy()}
+                aria-label={t(copied ? "message.imageCopied" : "message.copyImage")}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
+                {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+              </button>
+            </MessageActionTooltip>
+            <MessageActionTooltip label={t("message.exportImage")}>
+              <button type="button" disabled={busy} onClick={() => void handleSave(false)}
+                aria-label={t("message.exportImage")}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
+                <Download className="h-4 w-4" aria-hidden />
+              </button>
+            </MessageActionTooltip>
+          </div>
+        </TooltipProvider>
+      ) : null}
+      {actionError !== null ? <AlertDialog open onOpenChange={(open) => { if (!open) setActionError(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(actionError === "copy" ? "message.copyImageFailed" : "message.exportImageFailed")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("message.imageActionRetry")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogAction>{t("common.dismiss")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog> : null}
+      </>
     );
   }
 

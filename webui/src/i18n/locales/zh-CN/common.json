@@ -1075,6 +1075,12 @@
     "saveAsNote": "保存为笔记",
     "savedAsNote": "已保存为笔记",
     "downloadImage": "下载图片",
+    "copyImage": "复制图片",
+    "imageCopied": "已复制图片",
+    "exportImage": "导出图片",
+    "copyImageFailed": "复制图片失败",
+    "exportImageFailed": "导出图片失败",
+    "imageActionRetry": "请稍后重试。",
     "openInFolder": "在文件夹中显示",
     "turnLatencyTitle": "本轮耗时（端到端）"
   },

@@ -1060,6 +1060,12 @@
     "saveAsNote": "Save as note",
     "savedAsNote": "Saved as note",
     "downloadImage": "Download image",
+    "copyImage": "Copy image",
+    "imageCopied": "Image copied",
+    "exportImage": "Export image",
+    "copyImageFailed": "Copy image failed",
+    "exportImageFailed": "Export image failed",
+    "imageActionRetry": "Please try again.",
     "openInFolder": "Show in folder",
     "turnLatencyTitle": "Response time (end-to-end)"
   },
