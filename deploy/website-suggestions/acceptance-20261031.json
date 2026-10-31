@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-31",
+  "site": "https://mona-ai.cn/suggestions",
+  "backend_tests_in_separate_production_runtime": 9,
+  "local_browser_tests_accounts_and_suggestions": 20,
+  "final_css_only_layout_browser_tests": 8,
+  "real_production": [
+    "Existing dedicated test account received an actual email verification code",
+    "Normal password reset and website login APIs returned the verified test account",
+    "Anonymous browser read the real suggestions API and had no publishing form",
+    "Homepage navigation fit at 1440px and 1024px",
+    "Authenticated browser posted text, emoji and newline to the real service",
+    "Public API and browser refresh retained the exact submitted text",
+    "HTML tags were displayed as literal text",
+    "320px mobile layout had no horizontal overflow",
+    "Confirmed logout revoked the website token and a later publish returned 401",
+    "Restarting only the new suggestions service retained the actual suggestion",
+    "Online SQLite backup restored with integrity_check ok and the same saved row",
+    "Only the exact dedicated test account, request ID and body row was removed"
+  ],
+  "final_artifact": {
+    "business_javascript_bytes_identical_to_real_browser_acceptance": true,
+    "public_html_javascript_css_match_release_manifest": true,
+    "no_seed_or_simulated_suggestions_deployed": true
+  },
+  "unchanged_processes": {
+    "mona-auth": 364638,
+    "one-api": 310825,
+    "nginx_master": 343378,
+    "mariadb": 310721,
+    "frps": 743,
+    "notebook-relay-tunnel": 275482,
+    "mona-work-visitor": 367299
+  },
+  "auth_row_counts_users_wallets_subscriptions_payments": [16, 16, 10, 30],
+  "ubuntu_or_docker_operations": false,
+  "boot_start": "Suggestions system unit enabled; no whole-machine reboot test",
+  "backups": [
+    "/var/www/mona/backups/suggestions-20261031-v1",
+    "/var/www/mona/backups/suggestions-20261031-layout-v2"
+  ]
+}
