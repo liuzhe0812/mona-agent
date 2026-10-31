@@ -60,10 +60,10 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $releaseInstaller, $releaseArchive
 
 正式双端发布时，完成 Windows 本地构建、免费签名与热更新包验收后，先按本节分阶段上传并验证 Windows 产物，发布并验证官网日志，最后更新并验证 Windows 清单。Windows 上线后，再执行 [macOS 发布](macos-release.md)，默认使用 `publish=ad-hoc` 并验证 Apple Silicon DMG 的公开下载。
 
-完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件，无 dry-run/resume 或阶段间验证；以下仅说明参数，正式发布按后续分阶段方式执行：
+完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件和已核实的线上官网真实根目录，无 dry-run/resume 或阶段间验证；以下仅说明参数，正式发布按后续分阶段方式执行：
 
 ```powershell
-& $releasePython scripts/release_upload.py $releaseVersion $releaseInstaller $releaseArchive $releaseSha $releaseNotes $releaseGitHash --changelog-items-file $releaseChangelogItems
+& $releasePython scripts/release_upload.py $releaseVersion $releaseInstaller $releaseArchive $releaseSha $releaseNotes $releaseGitHash --changelog-items-file $releaseChangelogItems --site-root $verifiedSiteRoot
 ```
 
 更新条目文件是一个非空 JSON 字符串数组，只写用户可感知的变化。完整 CLI 会连续上传产物、构建并以备份切换官网静态站点、更新清单，无法在阶段间验证，正式发布应使用短小的一次性 Python 入口导入现有脚本，分阶段调用并验收，仅重试仍需执行的阶段。通过 argv 传路径，不拼接 shell 字符串，不在临时文件写凭据。
@@ -78,7 +78,7 @@ release.upload_to_qiniu(local_path, object_key)
 
 安装包 key 为 `Mona-latest.exe`，签名 key 为 `Mona-latest.exe.sig`，热更新包 key 为包文件名。CLI 会调用 Node 验签器确认 `.sig` 与安装包字节匹配。直接调用上传函数会绕过该门槛，须先执行相同验签。超时先查远端，再决定是否重传。
 
-安装包、签名和热更新包三个公共对象验证通过后，先调用 build_and_publish_changelog，确认官网 changelog 已显示本次版本；随后才单独调用：
+安装包、签名和热更新包三个公共对象验证通过后，先核实 Nginx 当前官网 root 与精确 alias 使用的真实目录，不能假定是 `/var/www/mona/dist`。使用当前已发布的源码快照在隔离目录构建，并向 `build_and_publish_changelog` 的 `site_root` 传入已核实目录；该函数保留既有网站及旧版哈希资源后切换目录。确认官网 changelog 和既有账户、建议、下载页面正常后，才单独调用：
 
 ```python
 release.update_vps_manifest(

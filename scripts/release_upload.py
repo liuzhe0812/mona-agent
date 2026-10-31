@@ -19,14 +19,15 @@ Credentials are read from environment variables, never hardcoded:
 
 Usage:
   python scripts/release_upload.py <version> <nsis_path> <update_pkg_path> <sha256> <notes> <git_hash> \\
-    --changelog-items-file <items.json>
+    --changelog-items-file <items.json> --site-root <verified-site-root>
 
 Example:
   python scripts/release_upload.py 1.0.2 \
     "src-tauri/target/release/bundle/nsis/Mona_1.0.2_x64-setup.exe" \
     "dist/mona-1.0.2.tar.zst" \
     "abc123..." "修复若干问题" "def456..." \\
-    --changelog-items-file "output/release-changelog-items.json"
+    --changelog-items-file "output/release-changelog-items.json" \\
+    --site-root "/var/www/mona/site-releases/example/content"
 """
 
 from __future__ import annotations
@@ -35,10 +36,12 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -175,9 +178,18 @@ def _upload_tree(sftp: Any, source: Path, destination: str) -> None:
         try:
             sftp.mkdir(remote_directory)
         except OSError:
-            pass
+            if not stat.S_ISDIR(sftp.stat(remote_directory).st_mode):
+                raise
         for filename in files:
             sftp.put(str(Path(directory) / filename), f"{remote_directory}/{filename}")
+
+
+def _validated_site_root(value: str) -> str:
+    path = PurePosixPath(value)
+    base = PurePosixPath("/var/www/mona")
+    if str(path) != value or not path.is_absolute() or ".." in path.parts or base not in path.parents:
+        raise ValueError("官网目录必须是 /var/www/mona 下已核实的绝对路径。")
+    return str(path)
 
 
 def build_and_publish_changelog(
@@ -187,8 +199,10 @@ def build_and_publish_changelog(
     git_hash: str,
     items: list[str],
     pub_date: str,
+    site_root: str,
 ) -> None:
     """Build the official static site and atomically deploy its changelog."""
+    target = _validated_site_root(site_root)
     if not (_OFFICIAL_SITE_ROOT / "package.json").is_file():
         raise SystemExit(f"错误：未找到官网源码：{_OFFICIAL_SITE_ROOT}")
     update_local_changelog(
@@ -211,24 +225,29 @@ def build_and_publish_changelog(
     host = os.environ.get("VPS_HOST", "47.117.69.105")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     stage = f"/var/www/mona/.dist-staging-{stamp}-{os.getpid()}"
-    backup = f"/var/www/mona/backups/dist-{stamp}"
-    target = "/var/www/mona/dist"
+    backup = f"/var/www/mona/backups/dist-{stamp}-{os.getpid()}"
     print("发布官网更新日志 ...")
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(host, username="root", password=password, timeout=15)
     sftp = ssh.open_sftp()
     try:
+        if sftp.normalize(target) != target:
+            raise SystemExit(f"错误：官网目录不是已核实的真实路径：{target}")
+        quoted_target = shlex.quote(target)
+        _run_remote(ssh, f'test -d {quoted_target} && test -z "$(find {quoted_target} -type l -print -quit)"', "检查官网目录")
         _run_remote(ssh, f"mkdir {stage}", "创建官网发布暂存目录")
+        _run_remote(ssh, f"cp -a -- {quoted_target}/. {stage}/", "保留现有官网与旧版静态资源")
         _upload_tree(sftp, _STATIC_SITE_PATH, stage)
-        sftp.rename(f"{stage}/static-index.html", f"{stage}/index.html")
+        _run_remote(ssh, f"mv -f -- {stage}/static-index.html {stage}/index.html", "准备官网入口")
         _run_remote(ssh, f"test -f {stage}/index.html", "验证官网暂存内容")
         _run_remote(ssh, "mkdir -p /var/www/mona/backups", "创建官网备份目录")
-        _run_remote(ssh, f"mv {target} {backup}", "备份当前官网")
+        _run_remote(ssh, f"test \"$(stat -c %d {stage})\" = \"$(stat -c %d {shlex.quote(str(PurePosixPath(target).parent))})\" && test \"$(stat -c %d {stage})\" = \"$(stat -c %d /var/www/mona/backups)\"", "检查官网发布目录位于同一文件系统")
+        _run_remote(ssh, f"mv -- {quoted_target} {backup}", "备份当前官网")
         try:
-            _run_remote(ssh, f"mv {stage} {target}", "切换官网发布目录")
+            _run_remote(ssh, f"mv -- {stage} {quoted_target}", "切换官网发布目录")
         except BaseException:
-            _run_remote(ssh, f"mv {backup} {target}", "恢复官网备份")
+            _run_remote(ssh, f"mv -- {backup} {quoted_target}", "恢复官网备份")
             raise
     finally:
         sftp.close()
@@ -350,7 +369,9 @@ def main() -> None:
         required=True,
         help="包含面向用户更新条目的 JSON 字符串数组文件",
     )
+    parser.add_argument("--site-root", required=True, help="已核实的线上官网真实根目录")
     args = parser.parse_args()
+    _validated_site_root(args.site_root)
     version = args.version
     nsis_path = args.nsis_path
     update_pkg_path = args.update_pkg_path
@@ -399,6 +420,7 @@ def main() -> None:
         git_hash=git_hash,
         items=changelog_items,
         pub_date=pub_date,
+        site_root=args.site_root,
     )
 
     # 4. Update manifest only after website publication succeeds.

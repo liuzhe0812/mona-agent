@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "release_upload.py"
 _SPEC = importlib.util.spec_from_file_location("release_upload", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -60,3 +62,14 @@ def test_read_changelog_items_rejects_empty_or_non_string_items(tmp_path: Path) 
         assert "字符串数组" in str(error)
     else:
         raise AssertionError("invalid changelog items should be rejected")
+
+
+@pytest.mark.parametrize("path", ["/var/www/mona", "/tmp/site", "/var/www/mona/../other", "/var/www/mona/site/", "site"])
+def test_site_root_must_be_a_normalized_path_under_mona(path: str) -> None:
+    with pytest.raises(ValueError):
+        release_upload._validated_site_root(path)
+
+
+def test_site_root_accepts_a_verified_release_directory() -> None:
+    path = "/var/www/mona/site-releases/example/content"
+    assert release_upload._validated_site_root(path) == path
