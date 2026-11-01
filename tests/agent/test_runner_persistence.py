@@ -15,6 +15,156 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(402, None), (None, "insufficient_credits")])
+async def test_balance_error_preserves_queued_inputs_without_another_model_call(status, code):
+    from mona.agent.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="balance exhausted", finish_reason="error",
+        error_status_code=status, error_code=code,
+    ))
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    queued = [{"role": "user", "content": f"follow-up {i}"} for i in range(5)]
+
+    async def drain(*, limit, phase):
+        assert phase == "balance exhausted"
+        items = queued[:limit]
+        del queued[:limit]
+        return items
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "long task"}],
+        tools=tools, model="managed-model", max_iterations=10,
+        injection_callback=drain, max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert provider.chat_with_retry.await_count == 1
+    assert result.stop_reason == "error"
+    assert "余额不足" in result.final_content
+    assert result.had_injections and not queued
+    history = str(result.messages)
+    assert all(f"follow-up {i}" in history for i in range(5))
+    tools.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_tool", ["generate_image", "generate_video"])
+@pytest.mark.parametrize("code,expected", [("INSUFFICIENT_CREDITS", "余额不足"), ("MEDIA_RESULT_UNKNOWN", "结果暂时无法确认")])
+async def test_media_terminal_error_preserves_results_and_skips_unstarted_tools(tmp_path, media_tool, code, expected):
+    import json
+    from types import SimpleNamespace
+
+    from mona.agent.runner import AgentRunner, AgentRunSpec
+
+    artifact = tmp_path / "completed.txt"
+    artifact.write_text("completed result", encoding="utf-8")
+    unwanted_write = tmp_path / "must-not-be-created.txt"
+    calls = [ToolCallRequest(id=str(i), name=name, arguments={})
+             for i, name in enumerate(["read_file", media_tool, "write_file"])]
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="", finish_reason="tool_calls", tool_calls=calls,
+    ))
+    executed = []
+    checkpoints = []
+    queued = [{"role": "user", "content": "queued instruction"}]
+
+    async def execute(name, _params):
+        executed.append(name)
+        if name == "read_file":
+            return artifact.read_text(encoding="utf-8")
+        if name == media_tool:
+            return json.dumps({"ok": False, "code": code,
+                               "message": expected, "retryable": False,
+                               "artifacts": [{"path": str(artifact)}]})
+        unwanted_write.write_text("unexpected", encoding="utf-8")
+        return "written"
+
+    async def checkpoint(payload):
+        checkpoints.append(payload)
+
+    async def drain(*, limit, phase):
+        expected_phase = "balance exhausted" if code == "INSUFFICIENT_CREDITS" else "media result unknown"
+        if phase != expected_phase:
+            return []
+        items = queued[:limit]
+        del queued[:limit]
+        return items
+
+    tools = SimpleNamespace(get_definitions=lambda: [], get=lambda _name: None, execute=execute)
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "make media then write"}],
+        tools=tools, model="managed-model", max_iterations=10,
+        checkpoint_callback=checkpoint, injection_callback=drain, max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert executed == ["read_file", media_tool]
+    assert not unwanted_write.exists()
+    assert artifact.read_text(encoding="utf-8") == "completed result"
+    assert provider.chat_with_retry.await_count == 1
+    assert result.stop_reason == "error" and expected in result.final_content
+    assert result.had_injections and not queued
+    assert any(message.get("content") == "queued instruction" for message in result.messages)
+    assert result.tools_used == ["read_file", media_tool]
+    receipts = [message for message in result.messages if message.get("role") == "tool"]
+    assert len(receipts) == 3
+    assert "completed result" in receipts[0]["content"]
+    assert str(artifact) in json.loads(receipts[1]["content"])["artifacts"][0]["path"]
+    assert "未执行" in receipts[2]["content"]
+    assert result.tool_events[-1]["status"] == "skipped"
+    assert checkpoints[-1]["pending_tool_calls"] == []
+    assert "2" not in checkpoints[-1]["started_tool_call_ids"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_media_result_waits_for_started_tools_and_skips_queued_write(tmp_path):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from mona.agent.runner import AgentRunner, AgentRunSpec
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    executed = []
+    calls = [ToolCallRequest(id=str(i), name=name, arguments={})
+             for i, name in enumerate(["read_file", "generate_image", "write_file"])]
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="", finish_reason="tool_calls", tool_calls=calls,
+    ))
+
+    async def execute(name, _params):
+        executed.append(name)
+        if name == "read_file":
+            started.set()
+            await release.wait()
+            return "completed read"
+        if name == "generate_image":
+            await started.wait()
+            release.set()
+            return json.dumps({"ok": False, "code": "MEDIA_RESULT_UNKNOWN", "retryable": False})
+        (tmp_path / "unexpected").write_text("unexpected", encoding="utf-8")
+        return "written"
+
+    tools = SimpleNamespace(get_definitions=lambda: [], get=lambda _name: SimpleNamespace(concurrency_safe=True), execute=execute)
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "generate"}], tools=tools,
+        model="managed-model", max_iterations=10, concurrent_tools=True,
+        max_parallel_tool_calls=2, max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert set(executed) == {"read_file", "generate_image"}
+    assert not (tmp_path / "unexpected").exists()
+    assert result.stop_reason == "error" and "结果暂时无法确认" in result.final_content
+    assert "completed read" in str(result.messages)
+    assert result.tool_events[-1]["status"] == "skipped"
+    assert provider.chat_with_retry.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_runner_keeps_old_tool_results_when_context_has_room(monkeypatch):
     from mona.agent.runner import AgentRunner, AgentRunSpec
 

@@ -63,6 +63,8 @@ class MonaManagedProvider(OpenAICompatProvider):
                 response.content = body["detail"]
             if isinstance(body.get("error"), str):
                 response.error_code = body["error"]
+        if response.error_status_code is None and response.error_code == "insufficient_credits":
+            response.error_status_code = 402
         return response
 
     @staticmethod

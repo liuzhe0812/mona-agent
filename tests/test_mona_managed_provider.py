@@ -1,7 +1,11 @@
+import copy
+
+import httpx
 import pytest
 
 from mona.config.schema import Config, ModelPresetConfig
-from mona.providers.base import LLMResponse
+from mona.providers.base import LLMProvider, LLMResponse
+from mona.providers.mona_managed_media import MonaManagedMediaClient
 from mona.providers.mona_managed_provider import MonaManagedProvider
 from mona.providers.registry import find_by_name
 
@@ -102,3 +106,116 @@ def test_managed_duplicate_request_does_not_ask_users_to_verify_billing():
     assert response.content == "模型请求失败，请稍后重试。"
     assert response.error_code == "request_already_exists"
     assert response.error_should_retry is False
+
+
+class BalanceErrorProvider(LLMProvider):
+    def __init__(self, response: LLMResponse):
+        super().__init__()
+        self.response = response
+        self.calls = 0
+
+    async def chat(self, **kwargs):
+        self.calls += 1
+        return self.response
+
+    async def chat_stream(self, **kwargs):
+        return await self.chat(**kwargs)
+
+    def get_default_model(self):
+        return "managed-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat_with_retry", "chat_stream_with_retry"])
+@pytest.mark.parametrize(
+    "metadata",
+    [{"error_status_code": 402}, {"error_code": "insufficient_credits"}],
+)
+async def test_insufficient_balance_never_retries_without_images(method, metadata):
+    provider = BalanceErrorProvider(
+        LLMResponse(content="模型余额不足，请充值后重试。", finish_reason="error", **metadata)
+    )
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "describe this"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+    ]}]
+    original = copy.deepcopy(messages)
+
+    response = await getattr(provider, method)(messages=messages)
+
+    assert response is provider.response
+    assert provider.calls == 1
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_managed_stream_balance_error_maps_to_402_without_retry(monkeypatch):
+    calls = []
+    deltas = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"id":"request-1","object":"chat.completion.chunk","created":0,'
+                '"model":"managed-model","choices":[{"index":0,"delta":{"content":"部分结果"},'
+                '"finish_reason":null}]}\n\n'
+                'data: {"error":{"code":"insufficient_credits","status":402,'
+                '"message":"balance exhausted"}}\n\n'
+                'data: [DONE]\n\n'
+            ),
+        )
+
+    async def refresh_credentials(*, force=False):
+        pass
+
+    async def on_content_delta(content):
+        deltas.append(content)
+
+    provider = MonaManagedProvider(default_model="managed-model", spec=find_by_name("mona_managed"))
+    monkeypatch.setattr(provider, "_refresh_credentials", refresh_credentials)
+    provider.http_client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    try:
+        response = await provider.chat_stream_with_retry(
+            messages=[{"role": "user", "content": "hello"}],
+            on_content_delta=on_content_delta,
+        )
+    finally:
+        await provider.aclose()
+
+    assert len(calls) == 1
+    assert deltas == ["部分结果"]
+    assert response.finish_reason == "error"
+    assert response.error_status_code == 402
+    assert response.error_code == "insufficient_credits"
+    assert response.error_should_retry is False
+    assert response.content == "模型余额不足，请在账户中充值后重试。"
+
+
+@pytest.mark.asyncio
+async def test_managed_media_polls_uncertain_request_until_settled(monkeypatch):
+    from mona.providers import mona_managed_media
+
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "managed-token", "api_base": "https://mona.example/v1",
+    })
+    calls = []
+
+    def handle(request):
+        calls.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(202, json={"status": "running"})
+        if len(calls) == 2:
+            return httpx.Response(200, json={"status": "uncertain"})
+        return httpx.Response(200, json={"status": "succeeded", "result": {"assets": ["ready"]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await MonaManagedMediaClient(poll_interval=0, poll_timeout=2, client=client).generate(
+            {"model": "image", "prompt": "draw"},
+        )
+
+    assert result["result"]["assets"] == ["ready"]
+    assert [method for method, _ in calls] == ["POST", "GET", "GET"]
+    assert calls[1][1] == calls[2][1]

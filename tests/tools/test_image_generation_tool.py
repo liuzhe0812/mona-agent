@@ -4,19 +4,25 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from mona.agent.tools.image_generation import ImageGenerationTool
+from mona.agent.tools.video_generation import VideoGenerationTool
 from mona.config.loader import set_config_path
 from mona.config.schema import (
     ImageGenerationToolConfig,
     ModelGenerationParameters,
     ProviderConfig,
+    VideoGenerationToolConfig,
 )
 from mona.providers.image_generation import (
     GeneratedImageResponse,
     ImageGenerationError,
+    MonaManagedImageGenerationClient,
 )
+from mona.providers.mona_managed_media import MonaManagedMediaClient, MonaManagedMediaError
+from mona.providers.video_generation import MonaManagedVideoGenerationClient
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -269,3 +275,192 @@ async def test_generate_image_tool_preserves_failed_download_url(
         "http://172.31.13.189:30030/outputs/generated.png"
     )
     assert "without resubmitting" in payload["next_step"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["image", "video"])
+async def test_managed_media_balance_error_stops_tool_and_keeps_completed_images(
+    kind, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.providers import mona_managed_media
+
+    set_config_path(tmp_path / "config.json")
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "managed-token", "api_base": "https://mona.example/v1",
+    })
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request)
+            if kind == "image" and len(posts) == 1:
+                return httpx.Response(200, json={
+                    "status": "succeeded",
+                    "result": {"assets": [{"url": "/v1/media/generations/one/assets/0"}]},
+                })
+            return httpx.Response(402, json={"error": "insufficient_credits", "detail": "No funds"})
+        return httpx.Response(200, content=PNG_BYTES, headers={"content-type": "image/png"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        if kind == "image":
+            provider = MonaManagedImageGenerationClient(api_key=None)
+            tool = ImageGenerationTool(
+                workspace=tmp_path,
+                config=ImageGenerationToolConfig(
+                    enabled=True, provider="mona_managed", model="qwen-image", max_images_per_turn=2,
+                ),
+            )
+            kwargs = {"count": 2}
+        else:
+            provider = MonaManagedVideoGenerationClient(api_key=None)
+            tool = VideoGenerationTool(
+                workspace=tmp_path,
+                config=VideoGenerationToolConfig(enabled=True, provider="mona_managed", model="video"),
+            )
+            kwargs = {}
+        provider._client = client
+        monkeypatch.setattr(tool, "_provider_client", lambda: provider)
+        result = json.loads(await tool.execute(prompt="draw", **kwargs))
+
+    assert result["ok"] is False
+    assert result["code"] == "INSUFFICIENT_CREDITS"
+    assert result["message"] == "模型余额不足，请充值后继续。"
+    assert result["retryable"] is False
+    if kind == "image":
+        assert len(posts) == 2
+        assert len(result["artifacts"]) == 1
+        assert Path(result["artifacts"][0]["path"]).is_file()
+    else:
+        assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(402, "insufficient_credits"), (400, None)])
+async def test_managed_media_balance_code_depends_on_status(status, code, monkeypatch):
+    from mona.providers import mona_managed_media
+
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "managed-token", "api_base": "https://mona.example/v1",
+    })
+    transport = httpx.MockTransport(lambda _: httpx.Response(status, json={"error": "insufficient_credits"}))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(MonaManagedMediaError) as raised:
+            await MonaManagedMediaClient(client=client).generate({"model": "model"})
+
+    assert raised.value.code == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["post_disconnect", "post_502", "post_invalid", "poll_disconnect", "poll_503", "poll_invalid"])
+async def test_managed_media_uncertain_submission_does_not_reissue(monkeypatch, failure):
+    from mona.providers import mona_managed_media
+
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "test", "api_base": "https://mona.example/v1",
+    })
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append((request.method, request.url.path, request.headers.get("x-request-id")))
+        if request.method == "POST":
+            if failure == "post_disconnect":
+                raise httpx.ConnectError("connection lost", request=request)
+            if failure == "post_502":
+                return httpx.Response(502)
+            if failure == "post_invalid":
+                return httpx.Response(200, text="invalid")
+            return httpx.Response(202, json={"status": "running"})
+        if failure == "poll_disconnect":
+            raise httpx.ReadError("connection lost", request=request)
+        if failure == "poll_503":
+            return httpx.Response(503)
+        return httpx.Response(200, text="invalid")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(MonaManagedMediaError) as raised:
+            await MonaManagedMediaClient(client=client, poll_interval=0).generate({"model": "test"})
+
+    assert raised.value.code == "result_unknown"
+    assert [call[0] for call in calls].count("POST") == 1
+    if len(calls) > 1:
+        assert calls[1][1].endswith("/" + calls[0][2])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["image", "video"])
+async def test_managed_media_unknown_result_is_non_retryable(kind, tmp_path, monkeypatch):
+    from mona.providers import mona_managed_media
+
+    set_config_path(tmp_path / "config.json")
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "test", "api_base": "https://mona.example/v1",
+    })
+    requests = []
+
+    def handler(request):
+        requests.append(request.method)
+        return httpx.Response(502)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        if kind == "image":
+            provider = MonaManagedImageGenerationClient(api_key=None)
+            tool = ImageGenerationTool(workspace=tmp_path, config=ImageGenerationToolConfig(
+                enabled=True, provider="mona_managed", model="image",
+            ))
+        else:
+            provider = MonaManagedVideoGenerationClient(api_key=None)
+            tool = VideoGenerationTool(workspace=tmp_path, config=VideoGenerationToolConfig(
+                enabled=True, provider="mona_managed", model="video",
+            ))
+        provider._client = client
+        monkeypatch.setattr(tool, "_provider_client", lambda: provider)
+        result = json.loads(await tool.execute(prompt="draw"))
+
+    assert requests == ["POST"]
+    assert result["code"] == "MEDIA_RESULT_UNKNOWN"
+    assert result["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["image", "video"])
+@pytest.mark.parametrize("status,code", [(402, "INSUFFICIENT_CREDITS"), (503, "MEDIA_RESULT_UNKNOWN")])
+async def test_managed_media_download_failure_retains_generated_result_url(
+    kind, status, code, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.providers import mona_managed_media
+
+    set_config_path(tmp_path / "config.json")
+    monkeypatch.setattr(mona_managed_media, "_tauri_invoke", lambda _: {
+        "access_token": "managed-token", "api_base": "https://mona.example/v1",
+    })
+    asset_url = "/v1/media/generations/one/assets/0"
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "POST":
+            result = {"assets": [{"url": asset_url}]} if kind == "image" else {"asset": {"url": asset_url}}
+            return httpx.Response(200, json={"status": "succeeded", "result": result})
+        return httpx.Response(status, json={"error": "insufficient_credits"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        if kind == "image":
+            provider = MonaManagedImageGenerationClient(api_key=None)
+            tool = ImageGenerationTool(
+                workspace=tmp_path,
+                config=ImageGenerationToolConfig(enabled=True, provider="mona_managed", model="image"),
+            )
+        else:
+            provider = MonaManagedVideoGenerationClient(api_key=None)
+            tool = VideoGenerationTool(
+                workspace=tmp_path,
+                config=VideoGenerationToolConfig(enabled=True, provider="mona_managed", model="video"),
+            )
+        provider._client = client
+        monkeypatch.setattr(tool, "_provider_client", lambda: provider)
+        result = json.loads(await tool.execute(prompt="draw"))
+
+    assert calls == ["POST", "GET"]
+    assert result["code"] == code
+    assert result["result_url"] == asset_url
+    assert result["retryable"] is False

@@ -320,6 +320,23 @@ class ImageGenerationTool(Tool):
             return generated_image_tool_result(artifacts)
         except (ArtifactError, ImageGenerationError, OSError) as exc:
             code = getattr(exc, "code", None)
+            if code == "result_unknown":
+                payload = {
+                    "ok": False, "code": "MEDIA_RESULT_UNKNOWN",
+                    "message": str(exc), "retryable": False, "artifacts": artifacts,
+                }
+                if result_url := getattr(exc, "result_url", None):
+                    payload["result_url"] = result_url
+                return json.dumps(payload, ensure_ascii=False)
+            if code == "insufficient_credits":
+                payload = {
+                    "ok": False, "code": "INSUFFICIENT_CREDITS",
+                    "message": "模型余额不足，请充值后继续。", "retryable": False,
+                    "artifacts": artifacts,
+                }
+                if result_url := getattr(exc, "result_url", None):
+                    payload["result_url"] = result_url
+                return json.dumps(payload, ensure_ascii=False)
             supported_sizes = getattr(exc, "supported_sizes", [])
             if code or artifacts:
                 payload = {

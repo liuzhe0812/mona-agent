@@ -64,6 +64,8 @@ from mona.utils.widget_events import (
 )
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
+_BALANCE_EXHAUSTED_MESSAGE = "模型余额不足，本次任务已停止。已完成的结果已保留，请充值后继续。"
+_MEDIA_RESULT_UNKNOWN_MESSAGE = "媒体任务结果暂时无法确认，本次任务已停止。请先检查生成结果，再决定是否重新发起。"
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
@@ -202,6 +204,14 @@ class AgentRunResult:
     detected_context_window_tokens: int | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
+
+
+class _BalanceExhaustedError(RuntimeError):
+    pass
+
+
+class _MediaResultUnknownError(RuntimeError):
+    pass
 
 
 class AgentRunner:
@@ -482,6 +492,14 @@ class AgentRunner:
             office_edit_failures.clear()
             blocked_office_edits.clear()
 
+        async def preserve_pending_inputs(*, phase: str = "balance exhausted") -> None:
+            nonlocal had_injections
+            while injections := await self._drain_injections(spec, phase=phase):
+                self._append_injected_messages(
+                    messages, injections, preserve_identity=spec.model_context_callback is not None,
+                )
+                had_injections = True
+
         for iteration in range(spec.max_iterations):
             # Explicit projections leave the execution log append-only. They
             # may summarize completed batches, but never silently drop history.
@@ -564,6 +582,19 @@ class AgentRunner:
                 await hook.emit_reasoning_end()
                 context.streamed_reasoning = True
 
+            if response.error_status_code == 402 or response.error_code == "insufficient_credits":
+                final_content = error = _BALANCE_EXHAUSTED_MESSAGE
+                stop_reason = "error"
+                await preserve_pending_inputs()
+                self._append_model_error_placeholder(messages)
+                context.final_content = final_content
+                context.error = error
+                context.stop_reason = stop_reason
+                if hook.wants_streaming():
+                    await hook.on_stream_end(context, resuming=False)
+                await hook.after_iteration(context)
+                break
+
             if response.should_execute_tools:
                 context.tool_calls = list(response.tool_calls)
                 if hook.wants_streaming():
@@ -582,7 +613,6 @@ class AgentRunner:
                     thinking_blocks=response.thinking_blocks,
                 )
                 messages.append(assistant_message)
-                tools_used.extend(tc.name for tc in response.tool_calls)
                 await self._emit_checkpoint(
                     spec,
                     {
@@ -632,6 +662,10 @@ class AgentRunner:
                     blocked_office_edits=blocked_office_edits,
                     checkpoint_started=checkpoint_started if spec.checkpoint_callback else None,
                     checkpoint_completed=checkpoint_completed if spec.checkpoint_callback else None,
+                )
+                tools_used.extend(
+                    call.name for call, event in zip(response.tool_calls, new_events)
+                    if event.get("status") != "skipped"
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -705,6 +739,19 @@ class AgentRunner:
                     block_at = max(t[1] for t in tool_repeat_budgets[-result_period:])
                     loop_detected = unchanged >= block_at
                 if fatal_error is not None:
+                    if isinstance(fatal_error, (_BalanceExhaustedError, _MediaResultUnknownError)):
+                        final_content = error = str(fatal_error)
+                        stop_reason = "error"
+                        phase = "balance exhausted" if isinstance(fatal_error, _BalanceExhaustedError) else "media result unknown"
+                        await preserve_pending_inputs(phase=phase)
+                        self._append_final_message(messages, final_content)
+                        context.final_content = final_content
+                        context.error = error
+                        context.stop_reason = stop_reason
+                        if hook.wants_streaming():
+                            await hook.on_stream_end(context, resuming=False)
+                        await hook.after_iteration(context)
+                        break
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
                     stop_reason = "tool_error"
@@ -1537,14 +1584,28 @@ class AgentRunner:
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         pool = asyncio.Semaphore(spec.max_parallel_tool_calls) if spec.max_parallel_tool_calls is not None else None
+        terminal_error: _BalanceExhaustedError | _MediaResultUnknownError | None = None
 
         async def execute_call(call: ToolCallRequest):
-            outcome = await self._run_tool(
-                spec, call, workspace_violation_counts,
-                disabled_tools=disabled_tools,
-                blocked_office_edits=blocked_office_edits,
-                checkpoint_started=checkpoint_started,
-            )
+            nonlocal terminal_error
+            if terminal_error is not None:
+                balance_exhausted = isinstance(terminal_error, _BalanceExhaustedError)
+                code = "INSUFFICIENT_CREDITS" if balance_exhausted else "MEDIA_RESULT_UNKNOWN"
+                detail = "未执行：模型余额不足。" if balance_exhausted else "未执行：此前媒体任务结果未确认。"
+                outcome = (
+                    json.dumps({"ok": False, "code": code, "message": detail, "retryable": False}, ensure_ascii=False),
+                    {"name": call.name, "status": "skipped", "detail": detail},
+                    terminal_error,
+                )
+            else:
+                outcome = await self._run_tool(
+                    spec, call, workspace_violation_counts,
+                    disabled_tools=disabled_tools,
+                    blocked_office_edits=blocked_office_edits,
+                    checkpoint_started=checkpoint_started,
+                )
+                if isinstance(outcome[2], (_BalanceExhaustedError, _MediaResultUnknownError)):
+                    terminal_error = terminal_error or outcome[2]
             if checkpoint_completed is not None:
                 await checkpoint_completed(call, outcome[0])
             return outcome
@@ -1766,6 +1827,16 @@ class AgentRunner:
 
         receipt = self._structured_tool_receipt(result)
         if receipt and (receipt.get("ok") is False or receipt.get("isError") is True):
+            if tool_call.name in {"generate_image", "generate_video"} and receipt.get("code") == "MEDIA_RESULT_UNKNOWN":
+                return result, {
+                    "name": tool_call.name, "status": "error",
+                    "detail": _MEDIA_RESULT_UNKNOWN_MESSAGE, "retryable": "false",
+                }, _MediaResultUnknownError(_MEDIA_RESULT_UNKNOWN_MESSAGE)
+            if tool_call.name in {"generate_image", "generate_video"} and receipt.get("code") == "INSUFFICIENT_CREDITS":
+                return result, {
+                    "name": tool_call.name, "status": "error",
+                    "detail": _BALANCE_EXHAUSTED_MESSAGE, "retryable": "false",
+                }, _BalanceExhaustedError(_BALANCE_EXHAUSTED_MESSAGE)
             details = receipt.get("error") or receipt.get("message") or "Tool reported failure"
             message = str(details.get("message") or details.get("code")) if isinstance(details, dict) else str(details)
             conflict = isinstance(details, dict) and details.get("code") == "VERSION_CONFLICT"

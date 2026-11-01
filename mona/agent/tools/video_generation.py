@@ -240,6 +240,22 @@ class VideoGenerationTool(Tool):
             )
             return generated_video_tool_result([artifact])
         except VideoGenerationError as exc:
+            if exc.code == "result_unknown":
+                payload = {
+                    "ok": False, "code": "MEDIA_RESULT_UNKNOWN",
+                    "message": str(exc), "retryable": False,
+                }
+                if exc.result_url:
+                    payload["result_url"] = exc.result_url
+                return json.dumps(payload, ensure_ascii=False)
+            if exc.code == "insufficient_credits":
+                payload = {
+                    "ok": False, "code": "INSUFFICIENT_CREDITS",
+                    "message": "模型余额不足，请充值后继续。", "retryable": False,
+                }
+                if exc.result_url:
+                    payload["result_url"] = exc.result_url
+                return json.dumps(payload, ensure_ascii=False)
             message = str(exc)
             result_url = getattr(exc, "result_url", None)
             if result_url:

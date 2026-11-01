@@ -8,10 +8,13 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
+from loguru import logger
 
 
 class MonaManagedMediaError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,26 @@ def _error_detail(response: httpx.Response) -> str:
     return f"Mona AI 媒体服务请求失败（{response.status_code}）"
 
 
+def _response_error(response: httpx.Response) -> MonaManagedMediaError:
+    code = "insufficient_credits" if response.status_code == 402 else None
+    return MonaManagedMediaError(_error_detail(response), code=code)
+
+
+def _unknown_result(reason: str = "invalid response") -> MonaManagedMediaError:
+    logger.warning("Managed media result is unknown: {}", reason)
+    return MonaManagedMediaError("媒体任务结果暂时无法确认，请先检查结果再决定是否重新发起。", code="result_unknown")
+
+
+def _generation_payload(response: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise _unknown_result() from exc
+    if not isinstance(payload, dict):
+        raise _unknown_result()
+    return payload
+
+
 class MonaManagedMediaClient:
     def __init__(
         self,
@@ -85,7 +108,7 @@ class MonaManagedMediaClient:
                 request_id=request_id,
                 body=body,
             )
-            if payload.get("status") in {"succeeded", "failed", "uncertain"}:
+            if payload.get("status") in {"succeeded", "failed"}:
                 self._last_credentials = credentials
                 return self._require_success(payload)
             deadline = time.monotonic() + self.poll_timeout if self.poll_timeout is not None else None
@@ -96,18 +119,21 @@ class MonaManagedMediaClient:
                     headers={"Authorization": f"Bearer {credentials.access_token}"},
                 )
                 if response.status_code == 401:
-                    credentials = await managed_media_credentials()
+                    try:
+                        credentials = await managed_media_credentials()
+                    except MonaManagedMediaError as exc:
+                        raise _unknown_result("poll authorization refresh failed") from exc
                     continue
                 if response.status_code >= 400:
-                    raise MonaManagedMediaError(_error_detail(response))
-                payload = response.json()
-                if payload.get("status") in {"pending", "running"}:
+                    raise _response_error(response) if response.status_code == 402 else _unknown_result(f"poll HTTP {response.status_code}")
+                payload = _generation_payload(response)
+                if payload.get("status") in {"pending", "running", "uncertain"}:
                     continue
                 self._last_credentials = credentials
                 return self._require_success(payload)
-            raise MonaManagedMediaError("媒体生成超时，任务仍会在后台继续结算")
+            raise _unknown_result("poll timeout")
         except httpx.RequestError as exc:
-            raise MonaManagedMediaError("无法连接 Mona AI 媒体服务") from exc
+            raise _unknown_result(f"transport {type(exc).__name__}") from exc
         finally:
             if owns_client:
                 await client.aclose()
@@ -125,7 +151,7 @@ class MonaManagedMediaClient:
                 )
                 if response.status_code != 401 or attempt == 1:
                     if response.status_code >= 400:
-                        raise MonaManagedMediaError(_error_detail(response))
+                        raise _response_error(response)
                     return response.content, response.headers.get(
                         "content-type", "application/octet-stream"
                     ).split(";", 1)[0]
@@ -158,8 +184,10 @@ class MonaManagedMediaClient:
             )
             if response.status_code != 401 or attempt == 1:
                 if response.status_code >= 400:
-                    raise MonaManagedMediaError(_error_detail(response))
-                return response.json(), credentials
+                    if response.status_code >= 500:
+                        raise _unknown_result(f"submit HTTP {response.status_code}")
+                    raise _response_error(response)
+                return _generation_payload(response), credentials
             credentials = await managed_media_credentials()
         raise MonaManagedMediaError("Mona AI 登录状态已失效")
 
@@ -168,7 +196,7 @@ class MonaManagedMediaClient:
         status = payload.get("status")
         if status == "succeeded" and isinstance(payload.get("result"), dict):
             return payload
-        if status == "uncertain":
-            raise MonaManagedMediaError("任务状态待核算，预留金额尚未扣除或退回")
+        if status != "failed":
+            raise _unknown_result()
         code = payload.get("error_code")
         raise MonaManagedMediaError(f"媒体生成失败{f'：{code}' if code else ''}")

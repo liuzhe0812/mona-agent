@@ -47,9 +47,12 @@ _AGNES_DURATION_PRESETS = {
 class VideoGenerationError(RuntimeError):
     """Raised when the video generation provider cannot return a video."""
 
-    def __init__(self, message: str, *, result_url: str | None = None) -> None:
+    def __init__(
+        self, message: str, *, result_url: str | None = None, code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.result_url = result_url
+        self.code = code
 
 
 def _origin(value: str) -> tuple[str, str, int | None]:
@@ -675,18 +678,20 @@ class MonaManagedVideoGenerationClient(VideoGenerationProvider):
                 }
             )
         except MonaManagedMediaError as exc:
-            raise VideoGenerationError(str(exc)) from exc
+            raise VideoGenerationError(str(exc), code=exc.code) from exc
         result = payload.get("result") or {}
         asset = result.get("asset") if isinstance(result, dict) else None
         video_url = asset.get("url") if isinstance(asset, dict) else None
         if not isinstance(video_url, str) or not video_url:
-            raise VideoGenerationError("Mona AI 未返回生成视频")
+            raise VideoGenerationError("Mona AI 未返回生成视频", code="result_unknown")
         try:
             video_bytes, content_type = await service.download_asset(video_url)
         except MonaManagedMediaError as exc:
-            raise VideoGenerationError(str(exc)) from exc
+            raise VideoGenerationError(
+                str(exc), code=exc.code or "result_unknown", result_url=video_url,
+            ) from exc
         if not content_type.startswith(("video/", "application/octet-stream")):
-            raise VideoGenerationError("Mona AI 返回了不支持的视频格式")
+            raise VideoGenerationError("Mona AI 返回了不支持的视频格式", code="result_unknown", result_url=video_url)
         usage = payload.get("usage") or {}
         raw_payload = dict(payload)
         raw_payload["_video_bytes"] = video_bytes

@@ -854,6 +854,8 @@ class LLMProvider(ABC):
             response = await call(**kw)
             if response.finish_reason != "error":
                 return response
+            if response.error_status_code == 402 or response.error_code == "insufficient_credits":
+                return response
             last_response = response
             error_key = ((response.content or "").strip().lower() or None)
             if error_key and error_key == last_error_key:

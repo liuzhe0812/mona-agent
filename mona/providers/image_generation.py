@@ -2022,19 +2022,26 @@ class MonaManagedImageGenerationClient(ImageGenerationProvider):
             payload = await service.generate(request_body)
             assets = (payload.get("result") or {}).get("assets") or []
             if not assets:
-                raise ImageGenerationError("Mona AI 未返回生成图片")
+                raise ImageGenerationError("Mona AI 未返回生成图片", code="result_unknown")
             images: list[str] = []
             for asset in assets:
                 asset_url = asset.get("url") if isinstance(asset, dict) else None
                 if not isinstance(asset_url, str) or not asset_url:
-                    raise ImageGenerationError("Mona AI 图片地址无效")
-                raw, _content_type = await service.download_asset(asset_url)
+                    raise ImageGenerationError("Mona AI 图片地址无效", code="result_unknown")
+                try:
+                    raw, _content_type = await service.download_asset(asset_url)
+                except MonaManagedMediaError as exc:
+                    raise ImageGenerationError(
+                        str(exc), code=exc.code or "result_unknown", result_url=asset_url,
+                    ) from exc
                 mime = detect_image_mime(raw)
                 if mime is None:
-                    raise ImageGenerationError("Mona AI 返回了不支持的图片格式")
+                    raise ImageGenerationError("Mona AI 返回了不支持的图片格式", code="result_unknown", result_url=asset_url)
                 images.append(f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}")
             return GeneratedImageResponse(images=images, content="", raw=payload)
-        except (ImageUploadError, MonaManagedMediaError) as exc:
+        except MonaManagedMediaError as exc:
+            raise ImageGenerationError(str(exc), code=exc.code) from exc
+        except ImageUploadError as exc:
             raise ImageGenerationError(str(exc)) from exc
 
 

@@ -1642,7 +1642,9 @@ class AgentLoop:
                 return
             self._set_runtime_checkpoint(session, payload)
 
-        async def _drain_pending(*, limit: int = _MAX_INJECTIONS_PER_TURN) -> list[dict[str, Any]]:
+        async def _drain_pending(
+            *, limit: int = _MAX_INJECTIONS_PER_TURN, phase: str = "",
+        ) -> list[dict[str, Any]]:
             """Drain follow-up messages from the pending queue.
 
             When no messages are immediately available but sub-agents
@@ -1740,6 +1742,7 @@ class AgentLoop:
             # instead of injecting one, so also stop waiting once they finish.
             if (
                 not items
+                and phase not in {"balance exhausted", "media result unknown"}
                 and not model_boundary
                 and session is not None
                 and self.subagents.get_running_count_by_session(session.key) > 0
