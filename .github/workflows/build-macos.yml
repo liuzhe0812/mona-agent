@@ -22,6 +22,10 @@ on:
           - none
           - ad-hoc
           - notarized
+      source_commit:
+        description: "可选：与 Windows 构建一致的完整 Git 提交 SHA"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -65,17 +69,24 @@ jobs:
         id: release_source
         env:
           PUBLISH_MODE: ${{ inputs.publish || 'none' }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit || '' }}
         run: |
           set -euo pipefail
           if [[ "$PUBLISH_MODE" == "ad-hoc" || "$PUBLISH_MODE" == "notarized" ]]; then
             source_sha="$(python - <<'PY'
-          import json, re, tomllib
+          import json, os, re, tomllib, urllib.request
           from pathlib import Path
           version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          release = json.loads(Path("official-site/public/changelog.json").read_text(encoding="utf-8"))["releases"][0]
-          sha = release.get("gitHash", "")
-          if release.get("version") != version or not re.fullmatch(r"[0-9a-f]{40}", sha):
-              raise SystemExit("published changelog does not identify the current release source")
+          sha = os.environ.get("RELEASE_SOURCE_COMMIT", "").strip()
+          if not sha:
+              request = urllib.request.Request("https://www.mona-ai.cn/updates/update.json", headers={"Cache-Control": "no-cache"})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  release = json.load(response)
+              if release.get("version") != version:
+                  raise SystemExit("Windows update manifest does not match the release version")
+              sha = release.get("git_hash", "")
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("release source must be a complete Git commit SHA")
           print(sha)
           PY
             )"
@@ -85,6 +96,18 @@ jobs:
             source_sha="$(git rev-parse HEAD)"
           fi
           test "$(git rev-parse HEAD)" = "$source_sha"
+          if [[ "$PUBLISH_MODE" == "ad-hoc" || "$PUBLISH_MODE" == "notarized" ]]; then
+            python - "$source_sha" <<'PY'
+          import json, sys, tomllib, urllib.request
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          request = urllib.request.Request("https://www.mona-ai.cn/updates/update.json", headers={"Cache-Control": "no-cache"})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              release = json.load(response)
+          if release.get("version") != version or release.get("git_hash") != sys.argv[1]:
+              raise SystemExit("Windows update manifest does not match the selected release source")
+          PY
+          fi
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "Release source: $source_sha"
 
@@ -263,6 +286,7 @@ jobs:
           QINIU_SK: ${{ secrets.QINIU_SK }}
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
           QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN }}
+          EXPECTED_SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           test -n "$QINIU_DOMAIN"
           domain="${QINIU_DOMAIN#https://}"
@@ -270,14 +294,38 @@ jobs:
           domain="${domain%/}"
           python -m pip install qiniu
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          python - "$version" "$EXPECTED_SOURCE_SHA" <<'PY'
+          import json, sys, urllib.request
+          request = urllib.request.Request("https://www.mona-ai.cn/updates/update.json", headers={"Cache-Control": "no-cache"})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              release = json.load(response)
+          if release.get("version") != sys.argv[1] or release.get("git_hash") != sys.argv[2]:
+              raise SystemExit("Windows update manifest changed before macOS publication")
+          PY
           found=0
           while IFS= read -r dmg; do
             found=1
             digest="$(sha256sum "$dmg" | cut -d ' ' -f 1)"
+            etag="$(python -c 'import sys; from qiniu import etag; print(etag(sys.argv[1]))' "$dmg")"
             # 版本化路径供归档，固定路径供官网下载按钮长期使用。
             for object_key in "macos/${version}/$(basename "$dmg")" "macos/Mona-latest.dmg"; do
               python .github/scripts/upload_qiniu_artifact.py --artifact "$dmg" --object-key "$object_key"
               public_url="https://${domain}/${object_key}"
+              python - "$public_url" "$etag" <<'PY'
+          import sys, time, urllib.error, urllib.request
+          url, expected = sys.argv[1:]
+          for attempt in range(12):
+              try:
+                  request = urllib.request.Request(url, method="HEAD", headers={"Cache-Control": "no-cache"})
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      if response.headers.get("ETag", "").strip('"') == expected:
+                          break
+              except urllib.error.URLError:
+                  pass
+              time.sleep(5)
+          else:
+              raise SystemExit("public CDN has not served the uploaded DMG")
+          PY
               downloaded="$RUNNER_TEMP/verify-$(basename "$dmg")"
               curl --fail --location --retry 3 --retry-delay 5 --output "$downloaded" "$public_url"
               test "$digest" = "$(sha256sum "$downloaded" | cut -d ' ' -f 1)"
