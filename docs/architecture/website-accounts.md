@@ -4,7 +4,7 @@
 
 ## 目标边界
 
-官网和客户端共用原有 Mona Auth 的 users，不创建第二套用户库。在线 Work 只消费认证能力：账号身份、网页登录和退出。会话、附件、运行数据、模型凭据、并发额度仍归 Work 独立管理；不读取桌面项目或钱包，不连接现有计费/订阅/同步接口。
+官网和客户端共用原有 Mona Auth 的 users，不创建第二套用户库。2026-11-01 用户进一步明确：Qwen 免费，Codex 按官方 Token 单价扣网站和客户端共用的 Mona 余额，不另建钱包。该决策取代在线 Work 仅消费认证的旧限制；会话、附件、运行数据、模型凭据和执行并发仍归 Work 独立管理，不读取桌面项目，不改变订阅、支付、设备和同步逻辑。当前 Work 发布包尚未接入计费，详细准入见 [独立在线宿主](hosted-work.md)。
 
 2026-10-31 新增的 [官网产品建议](website-suggestions.md) 也只复用网站身份。建议数据与服务独立保存，Auth 不增加建议业务表或路由；既有账号登录、资料与退出规则不变。
 
@@ -18,7 +18,7 @@
 
 ## 身份、存储和安全
 
-新增五张认证表：website_profiles、website_sessions、website_email_codes、website_wechat_attempts、website_wechat_identities。账户 ID、原 users/订阅/余额表不迁移到其他系统。新增账号沿用原注册策略创建用户及其初始业务记录；这不代表 Work 可消费原业务钱包。
+新增五张认证表：website_profiles、website_sessions、website_email_codes、website_wechat_attempts、website_wechat_identities。账户 ID、原 users/订阅/余额表不迁移到其他系统。新增账号沿用原注册策略创建用户及其初始业务记录。后续 Work 收费复用同一个钱包，须经服务端预扣和真实用量结算；网站登录令牌本身不授予结算权限，也不放开旧桌面模型访问通道。
 
 网页登录令牌仍为 account scope，额外带 wsid 和 credential_version。get_current_user 在存在 wsid 时检查具体会话归属、有效期和撤销；普通旧账号/桌面令牌不因网页退出而被撤销。网站令牌不能管理新旧桌面设备，也不能利用旧模型访问过渡通道签发模型令牌；历史 account 和桌面令牌维持原行为。个人页面只允许当前网页登录修改自己的资料，不接受 user_id、is_admin 等字段。
 
