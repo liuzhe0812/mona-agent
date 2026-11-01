@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 适用范围：Mona 桌面端、Python Gateway/Services、WebUI、Agent 与工具系统
-- 最后更新：2026-10-31
+- 最后更新：2026-11-01
 
 ## 1. 核心与扩展
 
@@ -95,6 +95,7 @@
 - Mona 必须兼容 Windows 路径、非 ASCII 文件名和 UTF-8 输出。
 - 机器相关、可重建且体积较大的数据放在操作系统 LocalAppData；用户数据和工作区不得混入运行时缓存。
 - Tauri IPC 的参数名必须与 Rust command 契约一致，并为新增命令增加最小调用测试。
+- Mona AI 官方模型以服务端当前开放目录为准，全部显示并自动接收新增、更新和下架；本地历史 `enabled_models` 不得过滤官方模型，也不提供官方模型显隐开关。文本、图片和视频仍按能力进入对应选择器，自定义 API 供应商与原生来源继续保留用户显示偏好。
 - Windows 普通 WebView2 浏览器标签共用 `app_local_data_dir()/browser` 独立资料目录，与有应用权限的 main WebView 资料目录隔离；不得复用 main WebView 环境或为每个标签创建独立目录。浏览器仍使用固定 CDP 9300。
 
 ## 6. UI 约束

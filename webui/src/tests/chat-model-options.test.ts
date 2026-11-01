@@ -104,6 +104,28 @@ describe("chat model options", () => {
     expect(buildComposerProviderOptions(settings).map((option) => option.model)).toEqual(["qwen"]);
   });
 
+  it("shows all official chat models despite stale visibility while preserving custom choices", () => {
+    const settings = {
+      agent: { provider: "mona_managed", model: "official-new" },
+      chat_providers: [{
+        name: "mona_managed", label: "Mona AI", configured: true, is_builtin: true,
+        models: [
+          { id: "official-new", name: "Official New", type: "chat", enabled: false },
+          { id: "official-image", name: "Official Image", type: "image", enabled: false },
+        ],
+      }, {
+        name: "custom-example", label: "Custom", configured: true, is_custom: true,
+        models: [
+          { id: "custom-shown", name: "Shown", type: "chat", enabled: true },
+          { id: "custom-hidden", name: "Hidden", type: "chat", enabled: false },
+        ],
+      }],
+    } as SettingsPayload;
+
+    expect(buildComposerProviderOptions(settings).map((option) => option.model))
+      .toEqual(["official-new", "custom-shown"]);
+  });
+
   it("adds native catalog models to ordinary chat while keeping same-named sources distinct", () => {
     const settings = {
       agent: { provider: "example", model: "shared", executor: "mona", native_model: null },

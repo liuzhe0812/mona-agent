@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { ChatProvidersSettings } from "./ChatProvidersSettings";
-import { fetchProviderModels, fetchSettings, updateProviderSettings } from "@/lib/api";
+import { fetchProviderModels, fetchSettings, updateProviderSettings, updateSettings } from "@/lib/api";
 import { developmentApi, type EngineResource, type ExecutorSettings, type NativeProbe } from "@/lib/development-api";
 import { useModelPreferences } from "@/components/models/model-sources";
 import type { SettingsPayload } from "@/lib/types";
@@ -210,6 +210,44 @@ describe("ChatProvidersSettings", () => {
     expect(screen.getByText("暂无模型")).toBeInTheDocument();
     expect(screen.queryByText(/VPS|服务端|生效价格/)).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("shows all official models and removes visibility controls even with old hidden settings", async () => {
+    const previousHidden = {
+      ...settings,
+      image_generation: { ...settings.image_generation, providers: [{
+        name: "mona_managed", label: "Mona AI", configured: true, image_models: ["official-image"],
+      }] },
+      chat_providers: settings.chat_providers!.map((provider) => provider.name === "mona_managed"
+        ? { ...provider, models: [
+          { id: "existing", name: "已有模型", enabled: true },
+          { id: "new-official", name: "官方新模型", enabled: false },
+        ] }
+        : provider),
+    } as SettingsPayload;
+    vi.mocked(updateSettings).mockResolvedValueOnce(previousHidden);
+    render(<ChatProvidersSettings settings={previousHidden} token="test-token" onSettingsChanged={vi.fn()} onModelNameChange={vi.fn()} />);
+
+    expect(screen.getByText("已有模型")).toBeInTheDocument();
+    expect(screen.getByText("官方新模型")).toBeInTheDocument();
+    expect(screen.getByText("official-image")).toBeInTheDocument();
+    expect(screen.getByText("可用模型 3")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /未显示/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+
+    openManagementMenu();
+    expect(screen.getByRole("menuitemradio", { name: "按品牌分组" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "全部显示" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "全部隐藏" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "重置显示偏好" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "分别调整" }));
+
+    const row = screen.getByRole("button", { name: "设置 官方新模型" }).closest(".group");
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "设为默认" }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith("test-token", {
+      provider: "mona_managed", model: "new-official", providerModel: "new-official",
+    }));
   });
 
   it("offers one custom model list independently to chat, image, and video", async () => {

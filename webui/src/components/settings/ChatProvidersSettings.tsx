@@ -395,6 +395,7 @@ export function ChatProvidersSettings({
   const [error, setError] = useState<string | null>(null);
 
   const selected = selectedCodebuddy ? undefined : configured.find((provider) => provider.name === selectedId) ?? configured[0];
+  const isMonaManaged = selected?.name === "mona_managed";
   const accountUsage = useNativeAccountUsage(selected?.name === "openai", Boolean(nativeConnected("openai")), nativeRefresh);
   const usageIdentity = useRef<string | null>(null);
   useEffect(() => {
@@ -845,7 +846,7 @@ export function ChatProvidersSettings({
   };
 
   const toggleModel = async (model: ChatModel) => {
-    if (!selected || saving) return;
+    if (!selected || isMonaManaged || saving) return;
     const enabledModels = selected.models.filter((item) => item.enabled).map((item) => item.id);
     const next = model.enabled
       ? enabledModels.filter((id) => id !== model.id)
@@ -899,7 +900,7 @@ export function ChatProvidersSettings({
   };
 
   const toggleAllModels = async (action: "show" | "hide" | "reset") => {
-    if (!selected || saving) return;
+    if (!selected || isMonaManaged || saving) return;
     const native = nativeFor(selected.name);
     if (native) {
       const keys = native.models.filter((model) => model.id).map((model) =>
@@ -1099,7 +1100,7 @@ export function ChatProvidersSettings({
     .localeCompare(modelPresentation(b, { id: selected!.name, label: selected!.label }).name, undefined, { numeric: true }));
   const hiddenModels: typeof visibleModels = [];
   for (const model of managementView === "model" ? namedModels : visibleModels) {
-    if (chatModelIds.has(model.id) && isLanguageModel(model.type, !selected!.is_custom) && !model.enabled) {
+    if (!isMonaManaged && chatModelIds.has(model.id) && isLanguageModel(model.type, !selected!.is_custom) && !model.enabled) {
       hiddenModels.push(model);
       continue;
     }
@@ -1114,7 +1115,7 @@ export function ChatProvidersSettings({
   const kindOrder = [...MODEL_TYPE_OPTIONS.map((option) => option.value), "hidden"];
   const orderedModelGroups = [...modelGroups].sort(([, a], [, b]) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind));
   const nativeSource = nativeFor(selected?.name ?? "");
-  const selectedModelCount = (selected?.configured && !["openai", "anthropic"].includes(selected.name) ? selected.models.filter((model) => model.enabled && isLanguageModel(model.type, !selected.is_custom)).length : 0)
+  const selectedModelCount = (selected?.configured && !["openai", "anthropic"].includes(selected.name) ? selected.models.filter((model) => (isMonaManaged || model.enabled) && isLanguageModel(model.type, !selected.is_custom)).length : 0)
     + (nativeConnected(selected?.name ?? "") ? nativeSource?.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: `native:${nativeSource.id}`, model: model.id, executor: nativeSource.id }))).length ?? 0 : 0);
   const presentCapabilities = new Set(unifiedModels.map((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)
     ? "chat" : modelTypeInfo(model.type).capability));
@@ -1317,7 +1318,7 @@ export function ChatProvidersSettings({
                 </div>
               ) : null}
               <div className={cn("z-10 flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-2.5", !nativeSource && "sticky top-0 bg-card")}>
-                <span className="shrink-0 text-caption text-muted-foreground">{nativeSource ? `可用模型 ${(nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) ? nativeSource.models.filter((model) => model.id).length : 0) + selected.models.length}` : `已选 ${selectedModelCount} 个模型`}</span>
+                <span className="shrink-0 text-caption text-muted-foreground">{nativeSource ? `可用模型 ${(nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) ? nativeSource.models.filter((model) => model.id).length : 0) + selected.models.length}` : isMonaManaged ? `可用模型 ${unifiedModels.length}` : `已选 ${selectedModelCount} 个模型`}</span>
                 <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
                   <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving || (!selected.configured && (!nativeSource || !nativeProgramAvailable(nativeSource)))} title="刷新模型" aria-label="刷新模型">
                     {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -1331,11 +1332,13 @@ export function ChatProvidersSettings({
                           <DropdownMenuRadioItem value="model">按名称排序</DropdownMenuRadioItem>
                         </DropdownMenuRadioGroup>
                         <DropdownMenuSeparator />
-                        <DropdownMenuLabel>显示选择</DropdownMenuLabel>
-                        <DropdownMenuItem onSelect={() => void toggleAllModels("show")} disabled={saving || !selectionAvailable || selectedModelCount === selectableModelCount}>全部显示</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => void toggleAllModels("hide")} disabled={saving || !selectionAvailable || selectedModelCount === 0}>全部隐藏</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => void toggleAllModels("reset")} disabled={saving || !selectionAvailable || !selectableModelCount}>重置显示偏好</DropdownMenuItem>
-                        <DropdownMenuSeparator />
+                        {!isMonaManaged && <>
+                          <DropdownMenuLabel>显示选择</DropdownMenuLabel>
+                          <DropdownMenuItem onSelect={() => void toggleAllModels("show")} disabled={saving || !selectionAvailable || selectedModelCount === selectableModelCount}>全部显示</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => void toggleAllModels("hide")} disabled={saving || !selectionAvailable || selectedModelCount === 0}>全部隐藏</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => void toggleAllModels("reset")} disabled={saving || !selectionAvailable || !selectableModelCount}>重置显示偏好</DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>}
                         {!nativeSource && <DropdownMenuItem onSelect={() => setAdjustModels((value) => !value)}>分别调整{adjustModels && <Check className="ml-auto h-4 w-4" />}</DropdownMenuItem>}
                       </DropdownMenuContent>
                   </DropdownMenu>
@@ -1392,7 +1395,7 @@ export function ChatProvidersSettings({
                             </div>
                             {adjustModels && modelMeta ? <p className="truncate font-mono text-micro text-muted-foreground">{modelMeta}</p> : null}
                           </div>
-                          {adjustModels && isChatModel && model.enabled && !isDefaultChat && !isDefaultImage && !isDefaultVideo ? <Button type="button" variant="outline" size="sm" onClick={() => setDefault(model)} disabled={saving}>设为默认</Button> : null}
+                          {adjustModels && isChatModel && (isMonaManaged || model.enabled) && !isDefaultChat && !isDefaultImage && !isDefaultVideo ? <Button type="button" variant="outline" size="sm" onClick={() => setDefault(model)} disabled={saving}>设为默认</Button> : null}
                           {!isChatModel || selected.configured ? (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -1453,7 +1456,7 @@ export function ChatProvidersSettings({
                               </DropdownMenuContent>
                             </DropdownMenu>
                           ) : null}
-                          {isChatModel ? (
+                          {isChatModel && !isMonaManaged ? (
                             <Switch
                               checked={selected.configured && model.enabled}
                               onCheckedChange={() => void toggleModel(model)}

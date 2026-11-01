@@ -36,7 +36,7 @@ export function buildComposerProviderOptions(
     )
     .flatMap((provider) => provider.models
       .filter((model) => (
-        model.enabled
+        (provider.is_builtin || model.enabled)
         && isLanguageModel(model)
         && !isDefaultMediaModel(settings, provider, model)
       ))

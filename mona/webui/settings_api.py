@@ -1516,6 +1516,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             isinstance(item, str) for item in enabled
         )):
             raise WebUISettingsError("enabled_models must be a JSON array of strings")
+        if managed_entry and enabled is not None:
+            raise WebUISettingsError("Mona AI 模型由官方统一提供，全部显示。")
         known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
         if provider_name in {"openai", "anthropic"} and provider_config.model:
             known_models.add(provider_config.model)
@@ -2251,11 +2253,6 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 }
             )
         managed_ids = [model["id"] for model in managed_models]
-        selected = (
-            list(provider_config.enabled_models)
-            if provider_config and provider_config.enabled_models is not None
-            else None
-        )
         rows.insert(
             0,
             {
@@ -2274,7 +2271,7 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "models": [
                     {
                         **model,
-                        "enabled": selected is None or model["id"] in selected,
+                        "enabled": True,
                         "recommended": index == 0,
                     }
                     for index, model in enumerate(managed_models)
