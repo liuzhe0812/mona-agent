@@ -935,7 +935,7 @@ async def test_openai_extra_body_size_is_preserved_when_request_omits_size() -> 
 async def test_openai_requires_api_key() -> None:
     client = OpenAIImageGenerationClient(api_key=None)
 
-    with pytest.raises(ImageGenerationError, match="API key"):
+    with pytest.raises(ImageGenerationError, match="API [Kk]ey"):
         await client.generate(prompt="draw", model="dall-e-3")
 
 

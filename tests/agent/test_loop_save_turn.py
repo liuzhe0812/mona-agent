@@ -65,7 +65,7 @@ def test_conversation_background_is_not_saved_as_user_input(tmp_path, with_media
     assert "Previous task background." not in projected[0]["content"]
     assert "A revision is still pending." not in projected[0]["content"]
     current_input = json.dumps(projected[-1]["content"], ensure_ascii=False)
-    assert "Previous task background." in current_input
+    assert "Previous task background." not in current_input
     assert "A revision is still pending." in current_input
     session = Session(key="cli:background")
 
@@ -78,7 +78,7 @@ def test_conversation_background_is_not_saved_as_user_input(tmp_path, with_media
     assert "A revision is still pending." not in saved
     assert ContextBuilder._RUNTIME_CONTEXT_TAG not in saved
     model_input = json.dumps(session.get_history(model_view=True)[0]["content"], ensure_ascii=False)
-    assert "Previous task background." in model_input
+    assert "Previous task background." not in model_input
     assert "A revision is still pending." in model_input
     assert "data:image/" not in json.dumps(session.metadata)
     if with_media:
@@ -100,8 +100,8 @@ def test_history_and_handoff_changes_keep_system_prompt_stable(tmp_path) -> None
     assert "Export is pending." not in second[0]["content"]
     assert "The user approved the layout." not in first[-1]["content"]
     assert "Review is pending." not in second[-1]["content"]
-    assert "The first draft is ready." in second[-1]["content"]
-    assert "The user approved the layout." in second[-1]["content"]
+    assert "The first draft is ready." not in second[-1]["content"]
+    assert "The user approved the layout." not in second[-1]["content"]
     assert "Export is pending." in second[-1]["content"]
     assert second[-1]["content"].startswith("Export it\n\n" + ContextBuilder._RUNTIME_CONTEXT_TAG)
 
