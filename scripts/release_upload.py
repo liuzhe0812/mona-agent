@@ -323,6 +323,7 @@ def update_vps_manifest(
     size: int,
     notes: str,
     git_hash: str,
+    pub_date: str | None = None,
 ) -> None:
     """更新 VPS 上的 update.json 清单（小文件，保留在 VPS 便于频繁更新）。"""
     import paramiko
@@ -337,7 +338,7 @@ def update_vps_manifest(
     manifest = {
         "version": version,
         "notes": notes,
-        "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pub_date": pub_date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "url": f"https://{domain}/{update_pkg_filename}",
         "sha256": sha256_hash,
         "size": size,

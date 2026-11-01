@@ -80,6 +80,35 @@ def test_site_root_accepts_a_verified_release_directory() -> None:
     assert release_upload._validated_site_root(path) == path
 
 
+def test_republished_manifest_preserves_original_release_date_and_notes(monkeypatch) -> None:
+    saved: list[str] = []
+
+    class Output:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def write(self, value): saved.append(value)
+
+    class SFTP:
+        def open(self, path, mode):
+            assert path == "/var/www/mona/updates/update.json" and mode == "w"
+            return Output()
+        def close(self): pass
+
+    class SSH:
+        def set_missing_host_key_policy(self, _policy): pass
+        def connect(self, *_args, **_kwargs): pass
+        def open_sftp(self): return SFTP()
+        def close(self): pass
+
+    monkeypatch.setitem(sys.modules, "paramiko", SimpleNamespace(SSHClient=SSH, AutoAddPolicy=lambda: None))
+    monkeypatch.setenv("VPS_PASSWORD", str(object()))
+    monkeypatch.setenv("QINIU_DOMAIN", "storage.example")
+    release_upload.update_vps_manifest("1.8.4", "mona-1.8.4.tar.zst", "hash", 123, "original notes", "commit", pub_date="2026-10-31T18:08:18Z")
+    manifest = json.loads("".join(saved))
+    assert manifest["pub_date"] == "2026-10-31T18:08:18Z"
+    assert manifest["notes"] == "original notes"
+
+
 @pytest.mark.parametrize("commit,valid", [("a" * 40, True), ("not-a-commit", False)])
 def test_macos_release_source_can_be_selected_without_changelog(tmp_path: Path, commit: str, valid: bool) -> None:
     workflow = yaml.safe_load((_SCRIPT.parents[1] / ".github/workflows/build-macos.yml").read_text(encoding="utf-8"))
