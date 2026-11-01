@@ -33,6 +33,7 @@ vi.mock("@/components/settings/ManagedRuntimeSettings", () => ({
 }));
 
 import { SettingsView } from "./SettingsView";
+import * as settingsUpdates from "@/lib/settings-updates";
 
 const props = {
   theme: "light" as const,
@@ -73,6 +74,7 @@ describe("SettingsView advanced features section", () => {
   });
 
   it("keeps the provider layout visible and edits the decision model only in the shared settings dialog", async () => {
+    const published = vi.spyOn(settingsUpdates, "publishSettingsUpdate");
     const payload = {
       agent: { model: "", provider: "", model_preset: "default", timezone: "UTC", tool_hint_max_length: 40 },
       model_presets: [],
@@ -107,12 +109,16 @@ describe("SettingsView advanced features section", () => {
     await waitFor(() => expect(api.updateJevSettings).toHaveBeenCalledWith("tok", {
       apiKey: undefined, apiBase: "https://api.typesafe.ai/v1", model: "jev-preview", timeoutSeconds: 15,
     }));
+    await waitFor(() => expect(published).toHaveBeenLastCalledWith("tok", {
+      ...payload, jev: { ...payload.jev, model: "jev-preview" },
+    }));
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "模型来源" })).toBeVisible();
 
     fireEvent.click(openJev);
     expect(screen.getByLabelText("模型")).toHaveValue("jev-preview");
+    published.mockRestore();
   });
 
   it("opens the independent advanced features section from its initial section", async () => {

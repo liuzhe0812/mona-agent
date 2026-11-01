@@ -105,6 +105,7 @@ import {
   updateWebSearchSettings,
 } from "@/lib/api";
 import { EDGE_TTS_VOICES } from "@/lib/constants";
+import { publishSettingsUpdate } from "@/lib/settings-updates";
 import { cn } from "@/lib/utils";
 import {
   MODULE_DEFS,
@@ -373,7 +374,8 @@ export function SettingsView({
         channels: payload.restart_required_sections.includes("channels"),
       });
     }
-  }, []);
+    publishSettingsUpdate(token, payload);
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;

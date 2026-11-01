@@ -15,6 +15,7 @@ import * as api from "@/lib/api";
 import { fetchFilePreviewBlob } from "@/lib/api";
 import { developmentApi, type DevExecutor } from "@/lib/development-api";
 import { nativeProvidersChanged, useNativeProviderState } from "@/lib/native-provider-state";
+import { publishSettingsUpdate } from "@/lib/settings-updates";
 import type { OfficeSessionState } from "@/components/office/types";
 import {
   computeFlowchartSemanticHash,
@@ -560,6 +561,92 @@ describe("ThreadShell", () => {
 
     expect(settingsRequest).toHaveBeenCalled();
     expect(slashRequest).toHaveBeenCalled();
+  });
+
+  it("syncs enabled and disabled models into a mounted conversation immediately", async () => {
+    const settings = {
+      agent: { model: "current", provider: "example", executor: "mona" },
+      model_presets: [],
+      chat_providers: [{
+        name: "example", label: "Example API", configured: true,
+        models: [
+          { id: "current", name: "Current model", enabled: true },
+          { id: "new", name: "New model", enabled: false },
+        ],
+      }],
+    } as SettingsPayload;
+    const updated = {
+      ...settings,
+      chat_providers: settings.chat_providers!.map((provider) => ({
+        ...provider,
+        models: provider.models.map((model) => model.id === "new" ? { ...model, enabled: true } : model),
+      })),
+    };
+    const settingsRequest = vi.spyOn(api, "fetchSettings").mockResolvedValue(settings);
+    const selectionRequest = vi.spyOn(developmentApi, "selectWorkModelSource").mockResolvedValue(settings);
+    restoreModelSourceSpies.push(() => settingsRequest.mockRestore(), () => selectionRequest.mockRestore());
+    const client = makeClient();
+
+    render(wrap(client, <ThreadShell session={session("model-sync")} onToggleSidebar={() => {}} />));
+    const trigger = await screen.findByRole("button", { name: "Current model" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole("menuitem", { name: "Example API · New model" })).not.toBeInTheDocument();
+
+    act(() => publishSettingsUpdate("other-token", updated));
+    expect(screen.queryByRole("menuitem", { name: "Example API · New model" })).not.toBeInTheDocument();
+    act(() => publishSettingsUpdate("tok", updated));
+    expect(await screen.findByRole("menuitem", { name: "Example API · New model" })).toBeInTheDocument();
+
+    act(() => publishSettingsUpdate("tok", settings));
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Example API · New model" })).not.toBeInTheDocument());
+    expect(trigger).toHaveTextContent("Current model");
+    expect(settingsRequest).toHaveBeenCalledTimes(1);
+    expect(selectionRequest).not.toHaveBeenCalled();
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])("keeps newer models when the initial settings request ends late with %s", async (outcome) => {
+    const oldSettings = {
+      agent: { model: "current", provider: "example", executor: "mona" },
+      model_presets: [],
+      chat_providers: [{
+        name: "example", label: "Example API", configured: true,
+        models: [{ id: "current", name: "Current model", enabled: true }],
+      }],
+    } as SettingsPayload;
+    const updated = {
+      ...oldSettings,
+      chat_providers: oldSettings.chat_providers!.map((provider) => ({
+        ...provider, models: [...provider.models, { id: "new", name: "New model", enabled: true }],
+      })),
+    };
+    let resolveRequest!: (value: SettingsPayload) => void;
+    let rejectRequest!: (error: Error) => void;
+    const pending = new Promise<SettingsPayload>((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = reject;
+    });
+    const settingsRequest = vi.spyOn(api, "fetchSettings").mockReturnValue(pending);
+    const selectionRequest = vi.spyOn(developmentApi, "selectWorkModelSource").mockResolvedValue(updated);
+    restoreModelSourceSpies.push(() => settingsRequest.mockRestore(), () => selectionRequest.mockRestore());
+    const client = makeClient();
+
+    render(wrap(client, <ThreadShell session={session("model-sync-pending")} onToggleSidebar={() => {}} />));
+    await waitFor(() => expect(settingsRequest).toHaveBeenCalledTimes(1));
+    act(() => publishSettingsUpdate("tok", updated));
+    const trigger = await screen.findByRole("button", { name: "Current model" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: "Example API · New model" })).toBeInTheDocument();
+
+    await act(async () => {
+      if (outcome === "success") resolveRequest(oldSettings);
+      else rejectRequest(new Error("settings temporarily unavailable"));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("menuitem", { name: "Example API · New model" })).toBeInTheDocument();
+    expect(settingsRequest).toHaveBeenCalledTimes(1);
+    expect(selectionRequest).not.toHaveBeenCalled();
+    expect(client.sendMessage).not.toHaveBeenCalled();
   });
 
   it("warns during computer control, stops for takeover, and clears when the run ends", async () => {

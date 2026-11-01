@@ -56,6 +56,7 @@ import { fetchSettings, listSlashCommands, renameArtifact } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
 import { developmentApi, type DevExecutor, type ExecutorId } from "@/lib/development-api";
 import { useNativeProviderState } from "@/lib/native-provider-state";
+import { subscribeSettingsUpdates } from "@/lib/settings-updates";
 import { buildComposerModelOptions } from "@/components/models/model-options";
 export { buildComposerModelOptions, buildComposerNativeOptions, buildComposerProviderOptions } from "@/components/models/model-options";
 import { useWorkspaceStore } from "@/lib/workspace-store";
@@ -858,7 +859,23 @@ export function ThreadShell({
 
   useEffect(() => {
     let cancelled = false;
+    let settingsUpdated = false;
     let managedPriceTimer: number | undefined;
+    const applySettings = (settings: SettingsPayload) => {
+      settingsRef.current = settings;
+      setProviderOptions(buildComposerModelOptions(settings, nativeExecutorsRef.current, managedModelPricesRef.current));
+      const activePreset = settings.model_presets.find((p) => p.active);
+      const native = (settings.agent.executor ?? "mona") !== "mona";
+      setImageInputEnabled(native || activePreset?.capabilities?.supports_vision !== false);
+      setContextWindowTokens(native
+        ? settings.agent.native_context_window_tokens ?? null
+        : settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null);
+      if (settings.runtime?.workspace_path) setWorkspacePath(settings.runtime.workspace_path);
+    };
+    const unsubscribe = subscribeSettingsUpdates(token, (settings) => {
+      settingsUpdated = true;
+      applySettings(settings);
+    });
     const refreshManagedPrices = async () => {
       try {
         const { prices } = await getManagedModelPrices();
@@ -887,20 +904,7 @@ export function ThreadShell({
     (async () => {
       try {
         const settings = await fetchSettings(token);
-        if (!cancelled) {
-          settingsRef.current = settings;
-          const options = buildComposerModelOptions(settings, nativeExecutorsRef.current, managedModelPricesRef.current);
-          setProviderOptions(options);
-          const activePreset = settings.model_presets.find((p) => p.active);
-          const native = (settings.agent.executor ?? "mona") !== "mona";
-          setImageInputEnabled(native || activePreset?.capabilities?.supports_vision !== false);
-          setContextWindowTokens(native
-            ? settings.agent.native_context_window_tokens ?? null
-            : settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null);
-          if (settings.runtime?.workspace_path) {
-            setWorkspacePath(settings.runtime.workspace_path);
-          }
-        }
+        if (!cancelled && !settingsUpdated) applySettings(settings);
         if (isTauri()) {
           await refreshManagedPrices();
           if (!cancelled) {
@@ -910,11 +914,12 @@ export function ThreadShell({
           }
         }
       } catch {
-        if (!cancelled) setProviderOptions([]);
+        if (!cancelled && !settingsUpdated) setProviderOptions([]);
       }
     })();
     return () => {
       cancelled = true;
+      unsubscribe();
       if (managedPriceTimer !== undefined) window.clearInterval(managedPriceTimer);
     };
   }, [token, setWorkspacePath, nativeProviderRevision]);
