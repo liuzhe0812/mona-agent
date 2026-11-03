@@ -119,7 +119,7 @@ Screen 组件接 callback props（`onTabChange`、`onOpen`、`onClose`、`onTogg
 
 ### 3. 交付前跑真实点击测试
 
-静态截图只能看 layout，交互 bug 要点过才发现。用 Playwright 跑 3 项最小点击测试：进入详情 / 关键标注点 / tab 切换。检查 `pageerror` 为 0 再交付。Playwright 可用 `npx playwright` 调用，或按本机全局安装路径（`npm root -g` + `/playwright`）。
+静态截图只能看 layout，交互 bug 要点过才发现。复用 Mona 浏览器完成三项最小点击测试：进入详情 / 关键标注点 / tab 切换。先用 `browser_observe(action="snapshot", tabId=...)` 取得当前元素，再用 `browser_act(kind="click", tabId=..., target="ref=...")` 操作，在同一标签截图复核。当前接口没有完整控制台历史时，不能声称 `pageerror` 为 0；按 [验证参考](verification.md) 记录实际检查和限制，不安装或启动独立 Playwright。
 
 ### 4. 品位锚点（pursue list，fallback 首选）
 

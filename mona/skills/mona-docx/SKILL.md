@@ -1,6 +1,6 @@
 ---
 name: mona-docx
-description: "Create, edit and analyze Word/DOCX documents in Mona. Use live Office sessions for ordinary work and bundled advanced helpers for unsupported OOXML, tracked changes, comments or legacy conversion."
+description: "Create, edit and analyze Word/DOCX documents in Mona. Use live Office sessions for ordinary work and bundled advanced helpers for unsupported OOXML, tracked changes or comments."
 ---
 
 # Mona Word 文档

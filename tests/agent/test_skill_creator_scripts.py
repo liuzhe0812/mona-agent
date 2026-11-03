@@ -3,6 +3,10 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
+from mona.agent.skills import SkillsLoader
+
 SCRIPT_DIR = Path("mona/skills/skill-creator/scripts").resolve()
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -31,6 +35,45 @@ def test_validate_skill_accepts_existing_skill_creator() -> None:
     valid, message = quick_validate.validate_skill(Path("mona/skills/skill-creator").resolve())
 
     assert valid, message
+
+
+def test_validate_skill_accepts_mona_frontmatter(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "example-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: example-skill\ndescription: A full description.\n"
+        "short_description: A short description.\nalways: true\n"
+        "metadata:\n  mona:\n    requires:\n      env: []\n---\n# Skill\n",
+        encoding="utf-8",
+    )
+    valid, message = quick_validate.validate_skill(skill_dir)
+    assert valid, message
+
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=tmp_path)
+    loader.workspace_skills = tmp_path / "private-skills"
+    assert loader.get_always_skills() == ["example-skill"]
+    assert "A short description." in loader.build_skills_summary()
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_error"),
+    [
+        ("always: 'true'", "'always' must be a boolean"),
+        ("short_description: 10", "'short_description' must be a string"),
+        ("metadata: [unclosed", "Invalid YAML"),
+        ("1: invalid", "Unexpected key(s)"),
+    ],
+)
+def test_validate_skill_rejects_invalid_frontmatter(tmp_path: Path, field: str, expected_error: str) -> None:
+    skill_dir = tmp_path / "example-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: example-skill\ndescription: Example skill.\n{field}\n---\n# Skill\n",
+        encoding="utf-8",
+    )
+    valid, message = quick_validate.validate_skill(skill_dir)
+    assert not valid
+    assert expected_error in message
 
 
 def test_validate_skill_rejects_placeholder_description(tmp_path: Path) -> None:

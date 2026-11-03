@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T00:00:00Z",
+  "components": [
+    {
+      "schemaVersion": 1,
+      "id": "browser-chromium",
+      "version": "156.0.8078.80+win32.x64",
+      "kind": "browser-runtime",
+      "downloadUrl": "https://cdn.npmmirror.com/binaries/chrome-for-testing/156.0.8078.80/win64/chrome-headless-shell-win64.zip",
+      "mirrors": [
+        "https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.80/win64/chrome-headless-shell-win64.zip"
+      ],
+      "size": 125772546,
+      "sha256": "10a77466005e7f64e00f1a75fd1ea81f4a38a60093c65fea6895843b26e60a9a",
+      "dependencies": [],
+      "platforms": [
+        "win32"
+      ],
+      "architectures": [
+        "x64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "chrome-headless-shell-win64/chrome-headless-shell.exe"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "ffmpeg",
+      "version": "6.1.1+darwin.arm64",
+      "kind": "ffmpeg-runtime",
+      "downloadUrl": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1708546399_6.1.1/ffmpeg.zip",
+      "mirrors": [],
+      "size": 25188133,
+      "sha256": "b2511beca5ee12d537b45201ade0a64f61e8c670725955bed81a8f600fa886a1",
+      "dependencies": [
+        "ffprobe@6.1.1+darwin.arm64"
+      ],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "ffmpeg"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "ffprobe",
+      "version": "6.1.1+darwin.arm64",
+      "kind": "ffprobe-runtime",
+      "downloadUrl": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1708546399_6.1.1/ffprobe.zip",
+      "mirrors": [],
+      "size": 25138782,
+      "sha256": "8e04238a9c370b5727665775a0029e596d394b25fe767f6490a98c394b8527ff",
+      "dependencies": [],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "ffprobe"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "ffmpeg",
+      "version": "6.1.1+darwin.x64",
+      "kind": "ffmpeg-runtime",
+      "downloadUrl": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1708548944_6.1.1/ffmpeg.zip",
+      "mirrors": [],
+      "size": 31286874,
+      "sha256": "a7efcd65b41faf405686468daa5f88c2fc78ade813ebdbf6f39df1b31529b26b",
+      "dependencies": [
+        "ffprobe@6.1.1+darwin.x64"
+      ],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "x64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "ffmpeg"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "ffprobe",
+      "version": "6.1.1+darwin.x64",
+      "kind": "ffprobe-runtime",
+      "downloadUrl": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1708548944_6.1.1/ffprobe.zip",
+      "mirrors": [],
+      "size": 31235966,
+      "sha256": "9ea9a5107331ca65c71821ae6be0f80d4ed990c8c49205482f65222e31c8e705",
+      "dependencies": [],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "x64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "ffprobe"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "browser-chromium",
+      "version": "150.0.7871.124+darwin.arm64",
+      "kind": "browser-runtime",
+      "downloadUrl": "https://cdn.npmmirror.com/binaries/chrome-for-testing/150.0.7871.124/mac-arm64/chrome-headless-shell-mac-arm64.zip",
+      "mirrors": [
+        "https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.124/mac-arm64/chrome-headless-shell-mac-arm64.zip"
+      ],
+      "size": 98564395,
+      "sha256": "c050d28c34e1f47530913da744ca5bcf10c482df8725102dfdd2aa633d72053b",
+      "dependencies": [],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "chrome-headless-shell-mac-arm64/chrome-headless-shell"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "browser-chromium",
+      "version": "150.0.7871.124+darwin.x64",
+      "kind": "browser-runtime",
+      "downloadUrl": "https://cdn.npmmirror.com/binaries/chrome-for-testing/150.0.7871.124/mac-x64/chrome-headless-shell-mac-x64.zip",
+      "mirrors": [
+        "https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.124/mac-x64/chrome-headless-shell-mac-x64.zip"
+      ],
+      "size": 104327752,
+      "sha256": "2421e227509a56b85c4c0adc0662b31fb21e51d04f26588964d139ce40b32675",
+      "dependencies": [],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "x64"
+      ],
+      "artifactFormat": "native-zip",
+      "nativeEntrypoint": "chrome-headless-shell-mac-x64/chrome-headless-shell"
+    }
+  ]
+}

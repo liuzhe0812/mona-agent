@@ -22,7 +22,9 @@ metadata:
 | 信息图、可视化 | 读 [信息图设计](references/modules/infographic.md)，按用户要求的媒介制作。 |
 | 设计评审 | 读 [设计评审](references/critique-guide.md)，依据真实画面和用途指出可执行的问题；模型评分不是质量认证。 |
 
-用户要求、项目规则、当前设计系统和对应制作工具的契约优先。原始模块中的 HTML 外壳、Babel 起手、固定画布和转换命令只适用于相应 HTML 产物，不能覆盖真实前端项目或 Office 文稿。PPT 不执行上游 HTML deck/PDF 转换流程。
+用户要求、项目规则、当前设计系统和对应制作工具的契约优先。原始模块中的 HTML 外壳、Babel 起手、固定画布和转换命令只适用于相应 HTML 产物，不能覆盖真实前端项目或 Office 文稿。PPT 使用原生 Office。
+
+网页读取、截图、点击、输入和页面检查统一复用 Mona 现有的 `browser_observe` / `browser_act`。按 [验证参考](references/verification.md) 在同一个 `tabId` 上观察和操作；页面测量使用 [DOM 采样源码](references/browser-checks.js)，交给现有浏览器的 `evaluate` 执行。本 Skill 不安装 Playwright、不启动或下载浏览器，也不直接连接 CDP。上游资料中的命令不覆盖这个执行方式。
 
 ## 设计工作
 
@@ -48,8 +50,10 @@ metadata:
 
 ## 资源与脚本边界
 
-上游 `assets/`、`references/`、`demos/`、`scripts/`、许可和依赖清单完整保留，可查看和复用已有代码。示例引用的 CDN、网络字体和运行时生成的配音不是内置离线素材；实际项目沿用自己的资源与依赖管理方式。
+设计样张、参考、演示和许可保留；上游脚本源码位于 `references/upstream-scripts/`，其依赖声明在 `references/upstream-package.json`，只作为只读参考，不作为 Mona 的脚本入口或安装清单。示例引用的 CDN、网络字体和运行时生成的配音不是内置离线素材；实际项目沿用自己的资源与依赖管理方式。
 
-接入不执行上游安装命令、Hooks、云配音、自动更新或 `~/.huashu-design/` 偏好写入；偏好沿用 Mona 既有机制。运行脚本仍需宿主允许的执行能力与统一受管运行时，只读资源接口不授予执行权限。PPT 制作和视频正式导出由各自 Mona 工具负责。
+本地 HTML 通过当前项目已验证的本地 HTTP 地址在 Mona 浏览器打开，不能把 `file://` 示例直接传入浏览器工具。当前浏览器没有提供的多视口、完整控制台历史或录屏能力明确记为未验证，不另起 Playwright 实例补做。PPT 制作使用原生 Office，视频使用 Mona Motion。
+
+不执行上游安装命令、Hooks、云配音、自动更新或 `~/.huashu-design/` 偏好写入；偏好沿用 Mona 既有机制。此 Skill 没有独立 Python/Node 执行依赖；工具和项目依赖由 Mona 对应功能管理。只读参考不授予执行权限，未完成的实际检查不报告通过。
 
 本设计包不提供背景配乐素材、选曲或混音流程。独立的视频工作台及 Huashu Motion 的音频能力由其自身工具管理，不受本设计包的资源裁剪影响。

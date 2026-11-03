@@ -14,6 +14,7 @@ import pytest
 import mona.runtime.catalog as catalog_module
 import mona.runtime.download as download_module
 from mona.runtime.catalog import (
+    RuntimeCatalog,
     RuntimeCatalogClient,
     RuntimeInstaller,
 )
@@ -107,6 +108,32 @@ def _entry(
 def allow_test_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(catalog_module, "validate_url_target", lambda _url: (True, ""))
     monkeypatch.setattr(download_module, "validate_url_target", lambda _url: (True, ""))
+
+
+@pytest.mark.parametrize("online", [True, False])
+async def test_bundled_native_catalog_survives_server_failure_and_merges_remote_entries(tmp_path, online):
+    bundled = RuntimeCatalog.model_validate({
+        "generatedAt": "2026-11-03T00:00:00Z",
+        "components": [_entry("browser-chromium", "156+win32.x64", b"fixture", kind="browser-runtime")],
+    })
+
+    def handler(request):
+        if not online:
+            raise httpx.ConnectError("catalog unavailable", request=request)
+        return httpx.Response(200, json={
+            "generatedAt": "2026-11-02T00:00:00Z",
+            "components": [_entry("ffmpeg", "6.1.1", b"fixture", kind="ffmpeg-runtime")],
+        })
+
+    client = RuntimeCatalogClient(
+        ["https://catalog.example.test/runtimes.json"], tmp_path / "catalog.json",
+        transport=httpx.MockTransport(handler), bundled_catalog=bundled,
+    )
+    catalog = await client.fetch()
+    assert {entry.id for entry in catalog.components} == ({"browser-chromium", "ffmpeg"} if online else {"browser-chromium"})
+    assert catalog.generated_at == ("2026-11-02T00:00:00Z" if online else bundled.generated_at)
+    offline_client = RuntimeCatalogClient([], tmp_path / "unused.json", bundled_catalog=bundled)
+    assert await offline_client.fetch() == bundled
 
 
 @pytest.mark.parametrize("environment", ["official", "stock-vibe"])

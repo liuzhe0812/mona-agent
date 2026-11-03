@@ -1,8 +1,23 @@
 # Mona 官方运行时源
 
-基础安装包不包含 Python 或 Node.js。本目录只保存可复现的运行时输入与构建说明；
+基础安装包包含供 Skill 和项目独立执行脚本的 Python/Node.js 基座及六个常用 Python 库；应用后端 Python 和 Playwright 专用 Node 驱动继续隔离。本目录保存可复现的运行时输入与构建说明；
 生成后的组件进入 `runtime-library/components/`，再由
 `scripts/build_official_distribution.py` 构建后将 ZIP 上传七牛，并把目录文件发布到 VPS。
+
+随包资源使用 `bundled-sources.json` 的固定输入，在 Gateway 构建前执行
+`python scripts/prepare_bundled_runtimes.py`，输出到被 Git 忽略的
+`src-tauri/resources/runtime-base/`。Windows x64、macOS ARM64/x64 的基础 Python、
+Node 和公共 wheel 均固定版本、大小和 SHA；资源准备完成后可用 `--offline` 重建。
+应用首次启动只从随包 ZIP 本地导入同一统一仓库，不下载基础解释器或常用库。
+
+大型视频资源不进入基础包。无界面浏览器与 macOS FFmpeg/FFprobe 的固定原始
+ZIP 目录在 `mona/runtime/native-tools.json`，由现有统一下载器校验并归一化安装；
+浏览器国内镜像与官方上游已验证同字节，FFmpeg 组件附带固定许可及来源说明。
+
+Windows 无界面浏览器固定为 156.0.8078.80；Mac 固定为 150.0.7871.124，保持 Mona
+当前最低 macOS 12 的支持。[Chrome 151 起要求 macOS 13](https://developer.chrome.com/release-notes/151)，
+不能直接把较新的 Mac 浏览器包替换进目录。两种 Mac 架构的主程序及全部动态库已核对
+Mach-O 最低版本为 12.0；仍须执行 Mac 构建脚本中的实际运行验收。
 
 Windows x64 首版固定：
 
@@ -42,5 +57,6 @@ python scripts/prepare_official_runtimes.py cua-driver --archive D:\runtime-inpu
 `runtime-library/sources.json` 将华为云/npmmirror 放在官方上游之前，但同时固定
 官方同字节文件的大小和 SHA-256；镜像内容不一致会在进入组件源之前被拒绝。
 
-客户端只从 Mona 配置的七牛公开域名下载，不需要用户申请 API Key；下载后校验
-文件大小和 SHA-256，失败时不会安装或激活组件。
+常规组件从 Mona 配置的公开目录下载，不需要用户申请 API Key；固定原生资源也可
+使用随包目录列出的已核验镜像或上游。所有路径都校验文件大小和 SHA-256，失败时
+不会安装或激活组件。

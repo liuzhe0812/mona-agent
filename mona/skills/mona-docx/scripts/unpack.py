@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import defusedxml.minidom
+from helpers import MAX_ARCHIVE_BYTES, validate_archive, validate_tree, workspace_path
 from helpers.merge_runs import merge_runs as do_merge_runs
 from helpers.simplify_redlines import simplify_redlines as do_simplify_redlines
 
@@ -41,8 +42,11 @@ def unpack(
     Returns:
         (None, message) - message indicates success or failure
     """
-    input_path = Path(input_file)
-    output_path = Path(output_directory)
+    try:
+        input_path = workspace_path(input_file)
+        output_path = workspace_path(output_directory)
+    except (OSError, ValueError) as exc:
+        return None, f"Error: {exc}"
 
     if not input_path.exists():
         return None, f"Error: {input_file} does not exist"
@@ -51,11 +55,15 @@ def unpack(
         return None, f"Error: {input_file} must be a .docx file"
 
     try:
-        # Create output directory
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        # Extract ZIP contents
+        if input_path.stat().st_size > MAX_ARCHIVE_BYTES:
+            raise ValueError("DOCX archive exceeds size limit")
         with zipfile.ZipFile(input_path, "r") as zf:
+            validate_archive(zf)
+            if output_path.exists():
+                if not output_path.is_dir() or any(output_path.iterdir()):
+                    raise ValueError("Output directory must be new or empty")
+                validate_tree(output_path)
+            output_path.mkdir(parents=True, exist_ok=True)
             zf.extractall(output_path)
 
         # Pretty print all XML files

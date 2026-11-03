@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from filelock import FileLock
 from packaging.version import InvalidVersion, Version
@@ -26,11 +26,21 @@ from mona.runtime.catalog import (
     RuntimeInstaller,
 )
 from mona.runtime.executors import EXECUTOR_RUNTIMES
-from mona.runtime.manager import RuntimeComponentStore, parse_runtime_pack_ref
+from mona.runtime.manager import (
+    ActiveRuntimeComponent,
+    RuntimeComponentStore,
+    RuntimeManagerError,
+    parse_runtime_pack_ref,
+)
+
+if TYPE_CHECKING:
+    from mona.runtime.bundled import BundledRuntimePayload
+    from mona.runtime.python_env import PythonEnvironmentBuilder
 
 RUNTIME_KINDS = {
     "python": "python-runtime",
     "node": "node-runtime",
+    "browser": "browser-runtime",
     "ffmpeg": "ffmpeg-runtime",
     "yt_dlp": "yt-dlp-runtime",
     "asr": "asr-runtime",
@@ -43,6 +53,7 @@ RUNTIME_KINDS = {
 _RUNTIME_COMPONENT_IDS = {
     "python": ("python-base",),
     "node": ("node-base",),
+    "browser": ("browser-chromium",),
     "ffmpeg": ("ffmpeg",),
     "yt_dlp": ("yt-dlp",),
     "asr": ("asr-sensevoice",),
@@ -94,6 +105,7 @@ class RuntimeInstallJobManager:
         local_component_available: Callable[[str], bool] | None = None,
         migration_status: Callable[[], dict[str, object]] | None = None,
         cleanup_legacy: Callable[[], dict[str, int]] | None = None,
+        bundled_runtime_root: Path | None = None,
     ) -> None:
         self.catalog_client = catalog_client
         self.component_store = component_store
@@ -106,6 +118,8 @@ class RuntimeInstallJobManager:
         self.local_component_available = local_component_available or (lambda _component: False)
         self.migration_status = migration_status
         self.cleanup_legacy = cleanup_legacy
+        self.bundled_runtime_root = bundled_runtime_root
+        self._bundled_task: asyncio.Task[None] | None = None
         self.cache_dir = getattr(installer, "cache_dir", component_store.root / "downloads")
         self._jobs: dict[str, RuntimeInstallJob] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -113,6 +127,54 @@ class RuntimeInstallJobManager:
         self._install_lock = asyncio.Lock()
         self._last_persisted = 0.0
         self._load()
+
+    async def ensure_bundled(self) -> bool:
+        """Import shipped components locally, regardless of the network download setting."""
+        if self.bundled_runtime_root is None:
+            return False
+        from mona.runtime.bundled import load_bundled_runtime
+        from mona.runtime.python_env import PythonEnvironmentBuilder
+
+        payload = load_bundled_runtime(
+            self.bundled_runtime_root, current_platform=self.current_platform,
+            current_architecture=self.current_architecture, verify_archives=False,
+        )
+        builder = PythonEnvironmentBuilder(self.component_store.root, self.component_store, current_platform=self.current_platform)
+        if payload.is_ready(self.component_store, builder):
+            return True
+        if self._bundled_task is None or self._bundled_task.done():
+            self._bundled_task = asyncio.create_task(self._prepare_bundled(payload, builder))
+        await asyncio.shield(self._bundled_task)
+        return True
+
+    async def _prepare_bundled(
+        self, payload: BundledRuntimePayload, builder: PythonEnvironmentBuilder,
+    ) -> None:
+        async with self._install_lock:
+            if payload.is_ready(self.component_store, builder):
+                return
+            await asyncio.to_thread(payload.verify_archives)
+            previous = {entry.manifest.id: self.component_store.active(entry.manifest.id) for entry in payload.manifest.components}
+            try:
+                for entry in payload.manifest.components:
+                    installed = await asyncio.to_thread(
+                        self.component_store.install_archive, payload.archive_path(entry), activate=False,
+                    )
+                    version_root = self.component_store.root / "components" / installed.id / "versions" / installed.version
+                    receipt = ActiveRuntimeComponent.model_validate_json(
+                        (version_root / "receipt.json").read_text(encoding="utf-8")
+                    )
+                    if installed != entry.manifest or receipt.sha256 != entry.sha256:
+                        raise RuntimeManagerError("bundled runtime changed during installation")
+                    await asyncio.to_thread(self.component_store.activate, installed.id, installed.version)
+                await builder.ensure(payload.python_refs)
+            except Exception:
+                for component_id, active in previous.items():
+                    if active is None:
+                        self.component_store.deactivate(component_id)
+                    else:
+                        self.component_store.activate(component_id, active[0].version)
+                raise
 
     async def status_payload(self) -> dict[str, object]:
         catalog = await self._status_catalog()
@@ -258,15 +320,35 @@ class RuntimeInstallJobManager:
 
     async def ensure_packs(self, component: str, refs: list[str]) -> RuntimeInstallJob:
         """Install exact packs for a feature and wait without tying the job to its caller."""
+        normalized_refs = list(dict.fromkeys(ref.strip() for ref in refs if ref.strip()))
+        if not normalized_refs:
+            raise ValueError("at least one runtime pack is required")
+        if self.bundled_runtime_root is not None:
+            from mona.runtime.bundled import BUNDLED_RUNTIME_REFS
+
+            await self.ensure_bundled()
+            if set(normalized_refs) <= BUNDLED_RUNTIME_REFS and all(
+                (active := self.component_store.active(component_id)) is not None
+                and active[0].version == version
+                for component_id, version in map(parse_runtime_pack_ref, normalized_refs)
+            ):
+                now = _now_ms()
+                job = RuntimeInstallJob(
+                    jobId=uuid.uuid4().hex, component=component.strip().lower(),
+                    packRef=normalized_refs[0], packRefs=normalized_refs,
+                    state="completed", stage="completed", createdAt=now,
+                    updatedAt=now, finishedAt=now,
+                )
+                self._jobs[job.job_id] = job
+                self._prune()
+                self._persist(force=True)
+                return job.model_copy(deep=True)
         if not self.auto_download_enabled():
             raise RuntimeAutoDownloadDisabledError(
                 "需要先下载高级功能内容，请在设置的“高级功能”中下载，或开启“需要时自动下载”"
             )
         if self.installer is None:
             raise RuntimeInstallUnavailableError(self.unavailable_reason)
-        normalized_refs = list(dict.fromkeys(ref.strip() for ref in refs if ref.strip()))
-        if not normalized_refs:
-            raise ValueError("at least one runtime pack is required")
         catalog = await self.catalog_client.fetch()
         total_bytes = 0
         for ref in normalized_refs:

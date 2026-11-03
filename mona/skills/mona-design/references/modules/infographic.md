@@ -19,14 +19,11 @@
 
 1. 三方向：每方向 1 个完整 HTML，按目标宽度截整页长图（`references/directions.md`）。三版骨架要不同（地图、时间轴、图鉴、单一巨物、叙事序列都是可选的结构），但别为了不同硬套隐喻。
 2. 选定后填全内容、校对每个数字和单位
-3. 导出：`npx playwright screenshot --full-page --viewport-size=1080,1350 file:///… out.png`；要发平台的按平台规格再切
+3. 预览和截图复用 Mona 浏览器，使用 `browser_observe(action="screenshot", tabId=..., fullPage=true)`；如需特定尺寸，只有实际宿主提供并验证后才报告达到该规格，不执行独立 Playwright 截图命令。
 
 ## 体检
 
-```bash
-# $HD = 本 skill 的根目录（SKILL.md 所在目录），不是用户的项目目录
-python3 "$HD/scripts/design_lint.py" check info.html --viewport 1080x1350 --min-body 36 --min-label 28
-```
+按 [验证参考](../verification.md) 在同一个 Mona 标签上读取真实画面，必要时通过现有浏览器的 `evaluate` 执行 DOM 采样。按最终展示尺寸检查字号和对比度，不以未执行的脚本检查代替验收。
 
 图内最小字号按最终显示尺寸算：1080 宽的长图在手机上大约缩到 390pt 宽（约 2.8 倍），所以画布上正文 ≥36px、标签 ≥28px，到手机屏上才有 13–14pt。打印或大屏按实际观看距离另算。
 

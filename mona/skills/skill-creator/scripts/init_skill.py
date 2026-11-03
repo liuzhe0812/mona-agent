@@ -72,13 +72,13 @@ Delete this entire "Structuring This Skill" section when done - it's just guidan
 Create only the resource directories this skill actually needs. Delete this section if no resources are required.
 
 ### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
+Python (`.py`) or Node.js (`.mjs`) helpers run with Mona's `skill_script_run`.
 
 **Examples from other skills:**
 - PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
 - DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
 
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
+**Appropriate for:** Python or Node.js helpers that perform automation, data processing, or specific operations.
 
 **Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
 

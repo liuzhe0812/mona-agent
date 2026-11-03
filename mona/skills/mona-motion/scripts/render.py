@@ -387,8 +387,7 @@ async def _render_scene(
     file_url = scene_path.resolve().as_uri()
     _raise_if_cancelled(cancel_event)
 
-    # Some Chromium builds (e.g. chrome-headless-shell) do not expose the Page
-    # domain. Enable it when available and fall back to ready-state polling.
+    # Enable page events when supported, otherwise poll the ready state.
     try:
         await _cdp_call(ws, "Page.enable")
     except RuntimeError as e:
@@ -397,7 +396,6 @@ async def _render_scene(
         else:
             raise
 
-    # chrome-headless-shell may not expose the Emulation domain either.
     design_width, design_height = design_size or (width, height)
     try:
         await _cdp_call(ws, "Emulation.setDeviceMetricsOverride", {
@@ -412,8 +410,7 @@ async def _render_scene(
         else:
             raise
 
-    # Page.navigate is also missing from chrome-headless-shell. Fall back to
-    # a Runtime.evaluate navigation via window.location.
+    # Older targets can navigate through Runtime.evaluate.
     try:
         await _cdp_call(ws, "Page.navigate", {"url": file_url})
     except RuntimeError as e:
@@ -709,8 +706,7 @@ async def render_project_async(
         return {
             "ok": False,
             "error": (
-                "未找到可用于视频渲染的浏览器。"
-                "请安装完整版 Google Chrome 或 Microsoft Edge（chrome-headless-shell 不支持所需 CDP 命令）。"
+                "视频画面渲染资源尚未准备，请在 Mona 中准备视频资源后重试。"
             ),
             "need_download": True,
         }

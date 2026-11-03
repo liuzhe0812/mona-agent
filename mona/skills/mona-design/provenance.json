@@ -13,7 +13,7 @@
     "license": "MIT"
   },
   "sourceFileCount": 382,
-  "sourceBytes": 13958571,
+  "sourceBytes": 13955553,
   "files": [
     {
       "originalPath": ".env.example",
@@ -1838,13 +1838,13 @@
     },
     {
       "originalPath": "package-lock.json",
-      "targetPath": "package-lock.json",
+      "targetPath": "references/upstream-package-lock.json",
       "sizeBytes": 28566,
       "sha256": "0c334005bfe0da4ad5fa1ea805a1d99d3290f636add29faa861c841ddaac6a69"
     },
     {
       "originalPath": "package.json",
-      "targetPath": "package.json",
+      "targetPath": "references/upstream-package.json",
       "sizeBytes": 133,
       "sha256": "144b28fbf3911f2969589bbddb3208bb02e98bfb33988723d33d3a724ad3b7d5"
     },
@@ -1887,8 +1887,11 @@
     {
       "originalPath": "references/app-prototype.md",
       "targetPath": "references/app-prototype.md",
-      "sizeBytes": 11895,
-      "sha256": "a00aab7726c72960e4859c0ee0df2ac1cb58ea3a42e55462f0373bea42428984"
+      "sizeBytes": 12116,
+      "sha256": "c2b8a6e36e45dcc46e3ea5642a8b2731e36f0deb0ad2943b9fb8b3ffdd1f2297",
+      "upstreamSha256": "a00aab7726c72960e4859c0ee0df2ac1cb58ea3a42e55462f0373bea42428984",
+      "upstreamSizeBytes": 11895,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/apple-gallery-showcase.md",
@@ -1941,8 +1944,11 @@
     {
       "originalPath": "references/design-context.md",
       "targetPath": "references/design-context.md",
-      "sizeBytes": 6704,
-      "sha256": "93a7e6be5f6cb29076d3651747d5033701362ddd03283b1ddf11b105757430b6"
+      "sizeBytes": 6706,
+      "sha256": "0cb1c1bc842fae6058d36e00c4fc25295ca1c1d96a1299b9a5052a092f629a21",
+      "upstreamSha256": "93a7e6be5f6cb29076d3651747d5033701362ddd03283b1ddf11b105757430b6",
+      "upstreamSizeBytes": 6704,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/design-styles.md",
@@ -2013,8 +2019,11 @@
     {
       "originalPath": "references/materials.md",
       "targetPath": "references/materials.md",
-      "sizeBytes": 5679,
-      "sha256": "3ed5df12fcd628bfc145f70b251c2f0837bfd6b196c3a7930a6039f8c7405bf8"
+      "sizeBytes": 5514,
+      "sha256": "00ff5bc9cf87139a45b4d6810c77cdec3866ac123fefe7d9a050e8fb2e356525",
+      "upstreamSha256": "3ed5df12fcd628bfc145f70b251c2f0837bfd6b196c3a7930a6039f8c7405bf8",
+      "upstreamSizeBytes": 5679,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/modules/deck.md",
@@ -2025,8 +2034,11 @@
     {
       "originalPath": "references/modules/infographic.md",
       "targetPath": "references/modules/infographic.md",
-      "sizeBytes": 2459,
-      "sha256": "714ca08b997f1a50daec10e5f4f8b1d63833ac111a096f87358c6bf77904f33f"
+      "sizeBytes": 2608,
+      "sha256": "50618e3c9f6be4672b11c6bd9c9ef0450d5b20dd902d8f3b98e954951a1ef9c8",
+      "upstreamSha256": "714ca08b997f1a50daec10e5f4f8b1d63833ac111a096f87358c6bf77904f33f",
+      "upstreamSizeBytes": 2459,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/modules/motion.md",
@@ -2040,8 +2052,11 @@
     {
       "originalPath": "references/modules/web.md",
       "targetPath": "references/modules/web.md",
-      "sizeBytes": 2467,
-      "sha256": "73733f02f6fa3c19ed56e1949f4f0c5511a09a5f45a98c8298a1222ddc9c3591"
+      "sizeBytes": 2588,
+      "sha256": "6e84326f501733b0479af81015bfec2c68fb7fcdd2058130c480511d4be489f5",
+      "upstreamSha256": "73733f02f6fa3c19ed56e1949f4f0c5511a09a5f45a98c8298a1222ddc9c3591",
+      "upstreamSizeBytes": 2467,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/multi-perspective-parallel-case-study.md",
@@ -2109,8 +2124,11 @@
     {
       "originalPath": "references/verification.md",
       "targetPath": "references/verification.md",
-      "sizeBytes": 6998,
-      "sha256": "2481be020d5253efebcc6dd1a3bea80db25c1d03ce92d5a0347124c7407b366c"
+      "sizeBytes": 3865,
+      "sha256": "4a96eb85a7b4cb4d1671a9e644636994701927e97d88ac126e13638962fedc45",
+      "upstreamSha256": "2481be020d5253efebcc6dd1a3bea80db25c1d03ce92d5a0347124c7407b366c",
+      "upstreamSizeBytes": 6998,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "references/video-export.md",
@@ -2133,96 +2151,105 @@
     {
       "originalPath": "references/workflow.md",
       "targetPath": "references/workflow.md",
-      "sizeBytes": 10921,
-      "sha256": "b10d3e6702deffef717fbfc10851e9517fa274d4179967f60fc6ca0c0203648e"
+      "sizeBytes": 10974,
+      "sha256": "1b80c94c37995b6b09fb89b57df691313ad1f01a5ac430def04f81d03e4e259f",
+      "upstreamSha256": "b10d3e6702deffef717fbfc10851e9517fa274d4179967f60fc6ca0c0203648e",
+      "upstreamSizeBytes": 10921,
+      "adaptationReason": "Use existing Mona browser_observe/browser_act for observation, interaction and DOM checks; remove independent browser commands and private execution paths."
     },
     {
       "originalPath": "scripts/build_specimens.py",
-      "targetPath": "scripts/build_specimens.py",
+      "targetPath": "references/upstream-scripts/build_specimens.py",
       "sizeBytes": 4456,
       "sha256": "a1fb2a4cbe295b4350c5ec429d41b50056b4018c3d2dfb5d641ad80d393b0728"
     },
     {
       "originalPath": "scripts/capabilities.py",
-      "targetPath": "scripts/capabilities.py",
-      "sizeBytes": 3888,
-      "sha256": "6ed98cb8fee5c00d103e1ebab60350ceea2a58e8e08799082d8056d94fb7266f"
+      "targetPath": "references/upstream-scripts/capabilities.py",
+      "sizeBytes": 3596,
+      "sha256": "66c07cc404983cb082a104599e2edb59e5b9d69e27b895252fdce58410818662",
+      "upstreamSha256": "6ed98cb8fee5c00d103e1ebab60350ceea2a58e8e08799082d8056d94fb7266f",
+      "upstreamSizeBytes": 3888,
+      "adaptationReason": "Use Mona built-in browser and managed optional dependencies; report skipped design checks as unavailable, not success."
     },
     {
       "originalPath": "scripts/cloud/ai-review-video.py",
-      "targetPath": "scripts/cloud/ai-review-video.py",
+      "targetPath": "references/upstream-scripts/cloud/ai-review-video.py",
       "sizeBytes": 20433,
       "sha256": "c882682ab99a3d61b1955240b2d386363893a0cc65e4c6930bc27857d33d2560"
     },
     {
       "originalPath": "scripts/cloud/tts-doubao.mjs",
-      "targetPath": "scripts/cloud/tts-doubao.mjs",
+      "targetPath": "references/upstream-scripts/cloud/tts-doubao.mjs",
       "sizeBytes": 10071,
       "sha256": "8ddc9980b76a60deaf057b732d80d187382ddd9188d9d673ebd9e35c461a0015"
     },
     {
       "originalPath": "scripts/convert-formats.sh",
-      "targetPath": "scripts/convert-formats.sh",
+      "targetPath": "references/upstream-scripts/convert-formats.sh",
       "sizeBytes": 3000,
       "sha256": "4fdf469a1f1c44b40858cea8484d92fcae48096de1dedc3d4b9d640b5026277b"
     },
     {
       "originalPath": "scripts/design-gate-hook.sh",
-      "targetPath": "scripts/design-gate-hook.sh",
+      "targetPath": "references/upstream-scripts/design-gate-hook.sh",
       "sizeBytes": 3459,
       "sha256": "e8f255791e1475202f84aa6ac9589cf5790aa3cb0afe6f294237099583a8c42b"
     },
     {
       "originalPath": "scripts/design_lint.py",
-      "targetPath": "scripts/design_lint.py",
-      "sizeBytes": 28396,
-      "sha256": "46d649cd5a655a6f97dba3d8d5837ac8461bed7b3bfca8a5eb0c634917b3c3b2"
+      "targetPath": "references/upstream-scripts/design_lint.py",
+      "sizeBytes": 28422,
+      "sha256": "aa14a33a2e31e6ad49adaaf8f2ac778ea4fa420eff914bccb51a2fb5c08ca366",
+      "upstreamSha256": "46d649cd5a655a6f97dba3d8d5837ac8461bed7b3bfca8a5eb0c634917b3c3b2",
+      "upstreamSizeBytes": 28396,
+      "adaptationReason": "Use Mona built-in browser and managed optional dependencies; report skipped design checks as unavailable, not success."
     },
     {
       "originalPath": "scripts/export_deck_pdf.mjs",
-      "targetPath": "scripts/export_deck_pdf.mjs",
+      "targetPath": "references/upstream-scripts/export_deck_pdf.mjs",
       "sizeBytes": 3209,
       "sha256": "323f3d5963e8b9245d468f051d4b676e67d9b97cc73b62d98239a13c65d8cc31"
     },
     {
       "originalPath": "scripts/export_deck_pptx.mjs",
-      "targetPath": "scripts/export_deck_pptx.mjs",
+      "targetPath": "references/upstream-scripts/export_deck_pptx.mjs",
       "sizeBytes": 3800,
       "sha256": "c44ec586b3a059f00cd4d1a214973a73cbb89765f8359286990536840857e0ad"
     },
     {
       "originalPath": "scripts/export_deck_stage_pdf.mjs",
-      "targetPath": "scripts/export_deck_stage_pdf.mjs",
+      "targetPath": "references/upstream-scripts/export_deck_stage_pdf.mjs",
       "sizeBytes": 4781,
       "sha256": "d024a6b5fa84c1d25caf4c1acf47ca24a5c9e8c7ed3c45befa9fabac82765b04"
     },
     {
       "originalPath": "scripts/fetch_images.py",
-      "targetPath": "scripts/fetch_images.py",
+      "targetPath": "references/upstream-scripts/fetch_images.py",
       "sizeBytes": 4442,
       "sha256": "6bb273e785513c965a14445a2daaabbf9afc38f1dd93802c28a35374c53def89"
     },
     {
       "originalPath": "scripts/gen_deck_thumbs.mjs",
-      "targetPath": "scripts/gen_deck_thumbs.mjs",
+      "targetPath": "references/upstream-scripts/gen_deck_thumbs.mjs",
       "sizeBytes": 3037,
       "sha256": "7a6ec5c4351e36aaeeec66f5488a3ef12574bb994b3f81c4b35fd33144066e33"
     },
     {
       "originalPath": "scripts/html2pptx.js",
-      "targetPath": "scripts/html2pptx.js",
+      "targetPath": "references/upstream-scripts/html2pptx.js",
       "sizeBytes": 34510,
       "sha256": "79bd2df2c0aed3548ba78d88f7bf2906c2fbdef6bcf9dce8ee4a83013c6563ac"
     },
     {
       "originalPath": "scripts/learn.py",
-      "targetPath": "scripts/learn.py",
+      "targetPath": "references/upstream-scripts/learn.py",
       "sizeBytes": 10510,
       "sha256": "e4b01cc8c3d64bb7e83087a0ee646c142462e287e211b6d94388af1ff15e3bf9"
     },
     {
       "originalPath": "scripts/mix-voiceover.sh",
-      "targetPath": "scripts/mix-voiceover.sh",
+      "targetPath": "references/upstream-scripts/mix-voiceover.sh",
       "sizeBytes": 2817,
       "sha256": "a8980bf34be0ef98c9795a35d417690f8d0d4005b064032c07b928229b08ba12",
       "upstreamSha256": "cae4cfdfabbf918a6bd9fa7a2cac63e463903b348461360a19ca163d98b960ed",
@@ -2231,25 +2258,25 @@
     },
     {
       "originalPath": "scripts/narrate-pipeline.mjs",
-      "targetPath": "scripts/narrate-pipeline.mjs",
+      "targetPath": "references/upstream-scripts/narrate-pipeline.mjs",
       "sizeBytes": 12530,
       "sha256": "5b387544314c9f6374de7399a23b6692b77333e53a8fb4e2d892e2ae6e836a14"
     },
     {
       "originalPath": "scripts/pptx_from_rendered.py",
-      "targetPath": "scripts/pptx_from_rendered.py",
+      "targetPath": "references/upstream-scripts/pptx_from_rendered.py",
       "sizeBytes": 29541,
       "sha256": "e8c4dcdc712ad8cbe6e9cd17e8c454ecb2edea7e22e77ca4246578c86f6a0a00"
     },
     {
       "originalPath": "scripts/ref_board.py",
-      "targetPath": "scripts/ref_board.py",
+      "targetPath": "references/upstream-scripts/ref_board.py",
       "sizeBytes": 6865,
       "sha256": "a6365647e91de2ef9c3802d3d043ba5974f533673678dd6c5b6e654909a85f67"
     },
     {
       "originalPath": "scripts/render-narration.sh",
-      "targetPath": "scripts/render-narration.sh",
+      "targetPath": "references/upstream-scripts/render-narration.sh",
       "sizeBytes": 4652,
       "sha256": "3d3589a86c6d1e3a137c9d43f9ce73f7c4e97525731c0af1e9da90bf4b50e9ac",
       "upstreamSha256": "30703fff8de2f7d94ceb0714dd8ce3c712ff1b7f5dd9803d41bcdc1c6a0330b2",
@@ -2258,91 +2285,91 @@
     },
     {
       "originalPath": "scripts/render-video-seek.js",
-      "targetPath": "scripts/render-video-seek.js",
+      "targetPath": "references/upstream-scripts/render-video-seek.js",
       "sizeBytes": 9778,
       "sha256": "c6b68e89fc4f1709baf2b8a5e7910dfad5716aeb6bc40fb6aa4daaf92c7e9abb"
     },
     {
       "originalPath": "scripts/render-video.js",
-      "targetPath": "scripts/render-video.js",
+      "targetPath": "references/upstream-scripts/render-video.js",
       "sizeBytes": 12293,
       "sha256": "2c56bba90d045a3108651e4602617466f839adb36a29a0576019f9884f5b2a36"
     },
     {
       "originalPath": "scripts/sfx-cues.sh",
-      "targetPath": "scripts/sfx-cues.sh",
+      "targetPath": "references/upstream-scripts/sfx-cues.sh",
       "sizeBytes": 1628,
       "sha256": "842cda4237dd88d84b4de634bf23507ec01aacb621ce5f6ac17e2a1c60857244"
     },
     {
       "originalPath": "scripts/tests/fixtures/assets/logo.png",
-      "targetPath": "scripts/tests/fixtures/assets/logo.png",
+      "targetPath": "references/upstream-scripts/tests/fixtures/assets/logo.png",
       "sizeBytes": 76,
       "sha256": "cb2e77c9e8f959033fce306468281a1c2c3fb66c8529e7a3d858da602fee75ae"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_broken.html",
-      "targetPath": "scripts/tests/fixtures/lint_broken.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_broken.html",
       "sizeBytes": 391,
       "sha256": "71e32ad3a9059201faef0e9915a98c14c0586390fe82bf90026d69bdde485f12"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_clean.html",
-      "targetPath": "scripts/tests/fixtures/lint_clean.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_clean.html",
       "sizeBytes": 778,
       "sha256": "a9549087308a305d0ce2ff727ef204d1a579b82268a3e1d6d22f085e1ddf2bde"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_offline.html",
-      "targetPath": "scripts/tests/fixtures/lint_offline.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_offline.html",
       "sizeBytes": 302,
       "sha256": "c61756f15b30c57d233cabf94c06f9c3c7fe68b6d95f26a06436494d6d5934be"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_reskin.html",
-      "targetPath": "scripts/tests/fixtures/lint_reskin.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_reskin.html",
       "sizeBytes": 1749,
       "sha256": "e49bf584d93596b891517bcdfc1e2c719d150ddbe2c8e771b6a54496c8d1516a"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_slop.html",
-      "targetPath": "scripts/tests/fixtures/lint_slop.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_slop.html",
       "sizeBytes": 1742,
       "sha256": "facad17c3839d0319b1b899fb9503b188ae819605778a5b968cfc5adcc764fc3"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_tricky_bad.html",
-      "targetPath": "scripts/tests/fixtures/lint_tricky_bad.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_tricky_bad.html",
       "sizeBytes": 633,
       "sha256": "48bb2e71b5e350b36a0eed369d4f3cc32bbc3d8a09e73d5ca83d35d576fd4007"
     },
     {
       "originalPath": "scripts/tests/fixtures/lint_tricky_ok.html",
-      "targetPath": "scripts/tests/fixtures/lint_tricky_ok.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/lint_tricky_ok.html",
       "sizeBytes": 1347,
       "sha256": "b006ed1f1b36e62b6ae21f20f86e609424f93338fa4e3cb1b585b9688bb56608"
     },
     {
       "originalPath": "scripts/tests/fixtures/mixed_text.html",
-      "targetPath": "scripts/tests/fixtures/mixed_text.html",
+      "targetPath": "references/upstream-scripts/tests/fixtures/mixed_text.html",
       "sizeBytes": 1091,
       "sha256": "1d74749163760e65f138d77443f81a7adf7326348c22eb187ec631ec13e513f3"
     },
     {
       "originalPath": "scripts/tests/test_design_lint.py",
-      "targetPath": "scripts/tests/test_design_lint.py",
+      "targetPath": "references/upstream-scripts/tests/test_design_lint.py",
       "sizeBytes": 8606,
       "sha256": "220d4ddf35fabe9d720dd999017733563bcaf0fd5d93ab5325243cfc9c2e4f41"
     },
     {
       "originalPath": "scripts/tests/test_pptx_from_rendered.py",
-      "targetPath": "scripts/tests/test_pptx_from_rendered.py",
+      "targetPath": "references/upstream-scripts/tests/test_pptx_from_rendered.py",
       "sizeBytes": 3213,
       "sha256": "eeefcc7e1a58ccb21c1da7974ca945057691911f6ea0be30893fff64045ee6d0"
     },
     {
       "originalPath": "scripts/verify-video.sh",
-      "targetPath": "scripts/verify-video.sh",
+      "targetPath": "references/upstream-scripts/verify-video.sh",
       "sizeBytes": 5013,
       "sha256": "dcb78c7a8ad45c90fb9fefe4ede2a159a120e191b6c4371c2de80383f2c6b5f3",
       "upstreamSha256": "cd7cf69f282f19dede1cd5aeae9c829a44b587f86f9518a51343dba264a81d85",
@@ -2351,7 +2378,7 @@
     },
     {
       "originalPath": "scripts/verify.py",
-      "targetPath": "scripts/verify.py",
+      "targetPath": "references/upstream-scripts/verify.py",
       "sizeBytes": 5451,
       "sha256": "7a0a3243f51a1c816944a948a5caba239c63c9890327a60d80934d493153e9e4"
     },
@@ -2360,6 +2387,16 @@
       "targetPath": "test-prompts.json",
       "sizeBytes": 3086,
       "sha256": "25294eef2e98b7013caa28c0e3bae077e9fac2a4c24ee43bf095da136d776536"
+    }
+  ],
+  "derivedResources": [
+    {
+      "targetPath": "references/browser-checks.js",
+      "sourcePath": "references/upstream-scripts/design_lint.py",
+      "sourceField": "COLLECT_JS",
+      "sizeBytes": 8805,
+      "sha256": "508381bd81e2041db6a113588b5a36e2ae2b26ca9906d8fe829fd675b83e8275",
+      "purpose": "Reuse upstream DOM measurements through Mona browser_act evaluate."
     }
   ],
   "monaAdaptations": {
@@ -2612,7 +2649,7 @@
     "HTML demos/specimens reference Google Fonts hosts and some CDN-hosted packages; these are upstream remote runtime references and were not downloaded or rewritten.",
     "README links and YouTube preview resources are remote documentation media, not missing tracked repository files.",
     "Voiceover examples reference generated audio outputs such as voiceover.mp3; these outputs are not tracked and are expected to be produced by the example workflow.",
-    "Optional cloud scripts require user-supplied provider credentials; only the placeholder .env.example is included."
+    "Archived cloud example source requires upstream services; it is read-only reference and is not a Mona execution or dependency-preparation entry."
   ],
   "hashBasis": "Unmodified files use raw Git blob bytes from the pinned upstream commit. Customized files record their bundled size and SHA-256 plus upstreamSizeBytes/upstreamSha256; excluded files keep their original metadata and removal reason.",
   "upstreamFileCount": 389,

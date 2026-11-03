@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,34 @@ _SPEC.loader.exec_module(build_update_package)
 def _write(path: Path, data: bytes = b"fixture\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
+
+
+def _write_runtime_fixture(runtime: Path) -> dict[str, bytes]:
+    runtime.mkdir(parents=True)
+    manifests = [
+        {"id": "python-base", "version": "3.13.15", "kind": "python-runtime",
+         "entrypoints": {"python": "python/python.exe"}},
+        {"id": "node-base", "version": "22.23.2", "kind": "node-runtime",
+         "entrypoints": {"node": "node/node.exe"}},
+        {"id": "python-common", "version": "1.0.0", "kind": "python-pack",
+         "dependencies": ["python-base@3.13.15"], "pythonRequirements": "requirements.lock",
+         "pythonWheelhouse": "wheels"},
+    ]
+    components = []
+    for manifest in manifests:
+        archive = runtime / f"{manifest['id']}-{manifest['version']}.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("runtime-manifest.json", json.dumps(manifest))
+            for entry in manifest.get("entrypoints", {}).values():
+                bundle.writestr(entry, "fixture")
+        data = archive.read_bytes()
+        components.append({"archive": archive.name, "size": len(data),
+                           "sha256": hashlib.sha256(data).hexdigest(), "manifest": manifest})
+    (runtime / "manifest.json").write_text(
+        json.dumps({"schemaVersion": 1, "platform": "win32", "architecture": "x64",
+                    "components": components}), encoding="utf-8"
+    )
+    return {path.name: path.read_bytes() for path in runtime.iterdir()}
 
 
 def _make_staging(tmp_path: Path) -> Path:
@@ -55,6 +84,7 @@ def _make_staging(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    _write_runtime_fixture(gateway / "_internal" / "desktop-resources" / "runtime-base")
 
     # A real skill script must survive packaging, while development-only
     # caches and tests must be removed from the Gateway tree.
@@ -80,6 +110,8 @@ def _archive_members(archive: Path) -> list[str]:
 def test_build_package_keeps_office_and_skill_scripts_and_removes_dev_cache(tmp_path: Path) -> None:
     staging = _make_staging(tmp_path)
     output = tmp_path / "dist" / "mona-1.6.0.tar.zst"
+    runtime = staging / "mona-gateway/_internal/desktop-resources/runtime-base"
+    original_runtime = {path.name: path.read_bytes() for path in runtime.iterdir()}
 
     build_update_package.build_package(str(staging), str(output))
 
@@ -93,6 +125,14 @@ def test_build_package_keeps_office_and_skill_scripts_and_removes_dev_cache(tmp_
     for name in ("blank.docx", "blank.xlsx", "blank.pptx"):
         assert f"mona-gateway/_internal/desktop-resources/office-editor/templates/{name}" in members
     assert "mona-gateway/_internal/desktop-resources/office-editor/licenses/LICENSE" in members
+    with output.open("rb") as stream, zstandard.ZstdDecompressor().stream_reader(stream) as reader:
+        with tarfile.open(fileobj=reader, mode="r|") as tar:
+            packaged_runtime = {
+                Path(member.name).name: tar.extractfile(member).read()
+                for member in tar
+                if member.isfile() and "/desktop-resources/runtime-base/" in member.name
+            }
+    assert packaged_runtime == original_runtime
     assert "mona-gateway/_internal/mona/skills/mona-motion/scripts/export.py" in members
     assert not any("/tests/" in name or "/__pycache__/" in name for name in members)
     assert not any(name.endswith(".pyc") or name.endswith("py.typed") for name in members)
@@ -107,6 +147,30 @@ def test_build_package_rejects_missing_office_before_cleanup_or_output(tmp_path:
     output = tmp_path / "dist" / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="Office"):
+        build_update_package.build_package(str(staging), str(output))
+
+    assert not output.exists()
+    assert cache.exists()
+
+
+@pytest.mark.parametrize("failure", ["missing", "corrupt", "wrong-platform"])
+def test_build_package_rejects_invalid_runtime_before_cleanup_or_output(tmp_path: Path, failure: str) -> None:
+    staging = _make_staging(tmp_path)
+    runtime = staging / "mona-gateway/_internal/desktop-resources/runtime-base"
+    archive = runtime / "python-base-3.13.15.zip"
+    if failure == "missing":
+        archive.unlink()
+    elif failure == "corrupt":
+        archive.write_bytes(archive.read_bytes() + b"corrupt")
+    else:
+        manifest_path = runtime / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["architecture"] = "arm64"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    cache = staging / "mona-gateway/_internal/mona/skills/mona-motion/scripts/__pycache__/export.pyc"
+    output = tmp_path / "dist" / "package.tar.zst"
+
+    with pytest.raises(build_update_package.UpdatePackageValidationError, match="bundled script runtime"):
         build_update_package.build_package(str(staging), str(output))
 
     assert not output.exists()

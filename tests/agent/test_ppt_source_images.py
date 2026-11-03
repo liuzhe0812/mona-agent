@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
@@ -15,6 +16,7 @@ import pymupdf
 import pytest
 from docx import Document
 from docx.shared import Inches as DocxInches
+from packaging.requirements import Requirement
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches as PptxInches
@@ -31,6 +33,17 @@ SPEC = importlib.util.spec_from_file_location("extract_source_images", SCRIPT_PA
 assert SPEC is not None and SPEC.loader is not None
 EXTRACTOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXTRACTOR)
+
+
+def test_dependencies_accept_official_runtime_versions() -> None:
+    root = SCRIPT_PATH.parents[4]
+    project = tomllib.loads((SCRIPT_PATH.parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = {item.name.lower(): item for item in map(Requirement, project["project"]["dependencies"])}
+    lock = root / "runtime-library" / "locks" / "python-academic-1.0.0.lock"
+    locked = [Requirement(line.split(" --hash=", 1)[0]) for line in lock.read_text(encoding="utf-8").splitlines()]
+    versions = {item.name.lower(): next(iter(item.specifier)).version for item in locked}
+    for name in ("pillow", "pymupdf"):
+        assert versions[name] in requirements[name].specifier
 
 
 @pytest.fixture

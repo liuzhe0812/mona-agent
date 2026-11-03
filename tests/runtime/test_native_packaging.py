@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import stat
 import tarfile
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from mona.runtime import native_packaging
 from mona.runtime.catalog import RuntimeCatalogEntry
 from mona.runtime.manager import RuntimeComponentStore
 from mona.runtime.native_packaging import NativeArchiveError, normalize_engine_archive
@@ -253,4 +255,179 @@ def test_native_zip_rejects_symlink_members(tmp_path: Path) -> None:
             tmp_path / "out.zip",
             current_platform="win32",
             current_architecture="x64",
+        )
+
+
+def _zip_member(archive: zipfile.ZipFile, name: str, data: bytes, mode: int) -> None:
+    info = zipfile.ZipInfo(name)
+    info.create_system = 3
+    info.external_attr = mode << 16
+    archive.writestr(info, data)
+
+
+def test_chromium_preserves_distribution_and_has_only_browser_entrypoint(tmp_path: Path) -> None:
+    source = tmp_path / "chromium.zip"
+    executable = "chrome-headless-shell-mac-arm64/Contents/MacOS/headless"
+    resources = "chrome-headless-shell-mac-arm64/Contents/Resources/locale.dat"
+    empty_directory = "chrome-headless-shell-mac-arm64/Contents/empty/"
+    with zipfile.ZipFile(source, "w") as archive:
+        _zip_member(archive, executable, b"native browser", stat.S_IFREG | 0o755)
+        _zip_member(archive, resources, b"resource bytes", stat.S_IFREG | 0o640)
+        _zip_member(archive, empty_directory, b"", stat.S_IFDIR | 0o750)
+
+    result = normalize_engine_archive(
+        source,
+        _entry("browser-chromium", "1.2.3+darwin.arm64", "browser-runtime", "native-zip", executable),
+        tmp_path / "runtime.zip", current_platform="darwin", current_architecture="arm64",
+    )
+
+    with zipfile.ZipFile(result) as archive:
+        assert set(archive.namelist()) == {executable, resources, empty_directory, "runtime-manifest.json"}
+        assert archive.read(executable) == b"native browser"
+        assert archive.read(resources) == b"resource bytes"
+        assert archive.getinfo(executable).external_attr >> 16 & 0o777 == 0o755
+        assert archive.getinfo(resources).external_attr >> 16 & 0o777 == 0o640
+        assert archive.getinfo(empty_directory).external_attr >> 16 & 0o777 == 0o750
+        manifest = json.loads(archive.read("runtime-manifest.json"))
+        assert manifest["entrypoints"] == {"browser": executable}
+        assert manifest["dependencies"] == ["python-base@3.12"]
+
+    store = RuntimeComponentStore(tmp_path / "store")
+    installed = store.install_archive(result)
+    active = store.active(installed.id)
+    assert active is not None
+    assert active[0].entrypoints == {"browser": executable}
+    assert (active[1] / resources).read_bytes() == b"resource bytes"
+    assert (active[1] / empty_directory).is_dir()
+    if os.name != "nt":
+        assert stat.S_IMODE((active[1] / executable).stat().st_mode) == 0o755
+        assert stat.S_IMODE((active[1] / resources).stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize(
+    ("kind", "artifact_format", "entrypoint"),
+    [
+        ("other-runtime", "native-zip", "browser/headless"),
+        ("browser-runtime", "native-tar-gz", "browser/headless"),
+        ("browser-runtime", "native-zip", None),
+        ("browser-runtime", "native-zip", "browser/missing"),
+        ("browser-runtime", "native-zip", "browser/empty"),
+        ("browser-runtime", "native-zip", "browser/resource.dat"),
+    ],
+)
+def test_chromium_rejects_wrong_identity_format_and_entrypoint(
+    tmp_path: Path, kind: str, artifact_format: str, entrypoint: str | None,
+) -> None:
+    source = tmp_path / "chromium.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("browser/headless", b"browser")
+        archive.writestr("browser/resource.dat", b"not executable")
+        archive.writestr("browser/empty/", b"")
+    output = tmp_path / "runtime.zip"
+    with pytest.raises(NativeArchiveError):
+        normalize_engine_archive(
+            source, _entry("browser-chromium", "1.0", kind, artifact_format, entrypoint), output,
+            current_platform="darwin", current_architecture="arm64",
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("problem", ["path-escape", "symlink", "special-file", "duplicate", "reserved"])
+def test_chromium_rejects_unsafe_zip_members(tmp_path: Path, problem: str) -> None:
+    source = tmp_path / "chromium.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("browser/headless", b"browser")
+        if problem == "path-escape":
+            archive.writestr("../outside", b"bad")
+        elif problem == "symlink":
+            _zip_member(archive, "browser/link", b"../../outside", stat.S_IFLNK | 0o777)
+        elif problem == "special-file":
+            _zip_member(archive, "browser/pipe", b"", stat.S_IFIFO | 0o600)
+        elif problem == "duplicate":
+            archive.writestr("browser/HEADLESS", b"duplicate")
+        else:
+            archive.writestr("Runtime-Manifest.json", b"conflicts with generated manifest")
+    with pytest.raises(NativeArchiveError):
+        normalize_engine_archive(
+            source,
+            _entry("browser-chromium", "1.0", "browser-runtime", "native-zip", "browser/headless"),
+            tmp_path / "runtime.zip", current_platform="win32", current_architecture="x64",
+        )
+
+
+@pytest.mark.parametrize(("name", "architecture"), [("ffmpeg", "arm64"), ("ffprobe", "x64")])
+def test_macos_media_executable_keeps_license_and_version(
+    tmp_path: Path, name: str, architecture: str,
+) -> None:
+    source = tmp_path / "upstream.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        _zip_member(archive, name, b"native executable", stat.S_IFREG | 0o755)
+    entry = _entry(name, f"6.1.1+darwin.{architecture}", f"{name}-runtime", "native-zip", name)
+    if name == "ffmpeg":
+        entry.dependencies = ["ffprobe@6.1.1+darwin.arm64"]
+
+    result = normalize_engine_archive(
+        source, entry, tmp_path / "runtime.zip",
+        current_platform="darwin", current_architecture=architecture,
+    )
+
+    with zipfile.ZipFile(result) as archive:
+        assert set(archive.namelist()) == {
+            name, "licenses/LICENSE.md", "licenses/COPYING.GPLv2", "licenses/sources.md", "runtime-manifest.json",
+        }
+        assert archive.read(name) == b"native executable"
+        assert archive.getinfo(name).external_attr >> 16 & 0o777 == 0o755
+        for filename in ("LICENSE.md", "COPYING.GPLv2", "sources.md"):
+            assert archive.read(f"licenses/{filename}") == (native_packaging._FFMPEG_LICENSES / filename).read_bytes()
+        manifest = json.loads(archive.read("runtime-manifest.json"))
+        assert manifest["entrypoints"] == {name: name}
+        assert manifest["dependencies"] == entry.dependencies
+
+    store = RuntimeComponentStore(tmp_path / "store")
+    store.install_archive(result)
+    active = store.active(name)
+    assert active is not None
+    assert (active[1] / active[0].entrypoints[name]).read_bytes() == b"native executable"
+    if os.name != "nt":
+        assert stat.S_IMODE((active[1] / name).stat().st_mode) == 0o755
+
+
+@pytest.mark.parametrize(
+    ("kind", "version", "artifact_format", "entrypoint", "platform", "architecture", "extra", "mode"),
+    [
+        ("wrong-runtime", "6.1.1+darwin.arm64", "native-zip", "ffmpeg", "darwin", "arm64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.2+darwin.arm64", "native-zip", "ffmpeg", "darwin", "arm64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-zip", "ffmpeg", "darwin", "x64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-zip", "ffmpeg", "win32", "arm64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-binary", "ffmpeg", "darwin", "arm64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-zip", "ffprobe", "darwin", "arm64", False, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-zip", "ffmpeg", "darwin", "arm64", True, 0o755),
+        ("ffmpeg-runtime", "6.1.1+darwin.arm64", "native-zip", "ffmpeg", "darwin", "arm64", False, 0o644),
+    ],
+)
+def test_macos_media_rejects_wrong_archive(
+    tmp_path: Path, kind: str, version: str, artifact_format: str, entrypoint: str,
+    platform: str, architecture: str, extra: bool, mode: int,
+) -> None:
+    source = tmp_path / "upstream.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        _zip_member(archive, "ffmpeg", b"native executable", stat.S_IFREG | mode)
+        if extra:
+            archive.writestr("unexpected-file", b"unexpected")
+    with pytest.raises(NativeArchiveError):
+        normalize_engine_archive(
+            source, _entry("ffmpeg", version, kind, artifact_format, entrypoint), tmp_path / "runtime.zip",
+            current_platform=platform, current_architecture=architecture,
+        )
+
+
+def test_macos_media_fails_if_licenses_are_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "upstream.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        _zip_member(archive, "ffmpeg", b"native executable", stat.S_IFREG | 0o755)
+    monkeypatch.setattr(native_packaging, "_FFMPEG_LICENSES", tmp_path / "missing")
+    with pytest.raises(NativeArchiveError, match="license resources"):
+        normalize_engine_archive(
+            source, _entry("ffmpeg", "6.1.1+darwin.arm64", "ffmpeg-runtime", "native-zip", "ffmpeg"),
+            tmp_path / "runtime.zip", current_platform="darwin", current_architecture="arm64",
         )

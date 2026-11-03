@@ -21,11 +21,11 @@
 **读代码抄exact values**：hex codes、spacing scale、font stack、border radius。不要凭记忆重画。
 
 ### 3. 用户已发布的产品
-如果用户有上线的产品但没给代码，用Playwright或让用户提供截图。
+如果用户有上线的产品但没给代码，用 Mona 已有浏览器读取和截图。
 
-```bash
-# 用Playwright截图一个公开URL
-npx playwright screenshot https://example.com screenshot.png --viewport-size=1920,1080
+```text
+browser_act(kind="open", url="https://example.com")
+browser_observe(action="screenshot", tabId="上一步返回的 tab_id")
 ```
 
 让你看到真实的视觉vocabulary。

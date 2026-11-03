@@ -23,7 +23,8 @@ $functionNames = @(
   "Assert-PathWithinDirectory",
   "Assert-NoReparsePoints",
   "Get-OfficeSidecarManifestState",
-  "Update-OfficeSidecarManifest"
+  "Update-OfficeSidecarManifest",
+  "Assert-BundledRuntime"
 )
 $functionText = foreach ($functionName in $functionNames) {
   $functionAst = $productionAst.Find({
@@ -102,7 +103,7 @@ function Remove-TestPath {
 
 $testRoots = @()
 try {
-  $normalRoot = Join-Path ([IO.Path]::GetTempPath()) ("mona-release-wrapper-normal-" + [Guid]::NewGuid().ToString("N"))
+  $normalRoot = Join-Path ([IO.Path]::GetTempPath()) ("mona release wrapper normal " + [Guid]::NewGuid().ToString("N"))
   $testRoots += $normalRoot
   New-Item -ItemType Directory -Path $normalRoot -Force | Out-Null
   $normalFixture = New-OfficeFixture -Root $normalRoot
@@ -117,6 +118,49 @@ try {
       $updatedManifest.xlsxSidecar.version -ne "0.1.0" -or
       $updatedManifest.extra.keep -ne "yes") {
     throw "Sidecar manifest refresh did not preserve fields or update size/hash."
+  }
+
+  try {
+    Assert-BundledRuntime -GatewayDirectory $normalRoot -PythonExecutable "unused-python"
+    throw "A missing bundled runtime was accepted before packaging."
+  } catch {
+    if ($_.Exception.Message -notmatch "Bundled runtime directory was not found") {
+      throw
+    }
+  }
+
+  $fixturePython = Join-Path $repositoryRoot ".venv\Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $fixturePython -PathType Leaf)) {
+    $fixturePython = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+  }
+  $fixtureRuntime = Join-Path $normalRoot "_internal\desktop-resources\runtime-base"
+  $fixtureCode = @'
+import hashlib, json, sys, zipfile
+from pathlib import Path
+
+root = Path(sys.argv[1])
+root.mkdir(parents=True)
+components = []
+for identifier, version, kind in [('python-base', '3.13.15', 'python-runtime'),
+                                   ('node-base', '22.23.2', 'node-runtime'),
+                                   ('python-common', '1.0.0', 'python-pack')]:
+    manifest = {'id': identifier, 'version': version, 'kind': kind}
+    archive = root / f'{identifier}-{version}.zip'
+    with zipfile.ZipFile(archive, 'w') as zipped:
+        zipped.writestr('runtime-manifest.json', json.dumps(manifest))
+    data = archive.read_bytes()
+    components.append({'archive': archive.name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'manifest': manifest})
+(root / 'manifest.json').write_text(json.dumps({'schemaVersion': 1, 'platform': 'win32', 'architecture': 'x64', 'components': components}), encoding='utf-8')
+'@
+  Push-Location $repositoryRoot
+  try {
+    & $fixturePython -c $fixtureCode $fixtureRuntime
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not create the bundled runtime fixture."
+    }
+    Assert-BundledRuntime -GatewayDirectory $normalRoot -PythonExecutable $fixturePython
+  } finally {
+    Pop-Location
   }
 
   [IO.File]::WriteAllBytes($normalFixture.SidecarPath, [byte[]](9, 8, 7))

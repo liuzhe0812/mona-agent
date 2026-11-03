@@ -63,6 +63,13 @@ design-assets/
 !/tests/development/
 /tests/development/*
 !/tests/development/test_workbuddy_application.py
+!/tests/development/test_workbuddy_lifecycle.py
+!/tests/development/test_workbuddy_shutdown.py
+!/tests/development/test_workbuddy_mixed_process.py
+!/tests/development/test_workbuddy_real_sdk_hooks.py
+!/tests/development/sdk_workbuddy_mixed_peer.py
+!/tests/development/test_sdk_message_contract.py
+!/tests/development/test_sdk_protocol_readiness.py
 !/tests/development/test_model_bridge.py
 !/tests/development/test_claude_account.py
 !/tests/development/test_account_usage.py
@@ -70,6 +77,9 @@ design-assets/
 !/tests/development/test_git_generation.py
 !/tests/development/test_native_host_tools.py
 !/tests/development/test_work_native.py
+!/tests/development/test_work_native_terminal.py
+!/tests/development/test_native_work_tool_policy.py
+!/tests/development/test_codex_work_native_tools.py
 !/tests/development/test_work_native_images.py
 !/tests/development/test_sdk_context_recovery.py
 !/tests/development/test_native_collaboration_flow.py
@@ -362,11 +372,13 @@ docs/architecture/*
 !docs/architecture/hosted-work.md
 !docs/architecture/website-accounts.md
 !docs/architecture/runtime-component-management.md
+!docs/architecture/mona-interaction.md
 !docs/architecture/stock-vibe-integration.md
 !docs/architecture/stock-module-development-standard.md
 !docs/design/
 docs/design/*
 !docs/design/mona-ui-design-system.md
+!docs/design/mona-realtime-interaction.md
 !docs/design/ppt-native-design-components.md
 !docs/design/stock-vibe-functional-design-v1.md
 !docs/design/stock-vibe-functional-design-v1/
@@ -441,6 +453,7 @@ docs/plans/*
 !docs/plans/2026-10-08-development-permissions.md
 !docs/plans/stock-vibe-development-plan.md
 !docs/plans/stock-vibe-materials-sha256.json
+!docs/plans/mona-interaction-development.md
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/
@@ -631,8 +644,6 @@ webui/task-test.png
 !/tests/runtime/test_stock_execution.py
 !/tests/cli/test_partner_dream.py
 !/docs/plans/stock-vibe-native-product-goal.md
-!/mona/skills/mona-design/scripts/
-!/mona/skills/mona-design/scripts/**
 !/tests/agent/test_mona_design.py
 !/tests/development/test_design_resources.py
 !/tests/development/test_design_native_resources.py
@@ -647,3 +658,13 @@ webui/task-test.png
 !/tests/development/test_session_creation_service.py
 !/tests/tools/test_development_workbench_tool.py
 !/tests/test_development_background_transcript.py
+!/docs/guides/
+/docs/guides/*
+!/docs/guides/runtime-and-builtin-skills.md
+!/expert-library/skills/tmux/scripts/
+!/expert-library/skills/tmux/scripts/**
+!/scripts/prepare_bundled_runtimes.py
+!/tests/test_prepare_bundled_runtimes.py
+/src-tauri/resources/runtime-base/
+!/tests/runtime/test_bundled.py
+!/tests/agent/test_docx_accept_changes.py

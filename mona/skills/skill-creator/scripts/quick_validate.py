@@ -8,15 +8,13 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-try:
-    import yaml
-except ModuleNotFoundError:
-    yaml = None
+import yaml
 
 MAX_SKILL_NAME_LENGTH = 64
 ALLOWED_FRONTMATTER_KEYS = {
     "name",
     "description",
+    "short_description",
     "metadata",
     "always",
     "license",
@@ -37,66 +35,13 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     return None
 
 
-def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
-    """Fallback parser for simple frontmatter when PyYAML is unavailable."""
-    parsed: dict[str, str] = {}
-    current_key: Optional[str] = None
-    multiline_key: Optional[str] = None
-
-    for raw_line in frontmatter_text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        is_indented = raw_line[:1].isspace()
-        if is_indented:
-            if current_key is None:
-                return None
-            current_value = parsed[current_key]
-            parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
-            continue
-
-        if ":" not in stripped:
-            return None
-
-        key, value = stripped.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            return None
-
-        if value in {"|", ">"}:
-            parsed[key] = ""
-            current_key = key
-            multiline_key = key
-            continue
-
-        if (value.startswith('"') and value.endswith('"')) or (
-            value.startswith("'") and value.endswith("'")
-        ):
-            value = value[1:-1]
-        parsed[key] = value
-        current_key = key
-        multiline_key = None
-
-    if multiline_key is not None and multiline_key not in parsed:
-        return None
-    return parsed
-
-
 def _load_frontmatter(frontmatter_text: str) -> tuple[Optional[dict], Optional[str]]:
-    if yaml is not None:
-        try:
-            frontmatter = yaml.safe_load(frontmatter_text)
-        except yaml.YAMLError as exc:
-            return None, f"Invalid YAML in frontmatter: {exc}"
-        if not isinstance(frontmatter, dict):
-            return None, "Frontmatter must be a YAML dictionary"
-        return frontmatter, None
-
-    frontmatter = _parse_simple_frontmatter(frontmatter_text)
-    if frontmatter is None:
-        return None, "Invalid YAML in frontmatter: unsupported syntax without PyYAML installed"
+    try:
+        frontmatter = yaml.safe_load(frontmatter_text)
+    except yaml.YAMLError as exc:
+        return None, f"Invalid YAML in frontmatter: {exc}"
+    if not isinstance(frontmatter, dict):
+        return None, "Frontmatter must be a YAML dictionary"
     return frontmatter, None
 
 
@@ -156,7 +101,7 @@ def validate_skill(skill_path):
     if error:
         return False, error
 
-    unexpected_keys = sorted(set(frontmatter.keys()) - ALLOWED_FRONTMATTER_KEYS)
+    unexpected_keys = sorted(str(key) for key in frontmatter if key not in ALLOWED_FRONTMATTER_KEYS)
     if unexpected_keys:
         allowed = ", ".join(sorted(ALLOWED_FRONTMATTER_KEYS))
         unexpected = ", ".join(unexpected_keys)
@@ -183,6 +128,10 @@ def validate_skill(skill_path):
     description_error = _validate_description(description)
     if description_error:
         return False, description_error
+
+    short_description = frontmatter.get("short_description")
+    if short_description is not None and not isinstance(short_description, str):
+        return False, f"'short_description' must be a string, got {type(short_description).__name__}"
 
     always = frontmatter.get("always")
     if always is not None and not isinstance(always, bool):

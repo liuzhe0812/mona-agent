@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 import defusedxml.minidom
-
+from helpers import validate_tree, workspace_path
 from helpers.simplify_redlines import infer_author
 from ooxml.scripts.validation import DOCXSchemaValidator, RedliningValidator
 
@@ -34,24 +34,34 @@ def pack(
     Returns:
         (None, message) - message indicates success or failure
     """
-    input_dir = Path(input_directory)
-    output_path = Path(output_file)
+    try:
+        input_dir = workspace_path(input_directory)
+        output_path = workspace_path(output_file)
+        original_path = workspace_path(original_file) if original_file else None
+    except (OSError, ValueError) as exc:
+        return None, f"Error: {exc}"
 
     if not input_dir.is_dir():
         return None, f"Error: {input_dir} is not a directory"
 
     if output_path.suffix.lower() != ".docx":
         return None, f"Error: {output_file} must be a .docx file"
+    if output_path.exists() or output_path == original_path:
+        return None, "Error: Output must be a new file distinct from the original"
+    try:
+        validate_tree(input_dir)
+    except (OSError, ValueError) as exc:
+        return None, f"Error: {exc}"
 
     # Validate with auto-repair if requested and original file provided
-    if validate and original_file:
-        original_path = Path(original_file)
-        if original_path.exists():
-            success, output = _run_validation(input_dir, original_path)
-            if output:
-                print(output)
-            if not success:
-                return None, f"Error: Validation failed for {input_dir}"
+    if validate and original_path:
+        if not original_path.is_file():
+            return None, f"Error: Original file does not exist: {original_path}"
+        success, output = _run_validation(input_dir, original_path)
+        if output:
+            print(output)
+        if not success:
+            return None, f"Error: Validation failed for {input_dir}"
 
     # Work in temporary directory to avoid modifying original
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -65,7 +75,7 @@ def pack(
 
         # Create final DOCX file as zip archive
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(output_path, "x", zipfile.ZIP_DEFLATED) as zf:
             for f in temp_content_dir.rglob("*"):
                 if f.is_file():
                     zf.write(f, f.relative_to(temp_content_dir))

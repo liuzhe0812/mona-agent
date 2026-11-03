@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect system Edge/Chrome for Hyperframes rendering.
+"""Detect system Edge/Chrome for video rendering.
 
 Returns the browser executable path if found, empty string otherwise.
 """
@@ -7,13 +7,15 @@ Returns the browser executable path if found, empty string otherwise.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 
 def find_browser() -> str:
     """Find a usable Chromium-based browser on the system."""
-    candidates: list[Path] = []
+    managed = os.environ.get("MONA_RENDER_BROWSER", "").strip()
+    candidates = [Path(managed)] if managed else []
 
     if sys.platform == "win32":
         candidates.extend([
@@ -34,9 +36,6 @@ def find_browser() -> str:
             Path("/usr/bin/microsoft-edge"),
         ])
 
-    # chrome-headless-shell exposes a very limited CDP surface that is
-    # insufficient for video rendering (Page/Runtime/Emulation commands are
-    # missing). Only full Chromium-based browsers (Chrome/Edge) are accepted.
     for c in candidates:
         if c.exists() and c.is_file():
             return str(c)

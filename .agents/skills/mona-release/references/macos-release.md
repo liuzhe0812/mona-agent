@@ -6,7 +6,7 @@ macOS 只使用仓库 `.github/workflows/build-macos.yml`。该流程仅在 `mac
 
 用 `publish=none` 做单平台排错时，确认 artifact 同时包含 App 与同版本 arm64 DMG。Gateway 和 XLSX sidecar 必须都是 Apple Silicon 原生构建；此模式不上传。正式免费发布使用 `publish=ad-hoc`。
 
-工作流使用根目录 `mona-gateway.spec` 的目录模式输出。验收 App 内同时存在 Gateway、Office 清单和当前架构 sidecar；仅有 DMG 文件或 Tauri 主程序不算打包通过。
+工作流使用根目录 `mona-gateway.spec` 的目录模式输出。验收 App 内同时存在 Gateway、Office 清单和当前架构 sidecar；构建脚本还会从 App 内的基础运行时组件在隔离目录离线创建环境，执行 Python、Node、npm、npx 并检查常用库导入。随后它使用 App 内的固定目录将浏览器、FFmpeg、FFprobe 下载到同一临时运行时仓库，验证版本和一帧视频编码，临时文件不会进入 App。仅有 DMG 文件或 Tauri 主程序不算打包通过。
 
 ## 对外发布
 

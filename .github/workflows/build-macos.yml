@@ -7,6 +7,8 @@ on:
       - ".github/scripts/upload_qiniu_artifact.py"
       - "src-tauri/build-macos-release.sh"
       - "mona-gateway.spec"
+      - "scripts/prepare_bundled_runtimes.py"
+      - "runtime-library/bundled-sources.json"
       - "src-tauri/**"
       - "webui/**"
       - "mona/**"

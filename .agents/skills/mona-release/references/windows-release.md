@@ -6,6 +6,8 @@
 
 先准备 `src-tauri/resources/office-editor/` 的清单、当前平台 sidecar、三个空白模板和许可证。根目录 `mona-gateway.spec` 将它们一起放入 Gateway 的 `_internal/desktop-resources/office-editor/`，无需再手工往热更新包加独立 Office 目录。
 
+Gateway 构建前使用项目 Python 执行 `python scripts/prepare_bundled_runtimes.py --platform win32 --architecture x64`。这会准备统一 Python、Node 基座及常用依赖的已校验组件，构建时一并放入 `_internal/desktop-resources/runtime-base/`；缺少、平台不匹配或校验失败时 Gateway 构建必须停止。
+
 根目录 spec 与 `src-tauri/mona-gateway.spec` 不同，不因名称相同互换。根目录 spec 默认输出 `dist/mona-gateway/`；可指定独立输出避免混入旧产物：
 
 ```powershell
@@ -54,7 +56,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Update packaging failed' }
 Get-FileHash -Algorithm SHA256 -LiteralPath $releaseInstaller, $releaseArchive
 ```
 
-热更新构建会在写出前检查 Office 完整性与 sidecar 哈希、文件路径及重复 WebUI；验证失败时修复构建输入，不绕过检查。安装包和热更新必须使用同次构建的同一份 Gateway，后续若修改资源需要重新打包两份产物；免费 Ed25519 `.sig` 对最终 NSIS 安装包验签，不给 Gateway 或主程序添加 Authenticode。
+热更新构建会在写出前检查 Office 完整性、sidecar 哈希、基础运行时清单和组件哈希、文件路径及重复 WebUI；验证失败时修复构建输入，不绕过检查。安装包和热更新必须使用同次构建的同一份 Gateway，后续若修改资源需要重新打包两份产物；免费 Ed25519 `.sig` 对最终 NSIS 安装包验签，不给 Gateway 或主程序添加 Authenticode。
 
 ## 分阶段上传与恢复
 

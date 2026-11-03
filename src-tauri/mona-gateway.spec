@@ -199,6 +199,7 @@ hidden_imports = (
 
 excludes = [
     "tkinter",
+    "numpy",
     "matplotlib",
     "scipy",
     "pandas",
@@ -234,14 +235,17 @@ design_resources = MONA_PKG / "skills/mona-design"
 if not (design_resources / "provenance.json").is_file():
     raise FileNotFoundError("Mona Design resources missing")
 datas.append((str(design_resources), "mona/skills/mona-design"))
-# Include the native Office instruction entry and its operation references.
+# Skill instructions, dependency declarations and non-Python resources are
+# needed by the runtime loader alongside the executable Python scripts below.
 for source, destination in collect_data_files("mona"):
     normalized_destination = str(destination).replace("\\", "/").rstrip("/")
-    if normalized_destination != "mona/skills/mona-pptx" and not normalized_destination.startswith("mona/skills/mona-pptx/"):
+    if normalized_destination != "mona/skills" and not normalized_destination.startswith("mona/skills/"):
         continue
     if {"tests", "test", "testing", "__pycache__", "node_modules", ".git"}.intersection(
         Path(normalized_destination).parts
     ):
+        continue
+    if "ai-image-comparison" in str(source).lower() or "ai-image-comparison" in normalized_destination.lower():
         continue
     datas.append((source, destination))
 
@@ -277,11 +281,33 @@ for path in sorted(skill_root.rglob("*.py")):
     ) and "ai-image-comparison" not in path.parts:
         datas.append((str(path), "mona/" + path.parent.relative_to(MONA_PKG).as_posix()))
 
+ffmpeg_licenses = MONA_PKG / "runtime/licenses/ffmpeg-6.1.1"
+if not all((ffmpeg_licenses / name).is_file() for name in ("LICENSE.md", "COPYING.GPLv2", "sources.md")):
+    raise FileNotFoundError("FFmpeg license resources are missing")
+datas.append((str(ffmpeg_licenses), "mona/runtime/licenses/ffmpeg-6.1.1"))
+native_catalog = MONA_PKG / "runtime/native-tools.json"
+if not native_catalog.is_file():
+    raise FileNotFoundError("Built-in runtime catalog is missing")
+datas.append((str(native_catalog), "mona/runtime"))
+
 # Keep desktop resources within the tree copied by legacy hot updaters.
 office_resources = PROJECT_ROOT / "src-tauri" / "resources" / "office-editor"
 if not office_resources.is_dir():
     raise FileNotFoundError(f"Office resources missing: {office_resources}")
 datas.append((str(office_resources), "desktop-resources/office-editor"))
+
+from mona.runtime.bundled import load_bundled_runtime
+from mona.runtime.manager import RuntimeManagerError
+
+runtime_resources = PROJECT_ROOT / "src-tauri" / "resources" / "runtime-base"
+try:
+    load_bundled_runtime(runtime_resources, current_platform="win32", current_architecture="x64")
+except (RuntimeManagerError, OSError, ValueError) as exc:
+    raise RuntimeError(
+        "Bundled runtime resources are missing or invalid; "
+        "run scripts/prepare_bundled_runtimes.py before building the Gateway"
+    ) from exc
+datas.append((str(runtime_resources), "desktop-resources/runtime-base"))
 
 # certifi CA bundle
 try:

@@ -20,6 +20,14 @@ Use Mona Motion as the product name in replies and generated titles. Do not carr
 example vendor branding into the user's video. Keep bundled licenses and source
 provenance intact; they remain the record of third-party authorship.
 
+Use Mona's `video` tool for preview and export. The host reuses an available
+rendering browser or prepares the fixed headless browser through Mona's unified
+runtime; FFmpeg/FFprobe use the same lazy resource mechanism. Do not ask the user
+to install Chrome, Node, FFmpeg or another video CLI manually. These large
+resources are prepared only when needed and are separate from the bundled
+Python/Node bases and common script libraries. If automatic downloads are
+disabled or preparation fails, report the actual resource error.
+
 ## Start from the user's task
 
 The workbench is a place to observe and adjust a project, not a prerequisite for

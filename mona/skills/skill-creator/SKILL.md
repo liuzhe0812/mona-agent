@@ -58,7 +58,7 @@ skill-name/
 │   │   └── description: (required)
 │   └── Markdown instructions (required)
 └── Bundled Resources (optional)
-    ├── scripts/          - Executable code (Python/Bash/etc.)
+    ├── scripts/          - Managed Python (.py) or Node.js (.mjs) scripts
     ├── references/       - Documentation intended to be loaded into context as needed
     └── assets/           - Files used in output (templates, icons, fonts, etc.)
 ```
@@ -74,6 +74,8 @@ environment and one shared Agent Node.js environment for non-project tasks.
 - A Skill with Node dependencies declares them in a standard root
   `package.json` under `dependencies`.
 - Project dependencies belong to the user's project, not the Skill package.
+- Use Python `.py` or Node.js `.mjs` files for portable Skill helpers and run them
+  with `skill_script_run`.
 - Never select a system Python/Node path. Mona routes Skill scripts and Agent
   workspace code to the shared environment automatically.
 
@@ -100,14 +102,14 @@ Minimal Node example:
 
 Every SKILL.md consists of:
 
-- **Frontmatter** (YAML): Contains `name` and `description` fields. These are the only fields that the agent reads to determine when the skill gets used, thus it is very important to be clear and comprehensive in describing what the skill is, and when it should be used.
+- **Frontmatter** (YAML): Contains `name` and `description`; optional `short_description` supplies a compact catalog description. Describe clearly what the skill does and when to use it.
 - **Body** (Markdown): Instructions and guidance for using the skill. Only loaded AFTER the skill triggers (if at all).
 
 #### Bundled Resources (optional)
 
 ##### Scripts (`scripts/`)
 
-Executable code (Python/Bash/etc.) for tasks that require deterministic reliability or are repeatedly rewritten.
+Managed Python (`.py`) or Node.js (`.mjs`) helpers for tasks that require deterministic reliability or are repeatedly rewritten. Run them with `skill_script_run`.
 
 - **When to include**: When the same code is being rewritten repeatedly or deterministic reliability is needed
 - **Example**: `scripts/rotate_pdf.py` for PDF rotation tasks
@@ -240,12 +242,12 @@ Skill creation involves these steps:
 
 1. Understand the skill with concrete examples
 2. Plan reusable skill contents (scripts, references, assets)
-3. Initialize the skill (run init_skill.py)
+3. Initialize a draft when a scaffold is useful
 4. Edit the skill (implement resources and write SKILL.md)
-5. Package the skill (run package_skill.py)
+5. Package the skill when a distributable file is needed
 6. Iterate based on real usage
 
-Follow these steps in order, skipping only if there is a clear reason why they are not applicable.
+Follow the relevant steps in order; install only through an available authorized entry or the user's explicit placement.
 
 ### Skill Naming
 
@@ -302,23 +304,13 @@ At this point, it is time to actually create the skill.
 
 Skip this step only if the skill being developed already exists, and iteration or packaging is needed. In this case, continue to the next step.
 
-When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
+When a scaffold is useful, run `init_skill.py` through `skill_script_run` and use a verified **absolute path inside the active workspace** for `--path`. The script runs from the Skill directory, so a relative path would resolve there rather than in the workspace. The resulting directory is a reviewable draft, not an installed Skill.
 
-For `mona`, custom skills should live under the active workspace `skills/` directory so they can be discovered automatically at runtime (for example, `<workspace>/skills/my-skill/SKILL.md`).
-
-Usage:
-
-```bash
-scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
+```text
+skill_script_run(skill="skill-creator", script="init_skill.py", args='my-skill --path "<absolute-workspace-draft-directory>" --resources scripts,references')
 ```
 
-Examples:
-
-```bash
-scripts/init_skill.py my-skill --path ./workspace/skills
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts,references
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts --examples
-```
+Mona discovers private skills under the executing Agent's actual private skills directory, not `<workspace>/skills/`. Prefer the path returned by the host; the usual location is `~/.mona/agents/<agent-id>/skills/`. Install through a currently available, authorized Skill management entry, or have the user place the reviewed directory there. Report the Skill as installed only after the host's loader discovers it. Do not assume a ZIP import button or `skill_create` tool is available to the current Agent.
 
 The script:
 
@@ -364,7 +356,7 @@ Write the YAML frontmatter with `name` and `description`:
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to the agent.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when the agent needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
 
-Keep frontmatter minimal. In `mona`, `metadata` and `always` are also supported when needed, but avoid adding extra fields unless they are actually required.
+Keep frontmatter minimal. Mona also supports `short_description`, `metadata`, and `always` when needed.
 
 ##### Body
 
@@ -372,16 +364,10 @@ Write instructions for using the skill and its bundled resources.
 
 ### Step 5: Packaging a Skill
 
-Once development of the skill is complete, it must be packaged into a distributable .skill file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
+When the user needs a distributable file, package the reviewed draft with `skill_script_run`. Pass verified absolute paths inside the active workspace for both the draft and output directory; omitting the output directory would write to the Skill directory instead.
 
-```bash
-scripts/package_skill.py <path/to/skill-folder>
-```
-
-Optional output directory specification:
-
-```bash
-scripts/package_skill.py <path/to/skill-folder> ./dist
+```text
+skill_script_run(skill="skill-creator", script="package_skill.py", args='"<absolute-workspace-draft>" "<absolute-workspace-output-directory>"')
 ```
 
 The packaging script will:
@@ -396,7 +382,7 @@ The packaging script will:
 
    Security restriction: symlinks are rejected and packaging fails when any symlink is present.
 
-If validation fails, the script will report the errors and exit without creating a package. Fix any validation errors and run the packaging command again.
+If validation fails, the script will report the errors and exit without creating a package. Fix any validation errors and run the packaging command again. The archive is a deliverable, not proof that Mona installed the Skill; use the installation and discovery check above.
 
 ### Step 6: Iterate
 

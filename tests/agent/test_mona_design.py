@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
@@ -49,6 +50,92 @@ def _decode_jpeg(path: Path) -> None:
         image.load()
         assert image.width > 0
         assert image.height > 0
+
+
+@pytest.mark.asyncio
+async def test_design_reference_mode_needs_no_script_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mona.runtime.agent_env import AgentEnvironmentManager
+
+    loader = _make_loader(tmp_path, monkeypatch, MONA_AGENT_ID)
+    manager = AgentEnvironmentManager(tmp_path / "runtimes")
+
+    async def unexpected_prepare(*args):
+        pytest.fail("Reading design references must not install optional script runtimes")
+
+    monkeypatch.setattr(manager, "prepare_for_skill", unexpected_prepare)
+    spec = loader.get_runtime_spec("mona-design")
+    assert spec is None
+    await manager.prepare_all(DESIGN_ROOT, spec)
+    manager.assert_skill_ready(DESIGN_ROOT, spec)
+
+
+@pytest.mark.parametrize(("platform", "available"), [("win32", False), ("darwin", True), ("linux", True)])
+def test_skill_platform_requirement_is_checked_even_when_binary_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, available: bool
+) -> None:
+    loader = _make_loader(tmp_path, monkeypatch, MONA_AGENT_ID)
+    skill = loader.workspace_skills / "unix-only"
+    skill.mkdir(parents=True)
+    metadata = {"mona": {"os": ["darwin", "linux"], "requires": {"bins": ["tmux"]}}}
+    (skill / "SKILL.md").write_text(
+        f'---\nname: unix-only\ndescription: Unix helper\nmetadata: {json.dumps(metadata)}\n---\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("mona.agent.skills.sys.platform", platform)
+    monkeypatch.setattr("mona.agent.skills.shutil.which", lambda _: "/available/tmux")
+
+    assert ("unix-only" in {item["name"] for item in loader.list_skills()}) is available
+    if not available:
+        assert "OS: darwin, linux" in loader.build_skills_summary()
+
+
+@pytest.mark.asyncio
+async def test_upstream_browser_scripts_are_reference_only(tmp_path: Path, monkeypatch) -> None:
+    from mona.agent.tools import skill_tools
+
+    loader = _make_loader(tmp_path, monkeypatch, MONA_AGENT_ID)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: loader)
+    assert not (DESIGN_ROOT / "scripts").exists()
+    assert not (DESIGN_ROOT / "package.json").exists()
+    assert not (DESIGN_ROOT / "package-lock.json").exists()
+    assert not (DESIGN_ROOT / "pyproject.toml").exists()
+    assert (DESIGN_ROOT / "references/upstream-scripts/verify.py").is_file()
+    result = await skill_tools.SkillScriptRunTool(track_usage=False).execute(
+        skill="mona-design", script="verify.py",
+    )
+    assert "not found" in result
+
+
+@pytest.mark.asyncio
+async def test_design_dom_measurement_uses_existing_browser_action(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from mona.agent.tools import browser, skill_tools
+
+    loader = _make_loader(tmp_path, monkeypatch, MONA_AGENT_ID)
+    monkeypatch.setattr(skill_tools, "_skills_loader", lambda _agent_id: loader)
+    reference = json.loads(await skill_tools.SkillReferenceReadTool(track_usage=False).execute(
+        skill="mona-design", ref_path="browser-checks.js",
+    ))
+    assert reference["nextOffset"] is None
+    function = reference["content"]
+    original = ast.parse((DESIGN_ROOT / "references/upstream-scripts/design_lint.py").read_text(encoding="utf-8"))
+    collector = next(ast.literal_eval(node.value) for node in original.body
+                     if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "COLLECT_JS" for target in node.targets))
+    assert function == collector
+    tool = browser.BrowserActTool()
+    assert len(function) <= tool.parameters["properties"]["fn"]["maxLength"]
+    page = MagicMock()
+    page.evaluate = AsyncMock(return_value={"broken": [], "bodySmall": []})
+    manager = MagicMock()
+    manager.get_page = AsyncMock(return_value=page)
+    monkeypatch.setattr(browser, "_get_connection_manager", AsyncMock(return_value=manager))
+    result = await tool.execute(kind="evaluate", tabId="existing-mona-tab", fn=function)
+    assert "broken" in result
+    manager.get_page.assert_awaited_once_with("existing-mona-tab")
+    page.evaluate.assert_awaited_once_with(function)
 
 
 def test_provenance_hashes_retained_files_and_records_music_exclusions() -> None:
@@ -195,7 +282,7 @@ async def test_skill_reference_tool_reads_design_docs_images_and_paged_sources(
 
     for resource_path in (
         "assets/style-specimens/web/01-editorial-brutalism.html",
-        "scripts/design_lint.py",
+        "references/upstream-scripts/design_lint.py",
         "references/design-styles.md",
     ):
         source = (DESIGN_ROOT / resource_path).read_bytes().decode("utf-8-sig")

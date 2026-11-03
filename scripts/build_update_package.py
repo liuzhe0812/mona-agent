@@ -16,6 +16,13 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from mona.runtime.bundled import load_bundled_runtime  # noqa: E402
+from mona.runtime.manager import RuntimeManagerError  # noqa: E402
+
 _JUNK_DIR_NAMES = {
     "__pycache__", "tests", "test", "testing", "_pytest", "pytest", "node_modules", ".git",
 }
@@ -23,6 +30,7 @@ _JUNK_FILE_SUFFIXES = (".pyc", ".pyo")
 _JUNK_FILE_NAMES = {"py.typed"}
 _MAIN_EXECUTABLE_NAMES = ("Mona.exe", "Mona")
 _OFFICE_RELATIVE_PATH = Path("_internal", "desktop-resources", "office-editor")
+_RUNTIME_RELATIVE_PATH = Path("_internal", "desktop-resources", "runtime-base")
 _OFFICE_TEMPLATE_NAMES = ("blank.docx", "blank.xlsx", "blank.pptx")
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _TARGET_PLATFORM = "windows"
@@ -156,6 +164,10 @@ def _validate_staging(path: Path) -> tuple[Path, Path]:
     if web_dist.exists():
         raise UpdatePackageValidationError("mona-gateway contains the unused mona/web/dist web bundle")
     _validate_office(gateway)
+    try:
+        load_bundled_runtime(gateway / _RUNTIME_RELATIVE_PATH, current_platform="win32", current_architecture="x64")
+    except RuntimeManagerError as exc:
+        raise UpdatePackageValidationError(f"Invalid bundled script runtime: {exc}") from exc
     return main, gateway
 
 

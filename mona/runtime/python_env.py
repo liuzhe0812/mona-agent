@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ from mona.runtime.manager import (
     RuntimeManagerError,
     parse_runtime_pack_ref,
 )
+from mona.runtime.process_tree import OwnedProcess
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,16 +71,18 @@ CommandRunner = Callable[[list[str], Path, dict[str, str]], Awaitable[CommandRes
 
 
 async def _run_command(command: list[str], cwd: Path, env: dict[str, str]) -> CommandResult:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=str(cwd),
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    owned = OwnedProcess(
+        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            asyncio.to_thread(owned.process.communicate), timeout=900,
+        )
+    finally:
+        await asyncio.to_thread(owned.close)
     return CommandResult(
-        returncode=process.returncode or 0,
+        returncode=owned.process.returncode or 0,
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),
     )
@@ -148,7 +152,7 @@ class PythonEnvironmentBuilder:
                         components,
                     )
                     self._write_json(final / "environment.json", expected.model_dump(by_alias=True))
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     shutil.rmtree(final, ignore_errors=True)
                     raise
                 ready = expected

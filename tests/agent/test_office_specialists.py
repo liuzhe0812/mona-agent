@@ -112,7 +112,7 @@ async def test_source_picture_runs_through_skill_and_office_asset_pipeline(tmp_p
         async def prepare_for_skill(self, suffix, skill_dir, spec):
             assert suffix == ".py"
             requirements = AgentEnvironmentManager._python_requirements(spec, skill_dir)
-            assert {"defusedxml==0.7.1", "pillow==12.3.0", "pymupdf==1.28.2"} <= set(requirements)
+            assert {"defusedxml==0.7.1", "pillow==12.3.0", "pymupdf>=1.26.4,<2.0.0"} <= set(requirements)
             return AgentEnvironmentResolution(executable=Path(sys.executable), env={})
 
     photo = tmp_path / "原产品图.png"

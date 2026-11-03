@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import defusedxml.minidom
+from helpers import validate_tree, workspace_path
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 NS = {
@@ -247,7 +248,12 @@ def add_comment(
     Returns:
         (para_id, message) tuple.
     """
-    word = Path(unpacked_dir) / "word"
+    try:
+        unpacked_path = workspace_path(unpacked_dir)
+        validate_tree(unpacked_path)
+    except (OSError, ValueError) as exc:
+        return "", f"Error: {exc}"
+    word = unpacked_path / "word"
     if not word.exists():
         return "", f"Error: {word} not found"
 
@@ -260,8 +266,8 @@ def add_comment(
     if first_comment:
         shutil.copy(TEMPLATE_DIR / "comments.xml", comments)
         # Add relationships and content types for comment files
-        _ensure_comment_relationships(Path(unpacked_dir))
-        _ensure_comment_content_types(Path(unpacked_dir))
+        _ensure_comment_relationships(unpacked_path)
+        _ensure_comment_content_types(unpacked_path)
     _append_xml(
         comments,
         "w:comments",

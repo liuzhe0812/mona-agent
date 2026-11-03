@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "win32-x64": {
+      "pythonBase": {
+        "filename": "python-base-3.13.15-win32-x64.zip",
+        "format": "runtime-zip",
+        "size": 18048131,
+        "sha256": "0bace554d19d6e228757ebf8d8a0d87fcae629302473572d3bb984ec6edb2323",
+        "urls": ["https://dl.mona.lzfun.vip/runtimes/components/python-base/3.13.15.zip"]
+      },
+      "nodeBase": {
+        "filename": "node-base-22.23.2-win32-x64.zip",
+        "format": "runtime-zip",
+        "size": 37213780,
+        "sha256": "feff8c8c7b230a1ce239a0e4812066e1f59f9e783ad2dfaec00a27d90245c198",
+        "urls": ["https://dl.mona.lzfun.vip/runtimes/components/node-base/22.23.2.zip"]
+      },
+      "wheels": [
+        "defusedxml-0.7.1-py2.py3-none-any.whl",
+        "lxml-6.1.2-cp313-cp313-win_amd64.whl",
+        "pillow-12.3.0-cp313-cp313-win_amd64.whl",
+        "pymupdf-1.26.4-cp39-abi3-win_amd64.whl",
+        "pyyaml-6.0.3-cp313-cp313-win_amd64.whl",
+        "websockets-17.1-cp313-cp313-win_amd64.whl"
+      ]
+    },
+    "darwin-x64": {
+      "pythonBase": {
+        "filename": "cpython-3.13.15+20260814-x86_64-apple-darwin-install_only.tar.gz",
+        "format": "standalone-tar-gz",
+        "size": 25053138,
+        "sha256": "44bb8a1d97c070deb30880b2b7fe681c1e9cf727cb950709e022dc195cdfdf4f",
+        "urls": ["https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.13.15%2B20260814-x86_64-apple-darwin-install_only.tar.gz"]
+      },
+      "nodeBase": {
+        "filename": "node-v22.23.2-darwin-x64.tar.gz",
+        "format": "node-tar-gz",
+        "size": 51246936,
+        "sha256": "58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026",
+        "urls": [
+          "https://npmmirror.com/mirrors/node/v22.23.2/node-v22.23.2-darwin-x64.tar.gz",
+          "https://nodejs.org/dist/v22.23.2/node-v22.23.2-darwin-x64.tar.gz"
+        ]
+      },
+      "wheels": [
+        "defusedxml-0.7.1-py2.py3-none-any.whl",
+        "lxml-6.1.2-cp313-cp313-macosx_10_13_universal2.whl",
+        "pillow-12.3.0-cp313-cp313-macosx_10_13_x86_64.whl",
+        "pymupdf-1.26.4-cp39-abi3-macosx_10_9_x86_64.whl",
+        "pyyaml-6.0.3-cp313-cp313-macosx_10_13_x86_64.whl",
+        "websockets-17.1-cp313-cp313-macosx_10_13_x86_64.whl"
+      ]
+    },
+    "darwin-arm64": {
+      "pythonBase": {
+        "filename": "cpython-3.13.15+20260814-aarch64-apple-darwin-install_only.tar.gz",
+        "format": "standalone-tar-gz",
+        "size": 25304407,
+        "sha256": "7d50bb42813a5644db7c40d3ad79361d0b724bb29d25a91fab1048c2c5c6a8c5",
+        "urls": ["https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.13.15%2B20260814-aarch64-apple-darwin-install_only.tar.gz"]
+      },
+      "nodeBase": {
+        "filename": "node-v22.23.2-darwin-arm64.tar.gz",
+        "format": "node-tar-gz",
+        "size": 50068815,
+        "sha256": "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
+        "urls": [
+          "https://npmmirror.com/mirrors/node/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz",
+          "https://nodejs.org/dist/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz"
+        ]
+      },
+      "wheels": [
+        "defusedxml-0.7.1-py2.py3-none-any.whl",
+        "lxml-6.1.2-cp313-cp313-macosx_10_13_universal2.whl",
+        "pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl",
+        "pymupdf-1.26.4-cp39-abi3-macosx_11_0_arm64.whl",
+        "pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl",
+        "websockets-17.1-cp313-cp313-macosx_11_0_arm64.whl"
+      ]
+    }
+  },
+  "wheels": {
+    "defusedxml-0.7.1-py2.py3-none-any.whl": {
+      "size": 25604,
+      "sha256": "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
+      "urls": ["https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl"]
+    },
+    "lxml-6.1.2-cp313-cp313-win_amd64.whl": {
+      "size": 4004117,
+      "sha256": "6cb0c87421946030b92b558be416852780a912454e3dcba0998e4497c9c588d5",
+      "urls": ["https://files.pythonhosted.org/packages/1b/7a/96bac167538748cae2544335855f812fa33e49a9a67bc8b8520dcbd592bd/lxml-6.1.2-cp313-cp313-win_amd64.whl"]
+    },
+    "lxml-6.1.2-cp313-cp313-macosx_10_13_universal2.whl": {
+      "size": 8590165,
+      "sha256": "351318f5c0eb7fcab5b4fdb507c6f88fb2c4b5e67784c7e5911448c91fffb5d4",
+      "urls": ["https://files.pythonhosted.org/packages/61/2a/e9651f47a31a60b5cae031abc23391ed9aa30c8fc07571d1a38f58d6d770/lxml-6.1.2-cp313-cp313-macosx_10_13_universal2.whl"]
+    },
+    "pillow-12.3.0-cp313-cp313-win_amd64.whl": {
+      "size": 7239691,
+      "sha256": "1cca606cd25738df4ed873d5ad46bbdb3d83b5cbca291f6b4ff13a4df6b0bbe8",
+      "urls": ["https://files.pythonhosted.org/packages/a6/9b/7a58e61d62be561da3a356fe2384d4059a6345fc130e23ef1c36a5b81d24/pillow-12.3.0-cp313-cp313-win_amd64.whl"]
+    },
+    "pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl": {
+      "size": 4780109,
+      "sha256": "d69141514cc30b774ceea5e3ed3a6635c8d8a96edf664689b890f4089111fb35",
+      "urls": ["https://files.pythonhosted.org/packages/10/76/8803c13605b763d33d156c4678fc77f8443389c0c51c8aef707bb02015f4/pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl"]
+    },
+    "pillow-12.3.0-cp313-cp313-macosx_10_13_x86_64.whl": {
+      "size": 5345889,
+      "sha256": "7a743ff716f746fc19a9557f60dab1600d4613255f8a7aeb3cdde4db7eb15a66",
+      "urls": ["https://files.pythonhosted.org/packages/42/92/2fc3ffad878ae8dd5469ec1bc8eb83b71f48e13efdf68f02709003982a32/pillow-12.3.0-cp313-cp313-macosx_10_13_x86_64.whl"]
+    },
+    "pymupdf-1.26.4-cp39-abi3-win_amd64.whl": {
+      "size": 18743491,
+      "sha256": "0b6345a93a9afd28de2567e433055e873205c52e6b920b129ca50e836a3aeec6",
+      "urls": ["https://files.pythonhosted.org/packages/d1/c4/87d27b108c2f6d773aa5183c5ae367b2a99296ea4bc16eb79f453c679e30/pymupdf-1.26.4-cp39-abi3-win_amd64.whl"]
+    },
+    "pymupdf-1.26.4-cp39-abi3-macosx_11_0_arm64.whl": {
+      "size": 22410112,
+      "sha256": "67e9e6b45832c33726651c2a031e9a20108fd9e759140b9e843f934de813a7ff",
+      "urls": ["https://files.pythonhosted.org/packages/fc/b0/9a451d837e1fe18ecdbfbc34a6499f153c8a008763229cc634725383a93f/pymupdf-1.26.4-cp39-abi3-macosx_11_0_arm64.whl"]
+    },
+    "pymupdf-1.26.4-cp39-abi3-macosx_10_9_x86_64.whl": {
+      "size": 23061974,
+      "sha256": "cb95562a0a63ce906fd788bdad5239063b63068cf4a991684f43acb09052cb99",
+      "urls": ["https://files.pythonhosted.org/packages/27/ae/3be722886cc7be2093585cd94f466db1199133ab005645a7a567b249560f/pymupdf-1.26.4-cp39-abi3-macosx_10_9_x86_64.whl"]
+    },
+    "pyyaml-6.0.3-cp313-cp313-win_amd64.whl": {
+      "size": 154090,
+      "sha256": "79005a0d97d5ddabfeeea4cf676af11e647e41d81c9a7722a193022accdb6b7c",
+      "urls": ["https://files.pythonhosted.org/packages/97/c9/39d5b874e8b28845e4ec2202b5da735d0199dbe5b8fb85f91398814a9a46/pyyaml-6.0.3-cp313-cp313-win_amd64.whl"]
+    },
+    "pyyaml-6.0.3-cp313-cp313-macosx_10_13_x86_64.whl": {
+      "size": 181669,
+      "sha256": "8da9669d359f02c0b91ccc01cac4a67f16afec0dac22c2ad09f46bee0697eba8",
+      "urls": ["https://files.pythonhosted.org/packages/d1/11/0fd08f8192109f7169db964b5707a2f1e8b745d4e239b784a5a1dd80d1db/pyyaml-6.0.3-cp313-cp313-macosx_10_13_x86_64.whl"]
+    },
+    "pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl": {
+      "size": 173252,
+      "sha256": "2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1",
+      "urls": ["https://files.pythonhosted.org/packages/b1/16/95309993f1d3748cd644e02e38b75d50cbc0d9561d21f390a76242ce073f/pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl"]
+    },
+    "websockets-17.1-cp313-cp313-win_amd64.whl": {
+      "size": 217784,
+      "sha256": "0340bbef6bfbe16da888b3983d666a4db4954ac3253c38f13bc7aba0c7db5a2f",
+      "urls": ["https://files.pythonhosted.org/packages/22/36/fb521f0f2994c25509651f169efe5582dddd8713d57a0757ba87859372ef/websockets-17.1-cp313-cp313-win_amd64.whl"]
+    },
+    "websockets-17.1-cp313-cp313-macosx_11_0_arm64.whl": {
+      "size": 214947,
+      "sha256": "fd8f47dbf2e8adb15c847215f83436de3fdb120b51fdae0fbbdf69fd97a3ad80",
+      "urls": ["https://files.pythonhosted.org/packages/46/69/66e5b7d01445e0eeb1d4ab419c30315f2c90cf7a8a8cd4ecc47f894dba54/websockets-17.1-cp313-cp313-macosx_11_0_arm64.whl"]
+    },
+    "websockets-17.1-cp313-cp313-macosx_10_13_x86_64.whl": {
+      "size": 214690,
+      "sha256": "829dba1bc049779de9b332088c1a6a9858e96bd67e50b6b644a95e02b67836bc",
+      "urls": ["https://files.pythonhosted.org/packages/d0/2a/c1b006fc861695d2aa4e35327b842015ce1d98cf8f99241829b3d6460bfc/websockets-17.1-cp313-cp313-macosx_10_13_x86_64.whl"]
+    }
+  }
+}

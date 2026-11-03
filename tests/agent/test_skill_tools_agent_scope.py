@@ -252,12 +252,21 @@ class TestSkillDirToolsAgentScope:
         )
         monkeypatch.setattr(agent_management, "is_skill_script_enabled", lambda *_: True)
 
+        class RuntimeWithStaleWorkspace:
+            async def prepare_for_skill(self, *_args):
+                return AgentEnvironmentResolution(
+                    executable=Path(sys.executable),
+                    env={"MONA_ACTIVE_WORKSPACE": str(tmp_path / "old-workspace")},
+                )
+
         out = await SkillScriptRunTool(
             agent_id=AGENT_A,
             workspace=tmp_path,
+            agent_environment=RuntimeWithStaleWorkspace(),
         ).execute(skill="workspace-env", script="workspace.py")
 
         assert str(tmp_path.resolve()) in out
+        assert "old-workspace" not in out
 
     async def test_script_run_uses_declared_managed_runtime(
         self,

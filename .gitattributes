@@ -9,9 +9,12 @@
 /tests/fixtures/stock_vibe/**/*.csv text eol=lf
 /tests/fixtures/stock_vibe/**/*.json text eol=lf
 /mona/runtime/process_tree.py text eol=lf
+/mona/runtime/licenses/ffmpeg-6.1.1/LICENSE.md -text
+/mona/runtime/licenses/ffmpeg-6.1.1/COPYING.GPLv2 -text
 
 # Vendored design resources are verified against the pinned upstream Git blobs.
 /mona/skills/mona-design/** -text
+/mona/skills/mona-design/provenance.json -text whitespace=cr-at-eol
 /mona/skills/mona-motion/assets/huashu-motion/** -text
 /mona/skills/mona-motion/references/huashu-motion/** -text
 /deploy/website-suggestions/official-site.patch -text whitespace=cr-at-eol

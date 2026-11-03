@@ -1,4 +1,4 @@
-"""Convert verified native engine artifacts to the shared runtime ZIP format."""
+"""Convert verified native artifacts to the shared runtime ZIP format."""
 
 from __future__ import annotations
 
@@ -28,10 +28,11 @@ _MAX_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024
 _CHUNK_SIZE = 1024 * 1024
 _RESERVED_NAMES = {"runtime-manifest.json", "executor.json"}
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+_FFMPEG_LICENSES = Path(__file__).parent / "licenses" / "ffmpeg-6.1.1"
 
 
 class NativeArchiveError(RuntimeManagerError):
-    """Raised when a native engine artifact cannot be safely packaged."""
+    """Raised when a native artifact cannot be safely packaged."""
 
 
 def normalize_engine_archive(
@@ -43,12 +44,17 @@ def normalize_engine_archive(
     current_architecture: str,
 ) -> Path:
     """Build a regular runtime ZIP from one already-verified native artifact."""
-    try:
-        expected_kind, executor = _ENGINE_INFO[entry.id]
-    except KeyError as exc:
-        raise NativeArchiveError(f"unsupported native engine component: {entry.id}") from exc
+    if entry.id == "browser-chromium":
+        expected_kind, executor = "browser-runtime", None
+    elif entry.id in {"ffmpeg", "ffprobe"}:
+        expected_kind, executor = f"{entry.id}-runtime", None
+    else:
+        try:
+            expected_kind, executor = _ENGINE_INFO[entry.id]
+        except KeyError as exc:
+            raise NativeArchiveError(f"unsupported native engine component: {entry.id}") from exc
     if entry.kind != expected_kind:
-        raise NativeArchiveError("native engine component kind does not match its ID")
+        raise NativeArchiveError("native component kind does not match its ID")
 
     source = Path(source)
     destination = Path(destination)
@@ -70,6 +76,27 @@ def normalize_engine_archive(
         if artifact_format != "native-tar-gz":
             raise NativeArchiveError("Codex requires a native tar.gz artifact")
         members, entrypoint = _codex_tar_members(source, entry.native_entrypoint, entry.version)
+    elif entry.id in {"browser-chromium", "ffmpeg", "ffprobe"}:
+        if artifact_format != "native-zip":
+            raise NativeArchiveError(f"{entry.id} requires a native ZIP artifact")
+        if entry.id in {"ffmpeg", "ffprobe"} and (
+            current_platform != "darwin"
+            or current_architecture not in {"arm64", "x64"}
+            or entry.version != f"6.1.1+darwin.{current_architecture}"
+            or entry.native_entrypoint != entry.id
+        ):
+            raise NativeArchiveError("FFmpeg native ZIP does not match the supported version or platform")
+        entrypoint = _safe_path(entry.native_entrypoint)
+        try:
+            with zipfile.ZipFile(source) as archive:
+                entries = _zip_entries(archive, preserve_directories=True)
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise NativeArchiveError(f"{entry.id} native ZIP is invalid") from exc
+        members = [(path.as_posix(), member) for path, member in entries if member is not None]
+        if entry.id in {"ffmpeg", "ffprobe"} and (
+            len(members) != 1 or members[0][0] != entry.id or members[0][1].is_directory
+        ):
+            raise NativeArchiveError("FFmpeg native ZIP must contain only its declared executable")
     else:
         is_windows = current_platform in {"win32", "windows"}
         expected_format = "native-zip" if is_windows else "native-tar-gz"
@@ -78,35 +105,54 @@ def normalize_engine_archive(
             raise NativeArchiveError("CodeBuddy artifact format does not match the target platform")
         members, entrypoint = _codebuddy_members(source, artifact_format, entry.native_entrypoint)
 
-    if any(name in _RESERVED_NAMES for name, _ in members):
+    if any(name.casefold() in _RESERVED_NAMES for name, _ in members):
         raise NativeArchiveError("native engine artifact contains a reserved runtime metadata file")
-    if entrypoint not in {name for name, _ in members}:
+    executable = next((member for name, member in members if name == entrypoint and not member.is_directory), None)
+    if executable is None:
         raise NativeArchiveError("native engine artifact is missing its declared entrypoint")
+    if executor is None and current_platform == "darwin" and not executable.mode & 0o111:
+        raise NativeArchiveError(f"{entry.id} entrypoint is not executable")
+
+    licenses: dict[str, bytes] = {}
+    if entry.id in {"ffmpeg", "ffprobe"}:
+        try:
+            licenses = {
+                f"licenses/{name}": (_FFMPEG_LICENSES / name).read_bytes()
+                for name in ("LICENSE.md", "COPYING.GPLv2", "sources.md")
+            }
+        except OSError as exc:
+            raise NativeArchiveError("FFmpeg license resources are unavailable") from exc
 
     manifest = {
         "schemaVersion": 1,
         "id": entry.id,
         "version": entry.version,
         "kind": entry.kind,
-        "entrypoints": {executor: entrypoint, "metadata": "executor.json"},
+        "entrypoints": (
+            {("browser" if entry.id == "browser-chromium" else entry.id): entrypoint}
+            if executor is None else {executor: entrypoint, "metadata": "executor.json"}
+        ),
         "dependencies": entry.dependencies,
-    }
-    executor_metadata = {
-        "schemaVersion": 1,
-        "executor": executor,
-        "platform": current_platform,
-        "architecture": current_architecture,
-        "nativeVersion": entry.version.split("+", 1)[0],
     }
     manifest_bytes = (
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     ).encode("utf-8")
-    executor_bytes = (
-        json.dumps(executor_metadata, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode("utf-8")
+    executor_bytes = None
+    if executor is not None:
+        executor_metadata = {
+            "schemaVersion": 1,
+            "executor": executor,
+            "platform": current_platform,
+            "architecture": current_architecture,
+            "nativeVersion": entry.version.split("+", 1)[0],
+        }
+        executor_bytes = (
+            json.dumps(executor_metadata, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        ).encode("utf-8")
     if (
-        len(members) + 2 > _MAX_FILES
-        or sum(member.size for _, member in members) + len(manifest_bytes) + len(executor_bytes)
+        len(members) + 1 + (executor_bytes is not None) + len(licenses) > _MAX_FILES
+        or sum(member.size for _, member in members) + len(manifest_bytes)
+        + len(executor_bytes or b"") + sum(map(len, licenses.values()))
         > _MAX_EXPANDED_BYTES
     ):
         raise NativeArchiveError("normalized runtime exceeds expanded size limits")
@@ -118,12 +164,18 @@ def normalize_engine_archive(
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as output:
             for name, member in members:
+                if member.is_directory:
+                    output.writestr(_zip_info(name + "/", member.mode, directory=True), b"")
+                    continue
                 info = _zip_info(name, member.mode)
                 with output.open(info, "w", force_zip64=True) as target:
                     with member.open() as original:
                         _copy_limited(original, target, member.size)
             output.writestr(_zip_info("runtime-manifest.json", 0o644), manifest_bytes)
-            output.writestr(_zip_info("executor.json", 0o644), executor_bytes)
+            for name, data in licenses.items():
+                output.writestr(_zip_info(name, 0o644), data)
+            if executor_bytes is not None:
+                output.writestr(_zip_info("executor.json", 0o644), executor_bytes)
         os.replace(temporary, destination)
         return destination
     finally:
@@ -131,18 +183,20 @@ def normalize_engine_archive(
 
 
 class _Member:
-    def __init__(self, name: str, size: int, mode: int, opener) -> None:
+    def __init__(self, name: str, size: int, mode: int, opener, *, is_directory: bool = False) -> None:
         self.name = name
         self.size = size
         self.mode = mode
         self.open = opener
+        self.is_directory = is_directory
 
 
-def _zip_info(name: str, mode: int) -> zipfile.ZipInfo:
+def _zip_info(name: str, mode: int, *, directory: bool = False) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
     info.compress_type = zipfile.ZIP_STORED
     info.create_system = 3
-    info.external_attr = ((stat.S_IFREG | (mode & 0o777)) << 16) | 0x20
+    file_type = stat.S_IFDIR if directory else stat.S_IFREG
+    info.external_attr = ((file_type | (mode & 0o777)) << 16) | (0x10 if directory else 0x20)
     return info
 
 
@@ -228,7 +282,9 @@ def _codebuddy_members(
     ], entrypoint
 
 
-def _zip_entries(archive: zipfile.ZipFile) -> list[tuple[PurePosixPath, _Member | None]]:
+def _zip_entries(
+    archive: zipfile.ZipFile, *, preserve_directories: bool = False,
+) -> list[tuple[PurePosixPath, _Member | None]]:
     infos = archive.infolist()
     _check_count(len(infos) + 2)
     names: set[str] = set()
@@ -247,7 +303,13 @@ def _zip_entries(archive: zipfile.ZipFile) -> list[tuple[PurePosixPath, _Member 
         if is_directory:
             if info.file_size:
                 raise NativeArchiveError("native ZIP directory contains data")
-            entries.append((path, None))
+            member = None
+            if preserve_directories:
+                member = _Member(
+                    path.as_posix(), 0, (mode & 0o777) if mode else 0o755, None,
+                    is_directory=True,
+                )
+            entries.append((path, member))
             continue
         _check_limits(1, info.file_size)
         total += info.file_size

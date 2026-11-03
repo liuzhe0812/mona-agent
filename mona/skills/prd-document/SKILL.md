@@ -29,7 +29,7 @@ The user's requested format and delivery channel take priority. When the user sp
 - Excel/XLSX → `mona-xlsx` when the PRD needs a workbook or data artifact
 - PowerPoint/PPTX → `mona-pptx` when the PRD is requested as a presentation
 - PDF → `pdf`
-- HTML → `html-report` or the project's requested HTML workflow
+- HTML → the project's requested HTML workflow
 - Markdown or no file type → return structured Markdown in the conversation unless the user asks for an artifact.
 
 If no format is given, choose the smallest suitable deliverable from context and tell the user what will be produced when it materially affects the result. Never change an explicitly requested format to another format.
@@ -207,6 +207,8 @@ Every core page or screen must have a **prototype illustration** showing layout,
 - **Inline embedding**: Prototype components are embedded directly in the Feature Overview Table rows, maintaining one-to-one correspondence with feature descriptions.
 
 **Generation strategy** (select by content type):
+
+When the user asks for a UI prototype image, use `generate_image` and its returned artifact path. Mermaid and HTML are useful for logical diagrams and interactive PRD content.
 
 1. **Mermaid / PlantUML** — Best for relational/logical structures:
    - Flow charts, state machines, decision trees

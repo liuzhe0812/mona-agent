@@ -12,10 +12,14 @@ import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
+from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from filelock import FileLock, Timeout
+from packaging.markers import default_environment
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 from mona.runtime.manager import RuntimeComponentStore, parse_runtime_pack_ref
 from mona.runtime.python_env import CommandResult, PythonEnvironmentBuilder
@@ -256,8 +260,9 @@ class AgentEnvironmentManager:
             if not python.is_file():
                 raise AgentRuntimeError("Mona Agent Python environment is not prepared")
             requirements = self._python_requirements(spec, skill_dir)
-            if requirements and not self._state_has_group(
-                state, current.generation, "python", requirements
+            if requirements and not (
+                self._state_has_group(state, current.generation, "python", requirements)
+                or self._python_requirements_satisfied(python, requirements)
             ):
                 raise AgentRuntimeError(
                     "Skill dependencies are not prepared in the shared Agent environment"
@@ -271,12 +276,26 @@ class AgentEnvironmentManager:
                     "Skill dependencies are not prepared in the shared Agent environment"
                 )
 
+    async def _prepare_bundled_runtime(self) -> None:
+        if self.runtime_installer is not None:
+            return
+        from mona.runtime.bundled import bundled_runtime_root
+        from mona.runtime.official import get_official_runtime_jobs
+
+        if bundled_runtime_root() is None:
+            return
+        jobs = get_official_runtime_jobs()
+        if jobs.component_store.root != self.root:
+            raise AgentRuntimeError("shared Agent environment does not match the runtime store")
+        await jobs.ensure_bundled()
+
     async def _prepare_python(
         self,
         spec: SkillRuntimeSpec | None,
         skill_dir: Path | None,
         base_env: dict[str, str],
     ) -> AgentEnvironmentResolution:
+        await self._prepare_bundled_runtime()
         requested = self._python_pack_refs(spec)
         await self._ensure_packs(requested)
         builder = PythonEnvironmentBuilder(
@@ -308,6 +327,8 @@ class AgentEnvironmentManager:
         )
         if python_path:
             env["PYTHONPATH"] = os.pathsep.join(python_path)
+        if self.store.active("browser-chromium") is not None:
+            env["MONA_RENDER_BROWSER"] = str(self._entrypoint("browser-chromium", "browser"))
         return AgentEnvironmentResolution(
             executable=python,
             env=env,
@@ -320,6 +341,7 @@ class AgentEnvironmentManager:
         skill_dir: Path | None,
         base_env: dict[str, str],
     ) -> AgentEnvironmentResolution:
+        await self._prepare_bundled_runtime()
         refs = self._node_pack_refs(spec)
         await self._ensure_packs(refs)
         node = self._entrypoint("node-base", "node")
@@ -456,6 +478,9 @@ class AgentEnvironmentManager:
             state = self._read_state()
             if self._state_has_group(state, generation, "python", requirements):
                 return
+            if self._python_requirements_satisfied(python, requirements):
+                self._record_group(state, generation, "python", requirements)
+                return
             env = os.environ.copy()
             env.update(
                 {
@@ -498,6 +523,46 @@ class AgentEnvironmentManager:
             self._record_group(state, generation, "python", requirements)
         finally:
             lock.release()
+
+    def _python_requirements_satisfied(self, python: Path, requirements: list[str]) -> bool:
+        """Inspect this venv's metadata without importing its packages into the backend."""
+        root = python.parent.parent.resolve()
+        if not root.is_relative_to(self.root):
+            return False
+        try:
+            metadata = json.loads((root / "environment.json").read_text(encoding="utf-8"))
+            _component, version = parse_runtime_pack_ref(metadata["basePack"])
+            short_version = ".".join(version.split(".")[:2])
+            relative = "Lib/site-packages" if sys.platform == "win32" else f"lib/python{short_version}/site-packages"
+            site_packages = (root / relative).resolve(strict=True)
+            if not site_packages.is_relative_to(root):
+                return False
+            installed = {
+                canonicalize_name(dist.metadata["Name"]): dist
+                for dist in distributions(path=[str(site_packages)])
+                if dist.metadata["Name"]
+            }
+            environment = default_environment()
+            environment.update(python_version=short_version, python_full_version=version,
+                               implementation_version=version, extra="")
+            pending = list(requirements)
+            checked: set[str] = set()
+            while pending:
+                requirement = Requirement(pending.pop())
+                if requirement.marker and not requirement.marker.evaluate(environment):
+                    continue
+                if requirement.url or requirement.extras:
+                    return False
+                name = canonicalize_name(requirement.name)
+                dist = installed.get(name)
+                if dist is None or not requirement.specifier.contains(dist.version, prereleases=True):
+                    return False
+                if name not in checked:
+                    checked.add(name)
+                    pending.extend(dist.requires or [])
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
 
     async def _ensure_node_root(self) -> None:
         self.node_root.mkdir(parents=True, exist_ok=True)

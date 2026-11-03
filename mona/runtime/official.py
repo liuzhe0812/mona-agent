@@ -1,4 +1,4 @@
-"""Production wiring for Qiniu-backed managed runtime downloads."""
+"""Production wiring for bundled and downloadable managed runtime resources."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import httpx
 
@@ -16,7 +17,7 @@ from mona.config.paths import (
     get_target_managed_runtimes_dir,
 )
 from mona.distribution import DistributionSettings
-from mona.runtime.catalog import RuntimeCatalogClient, RuntimeInstaller
+from mona.runtime.catalog import RuntimeCatalog, RuntimeCatalogClient, RuntimeInstaller
 from mona.runtime.download import VerifiedDownloader
 from mona.runtime.jobs import RuntimeInstallJob, RuntimeInstallJobManager
 from mona.runtime.manager import RuntimeComponentStore
@@ -56,12 +57,14 @@ def _local_component_available(component: str) -> bool:
 
         probe = next(item for item in discover_executors(load_config().development) if item.executor.value == component)
         return probe.state == "detected" and probe.source != "managed_runtime"
-    if component in {"ffmpeg", "yt_dlp", "asr"}:
+    if component in {"ffmpeg", "browser", "yt_dlp", "asr"}:
         from mona.api.video_runtime import VideoRuntime
 
         runtime = VideoRuntime()
         if component == "ffmpeg":
             return runtime.get_ffmpeg_path() is not None and runtime.get_ffprobe_path() is not None
+        if component == "browser":
+            return runtime.get_chrome_path() is not None
         if component == "yt_dlp":
             return runtime.get_ytdlp_path() is not None
         return runtime.get_asr_paths() is not None
@@ -95,6 +98,9 @@ def build_official_runtime_installer(
         catalog_client=RuntimeCatalogClient(
             list(settings.runtime_catalog_urls),
             packages_root / "catalogs" / "runtimes.json",
+            bundled_catalog=RuntimeCatalog.model_validate_json(
+                Path(__file__).with_name("native-tools.json").read_text(encoding="utf-8")
+            ),
         ),
         downloader=VerifiedDownloader(),
         store=store,
@@ -113,8 +119,12 @@ def build_official_runtime_jobs(
     client = RuntimeCatalogClient(
         list(settings.runtime_catalog_urls),
         packages_root / "catalogs" / "runtimes.json",
+        bundled_catalog=RuntimeCatalog.model_validate_json(
+            Path(__file__).with_name("native-tools.json").read_text(encoding="utf-8")
+        ),
     )
     installer = build_official_runtime_installer(settings)
+    from mona.runtime.bundled import bundled_runtime_root
     return RuntimeInstallJobManager(
         catalog_client=client,
         component_store=store,
@@ -125,6 +135,7 @@ def build_official_runtime_jobs(
         local_component_available=_local_component_available,
         migration_status=_migration_status,
         cleanup_legacy=_cleanup_legacy,
+        bundled_runtime_root=bundled_runtime_root(),
     )
 
 

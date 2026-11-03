@@ -100,12 +100,43 @@ for path in sorted(skill_root.rglob("*.py")):
     ) and "ai-image-comparison" not in path.parts:
         datas.append((str(path), path.parent.as_posix()))
 
+ffmpeg_licenses = Path("mona/runtime/licenses/ffmpeg-6.1.1")
+if not all((ffmpeg_licenses / name).is_file() for name in ("LICENSE.md", "COPYING.GPLv2", "sources.md")):
+    raise FileNotFoundError("FFmpeg license resources are missing")
+datas = [
+    (source, destination) for source, destination in datas
+    if not (
+        str(destination).replace("\\", "/").casefold().startswith("mona/runtime/licenses/ffmpeg-6.1.1")
+        or (str(destination).replace("\\", "/").casefold() == "mona/runtime"
+            and Path(source).name.casefold() == "native-tools.json")
+    )
+]
+datas.append((str(ffmpeg_licenses), "mona/runtime/licenses/ffmpeg-6.1.1"))
+native_catalog = Path("mona/runtime/native-tools.json")
+if not native_catalog.is_file():
+    raise FileNotFoundError("Built-in runtime catalog is missing")
+datas.append((str(native_catalog), "mona/runtime"))
+
 # The legacy updater replaces the whole gateway tree. Keep desktop resources
 # inside it so both existing installations and fresh installers receive them.
 office_resources = Path("src-tauri/resources/office-editor")
 if not office_resources.is_dir():
     raise FileNotFoundError(f"Office resources missing: {office_resources}")
 datas.append((str(office_resources), "desktop-resources/office-editor"))
+
+# Bundle the same verified runtime components used by the managed store.
+from mona.runtime.bundled import load_bundled_runtime
+from mona.runtime.manager import RuntimeManagerError
+
+runtime_resources = Path("src-tauri/resources/runtime-base")
+try:
+    load_bundled_runtime(runtime_resources)
+except (RuntimeManagerError, OSError, ValueError) as exc:
+    raise RuntimeError(
+        "Bundled runtime resources are missing or invalid; "
+        "run scripts/prepare_bundled_runtimes.py before building the Gateway"
+    ) from exc
+datas.append((str(runtime_resources), "desktop-resources/runtime-base"))
 
 hiddenimports += [
     "pymupdf",
@@ -146,7 +177,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "tkinter", "matplotlib", "scipy", "pandas", "IPython", "notebook", "jupyter",
+        "tkinter", "numpy", "matplotlib", "scipy", "pandas", "IPython", "notebook", "jupyter",
         "cv2", "opencv_python", "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
         "test", "tests", "pytest", "_pytest", "torch", "torchvision", "torchaudio",
         "zmq", "pyzmq", "whisper", "modelscope", "sentence_transformers", "chromadb",

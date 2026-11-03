@@ -13,6 +13,12 @@ short_description: >-
 
 Turn the caller's image intent into a complete prompt, then call `generate_image`. The calling workflow decides whether it needs an image and how the result is used.
 
+Use Mona's image tool and configured image model. If the tool is unavailable or
+the service reports missing authentication, explain the image capability or
+account setting that needs attention; installing an external image CLI or a
+Python/Node package does not enable the service. The bundled case-search helper
+uses Mona's shared Python and needs no extra library.
+
 Unless the user explicitly asks only for a prompt, finish by calling the tool. Keep template names and internal selection notes out of the user-facing reply unless they answer the user's question.
 
 ## Use the complete reference method

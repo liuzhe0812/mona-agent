@@ -212,7 +212,34 @@ function Update-OfficeSidecarManifest {
   }
 }
 
+function Assert-BundledRuntime {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$GatewayDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$PythonExecutable
+  )
+
+  $runtimeDirectory = Join-Path $GatewayDirectory "_internal\desktop-resources\runtime-base"
+  if (-not (Test-Path -LiteralPath $runtimeDirectory -PathType Container)) {
+    throw "Bundled runtime directory was not found: $runtimeDirectory"
+  }
+  Assert-NoReparsePoints -Path $runtimeDirectory -Directory $GatewayDirectory -Description "Bundled runtime directory"
+  $manifestPath = Join-Path $runtimeDirectory "manifest.json"
+  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Bundled runtime manifest was not found: $manifestPath"
+  }
+  Assert-NoReparsePoints -Path $manifestPath -Directory $runtimeDirectory -Description "Bundled runtime manifest"
+
+  $validate = "from pathlib import Path; import sys; from mona.runtime.bundled import load_bundled_runtime; load_bundled_runtime(Path(sys.argv[1]), current_platform='win32', current_architecture='x64')"
+  & $PythonExecutable -X utf8 -c $validate $runtimeDirectory
+  if ($LASTEXITCODE -ne 0) {
+    throw "Bundled runtime validation failed: $runtimeDirectory"
+  }
+}
+
 $srcTauriDirectory = (Resolve-Path -LiteralPath $PSScriptRoot -ErrorAction Stop).Path
+$repositoryRoot = Split-Path -Parent $srcTauriDirectory
 $releaseSigner = Join-Path $srcTauriDirectory "sign-update-artifact.mjs"
 $gatewayDirectory = Join-Path $srcTauriDirectory "resources\mona-gateway"
 $tauriConfigPath = Join-Path $srcTauriDirectory "tauri.conf.json"
@@ -258,6 +285,16 @@ $installerPath = Join-Path $installerDirectory $installerFileName
 # Validate the unsigned bytes before any signer can mutate them. This reads
 # only the packaged Gateway copy; the source manifest is never rewritten.
 $null = Get-OfficeSidecarManifestState -GatewayDirectory $gatewayDirectory
+$releasePython = Join-Path $repositoryRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $releasePython -PathType Leaf)) {
+  $releasePython = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+}
+Push-Location $repositoryRoot
+try {
+  Assert-BundledRuntime -GatewayDirectory $gatewayDirectory -PythonExecutable $releasePython
+} finally {
+  Pop-Location
+}
 
 $buildStartedAt = [DateTime]::UtcNow
 Push-Location $srcTauriDirectory

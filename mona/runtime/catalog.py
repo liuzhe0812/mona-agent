@@ -146,13 +146,25 @@ class RuntimeCatalogClient:
         *,
         max_bytes: int = 5 * 1024 * 1024,
         transport: httpx.AsyncBaseTransport | None = None,
+        bundled_catalog: RuntimeCatalog | None = None,
     ) -> None:
-        if not urls:
+        if not urls and bundled_catalog is None:
             raise ValueError("at least one runtime catalog URL is required")
         self.urls = list(dict.fromkeys(urls))
         self.cache_path = cache_path
         self.max_bytes = max_bytes
         self.transport = transport
+        self.bundled_catalog = bundled_catalog
+
+    def _with_bundled(self, catalog: RuntimeCatalog) -> RuntimeCatalog:
+        if self.bundled_catalog is None:
+            return catalog
+        components = list(catalog.components)
+        identities = {(entry.id, entry.version, tuple(entry.platforms), tuple(entry.architectures))
+                      for entry in components}
+        components.extend(entry for entry in self.bundled_catalog.components
+                          if (entry.id, entry.version, tuple(entry.platforms), tuple(entry.architectures)) not in identities)
+        return catalog.model_copy(update={"components": components})
 
     async def fetch_resource(self, resource: str) -> RuntimeCatalog:
         from mona.runtime.executors import EXECUTOR_RUNTIMES
@@ -195,7 +207,7 @@ class RuntimeCatalogClient:
                         body = await response.aread()
                         if len(body) > self.max_bytes:
                             raise RuntimeCatalogError("runtime catalog exceeds size limit")
-                        catalog = RuntimeCatalog.model_validate_json(body)
+                        catalog = self._with_bundled(RuntimeCatalog.model_validate_json(body))
                         if cached is not None and any(item.artifact_format == "runtime-zip" for item in cached.catalog.components) and _catalog_time(
                             catalog.generated_at
                         ) < _catalog_time(cached.catalog.generated_at):
@@ -212,7 +224,9 @@ class RuntimeCatalogClient:
                 except Exception as exc:
                     errors.append(f"{original}: {exc}")
         if cached is not None:
-            return cached.catalog
+            return self._with_bundled(cached.catalog)
+        if self.bundled_catalog is not None:
+            return self.bundled_catalog
         raise RuntimeCatalogError("runtime catalog unavailable: " + "; ".join(errors))
 
     def load_cached(self) -> RuntimeCatalogCache | None:

@@ -9,22 +9,17 @@
 3. **真图诚实性测试**：去掉这张图，信息有没有损失？没有损失 = 装饰，不加。别配 stock「灵感图」。
 4. **人物、动物、实物、场景不用 SVG 手画**——画出来五官错位、比例诡异。用真图、生成图，或诚实的占位。几何、图标、数据图、地图线框不在此列；剪影遮罩只用于构图（裁切照片、做形状），不能拿来代替产品图。
 
-**涉及用户本人或他的产品时，真实素材优先**：先查用户私有 memory / config 目录下的 `personal-asset-index.json`（首次使用把 `assets/personal-asset-index.example.json` 复制过去填真实数据；真实数据不放 skill 目录，免得随分发泄露）。找不到就问用户要，不编造。
+**涉及用户本人或他的产品时，真实素材优先**：先从当前工作区、已有品牌资产及已授权的 Mona 资料/记忆工具查找。缺少关键素材时再向用户说明，不编造；不为这个 Skill 新建独立素材索引或扫描私有配置。
 
 ## 先探测能力
 
-```bash
-# $HD = 本 skill 的根目录（SKILL.md 所在目录），不是用户的项目目录
-python3 "$HD/scripts/capabilities.py"
-```
-
-它查本机装了哪些相关 skill、有没有生图的 key、ffmpeg / playwright 在不在，给出档位和缺什么时的安装建议。探测不到不代表没有（比如 Codex 自带 image_gen），用户说有就以用户为准。
+查看当前已注册、已授权的 Mona 工具：网页使用 `browser_observe` / `browser_act`，图片使用 `generate_image`，视频使用 `video`。按工具回执确认可用能力，不从 Skill 文件存在推断服务或权限已经就绪。不运行上游环境扫描、不自行查找系统浏览器或云服务密钥、不为设计 Skill 安装 Playwright。
 
 ## 三档
 
 ### T0 · 所有用户都有（默认，不依赖任何额外能力）
 
-- **真图**：`python3 "$HD/scripts/fetch_images.py" --query "英文关键词" --out 项目/assets/img --count 2 --width 1600`（Wikimedia Commons、Met / Art Institute 开放馆藏、Biodiversity Heritage Library、Unsplash、Pexels，带许可输出与失败兜底）。用户自己的产品走品牌资产协议取官方图。
+- **真图**：使用 Mona 现有搜索、浏览器及素材/文件能力获取真实来源，记录来源与许可，使用工具实际返回的工作区文件。宿主没有提供相应能力时写明限制，不运行上游下载脚本。用户自己的产品走品牌资产协议取官方图。
 - **具名产品的 logo**：设计里出现几个可识别的产品就取几个（svgl → simpleicons → favicon，见 `references/brand-asset-protocol.md`）。清单里有一个没取到就补，实在取不到才退诚实占位并明说。
 - **程序化材质**（单文件可用，不需要 fetch）：
   - SVG 滤镜：`feTurbulence` + `feDisplacementMap` 做纸纹、噪点、墨迹晕染、印刷错版
@@ -37,10 +32,10 @@ python3 "$HD/scripts/capabilities.py"
 
 ### T1 · 有 AI 生图能力
 
-判定：本机装了 `huashu-gpt-image`、`nano-banana-pro` 之类的生图 skill，或你所在的 runtime 自带生图工具（如 Codex 的 image_gen——你自己知道有没有），或用户明说有。只有 API key 不算：本 skill 没有直接调生图 API 的脚本。
+判定：当前已注册、已授权的 Mona `generate_image` 及其图片服务实际可用；以工具回执为准，不从其他 Skill 是否安装或是否存有 API key 推断能力。
 
 - **方向板阶段先出探针图**：每个方向生成一张氛围或主视觉图（材质、光线、主体），和 HTML 初稿一起摆给用户。写代码之前先有视觉层，用户选的是「看得见的样子」。
-- **选定后生成主视觉、插画、纹理、人物与场景**。提示词写具体视觉特征和真实参照名，不写「高级感」「极简」这种形容词——方法见 `huashu-gpt-image`。
+- **选定后生成主视觉、插画、纹理、人物与场景**。提示词写具体视觉特征和真实参照名，不写「高级感」「极简」这种形容词；生图方法使用 Mona 的 `image-generation` Skill。
 - 生成图要过真图诚实性测试，品牌产品图要以官方参考图为基底生成，不凭空画产品。
 
 ### T2 · 装了兄弟 skill
