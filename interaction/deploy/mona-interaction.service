@@ -1,0 +1,12 @@
+# Installed and populated by scripts/install-ubuntu-service.sh.
+[Unit]
+Description=Mona Interaction
+
+[Service]
+Type=exec
+ExecStart=@PYTHON_EXECUTABLE@ -m mona_interaction serve --host 127.0.0.1 --port 17880
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
