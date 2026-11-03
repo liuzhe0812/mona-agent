@@ -1,3 +1,5 @@
+import { PerformanceController } from "/performance-controller.js";
+
 const $ = (id) => document.getElementById(id);
 const sessionKey = "mona-interaction-demo-session";
 const pendingKey = "mona-interaction-demo-pending";
@@ -10,17 +12,39 @@ let pendingId = null;
 let connected = false;
 let lastReply = "";
 let retryDelay = 500;
+let mode = "unconfigured";
+let ready = false;
+let reviewId = null;
+let syncTimer;
+const performanceController = new PerformanceController();
+let previousFrame = 0;
 
-function updateState(state = "idle") {
-  const labels = {idle: "我在这里", thinking: "正在回应", offline: "正在恢复连接"};
-  $("status").textContent = labels[connected ? state : "offline"] || labels.idle;
-  $("send").disabled = !connected || Boolean(pendingId);
-  $("text").disabled = Boolean(pendingId);
+function animate(timestamp) {
+  const parameters = performanceController.tick(previousFrame ? (timestamp - previousFrame) / 1000 : 0);
+  previousFrame = timestamp;
+  window.dispatchEvent(new CustomEvent("mona:performance-frame", { detail: parameters }));
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+function applyPerformance(decision) {
+  performanceController.setDecision(decision || null);
+  window.dispatchEvent(new CustomEvent("mona:performance-decision", { detail: decision || null }));
 }
 
-function showNotice(title, message) {
+function updateState(state = "idle") {
+  const labels = {idle: "我在这里", thinking: "正在回应", offline: "正在恢复连接", unconfigured: "请先完成与 Mona 的连接配置", review: "上次结果需要核对"};
+  if (reviewId) state = "review";
+  $("status").textContent = labels[connected ? state : "offline"] || labels.idle;
+  $("send").disabled = !connected || !ready || Boolean(pendingId) || Boolean(reviewId);
+  $("text").disabled = !ready || Boolean(pendingId) || Boolean(reviewId);
+  $("review-request").hidden = !reviewId;
+}
+
+function showNotice(title, message, review = false) {
   $("notice-title").textContent = title;
   $("notice-body").textContent = message;
+  $("confirm-review").hidden = !review;
   if (!$("notice").open) $("notice").showModal();
 }
 
@@ -28,7 +52,7 @@ function renderRecords() {
   const panel = $("messages");
   panel.replaceChildren();
   for (const record of records.values()) {
-    for (const [label, text] of [["你", record.text], ["Mona · 模拟回复", record.reply]]) {
+    for (const [label, text] of [["你", record.text], [mode === "demo" ? "Mona · 模拟回复" : "Mona", record.reply]]) {
       if (!text) continue;
       const article = document.createElement("article");
       article.className = "message";
@@ -52,9 +76,14 @@ function sendCommand(type, payload = {}, messageId = crypto.randomUUID()) {
 }
 
 function reconcileSnapshot(payload) {
+  clearTimeout(syncTimer);
+  mode = payload.mode;
+  ready = mode === "mona" || mode === "demo";
+  $("mode").textContent = {mona: "Mona", demo: "模拟会话", unconfigured: "等待连接 Mona"}[mode] || "等待连接 Mona";
   const savedPending = sessionStorage.getItem(pendingKey);
   records.clear();
   for (const record of payload.records || []) records.set(record.message_id, record);
+  reviewId = [...records.values()].find((record) => record.state === "unknown")?.message_id || null;
   pendingId = payload.pending_id || null;
   if (savedPending) {
     const saved = JSON.parse(savedPending);
@@ -67,9 +96,10 @@ function reconcileSnapshot(payload) {
     }
   }
   lastReply = [...records.values()].filter((record) => record.state === "completed").at(-1)?.reply || "";
+  applyPerformance([...records.values()].at(-1)?.performance);
   $("read-reply").disabled = !lastReply || !("speechSynthesis" in window);
   renderRecords();
-  updateState(payload.state);
+  updateState(ready ? payload.state : "unconfigured");
 }
 
 function handleEvent(message) {
@@ -88,7 +118,8 @@ function handleEvent(message) {
     renderRecords();
   } else if (message.type === "reply.completed") {
     const record = records.get(message.message_id);
-    if (record) Object.assign(record, {reply: payload.text, state: "completed"});
+    if (record) Object.assign(record, {reply: payload.text, state: "completed", performance: payload.performance});
+    applyPerformance(payload.performance);
     lastReply = payload.text;
     $("read-reply").disabled = !("speechSynthesis" in window);
     renderRecords();
@@ -100,6 +131,15 @@ function handleEvent(message) {
     const saved = sessionStorage.getItem(pendingKey);
     if (saved) $("text").value = JSON.parse(saved).text;
     sessionStorage.removeItem(pendingKey);
+    if (payload.code === "result_unknown") {
+      reviewId = message.message_id;
+      const record = records.get(message.message_id);
+      if (record) record.state = "unknown";
+    }
+    if (payload.code === "sync_failed") {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => sendCommand("session.sync"), 3000);
+    }
     pendingId = null;
     updateState();
   }
@@ -126,7 +166,7 @@ function connect() {
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
   const text = $("text").value.trim();
-  if (!text || pendingId || !connected) return;
+  if (!text || pendingId || !connected || !ready) return;
   $("field-error").textContent = "";
   const messageId = crypto.randomUUID();
   sessionStorage.setItem(pendingKey, JSON.stringify({message_id: messageId, text}));
@@ -143,6 +183,12 @@ $("text").addEventListener("keydown", (event) => {
     event.preventDefault();
     $("composer").requestSubmit();
   }
+});
+$("review-request").addEventListener("click", () => {
+  showNotice("核对上次操作的实际结果", "请先在 Mona 核对上次操作的实际结果，确认后再继续发送新内容。原请求会保留为结果未确认记录，程序不会重新执行它。", true);
+});
+$("confirm-review").addEventListener("click", () => {
+  if (reviewId) sendCommand("input.resolve", {message_id: reviewId, acknowledged: true});
 });
 $("read-reply").addEventListener("click", () => {
   const voices = speechSynthesis.getVoices();

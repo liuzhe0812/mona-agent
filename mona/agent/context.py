@@ -354,14 +354,21 @@ class ContextBuilder:
         )
         user_content = self._build_user_content(current_message, media)
 
+        response_contract = ""
+        if channel == "interaction":
+            from mona.channels.interaction_support import RESPONSE_CONTRACT
+
+            response_contract = f"\n\n{RESPONSE_CONTRACT}"
+
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
         # Runtime context is appended to keep the user-content prefix stable
         # for prompt-cache hits (the context changes every turn due to time).
         if isinstance(user_content, str):
-            merged = f"{user_content}\n\n{runtime_ctx}"
+            merged = f"{user_content}{response_contract}\n\n{runtime_ctx}"
         else:
-            merged = user_content + [{"type": "text", "text": runtime_ctx}]
+            presentation = response_contract + "\n\n" if response_contract else ""
+            merged = user_content + [{"type": "text", "text": presentation + runtime_ctx}]
         user_profile_fields = None
         if message_metadata and message_metadata.get("origin") == "profile_advice":
             user_profile_fields = ("preferences", "work_context", "current_focus")

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mona · 交互预览</title>
+  <title>Mona · 陪伴</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -12,7 +12,7 @@
     <section class="stage" aria-label="Mona 角色">
       <header class="stage-header">
         <span class="brand">Mona</span>
-        <span class="mode">模拟会话</span>
+        <span id="mode" class="mode">正在连接 Mona</span>
       </header>
       <img class="character" src="/mona-original.png" alt="Mona，黑红服装的猫耳女孩" draggable="false">
       <p class="stage-caption">正式原画预览 · 表情动画待接入</p>
@@ -23,9 +23,10 @@
         <p id="status" role="status">正在连接</p>
       </header>
       <div id="messages" class="messages" aria-live="polite" aria-relevant="additions text">
-        <p class="welcome">这里可以验证文字输入和回应状态。当前使用模拟回复，尚未连接真实 Mona。</p>
+        <p class="welcome">想聊些什么？</p>
       </div>
       <div class="reply-actions">
+        <button id="review-request" class="button secondary" type="button" hidden>核对上次结果</button>
         <button id="read-reply" class="button secondary" type="button" disabled>朗读回复</button>
       </div>
       <form id="composer" class="composer">
@@ -42,7 +43,10 @@
   <dialog id="notice">
     <h2 id="notice-title">暂时无法完成</h2>
     <p id="notice-body"></p>
-    <form method="dialog"><button class="button">知道了</button></form>
+    <form method="dialog">
+      <button id="confirm-review" class="button" value="reviewed" hidden>我已核对，继续对话</button>
+      <button class="button" value="close">知道了</button>
+    </form>
   </dialog>
 </body>
 </html>

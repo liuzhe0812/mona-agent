@@ -1996,6 +1996,7 @@ class AgentLoop:
         registered = False
         work_turn: WorkTurn | None = None
         work_turns = getattr(self.bus, "work_turns", None)
+        channel_turn_status = "unknown"
 
         try:
             async with lock, gate:
@@ -2079,6 +2080,7 @@ class AgentLoop:
                                 metadata=msg.metadata or {},
                             )
                         )
+                    channel_turn_status = "completed"
                     if msg.channel == "websocket":
                         turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
                         turn_usage = self._pending_turn_usage.pop(session_key, None)
@@ -2089,6 +2091,7 @@ class AgentLoop:
                             token_usage=turn_usage,
                         )
                 except asyncio.CancelledError:
+                    channel_turn_status = "interrupted"
                     logger.info("Task cancelled for session {}", session_key)
                     # Preserve partial context from the interrupted turn so
                     # the user does not lose tool results and assistant
@@ -2115,6 +2118,7 @@ class AgentLoop:
                         )
                     raise
                 except Exception as exc:
+                    channel_turn_status = "failed"
                     if work_turn is not None and work_turn.state == "stopping":
                         work_turn.cleanup_failed = True
                     logger.exception("Error processing message for session {}", session_key)
@@ -2134,6 +2138,12 @@ class AgentLoop:
                 finally:
                     if work_turn is not None:
                         work_turns.finish(work_turn.turn_id)
+                    if msg.metadata.get("_wants_channel_turn_end") is True:
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel, chat_id=msg.chat_id, content="",
+                            metadata={**msg.metadata, "_channel_turn_end": True,
+                                      "_channel_turn_status": channel_turn_status},
+                        ))
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages

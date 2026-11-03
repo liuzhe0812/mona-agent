@@ -11,7 +11,7 @@ from mona_interaction.app import create_app
 
 @pytest_asyncio.fixture
 async def client():
-    async with TestClient(TestServer(create_app())) as test_client:
+    async with TestClient(TestServer(create_app(demo=True))) as test_client:
         yield test_client
 
 
@@ -49,6 +49,21 @@ async def test_health_identifies_demo(client):
     assert health["mode"] == "demo"
     assert type(health["protocol_version"]) is int
     assert health["protocol_version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_service_does_not_generate_simulated_replies():
+    async with TestClient(TestServer(create_app())) as terminal:
+        async with terminal.get("/health") as response:
+            assert (await response.json())["mode"] == "unconfigured"
+        async with terminal.ws_connect("/ws") as ws:
+            await ws.send_json(command("input.text", "message-1", text="你好"))
+            result = await receive(ws)
+            assert result["type"] == "error"
+            await ws.send_json(command("session.sync", "sync-1"))
+            snapshot = await receive(ws)
+            assert snapshot["payload"]["records"] == []
+            assert snapshot["payload"]["mode"] == "unconfigured"
 
 
 @pytest.mark.asyncio

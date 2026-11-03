@@ -14,10 +14,11 @@ from urllib.parse import urlsplit
 from aiohttp import WSMsgType, web
 
 from . import __version__
+from .connector import ConnectorError, MonaConnector, project_record
 from .protocol import PROTOCOL_VERSION, ClientMessage, ProtocolError, event, parse_message
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
-STATIC_FILES = {"index.html", "app.js", "style.css", "mona-original.png"}
+STATIC_FILES = {"index.html", "app.js", "style.css", "mona-original.png", "performance-controller.js"}
 MAX_RECORDS = 100
 
 
@@ -26,6 +27,8 @@ class InputRecord:
     text: str
     state: str = "accepted"
     reply: str = ""
+    performance: dict | None = None
+    performance_status: str = "missing"
 
 
 @dataclass
@@ -34,17 +37,25 @@ class DemoSession:
     listeners: set[web.WebSocketResponse] = field(default_factory=set)
     pending_id: str | None = None
 
-    def snapshot(self, session_id: str) -> dict:
+    def snapshot(self, session_id: str, mode: str = "demo") -> dict:
         return event(
-            "session.snapshot", session_id, mode="demo", state="thinking" if self.pending_id else "idle",
+            "session.snapshot", session_id, mode=mode, state="thinking" if self.pending_id else "idle",
             pending_id=self.pending_id,
-            records=[{"message_id": key, "text": record.text, "state": record.state, "reply": record.reply}
+            records=[{"message_id": key, "text": record.text, "state": record.state, "reply": record.reply,
+                      **({"performance": record.performance, "performance_status": record.performance_status}
+                         if mode == "mona" else {})}
                      for key, record in self.records.items()],
         )
 
 
 SESSIONS = web.AppKey("sessions", dict[str, DemoSession])
 TASKS = web.AppKey("tasks", set[asyncio.Task])
+CONNECTOR = web.AppKey("connector", MonaConnector)
+DEMO = web.AppKey("demo", bool)
+
+
+def app_mode(app: web.Application) -> str:
+    return "mona" if CONNECTOR in app else ("demo" if app[DEMO] else "unconfigured")
 
 
 def _loopback(host: str) -> bool:
@@ -85,7 +96,7 @@ async def local_only(request: web.Request, handler):
 
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "module": "mona-interaction", "version": __version__,
-                              "protocol_version": PROTOCOL_VERSION, "mode": "demo"})
+                              "protocol_version": PROTOCOL_VERSION, "mode": app_mode(request.app)})
 
 
 async def static_file(request: web.Request) -> web.FileResponse:
@@ -126,16 +137,77 @@ async def demo_reply(session: DemoSession, command: ClientMessage) -> None:
                                       message_id=command.message_id, state="idle"))
 
 
+async def mona_reply(app: web.Application, session: DemoSession, command: ClientMessage) -> None:
+    record = session.records[command.message_id]
+
+    async def accepted() -> None:
+        await broadcast(session, event("input.accepted", command.session_id,
+                                      message_id=command.message_id, text=command.text))
+        await broadcast(session, event("turn.state", command.session_id,
+                                      message_id=command.message_id, state="thinking"))
+
+    try:
+        result = await app[CONNECTOR].request(command, accepted)
+        record.reply = result["reply"]
+        record.state = result["state"]
+        record.performance = result["performance"]
+        record.performance_status = result["performance_status"]
+        await broadcast(session, event("reply.completed", command.session_id,
+                                      message_id=command.message_id, text=record.reply,
+                                      performance=record.performance, performance_status=record.performance_status))
+    except ConnectorError as exc:
+        record.state = "unknown" if exc.result_unknown else "failed"
+        await broadcast(session, event("error", command.session_id, message_id=command.message_id,
+                                      code="result_unknown" if exc.result_unknown else "connection_failed",
+                                      message=str(exc)))
+    finally:
+        session.pending_id = None
+        await broadcast(session, event("turn.state", command.session_id,
+                                      message_id=command.message_id, state="idle"))
+
+
 async def accept_command(app: web.Application, session: DemoSession, command: ClientMessage,
                          ws: web.WebSocketResponse) -> None:
+    if command.type == "input.resolve":
+        if CONNECTOR not in app:
+            raise ProtocolError("当前没有可核对的 Mona 请求。")
+        try:
+            await app[CONNECTOR].acknowledge_unknown(command.session_id, command.resolve_id)
+        except ConnectorError as exc:
+            raise ProtocolError(str(exc)) from None
+        command = ClientMessage("session.sync", command.session_id, command.message_id)
     if command.type == "session.sync":
-        await ws.send_json(session.snapshot(command.session_id))
+        if CONNECTOR in app:
+            try:
+                records = await app[CONNECTOR].lookup(command.session_id)
+                if session.pending_id is None:
+                    session.records.clear()
+                    for row in records:
+                        projected = project_record(row)
+                        session.records[row["message_id"]] = InputRecord(
+                            projected["text"], projected["state"], projected["reply"],
+                            projected["performance"], projected["performance_status"],
+                        )
+                    pending = next((row for row in records if row["status"] == "accepted"), None)
+                    if pending is not None:
+                        session.pending_id = pending["message_id"]
+                        recovery = ClientMessage("input.text", command.session_id, pending["message_id"], pending["text"])
+                        task = asyncio.create_task(mona_reply(app, session, recovery))
+                        app[TASKS].add(task)
+                        task.add_done_callback(app[TASKS].discard)
+            except (ConnectorError, ValueError) as exc:
+                message = str(exc) if isinstance(exc, ConnectorError) else "回复格式异常，请查看原会话。"
+                await ws.send_json(event("error", command.session_id, code="sync_failed", message=message))
+                return
+        await ws.send_json(session.snapshot(command.session_id, app_mode(app)))
         return
+    if app_mode(app) == "unconfigured":
+        raise ProtocolError("请先完成与 Mona 的连接配置。")
     previous = session.records.get(command.message_id)
     if previous is not None:
         if previous.text != command.text:
             raise ProtocolError("这条消息的标识已用于其他内容，请重新发送。")
-        await ws.send_json(session.snapshot(command.session_id))
+        await ws.send_json(session.snapshot(command.session_id, app_mode(app)))
         return
     if session.pending_id is not None:
         raise ProtocolError("上一条内容仍在处理中，请等回复结束后再发送。")
@@ -143,11 +215,14 @@ async def accept_command(app: web.Application, session: DemoSession, command: Cl
         session.records.popitem(last=False)
     session.records[command.message_id] = InputRecord(command.text)
     session.pending_id = command.message_id
-    await broadcast(session, event("input.accepted", command.session_id,
-                                  message_id=command.message_id, text=command.text))
-    await broadcast(session, event("turn.state", command.session_id,
-                                  message_id=command.message_id, state="thinking"))
-    task = asyncio.create_task(demo_reply(session, command))
+    if CONNECTOR in app:
+        task = asyncio.create_task(mona_reply(app, session, command))
+    else:
+        await broadcast(session, event("input.accepted", command.session_id,
+                                      message_id=command.message_id, text=command.text))
+        await broadcast(session, event("turn.state", command.session_id,
+                                      message_id=command.message_id, state="thinking"))
+        task = asyncio.create_task(demo_reply(session, command))
     app[TASKS].add(task)
     task.add_done_callback(app[TASKS].discard)
 
@@ -195,9 +270,12 @@ async def cleanup(app: web.Application) -> None:
             await task
 
 
-def create_app() -> web.Application:
+def create_app(connector: MonaConnector | None = None, *, demo: bool = False) -> web.Application:
     app = web.Application(middlewares=[local_only], client_max_size=40_000)
     app[SESSIONS], app[TASKS] = {}, set()
+    app[DEMO] = demo
+    if connector is not None:
+        app[CONNECTOR] = connector
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
     app.router.add_get("/", static_file)

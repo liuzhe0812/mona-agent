@@ -19,4 +19,4 @@ fi
 }
 "$venv_python" -m pip install -e "$project_dir"
 echo "Open http://127.0.0.1:17880/ . Press Ctrl+C to stop."
-exec "$venv_python" -m mona_interaction serve --host 127.0.0.1 --port 17880
+exec "$venv_python" -m mona_interaction serve --host 127.0.0.1 --port 17880 "$@"

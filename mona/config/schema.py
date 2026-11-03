@@ -54,6 +54,18 @@ class EmailOfflineSyncSettings(Base):
         return value
 
 
+class InteractionChannelConfig(Base):
+    """Optional local bridge for the independent character terminal."""
+
+    enabled: bool = False
+    host: Literal["127.0.0.1", "::1"] = "127.0.0.1"
+    port: int = Field(default=17881, ge=1, le=65535)
+    device_id: str = Field(default="companion", pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    streaming: Literal[False] = False
+    send_progress: bool = False
+    show_reasoning: bool = False
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels.
 
@@ -63,6 +75,8 @@ class ChannelsConfig(Base):
     """
 
     model_config = ConfigDict(extra="allow")
+
+    interaction: InteractionChannelConfig = Field(default_factory=InteractionChannelConfig)
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))

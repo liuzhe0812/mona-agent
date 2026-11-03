@@ -165,6 +165,7 @@ design-assets/
 /tests/agent/*
 !/tests/agent/test_ask_user_question.py
 !/tests/agent/test_context_prompt_cache.py
+!/tests/agent/test_interaction_response_contract.py
 !/tests/agent/test_runner_governance.py
 !/tests/agent/test_agent_deletion.py
 !/tests/agent/test_video_model_binding.py
@@ -290,6 +291,8 @@ design-assets/
 !tests/evals/canvas/**
 !/tests/channels/
 /tests/channels/*
+!/tests/channels/test_interaction_channel.py
+!/tests/channels/test_interaction_terminal.py
 !/tests/channels/test_video_model_binding.py
 !tests/channels/test_websocket_channel.py
 !tests/channels/test_agent_model_binding.py

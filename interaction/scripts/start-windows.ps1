@@ -1,3 +1,8 @@
+param(
+    [string]$ConnectionFile,
+    [switch]$Demo
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -30,5 +35,8 @@ if ($LASTEXITCODE -ne 0) { throw "The project virtual environment requires Pytho
 if ($LASTEXITCODE -ne 0) { throw "Could not install Mona Interaction into the project virtual environment." }
 
 Write-Host "Open http://127.0.0.1:17880/ . Press Ctrl+C to stop."
-& $venvPython -m mona_interaction serve --host 127.0.0.1 --port 17880
+$serveArgs = @("-m", "mona_interaction", "serve", "--host", "127.0.0.1", "--port", "17880")
+if ($ConnectionFile) { $serveArgs += @("--connection-file", $ConnectionFile) }
+if ($Demo) { $serveArgs += "--demo" }
+& $venvPython @serveArgs
 exit $LASTEXITCODE
