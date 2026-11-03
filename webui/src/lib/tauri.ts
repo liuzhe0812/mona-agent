@@ -1,4 +1,6 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { getHostedPlatform, hostedPlatformFetch, invokeHostedPlatform } from "./hosted-platform";
+import { invokeHostedCanvas } from "./hosted-canvas-storage";
 
 declare global {
   interface Window {
@@ -9,6 +11,10 @@ declare global {
 
 export function isTauri(): boolean {
   return !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
+}
+
+export function hasWorkspaceStorage(): boolean {
+  return isTauri() || getHostedPlatform() !== null;
 }
 
 interface LocalHttpBridgeResponse {
@@ -91,6 +97,7 @@ function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promis
 }
 
 export async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
+  if (getHostedPlatform()) return hostedPlatformFetch(url, init);
   if (isTauri()) {
     if (isLoopbackHttpUrl(url)) {
       const signal = init?.signal;
@@ -153,6 +160,10 @@ export async function httpFetch(url: string, init?: RequestInit): Promise<Respon
 }
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (getHostedPlatform() && (cmd.startsWith("workspace_canvas_") || cmd === "move_to_trash")) {
+    return invokeHostedCanvas<T>(cmd, args ?? {});
+  }
+  if (getHostedPlatform()) return invokeHostedPlatform<T>(cmd, args);
   if (!isTauri()) {
     throw new Error("Not running in Tauri environment");
   }
@@ -668,9 +679,9 @@ export async function revealItemInDir(path: string): Promise<void> {
 /** Move a file to the OS recycle bin (recoverable). Throws when the trash
  *  is unavailable — callers must surface the error, never fall back to a
  *  permanent delete. */
-export async function moveToTrash(path: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>("move_to_trash", { path });
+export async function moveToTrash(path: string, expectedSha256?: string): Promise<void> {
+  if (!hasWorkspaceStorage()) return;
+  return invoke<void>("move_to_trash", expectedSha256 === undefined ? { path } : { path, expectedSha256 });
 }
 
 /** Open an external http(s) URL in the user's default web browser.

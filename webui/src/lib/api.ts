@@ -38,6 +38,7 @@ import {
   httpFetch,
 } from "./tauri";
 import { getServicesHttpBase, resetServicesHttpBase } from "./services-http-base";
+import { getHostedPlatform } from "./hosted-platform";
 
 export { getServicesHttpBase, resetServicesHttpBase };
 
@@ -56,6 +57,8 @@ let _apiBase: string | null = null;
 let _gatewayHttpBase: string | null = null;
 
 export async function getApiBase(): Promise<string> {
+  const hosted = getHostedPlatform();
+  if (hosted) return hosted.apiBase;
   if (_apiBase) return _apiBase;
   if (isTauri()) {
     const status = await getGatewayStatus();
@@ -74,6 +77,8 @@ export async function getApiBase(): Promise<string> {
  * for routes that are registered on the gateway but NOT on the websocket
  * server (e.g. /email/*). See project_rules.md "端口架构" for details. */
 export async function getGatewayHttpBase(): Promise<string> {
+  const hosted = getHostedPlatform();
+  if (hosted) return hosted.apiBase;
   if (_gatewayHttpBase) return _gatewayHttpBase;
   if (isTauri()) {
     let status = await getGatewayStatus();
@@ -106,6 +111,8 @@ export function resetApiBase(): void {
  * components where an async call is impractical. By the time media URLs
  * are rendered the bootstrap has completed, so the cache is populated. */
 export function getCachedApiBase(): string {
+  const hosted = getHostedPlatform();
+  if (hosted) return hosted.apiBase;
   return _apiBase ?? "";
 }
 

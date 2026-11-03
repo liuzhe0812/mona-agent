@@ -1,5 +1,6 @@
 import { getServicesHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import type {
   DocumentVersion,
   OfficeCheckpointReceipt,
@@ -233,7 +234,9 @@ export async function deleteOfficeSession(
 export async function getOfficeSocketUrl(ticket: string): Promise<string> {
   const base = await getServicesHttpBase();
   if (!base) throw new OfficeClientError("EDITOR_UNAVAILABLE", "文档编辑服务未启动。", true);
-  const url = new URL("/api/office/ws", base);
+  const url = getHostedPlatform()
+    ? new URL(`${base}/api/office/ws`)
+    : new URL("/api/office/ws", base);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("ticket", ticket);
   return url.toString();

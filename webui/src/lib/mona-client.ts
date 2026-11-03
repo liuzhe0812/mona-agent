@@ -1663,7 +1663,7 @@ export class MonaClient {
           // fall through to retry with current URL
         }
       }
-      this.connect();
+      if (!this.intentionallyClosed) this.connect();
     }, delay);
   }
 

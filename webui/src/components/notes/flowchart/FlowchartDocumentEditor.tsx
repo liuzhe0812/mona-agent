@@ -130,6 +130,7 @@ import {
   stripThemeProvidedStyles,
 } from "./flowchart-themes";
 import { getNotesVaultPath, isTauri } from "@/lib/tauri";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { cn } from "@/lib/utils";
 import {
   flowchartCanvasHelpers,
@@ -708,7 +709,7 @@ export function FlowchartDocumentEditor({
   }, [qualityDocumentHash]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() && !getHostedPlatform()) return;
     const instances = canvasAgentEditors.get(note.id) ?? [];
     canvasAgentEditors.set(note.id, [...instances.filter((id) => id !== editorInstanceId), editorInstanceId]);
     return () => {
@@ -719,15 +720,15 @@ export function FlowchartDocumentEditor({
   }, [editorInstanceId, note.id]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() && !getHostedPlatform()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let unlistenCancel: (() => void) | undefined;
     const requests = new Map<string, { controller: AbortController; result?: Record<string, unknown> }>();
     void (async () => {
       const [{ listen }, { invoke }] = await Promise.all([
-        import("@tauri-apps/api/event"),
-        import("@tauri-apps/api/core"),
+        import("@/lib/platform-events"),
+        import("@/lib/platform-invoke"),
       ]);
       if (disposed) return;
       const stopCancelling = await listen<{ requestId: string }>("canvas-agent-cancel", ({ payload }) => {

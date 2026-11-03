@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import type { DeliveredFile } from "@/lib/types";
 
 export interface ArtifactPreviewTab {
@@ -246,7 +247,7 @@ export function ArtifactSidebar({
                               aria-hidden
                               className="h-8 w-8 rounded-md bg-no-repeat"
                               style={{
-                                backgroundImage: `url(${APP_PICKER_SPRITE})`,
+                                backgroundImage: `url(${getHostedPlatform() ? "/work" : ""}${APP_PICKER_SPRITE})`,
                                 backgroundPosition: item.spritePosition,
                                 backgroundSize: "150px 100px",
                               }}

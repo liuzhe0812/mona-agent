@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import * as abcjs from "abcjs";
 
 import { isTauri } from "@/lib/tauri";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 
 export const LOCAL_SOUNDFONT_URL = "/soundfonts/FluidR3_GM";
 export const MIN_BPM = 40;
@@ -235,7 +236,7 @@ export function useAbcScorePreview({
       await synth.init({
         visualObj: tune,
         options: {
-          soundFontUrl: LOCAL_SOUNDFONT_URL,
+          soundFontUrl: `${getHostedPlatform() ? "/work" : ""}${LOCAL_SOUNDFONT_URL}`,
           soundFontVolumeMultiplier: 1,
           qpm: bpm,
         },

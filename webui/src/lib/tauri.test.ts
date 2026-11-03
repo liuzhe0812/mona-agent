@@ -10,6 +10,7 @@ import {
   httpFetch,
   listWorkspaceCanvases,
   migrateLegacyCanvases,
+  moveToTrash,
   openWorkspaceCanvasFile,
   readWorkspaceCanvas,
   saveNoteImageData,
@@ -89,6 +90,12 @@ describe("createNoteFromChat", () => {
       noteIds: ["note-1", "note-2"],
       vaultToken, expected,
     });
+  });
+
+  it("keeps the native trash command arguments unchanged when there is no file digest", async () => {
+    mocks.invoke.mockResolvedValueOnce(undefined);
+    await moveToTrash("D:\\workspace\\result.txt");
+    expect(mocks.invoke).toHaveBeenCalledWith("move_to_trash", { path: "D:\\workspace\\result.txt" });
   });
 
   it("saves one canvas artifact and notifies the workspace", async () => {

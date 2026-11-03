@@ -2,6 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { MindElixirInstance, NodeObj } from "mind-elixir";
 
 import { isTauri } from "@/lib/tauri";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { waitForCanvasRender, waitForCanvasTask } from "../flowchart/canvas-render-task";
 import { computeBaseHash, serializeMindMap, type MindMapNode } from "./mindmap-outline";
 import { applyPatch, parsePatch } from "./mindmap-patch";
@@ -33,7 +34,7 @@ export function useMindMapCanvasAgent(options: MindMapCanvasAgentOptions): void 
   const { noteId } = options;
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() && !getHostedPlatform()) return;
     const editor = Symbol(noteId);
     editors.set(noteId, [...(editors.get(noteId) ?? []), editor]);
     let disposed = false;
@@ -42,7 +43,7 @@ export function useMindMapCanvasAgent(options: MindMapCanvasAgentOptions): void 
     const requests = new Map<string, { controller: AbortController; result?: Record<string, unknown> }>();
     void (async () => {
       const [{ listen }, { invoke }] = await Promise.all([
-        import("@tauri-apps/api/event"), import("@tauri-apps/api/core"),
+        import("@/lib/platform-events"), import("@/lib/platform-invoke"),
       ]);
       if (disposed) return;
       const register = async <T,>(event: string, handler: (event: { payload: T }) => void | Promise<void>) => {

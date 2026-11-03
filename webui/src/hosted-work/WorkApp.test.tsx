@@ -1,154 +1,168 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MonaClient } from "@/lib/mona-client";
+import type { ChatSummary } from "@/lib/types";
+import { getHostedPlatform } from "@/lib/hosted-platform";
+import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
+import { useOfficeSessionStore } from "@/components/office/office-session-store";
 import { WorkApp } from "./WorkApp";
-import type { TurnInput, WorkRun } from "./client";
 
-const SID = "a".repeat(32);
-const RID = "b".repeat(32);
-const session = { id: SID, title: "资料整理", created: 1, updated: 1 };
+const fixtures = vi.hoisted(() => ({ clients: [] as MonaClient[], thread: vi.fn(), createHostedClient: vi.fn(),
+  sessions: new Map<string, ChatSummary[]>(), createChat: vi.fn() }));
+vi.mock("./runtime", async original => ({ ...await original<typeof import("./runtime")>(),
+  createHostedClient: fixtures.createHostedClient }));
+vi.mock("@/components/thread/ThreadShell", async () => {
+  const { useClient } = await import("@/providers/ClientProvider");
+  return { ThreadShell: (props: { title: string; session: unknown }) => {
+    const { client } = useClient();
+    fixtures.thread({ ...props, client });
+    return <section data-testid="shared-thread-shell">{props.title}</section>;
+  } };
+});
+vi.mock("@/components/ChatList", () => ({ ChatList: (props: { sessions: Array<{ title: string }> }) =>
+  <div data-testid="shared-chat-list">{props.sessions.map(item => item.title).join(",")}</div> }));
+vi.mock("@/hooks/useSessions", async original => {
+  const actual = await original<typeof import("@/hooks/useSessions")>();
+  const { useClientOptional } = await import("@/providers/ClientProvider");
+  return { ...actual, useSessions: () => {
+    const { token } = useClientOptional();
+    return { sessions: fixtures.sessions.get(token) ?? [{ key: `websocket:${token}`, chatId: token, title: token === "synthetic-A" ? "A的会话" : "B的会话",
+      channel: "websocket", createdAt: null, updatedAt: null, preview: "" }], loading: false, loaded: true,
+      error: null, refresh: vi.fn(), createChat: fixtures.createChat, branchChat: vi.fn(), deleteChat: vi.fn() };
+  } };
+});
+vi.mock("@/hooks/useSidebarState", async original => {
+  const actual = await original<typeof import("@/hooks/useSidebarState")>();
+  return { ...actual, useSidebarState: () => ({ state: actual.DEFAULT_SIDEBAR_STATE, update: vi.fn(), loading: false }) };
+});
+
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { "Content-Type": "application/json" },
 });
-let runs: WorkRun[];
-let posts: TurnInput[];
-let rejectFirst: boolean;
-let fileReady: boolean;
-const input: TurnInput = { request_id: RID, model_id: "official", text: "整理这份资料", attachment_ids: [] };
-
-beforeEach(() => {
-  sessionStorage.clear(); runs = []; posts = []; rejectFirst = false; fileReady = false;
-  vi.stubGlobal("fetch", vi.fn(async (raw: string, init?: RequestInit) => {
-    const path = String(raw);
-    if (path === "/api/work/models") return response({ models: [{ id: "official", label: "平台模型", source: "mona" }], max_file_bytes: 1024 });
-    if (path === "/api/work/sessions" && init?.method === "POST") return response(session, 201);
-    if (path === "/api/work/sessions") return response({ sessions: [session] });
-    if (path === `/api/work/sessions/${SID}`) return response({ ...session, runs,
-      files: fileReady ? [{ id: "d".repeat(32), name: "结果.txt", size: 1, sha256: "e".repeat(64) }] : [] });
-    if (path === `/api/work/sessions/${SID}/runs`) {
-      const value = JSON.parse(String(init?.body)) as TurnInput; posts.push(value);
-      if (rejectFirst && posts.length === 1) throw new TypeError("lost response");
-      const run: WorkRun = { id: value.request_id, session_id: SID, status: "running", input: value, result: {} };
-      runs = [run]; return response(run, 202);
-    }
-    if (path.includes("/events?")) {
-      const run = { ...runs.at(-1)!, status: "completed", result: { content: "已完成整理", workspace_saved: true } };
-      runs = [run]; fileReady = true;
-      return response({ run, events: [{ seq: 1, kind: "delta", data: { text: "已完成整理" } }], has_more: false });
-    }
-    return response({ message: "unexpected fixture request" }, 404);
-  }));
-});
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear(); });
-
-function loggedIn(pending?: { session_id: string; input: TurnInput }) {
-  sessionStorage.setItem("mona-hosted-work-v1", JSON.stringify({ token: "account-token", selected: SID, pending }));
-  return render(<WorkApp />);
+function saveAccount(token: string) {
+  sessionStorage.setItem("mona-website-session-v1", JSON.stringify({ token, user: { id: token } }));
+  sessionStorage.setItem("mona-hosted-work-v1", JSON.stringify({ token, selected: token }));
 }
 
-describe("independent online Work surface", () => {
-  it("adopts the website session without reusing another account's work selection", async () => {
-    sessionStorage.setItem("mona-hosted-work-v1", JSON.stringify({ token: "old-account", selected: SID }));
-    sessionStorage.setItem("mona-website-session-v1", JSON.stringify({ token: "website-account", user: { id: "1" } }));
-    render(<WorkApp />);
-    await screen.findByText("今天想完成什么？");
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
-    const call = vi.mocked(fetch).mock.calls.find(([url]) => url === "/api/work/sessions");
-    expect(new Headers(call?.[1]?.headers).get("Authorization")).toBe("Bearer website-account");
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === `/api/work/sessions/${SID}`)).toBe(false);
+beforeEach(() => {
+  vi.clearAllMocks(); sessionStorage.clear(); fixtures.clients.length = 0; fixtures.sessions.clear();
+  fixtures.createHostedClient.mockImplementation(async () => {
+    const client = new MonaClient({ url: "ws://localhost/fixture" });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "onStatus").mockImplementation(handler => { handler("open"); return () => undefined; });
+    vi.spyOn(client, "sendMessage");
+    vi.spyOn(client, "close"); fixtures.clients.push(client);
+    return client;
+  });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ message: "已退出" })));
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+describe("hosted desktop conversation composition", () => {
+  it("mounts the existing ThreadShell and ChatList under a real MonaClient", async () => {
+    saveAccount("synthetic-A");
+    const view = render(<WorkApp />);
+    expect(await screen.findByTestId("shared-thread-shell")).toHaveTextContent("A的会话");
+    expect(screen.getByTestId("shared-chat-list")).toHaveTextContent("A的会话");
+    expect(fixtures.thread.mock.lastCall?.[0].client).toBeInstanceOf(MonaClient);
+    expect(getHostedPlatform()?.token).toBe("synthetic-A");
+    view.unmount();
+    expect(fixtures.clients[0].close).toHaveBeenCalledOnce();
+    expect(getHostedPlatform()).toBeNull();
   });
 
-  it("retains login after unconfirmed logout and clears it only after upstream success", async () => {
-    const original = fetch;
-    let reject = true;
-    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => url === "/api/work/auth/logout"
-      ? Promise.resolve(response(reject ? { message: "退出未确认" } : { message: "logged out" }, reject ? 503 : 200)) : original(url, init)));
-    loggedIn();
-    await waitFor(() => expect(screen.getByLabelText("任务内容")).not.toBeDisabled());
+  it("selects an existing session or creates one real empty chat once without sending a model request", async () => {
+    saveAccount("synthetic-A");
+    sessionStorage.setItem("mona-hosted-work-v1", JSON.stringify({ token: "synthetic-A", selected: "removed" }));
+    const existing = render(<WorkApp />);
+    await waitFor(() => expect(fixtures.thread.mock.lastCall?.[0].session?.chatId).toBe("synthetic-A"));
+    expect(fixtures.createChat).not.toHaveBeenCalled();
+    existing.unmount();
+
+    const id = "a".repeat(32);
+    fixtures.sessions.set("synthetic-A", []);
+    fixtures.createChat.mockImplementationOnce(async () => {
+      fixtures.sessions.set("synthetic-A", [{ key: `websocket:${id}`, chatId: id, title: "",
+        channel: "websocket", createdAt: null, updatedAt: null, preview: "" }]);
+      return id;
+    });
+    const view = render(<WorkApp />);
+    await waitFor(() => expect(fixtures.thread.mock.lastCall?.[0].session?.chatId).toBe(id));
+    expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!).selected).toBe(id);
+    view.rerender(<WorkApp />);
+    await act(async () => { window.dispatchEvent(new Event("pageshow")); });
+    expect(fixtures.createChat).toHaveBeenCalledOnce();
+    expect(fixtures.clients.every(client => vi.mocked(client.sendMessage).mock.calls.length === 0)).toBe(true);
+  });
+
+  it("does not activate an old account's empty chat after the account changes", async () => {
+    fixtures.sessions.set("synthetic-A", []);
+    let finishCreate!: (value: string) => void;
+    fixtures.createChat.mockImplementationOnce(() => new Promise<string>(resolve => { finishCreate = resolve; }));
+    saveAccount("synthetic-A"); render(<WorkApp />);
+    await waitFor(() => expect(fixtures.createChat).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId("shared-thread-shell")).not.toBeInTheDocument();
+    expect(screen.getByText("正在打开会话…")).toBeInTheDocument();
+    await act(async () => {
+      saveAccount("synthetic-B"); window.dispatchEvent(new Event("mona-account-changed"));
+    });
+    await waitFor(() => expect(fixtures.thread.mock.lastCall?.[0].session?.chatId).toBe("synthetic-B"));
+    await act(async () => { finishCreate("a".repeat(32)); });
+    expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!)).toMatchObject({ token: "synthetic-B", selected: "synthetic-B" });
+    expect(fixtures.thread.mock.lastCall?.[0].session?.chatId).toBe("synthetic-B");
+  });
+
+  it("keeps a login after an unconfirmed logout and clears private mirrors only after success", async () => {
+    let rejected = true;
+    vi.stubGlobal("fetch", vi.fn(async () => response(rejected ? { message: "退出未确认" } : { message: "已退出" }, rejected ? 503 : 200)));
+    saveAccount("synthetic-A"); render(<WorkApp />);
+    await screen.findByTestId("shared-thread-shell");
+    sessionStorage.setItem("mona.office.sessions.v1:websocket:old", "private-office-filename");
     fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
     await screen.findByRole("dialog");
-    expect(sessionStorage.getItem("mona-hosted-work-v1")).not.toBeNull();
+    expect(getHostedPlatform()?.token).toBe("synthetic-A");
+    expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    reject = false;
+    rejected = false;
     fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
     await screen.findByRole("button", { name: "登录并开始" });
     expect(sessionStorage.getItem("mona-hosted-work-v1")).toBeNull();
+    expect(sessionStorage.getItem("mona-website-session-v1")).toBeNull();
+    expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).toBeNull();
+    expect(getHostedPlatform()).toBeNull();
   });
 
-  it("offers account login but no API configuration or desktop modules", () => {
+  it("does not let an old pending logout clear a newly selected account", async () => {
+    let finishLogout!: (value: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finishLogout = resolve; })));
+    saveAccount("synthetic-A"); render(<WorkApp />);
+    await screen.findByTestId("shared-thread-shell");
+    sessionStorage.setItem("mona.office.sessions.v1:websocket:old", "private-office-filename");
+    useFilePreviewStore.setState({ file: {
+      name: "A私有文件.txt", path: "A私有文件.txt", absolute_path: "/workspace/A私有文件.txt",
+      size: 1, size_human: "1 B", mime: "text/plain",
+    } });
+    useOfficeSessionStore.setState({ sessions: { old: { displayName: "A私有文档" } as never } });
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    await act(async () => {
+      saveAccount("synthetic-B"); window.dispatchEvent(new Event("mona-account-changed"));
+    });
+    await waitFor(() => expect(getHostedPlatform()?.token).toBe("synthetic-B"));
+    expect(screen.getByTestId("shared-chat-list")).toHaveTextContent("B的会话");
+    expect(screen.getByTestId("shared-chat-list")).not.toHaveTextContent("A的会话");
+    expect(useFilePreviewStore.getState().file).toBeNull();
+    expect(useOfficeSessionStore.getState().sessions).toEqual({});
+    expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).toBeNull();
+    await act(async () => { finishLogout(response({ message: "已退出" })); });
+    expect(getHostedPlatform()?.token).toBe("synthetic-B");
+    expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!).token).toBe("synthetic-B");
+  });
+
+  it("keeps website account login independent of desktop modules or API secrets", () => {
     render(<WorkApp />);
     expect(screen.getByLabelText("账号")).toBeInTheDocument();
     expect(screen.getByLabelText("密码")).toBeInTheDocument();
-    expect(screen.queryByLabelText(/API Key/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: "运维" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "开发" })).toBeNull();
-  });
-
-  it("loads history without dispatching a model request", async () => {
-    loggedIn();
-    await waitFor(() => expect(screen.getByLabelText("任务内容")).not.toBeDisabled());
-    expect(posts).toHaveLength(0);
-    expect(screen.getByRole("combobox", { name: "平台模型" })).toBeInTheDocument();
-  });
-
-  it("keeps failed-send text and resubmits only the original request identity", async () => {
-    rejectFirst = true; loggedIn();
-    await waitFor(() => expect(screen.getByLabelText("任务内容")).not.toBeDisabled());
-    fireEvent.change(screen.getByLabelText("任务内容"), { target: { value: "整理这份资料" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await screen.findByRole("dialog");
-    expect(posts).toHaveLength(1);
-    expect(screen.getByLabelText("任务内容")).toHaveValue("整理这份资料");
-    expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!).pending.input.request_id).toBe(posts[0].request_id);
-    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    fireEvent.click(screen.getByRole("button", { name: "核对原请求" }));
-    await waitFor(() => expect(posts).toHaveLength(2));
-    expect(posts[1]).toEqual(posts[0]);
-    await screen.findByRole("button", { name: "结果.txt" });
-    expect(screen.getByLabelText("任务内容")).toHaveValue("");
-  });
-
-  it("observes an accepted pending request after refresh without posting again", async () => {
-    runs = [{ id: RID, session_id: SID, status: "completed", input, result: { content: "已保存" } }];
-    loggedIn({ session_id: SID, input });
-    await screen.findByText("已保存");
-    await waitFor(() => expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!).pending).toBeNull());
-    expect(posts).toHaveLength(0);
-  });
-
-  it("retains unknown task state and disables starting another execution", async () => {
-    runs = [{ id: RID, session_id: SID, status: "unknown", input, result: { message: "结果待核对" } }];
-    loggedIn();
-    await screen.findByText(/已暂停新的执行/);
-    fireEvent.change(screen.getByLabelText("任务内容"), { target: { value: "继续" } });
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-    expect(posts).toHaveLength(0);
-  });
-
-  it("does not render a failed session query as an empty account", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ message: "读取失败" }, 503)));
-    loggedIn();
-    await screen.findByRole("dialog");
-    expect(screen.queryByText("还没有会话")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    expect(screen.getByRole("button", { name: "重新读取" })).toBeInTheDocument();
-  });
-
-  it("keeps execution disabled when no independent platform model is configured", async () => {
-    const original = fetch;
-    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => url === "/api/work/models"
-      ? Promise.resolve(response({ models: [], max_file_bytes: 1024 })) : original(url, init)));
-    loggedIn();
-    await screen.findByText(/在线模型尚未开放/);
-    fireEvent.change(screen.getByLabelText("任务内容"), { target: { value: "开始任务" } });
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-    expect(posts).toHaveLength(0);
-  });
-
-  it("cancels observation on unmount without cancelling the server task", async () => {
-    const view = loggedIn();
-    await waitFor(() => expect(screen.getByLabelText("任务内容")).not.toBeDisabled());
-    await act(async () => view.unmount());
-    expect(posts).toHaveLength(0);
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/stop"))).toBe(false);
+    expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
+    expect(getHostedPlatform()).toBeNull();
   });
 });

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.build.json && vite build && npm --prefix office-editor run build",
+    "build:hosted": "node scripts/build-hosted-work.mjs",
     "build:tauri": "tsc -p tsconfig.build.json && vite build --mode tauri && npm --prefix office-editor run build:tauri",
     "preview": "vite preview",
     "test": "vitest run",

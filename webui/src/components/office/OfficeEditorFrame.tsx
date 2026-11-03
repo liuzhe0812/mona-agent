@@ -1,6 +1,7 @@
 import { forwardRef } from "react";
 
 import type { OfficeDocumentType } from "./types";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 
 interface OfficeEditorFrameProps {
   documentType: OfficeDocumentType;
@@ -26,7 +27,7 @@ export const OfficeEditorFrame = forwardRef<HTMLIFrameElement, OfficeEditorFrame
     return (
       <iframe
         ref={ref}
-        src={ENTRY_PATHS[documentType]}
+        src={getHostedPlatform() ? `/work${ENTRY_PATHS[documentType]}` : ENTRY_PATHS[documentType]}
         title={`${DOCUMENT_LABELS[documentType]}编辑器`}
         sandbox="allow-same-origin allow-scripts"
         onLoad={onLoad}

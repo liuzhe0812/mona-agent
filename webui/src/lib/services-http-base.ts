@@ -1,4 +1,5 @@
 import { getServicesStatus, isTauri } from "./tauri";
+import { getHostedPlatform } from "./hosted-platform";
 
 let _servicesHttpBase: string | null = null;
 
@@ -9,6 +10,8 @@ let _servicesHttpBase: string | null = null;
  * ``getGatewayHttpBase()``: caches the base and lazily starts the services
  * process when it is not running. */
 export async function getServicesHttpBase(): Promise<string> {
+  const hosted = getHostedPlatform();
+  if (hosted) return hosted.apiBase;
   if (_servicesHttpBase) return _servicesHttpBase;
   if (isTauri()) {
     let status = await getServicesStatus();

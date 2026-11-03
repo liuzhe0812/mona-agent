@@ -1,53 +1,113 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Download, LogOut, MessageSquare, Paperclip, Plus, Send, Square, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Archive, ArrowLeft, LoaderCircle, LogOut, Plus } from "lucide-react";
+
+import { ChatList } from "@/components/ChatList";
+import { DeleteConfirm } from "@/components/DeleteConfirm";
+import { RenameChatDialog } from "@/components/RenameChatDialog";
+import { ThreadShell } from "@/components/thread/ThreadShell";
+import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
+import { useOfficeSessionStore } from "@/components/office/office-session-store";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { login, newRequestId, WorkApiError, WorkClient, type PendingTurn, type SessionDetail,
-  type WorkFile, type WorkModel, type WorkRun, type WorkSession } from "./client";
+import { useSessions, sessionTitle } from "@/hooks/useSessions";
+import { isSessionUnread, markAllSessionsRead, markSessionRead, useSidebarState } from "@/hooks/useSidebarState";
+import { resetApiBase } from "@/lib/api";
+import { configureHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
+import { OfficeClientError } from "@/lib/office-client";
+import type { MonaClient } from "@/lib/mona-client";
+import type { ConnectionStatus } from "@/lib/types";
+import { useWorkspaceStore } from "@/lib/workspace-store";
+import { ClientProvider, useClient, type RuntimeStatus } from "@/providers/ClientProvider";
+import { login, WorkApiError, WorkClient, type PendingTurn } from "./client";
+import { clearHostedClientIdentity, createHostedClient } from "./runtime";
 
 const SESSION_KEY = "mona-hosted-work-v1";
+const WEBSITE_SESSION_KEY = "mona-website-session-v1";
 type Saved = { token: string; selected?: string; pending?: PendingTurn | null; creating?: string | null };
+const validToken = (value: unknown): value is string => typeof value === "string" && value.length > 0
+  && value.length <= 8192 && !/[^\x21-\x7e]/.test(value);
+
 function loadSaved(): Saved {
   try {
     const work = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
-    const website = JSON.parse(sessionStorage.getItem("mona-website-session-v1") || "null");
-    if (typeof website?.token === "string" && website.token && typeof website?.user?.id === "string") {
+    const website = JSON.parse(sessionStorage.getItem(WEBSITE_SESSION_KEY) || "null");
+    if (validToken(website?.token) && typeof website?.user?.id === "string") {
       return work?.token === website.token ? work : { token: website.token };
     }
-    return work || { token: "" };
-  }
-  catch { return { token: "" }; }
+    return validToken(work?.token) ? work : { token: "" };
+  } catch { return { token: "" }; }
 }
-function save(value: Saved) { sessionStorage.setItem(SESSION_KEY, JSON.stringify(value)); }
-function active(run?: WorkRun) { return run?.status === "running" || run?.status === "cancelling"; }
-const statusText: Record<string, string> = { running: "正在处理", cancelling: "正在停止", completed: "已完成",
-  failed: "未完成", cancelled: "已停止", unknown: "结果待核对", interrupted: "已中断" };
+
+function clearHostedViewState() {
+  useOfficeSessionStore.getState().clear();
+  useWorkspaceStore.getState().setWorkspacePath("");
+  useFilePreviewStore.getState().close();
+  useFilePreviewStore.setState({
+    workspaceCollapsed: true, treeCollapsedByOwner: {}, treeExpansionInitializedByOwner: {},
+    artifactBaseline: null, viewedArtifactPaths: new Set(), deletedArtifactPaths: new Set(),
+  });
+  for (const key of Object.keys(sessionStorage)) {
+    if (key.startsWith("mona.office.sessions.v1:")) sessionStorage.removeItem(key);
+  }
+  resetApiBase();
+}
 
 export function WorkApp() {
   const [saved, setSaved] = useState<Saved>(loadSaved);
   const [error, setError] = useState("");
   const report = useCallback((value: unknown) => {
     if (value instanceof DOMException && value.name === "AbortError") return;
-    setError(value instanceof WorkApiError ? value.message : "操作未能完成，已有内容保留，请稍后重试。");
+    setError(value instanceof WorkApiError || value instanceof HostedPlatformError || value instanceof OfficeClientError
+      ? value.message : "操作未能确认，已有内容保留，请核对后重试。");
   }, []);
   const updateSaved = useCallback((patch: Partial<Saved>) => setSaved(previous => {
-    const next = { ...previous, ...patch }; save(next); return next;
+    const next = { ...previous, ...patch };
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
+    return next;
   }), []);
-  async function signOut() {
-    await new WorkClient(saved.token).logout();
-    sessionStorage.removeItem(SESSION_KEY);
-    try {
-      const website = JSON.parse(sessionStorage.getItem("mona-website-session-v1") || "null");
-      if (website?.token === saved.token) sessionStorage.removeItem("mona-website-session-v1");
-    } catch { sessionStorage.removeItem("mona-website-session-v1"); }
-    setSaved({ token: "" });
-  }
-  return <div className="min-h-dvh bg-background text-foreground">
+  const clearAccount = useCallback((token: string) => {
+    setSaved(previous => {
+      if (previous.token !== token) return previous;
+      clearHostedClientIdentity();
+      sessionStorage.removeItem(SESSION_KEY);
+      try {
+        const website = JSON.parse(sessionStorage.getItem(WEBSITE_SESSION_KEY) || "null");
+        if (website?.token === token) sessionStorage.removeItem(WEBSITE_SESSION_KEY);
+      } catch { sessionStorage.removeItem(WEBSITE_SESSION_KEY); }
+      return { token: "" };
+    });
+  }, []);
+  const unauthorized = useCallback((token: string) => {
+    clearAccount(token);
+    setError("登录已失效，请重新登录 Mona 账号。");
+  }, [clearAccount]);
+  const signOut = useCallback(async (token: string) => {
+    await new WorkClient(token).logout();
+    clearAccount(token);
+  }, [clearAccount]);
+
+  useEffect(() => {
+    const refresh = () => {
+      const next = loadSaved();
+      setSaved(previous => {
+        if (previous.token === next.token) return previous;
+        clearHostedClientIdentity();
+        return next;
+      });
+    };
+    window.addEventListener("mona-account-changed", refresh);
+    window.addEventListener("pageshow", refresh);
+    return () => {
+      window.removeEventListener("mona-account-changed", refresh);
+      window.removeEventListener("pageshow", refresh);
+    };
+  }, []);
+
+  return <div className="h-dvh min-h-0 bg-background text-foreground">
     {saved.token
-      ? <Workspace key={saved.token} saved={saved} updateSaved={updateSaved} report={report} signOut={signOut} />
+      ? <HostedRuntime key={saved.token} saved={saved} updateSaved={updateSaved} report={report}
+          signOut={signOut} unauthorized={unauthorized} />
       : <Login onLogin={token => updateSaved({ token, selected: undefined, pending: null, creating: null })} report={report} />}
     <Dialog open={Boolean(error)} onOpenChange={open => !open && setError("")}>
       <DialogContent><DialogHeader><DialogTitle>操作未完成</DialogTitle><DialogDescription>{error}</DialogDescription></DialogHeader>
@@ -62,8 +122,8 @@ function Login({ onLogin, report }: { onLogin: (token: string) => void; report: 
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   return <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-6 px-6">
-    <div><p className="text-caption font-semibold tracking-widest text-muted-foreground">MONA · WORK</p>
-      <h1 className="mt-3 text-title font-semibold">让想法落地</h1>
+    <div><p className="text-caption font-semibold tracking-widest text-muted-foreground">MONA</p>
+      <h1 className="mt-3 text-title font-semibold">线上工作台</h1>
       <p className="mt-3 text-body text-muted-foreground">登录 Mona 账号，在独立工作区中完成任务。</p></div>
     <form className="flex flex-col gap-4" onSubmit={async event => {
       event.preventDefault(); if (busy) return; setBusy(true);
@@ -77,222 +137,212 @@ function Login({ onLogin, report }: { onLogin: (token: string) => void; report: 
   </main>;
 }
 
-type WorkspaceProps = { saved: Saved; updateSaved: (patch: Partial<Saved>) => void; report: (error: unknown) => void; signOut: () => Promise<void> };
-function Workspace({ saved, updateSaved, report, signOut }: WorkspaceProps) {
-  const client = useMemo(() => new WorkClient(saved.token), [saved.token]);
-  const [sessions, setSessions] = useState<WorkSession[]>([]);
-  const [models, setModels] = useState<WorkModel[]>([]);
-  const [modelId, setModelId] = useState("");
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [draft, setDraft] = useState(saved.pending?.input.text || "");
-  const [selectedFiles, setSelectedFiles] = useState<WorkFile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [retryLoad, setRetryLoad] = useState(0);
-  const [stream, setStream] = useState<Record<string, string>>({});
-  const [progress, setProgress] = useState("");
-  const [maxFileBytes, setMaxFileBytes] = useState(0);
-  const [failedUpload, setFailedUpload] = useState<{ id: string; file: File; sessionId: string } | null>(null);
-  const [pollFailed, setPollFailed] = useState(false);
-  const uploadInput = useRef<HTMLInputElement>(null);
-  const mutation = useRef(false);
+interface WorkspaceProps {
+  saved: Saved;
+  updateSaved: (patch: Partial<Saved>) => void;
+  report: (error: unknown) => void;
+  signOut: (token: string) => Promise<void>;
+  unauthorized: (token: string) => void;
+}
+
+function runtimeStatus(status: ConnectionStatus): RuntimeStatus {
+  return status === "open" ? "ready" : status === "error" ? "error" : "connecting";
+}
+
+function HostedRuntime(props: WorkspaceProps) {
+  const { saved, unauthorized } = props;
+  const [client, setClient] = useState<MonaClient | null>(null);
+  const [status, setStatus] = useState<RuntimeStatus>("connecting");
+  const [modelName, setModelName] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState(false);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    let mounted = true;
+    let current: MonaClient | null = null;
+    let unsubscribeStatus: (() => void) | undefined;
+    let unsubscribeModel: (() => void) | undefined;
+    const controller = new AbortController();
+    clearHostedViewState();
+    const release = configureHostedPlatform({ apiBase: "/api/work/desktop", token: saved.token,
+      onUnauthorized: () => unauthorized(saved.token) });
+    setStatus("connecting"); setConnectionError(false); setClient(null);
+    void createHostedClient(controller.signal).then(value => {
+      if (!mounted) { value.close(); return; }
+      current = value;
+      unsubscribeStatus = value.onStatus(next => { if (mounted) setStatus(runtimeStatus(next)); });
+      unsubscribeModel = value.onRuntimeModelUpdate(next => { if (mounted) setModelName(next); });
+      setClient(value);
+      value.connect();
+    }).catch(value => {
+      if (!mounted || controller.signal.aborted || value instanceof HostedPlatformError && value.status === 401) return;
+      setStatus("error"); setConnectionError(true);
+    });
+    return () => {
+      mounted = false; controller.abort();
+      unsubscribeStatus?.(); unsubscribeModel?.(); current?.close();
+      release(); clearHostedViewState();
+    };
+  }, [retry, saved.token, unauthorized]);
+
+  if (!client) return <main className="flex h-full flex-col items-center justify-center gap-4 px-6">
+    {connectionError
+      ? <><p className="text-body text-muted-foreground">工作台暂时无法连接，请稍后重试。</p>
+          <Button variant="outline" onClick={() => setRetry(value => value + 1)}>重试</Button></>
+      : <><LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden /><p className="text-body text-muted-foreground">正在打开线上工作台…</p></>}
+  </main>;
+  return <ClientProvider client={client} token={saved.token} modelName={modelName} runtimeStatus={status}
+    runtimeError={status === "error" ? "连接已中断，正在恢复会话。" : null}>
+    <Conversations {...props} onModelNameChange={setModelName} />
+  </ClientProvider>;
+}
+
+function Conversations({ saved, updateSaved, report, signOut, onModelNameChange }: WorkspaceProps & {
+  onModelNameChange: (value: string | null) => void;
+}) {
+  const { runtimeStatus: status } = useClient();
+  const { sessions, loading, loaded, error, refresh, createChat, branchChat, deleteChat } = useSessions();
+  const { state: sidebar, update: updateSidebar } = useSidebarState(sessions, loaded);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [pendingRename, setPendingRename] = useState<{ key: string; label: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ keys: string[]; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const creatingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const initializedEmptyRef = useRef(false);
   const selectedRef = useRef(saved.selected);
   selectedRef.current = saved.selected;
-  const lastRun = detail?.runs.at(-1);
-  const running = active(lastRun);
-  const blocked = lastRun?.status === "unknown";
-  const pending = saved.pending?.session_id === saved.selected ? saved.pending : null;
+  const selected = sessions.find(item => item.chatId === saved.selected) ?? null;
 
   useEffect(() => {
-    const controller = new AbortController(); setLoading(true); setLoadFailed(false);
-    void Promise.all([client.sessions(controller.signal), client.models(controller.signal)]).then(([list, catalog]) => {
-      if (controller.signal.aborted) return;
-      setSessions(list.sessions); setModels(catalog.models); setMaxFileBytes(catalog.max_file_bytes);
-      setModelId(previous => catalog.models.some(model => model.id === previous) ? previous : catalog.models[0]?.id || "");
-    }).catch(err => { if (!controller.signal.aborted) { setLoadFailed(true); report(err); } })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [client, report, retryLoad]);
-
-  useEffect(() => {
-    if (!saved.selected) { setDetail(null); return; }
-    const controller = new AbortController(); setDetail(null); setSelectedFiles([]); setPollFailed(false);
-    void client.session(saved.selected, controller.signal).then(value => {
-      if (!controller.signal.aborted) setDetail(value);
-    }).catch(err => { if (!controller.signal.aborted) { setLoadFailed(true); report(err); } });
-    return () => controller.abort();
-  }, [client, saved.selected, retryLoad, report]);
-
-  useEffect(() => {
-    if (!detail || !pending) return;
-    const accepted = detail.runs.find(run => run.id === pending.input.request_id);
-    if (accepted && JSON.stringify(accepted.input) === JSON.stringify(pending.input)) {
-      updateSaved({ pending: null }); setDraft(""); setSelectedFiles([]);
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const run = useCallback(async (action: () => Promise<unknown>) => {
+    try { await action(); } catch (value) { if (mountedRef.current) report(value); }
+  }, [report]);
+  const select = useCallback((key: string) => {
+    if (!mountedRef.current) return;
+    const session = sessions.find(item => item.key === key);
+    if (!session) return;
+    updateSaved({ selected: session.chatId });
+    void run(async () => {
+      if (!await updateSidebar(previous => markSessionRead(previous, session.key, session.previewAt))) {
+        throw new HostedPlatformError("已读状态尚未保存，请稍后核对。");
+      }
+    });
+  }, [run, sessions, updateSaved, updateSidebar]);
+  const create = useCallback(async (_workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
+    if (creatingRef.current) throw new HostedPlatformError("新会话正在创建，请稍后核对。");
+    creatingRef.current = true; setCreating(true);
+    try {
+      const id = await createChat();
+      if (mountedRef.current && (!beforeActivate || beforeActivate(id))) updateSaved({ selected: id });
+      return id;
+    } finally {
+      creatingRef.current = false;
+      if (mountedRef.current) setCreating(false);
     }
-  }, [detail, pending, updateSaved]);
+  }, [createChat, updateSaved]);
+  const updateKeys = (field: "pinned_keys" | "archived_keys", keys: string[], enabled?: boolean) => void run(async () => {
+    const confirmed = await updateSidebar(previous => {
+      const values = new Set(previous[field]);
+      for (const key of keys) {
+        if (enabled ?? !values.has(key)) values.add(key);
+        else values.delete(key);
+      }
+      return { ...previous, [field]: [...values] };
+    });
+    if (!confirmed) throw new HostedPlatformError("会话设置尚未保存，请刷新后核对。");
+  });
+  const markAllRead = () => void run(async () => {
+    if (!await updateSidebar(previous => markAllSessionsRead(previous, sessions))) {
+      throw new HostedPlatformError("已读状态尚未保存，请稍后核对。");
+    }
+  });
 
   useEffect(() => {
-    if (!lastRun || !active(lastRun) || pollFailed) return;
-    const controller = new AbortController(); let cursor = 0; let timer: ReturnType<typeof setTimeout> | undefined;
-    let accumulated = "";
-    const id = lastRun.id;
-    async function poll() {
-      try {
-        const reply = await client.events(id, cursor, controller.signal);
-        if (controller.signal.aborted) return;
-        for (const event of reply.events) {
-          if (event.seq <= cursor) continue;
-          cursor = event.seq;
-          if (event.kind === "delta") accumulated += event.data.text || "";
-          if (event.kind === "progress") setProgress(event.data.message || "正在处理任务");
-        }
-        setStream(previous => ({ ...previous, [id]: accumulated }));
-        if (reply.has_more || active(reply.run)) {
-          if (!reply.has_more) setDetail(previous => previous ? { ...previous,
-            runs: previous.runs.map(run => run.id === id ? reply.run : run) } : previous);
-          timer = setTimeout(() => void poll(), reply.has_more ? 0 : 700);
-        } else if (selectedRef.current === reply.run.session_id) {
-          const final = await client.session(reply.run.session_id, controller.signal);
-          if (!controller.signal.aborted) { setDetail(final); setProgress(""); }
-        }
-      } catch (err) {
-        if (!controller.signal.aborted) { setPollFailed(true); report(err); }
-      }
+    if (status !== "ready" || !loaded || loading || error || selected) return;
+    if (sessions.length) {
+      updateSaved({ selected: sessions[0].chatId });
+    } else if (!initializedEmptyRef.current && !creatingRef.current) {
+      initializedEmptyRef.current = true;
+      const previousSelection = saved.selected;
+      void run(() => create(undefined, () => selectedRef.current === previousSelection));
     }
-    void poll();
-    return () => { controller.abort(); if (timer) clearTimeout(timer); };
-  }, [client, lastRun?.id, running, pollFailed, report]);
+  }, [create, error, loaded, loading, run, saved.selected, selected, sessions, status, updateSaved]);
 
-  async function mutate(action: () => Promise<void>) {
-    if (mutation.current) return;
-    mutation.current = true; setBusy(true);
-    try { await action(); } catch (err) { report(err); } finally { mutation.current = false; setBusy(false); }
-  }
-  async function create() {
-    await mutate(async () => {
-      const id = saved.creating || newRequestId(); updateSaved({ creating: id });
-      const session = await client.createSession(id);
-      setSessions(previous => [session, ...previous.filter(item => item.id !== session.id)]);
-      updateSaved({ selected: session.id, creating: null }); setDraft(""); setSelectedFiles([]); setLoadFailed(false);
-    });
-  }
-  async function send(original?: PendingTurn) {
-    if (!saved.selected || !modelId || (!draft.trim() && !original) || running || blocked || !detail) return;
-    await mutate(async () => {
-      const value = original || { session_id: saved.selected!, input: { request_id: newRequestId(), model_id: modelId,
-        text: draft, attachment_ids: selectedFiles.map(file => file.id) } };
-      updateSaved({ pending: value });
-      const run = await client.submit(value);
-      if (selectedRef.current === value.session_id) {
-        setDetail(previous => previous ? { ...previous, runs: [...previous.runs.filter(item => item.id !== run.id), run] } : previous);
-        setDraft(""); setSelectedFiles([]); setPollFailed(false);
-      }
-      updateSaved({ pending: null });
-    });
-  }
-  async function upload(value: { id: string; file: File; sessionId: string }) {
-    await mutate(async () => {
-      setFailedUpload(value);
-      const result = await client.upload(value.sessionId, value.id, value.file);
-      setFailedUpload(null);
-      if (selectedRef.current === value.sessionId) {
-        setSelectedFiles(previous => [...previous.filter(file => file.id !== result.id), result]);
-        setDetail(previous => previous ? { ...previous, files: [...previous.files.filter(file => file.id !== result.id), result] } : previous);
-      }
-    });
-  }
-  async function download(file: WorkFile) {
-    if (!saved.selected) return;
-    await mutate(async () => {
-      const blob = await client.download(saved.selected!, file);
-      const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = file.name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-  }
-
-  return <div className="flex h-dvh min-h-0 overflow-hidden">
-    <aside className="flex w-56 shrink-0 flex-col gap-4 border-r border-border bg-sidebar p-4 max-sm:w-36">
-      <div className="flex items-center gap-2 text-caption font-semibold"><MessageSquare size={18} />MONA WORK</div>
-      <Button variant="outline" onClick={() => void create()} disabled={busy || loading || Boolean(saved.pending) || Boolean(failedUpload)}><Plus size={16} className="mr-2" />新任务</Button>
-      <nav aria-label="会话列表" className="min-h-0 flex-1 space-y-1 overflow-auto">
-        {loading && <p className="text-caption text-muted-foreground">正在读取会话…</p>}
-        {loadFailed && <Button variant="ghost" onClick={() => setRetryLoad(value => value + 1)}>重新读取</Button>}
-        {!loading && !loadFailed && sessions.length === 0 && <p className="text-caption text-muted-foreground">还没有会话</p>}
-        {sessions.map(session => <Button key={session.id} variant={saved.selected === session.id ? "secondary" : "ghost"}
-          className="w-full justify-start truncate" disabled={busy || Boolean(saved.pending) || Boolean(failedUpload)} onClick={() => { updateSaved({ selected: session.id }); setDraft(""); }}>
-          <span className="truncate">{session.title}</span></Button>)}
-      </nav>
-      <Button variant="ghost" disabled={busy} onClick={() => void mutate(signOut)}><LogOut size={16} className="mr-2" />退出登录</Button>
-    </aside>
-    <main className="flex min-w-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-5">
-        <h1 className="truncate text-body font-medium">{detail?.title || "在线工作区"}</h1>
-        <label className="flex items-center gap-2 text-caption text-muted-foreground">模型
-          <select aria-label="平台模型" className="h-8 max-w-48 rounded-md border border-input bg-background px-2 text-foreground"
-            value={modelId} onChange={event => setModelId(event.target.value)} disabled={busy || running || Boolean(saved.pending)}>
-            {models.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
-          </select>
-        </label>
+  return <div className="flex h-full min-h-0 overflow-hidden bg-background">
+    {sidebarOpen && <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border/45 bg-sidebar lg:w-[264px] xl:w-[272px]">
+      <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border/55 px-3">
+        <a className="flex min-w-0 items-center gap-2 text-caption font-semibold" href="/"><ArrowLeft className="h-3.5 w-3.5" aria-hidden />线上工作台</a>
+        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="新建会话" title="新建会话"
+          disabled={creating} onClick={() => void run(() => create())}><Plus className="h-3.5 w-3.5" aria-hidden /></Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-6">
-        <div className="mx-auto max-w-3xl space-y-6" aria-live="polite">
-          {!saved.selected && <div className="py-16"><h2 className="text-title font-semibold">今天想完成什么？</h2>
-            <p className="mt-3 text-body text-muted-foreground">新建任务，开始写作、整理资料或处理工作区文件。</p></div>}
-          {saved.selected && !detail && <p className="text-caption text-muted-foreground">正在读取会话…</p>}
-          {detail?.runs.map(run => <section key={run.id} className="space-y-4">
-            <div className="ml-auto max-w-prose whitespace-pre-wrap rounded-lg bg-secondary px-4 py-3 text-body">{run.input.text}</div>
-            <div className="prose prose-sm max-w-none break-words text-foreground">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a>,
-                img: ({ alt }) => <span>{alt || "图片引用"}</span>,
-              }}>{run.result.content || stream[run.id] || (active(run) ? "" : run.result.message || "")}</ReactMarkdown>
-            </div>
-            <p className="text-caption text-muted-foreground">{statusText[run.status] || "状态待核对"}
-              {run.result.message && run.result.content ? ` · ${run.result.message}` : ""}</p>
-          </section>)}
-          {running && <p role="status" className="text-caption text-muted-foreground">{progress || "正在处理任务…"}</p>}
-          {pollFailed && <Button variant="outline" onClick={() => { setPollFailed(false); setRetryLoad(value => value + 1); }}>重新读取任务状态</Button>}
-          {detail && detail.files.length > 0 && <section aria-label="工作文件" className="border-t border-border pt-4">
-            <h2 className="mb-2 text-caption font-medium">工作文件</h2><div className="flex flex-wrap gap-2">
-              {detail.files.map(file => <Button key={file.id} variant="outline" size="sm" disabled={busy || running || blocked}
-                onClick={() => void download(file)}><Download size={14} className="mr-2" />{file.name}</Button>)}
-            </div>
-          </section>}
-        </div>
+      <div className="min-h-0 flex-1 overflow-hidden pb-2 pt-1.5">
+        <ChatList sessions={sessions} activeKey={selected?.key ?? null} loading={loading} error={error}
+          onRetry={refresh} onSelect={select} pinnedKeys={sidebar.pinned_keys} archivedKeys={sidebar.archived_keys}
+          titleOverrides={sidebar.title_overrides} showArchived={sidebar.view.show_archived}
+          runningChatIds={sessions.filter(item => item.runStartedAt != null).map(item => item.chatId)}
+          unreadKeys={sessions.filter(item => isSessionUnread(item, sidebar.last_read_at_by_key[item.key])).map(item => item.key)}
+          onRequestDelete={(key, label) => setPendingDelete({ keys: [key], label })}
+          onRequestBatchDelete={keys => setPendingDelete({ keys, label: `${keys.length} 个会话` })}
+          onTogglePin={key => updateKeys("pinned_keys", [key])} onBatchPin={(keys, pinned) => updateKeys("pinned_keys", keys, pinned)}
+          onToggleArchive={key => updateKeys("archived_keys", [key])} onBatchArchive={(keys, archived) => updateKeys("archived_keys", keys, archived)}
+          onRequestRename={(key, label) => setPendingRename({ key, label })} onMarkAllRead={markAllRead} />
       </div>
-      <div className="border-t border-border px-5 py-4">
-        <div className="mx-auto max-w-3xl space-y-3">
-          {!loading && !loadFailed && models.length === 0 && <p role="status" className="text-caption text-muted-foreground">在线模型尚未开放，请稍后再试。无需配置 API，也不会使用桌面端额度。</p>}
-          {pending && <div className="flex items-center justify-between gap-3 text-caption"><span>上次发送结果待核对，原文和附件已保留。</span>
-            <Button variant="outline" size="sm" disabled={busy || running} onClick={() => void send(pending)}>核对原请求</Button></div>}
-          {failedUpload && <div className="flex items-center justify-between gap-3 text-caption"><span>文件上传未确认：{failedUpload.file.name}</span>
-            <Button variant="outline" size="sm" disabled={busy || running} onClick={() => void upload(failedUpload)}>重试原上传</Button></div>}
-          {blocked && <p className="text-caption text-destructive">任务结果待核对，已暂停新的执行；请联系管理员核对，不会自动重跑。</p>}
-          <div className="flex flex-wrap gap-2">{selectedFiles.map(file => <span key={file.id} className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-caption">{file.name}
-            <button aria-label={`取消附加 ${file.name}`} disabled={busy || Boolean(pending)} onClick={() => setSelectedFiles(previous => previous.filter(item => item.id !== file.id))}><X size={14} /></button></span>)}</div>
-          <textarea aria-label="任务内容" value={draft} onChange={event => setDraft(event.target.value)} maxLength={50000} rows={3}
-            placeholder={detail ? "描述你要完成的任务…" : "先新建一个任务"} disabled={!detail || Boolean(pending)}
-            className="w-full resize-none rounded-md border border-input bg-background p-3 text-body outline-none"
-            onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!pending && !busy) void send(); } }} />
-          <div className="flex items-center justify-between gap-3">
-            <input ref={uploadInput} type="file" className="hidden" aria-label="上传附件" onChange={event => {
-              const file = event.target.files?.[0]; event.target.value = "";
-              if (!file || !saved.selected) return;
-              if (file.size > maxFileBytes) { report(new WorkApiError("文件超过上传上限。")); return; }
-              void upload({ id: newRequestId(), file, sessionId: saved.selected });
-            }} />
-            <Button variant="ghost" disabled={!detail || busy || running || blocked || Boolean(pending) || selectedFiles.length >= 8 || Boolean(failedUpload)}
-              onClick={() => uploadInput.current?.click()}><Paperclip size={16} className="mr-2" />添加附件</Button>
-            {running && lastRun
-              ? <Button variant="outline" disabled={busy || lastRun.status === "cancelling"} onClick={() => void mutate(async () => {
-                const stopped = await client.stop(lastRun.id); setDetail(previous => previous ? { ...previous, runs: previous.runs.map(run => run.id === stopped.id ? stopped : run) } : previous);
-              })}><Square size={14} className="mr-2" />{lastRun.status === "cancelling" ? "正在停止" : "停止"}</Button>
-              : <Button disabled={!detail || !draft.trim() || !modelId || busy || blocked || Boolean(pending)} onClick={() => void send()}><Send size={15} className="mr-2" />发送</Button>}
-          </div>
-          <p className="text-micro text-muted-foreground">仅操作你的隔离工作区 · 模型由平台提供 · Shift + Enter 换行</p>
-        </div>
-      </div>
+      <footer className="grid gap-1 border-t border-border/45 p-2">
+        <Button variant="ghost" className="justify-start" onClick={() => void run(async () => {
+          if (!await updateSidebar(previous => ({ ...previous, view: { ...previous.view, show_archived: !previous.view.show_archived } }))) {
+            throw new HostedPlatformError("会话显示设置尚未保存，请刷新后核对。");
+          }
+        })}><Archive className="mr-2 h-4 w-4" aria-hidden />{sidebar.view.show_archived ? "返回会话" : "已归档"}</Button>
+        <Button variant="ghost" className="justify-start" disabled={loggingOut} onClick={() => void run(async () => {
+          setLoggingOut(true); try { await signOut(saved.token); } finally { setLoggingOut(false); }
+        })}><LogOut className="mr-2 h-4 w-4" aria-hidden />{loggingOut ? "正在退出…" : "退出登录"}</Button>
+      </footer>
+    </aside>}
+    <main className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      {selected ? <ThreadShell session={selected} title={sidebar.title_overrides[selected.key] || sessionTitle(selected)}
+        onToggleSidebar={() => setSidebarOpen(value => !value)} onCollapseSessionList={() => setSidebarOpen(false)}
+        sessionListOpen={sidebarOpen} recentSessions={sessions.filter(item => !sidebar.archived_keys.includes(item.key))}
+        onSelectSession={select} onCreateChat={create} onCreateDirectChat={(_agent, workspace, activate) => create(workspace, activate)}
+        onBranchChat={async (source, ordinal, task) => {
+          const id = await branchChat(source, ordinal, task);
+          if (mountedRef.current) updateSaved({ selected: id });
+          return id;
+        }}
+        onTurnEnd={() => void refresh()} onModelNameChange={onModelNameChange} onActionError={report} browserHostVisible={false} />
+        : <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
+            {(loading || creating || status === "connecting") && <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />}
+            <p className="text-body text-muted-foreground">{loading || creating || status === "connecting"
+              ? "正在打开会话…" : "选择或新建会话，开始使用线上工作台。"}</p>
+          </div>}
     </main>
+    <RenameChatDialog open={Boolean(pendingRename)} title={pendingRename?.label ?? ""} onCancel={() => setPendingRename(null)}
+      onConfirm={value => void run(async () => {
+        if (!pendingRename) return;
+        if (!await updateSidebar(previous => ({ ...previous, title_overrides: { ...previous.title_overrides, [pendingRename.key]: value } }))) {
+          throw new HostedPlatformError("会话名称尚未保存，请刷新后核对。");
+        }
+        setPendingRename(null);
+      })} />
+    <DeleteConfirm open={Boolean(pendingDelete)} title={pendingDelete?.label ?? ""} busy={deleting}
+      onCancel={() => { if (!deleting) setPendingDelete(null); }} onConfirm={async () => {
+        if (!pendingDelete || deleting) return;
+        setDeleting(true);
+        try {
+          for (const key of pendingDelete.keys) {
+            if (!mountedRef.current) return;
+            await deleteChat(key);
+          }
+          if (!mountedRef.current) return;
+          if (selected && pendingDelete.keys.includes(selected.key)) updateSaved({ selected: undefined });
+          setPendingDelete(null);
+        } catch (value) { if (mountedRef.current) report(value); }
+        finally { if (mountedRef.current) setDeleting(false); }
+      }} />
   </div>;
 }

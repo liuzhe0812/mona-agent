@@ -56,6 +56,7 @@ import { fetchSettings, listSlashCommands, renameArtifact } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
 import { developmentApi, type DevExecutor, type ExecutorId } from "@/lib/development-api";
 import { useNativeProviderState } from "@/lib/native-provider-state";
+import { getHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
 import { subscribeSettingsUpdates } from "@/lib/settings-updates";
 import { buildComposerModelOptions } from "@/components/models/model-options";
 export { buildComposerModelOptions, buildComposerNativeOptions, buildComposerProviderOptions } from "@/components/models/model-options";
@@ -107,8 +108,12 @@ function isOfficeSessionState(value: unknown): value is OfficeSessionState {
 
 const OFFICE_SESSION_STORAGE_PREFIX = "mona.office.sessions.v1:";
 
+function officeSessionStorage(): Storage {
+  return getHostedPlatform() ? sessionStorage : localStorage;
+}
+
 function persistedOfficeSessions(ownerSessionKey: string): OfficeSessionState[] {
-  const raw = localStorage.getItem(`${OFFICE_SESSION_STORAGE_PREFIX}${ownerSessionKey}`);
+  const raw = officeSessionStorage().getItem(`${OFFICE_SESSION_STORAGE_PREFIX}${ownerSessionKey}`);
   if (!raw) return [];
   try {
     const sessions = JSON.parse(raw) as unknown;
@@ -121,7 +126,7 @@ function persistedOfficeSessions(ownerSessionKey: string): OfficeSessionState[] 
 function rememberOfficeSession(ownerSessionKey: string, session: OfficeSessionState): void {
   const sessions = persistedOfficeSessions(ownerSessionKey)
     .filter((item) => item.sessionId !== session.sessionId);
-  localStorage.setItem(
+  officeSessionStorage().setItem(
     `${OFFICE_SESSION_STORAGE_PREFIX}${ownerSessionKey}`,
     JSON.stringify([...sessions, session]),
   );
@@ -131,8 +136,8 @@ function forgetOfficeSession(ownerSessionKey: string, sessionId: string): void {
   const sessions = persistedOfficeSessions(ownerSessionKey)
     .filter((item) => item.sessionId !== sessionId);
   const key = `${OFFICE_SESSION_STORAGE_PREFIX}${ownerSessionKey}`;
-  if (sessions.length > 0) localStorage.setItem(key, JSON.stringify(sessions));
-  else localStorage.removeItem(key);
+  if (sessions.length > 0) officeSessionStorage().setItem(key, JSON.stringify(sessions));
+  else officeSessionStorage().removeItem(key);
 }
 
 function disposeSidebarTerminalSession(sessionId: string) {
@@ -324,6 +329,7 @@ interface ThreadShellProps {
   browserHostVisible?: boolean;
   onSidebarBrowserVisibilityChange?: (visible: boolean) => void;
   onRightWorkspaceMaximizedChange?: (maximized: boolean) => void;
+  onActionError?: (error: unknown) => void;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -384,6 +390,7 @@ export function ThreadShell({
   browserHostVisible = true,
   onSidebarBrowserVisibilityChange,
   onRightWorkspaceMaximizedChange,
+  onActionError,
 }: ThreadShellProps) {
   const { t, i18n } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -658,7 +665,7 @@ export function ThreadShell({
   }, [recentSessions]);
 
   useEffect(() => {
-    if (showHeroComposer) void loadScheduleItems();
+    if (showHeroComposer && !getHostedPlatform()) void loadScheduleItems();
   }, [loadScheduleItems, showHeroComposer]);
 
   useEffect(() => {
@@ -1457,7 +1464,7 @@ export function ThreadShell({
   // sessions use the active Agent's durable output directory.
   const isRoomSession = conversation?.type === "room";
   const isProjectSession = !isRoomSession && !!session?.workspace;
-  const canvasWorkspaceRoot = session?.workspace?.trim()
+  const canvasWorkspaceRoot = getHostedPlatform() ? "/workspace" : session?.workspace?.trim()
     || buildSharedOutputDir(workspacePath, conversation?.directAgentId);
   const sessionKey = session?.key ?? null;
   const isHome = !session;
@@ -1514,14 +1521,15 @@ export function ThreadShell({
   const conversationCanvasTabsRef = useRef(conversationCanvases.tabs);
   conversationCanvasTabsRef.current = conversationCanvases.tabs;
   useEffect(() => {
-    if (!isTauri() || isRoomSession) return;
+    if ((!isTauri() && !getHostedPlatform()) || isRoomSession) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      const stopListening = await listen<{ canvasId?: string; path?: string }>(
+      const { listen } = await import("@/lib/platform-events");
+      const stopListening = await listen<{ canvasId?: string; path?: string; chatId?: string }>(
         "canvas-agent-activate-sidebar",
         async ({ payload }) => {
+          if (payload.chatId && payload.chatId !== chatId) return;
           const canvas = conversationCanvasTabsRef.current.find(
             (tab) => tab.note.id === payload?.canvasId,
           );
@@ -1573,6 +1581,12 @@ export function ThreadShell({
   useEffect(() => {
     if (!chatId || isRoomSession) return;
     return client.onChat(chatId, (event) => {
+      if (event.event === "attached") {
+        for (const restored of event.office_sessions ?? []) {
+          if (isOfficeSessionState(restored)) openOfficeEditor(restored);
+        }
+        return;
+      }
       if (event.event !== "message" || event.agent_ui?.kind !== "office_session") return;
       const data = event.agent_ui.data as Record<string, unknown> | undefined;
       if (isOfficeSessionState(data?.session)) openOfficeEditor(data.session);
@@ -2021,6 +2035,9 @@ export function ThreadShell({
     }
   }, [activeRightTabId, closePreview, conversationCanvases.closeCanvas, sessionKey, toolTabs]);
   const handleCreateRightTab = useCallback(async (kind: SidebarNewTabKind) => {
+    if (getHostedPlatform() && (kind === "browser" || kind === "terminal")) {
+      throw new HostedPlatformError("线上工作台暂不支持此操作，请使用桌面端。", 501);
+    }
     if (kind === "flowchart" || kind === "mindmap") {
       conversationCanvases.createBlankCanvas(kind);
       return;
@@ -2126,7 +2143,7 @@ export function ThreadShell({
       // 删除一律进系统回收站（可恢复）；失败时抛给 WorkspacePanel 在确认
       // 弹窗中展示原因，绝不静默回退为永久删除。
       const { moveToTrash } = await import("@/lib/tauri");
-      await moveToTrash(target);
+      await (file.sha256 ? moveToTrash(target, file.sha256) : moveToTrash(target));
       // 消息事件不可变，显式记录已删除路径让本次会话列表立即移除。
       markArtifactDeleted(target);
       const normalizedTarget = normalizeArtifactPath(target).replace(/\/+$/, "");
@@ -2271,7 +2288,7 @@ export function ThreadShell({
             onSelectOverview={handleSelectOverview}
             onSelectTab={handleSelectRightTab}
             onCloseTab={handleCloseRightTab}
-            onCreateTab={handleCreateRightTab}
+            onCreateTab={onActionError ? kind => { void handleCreateRightTab(kind).catch(onActionError); } : handleCreateRightTab}
             toolbarSlotRef={setOfficeToolbarContainer}
             onToggleMaximized={() => setRightMaximized((value) => !value)}
             onCollapse={() => {

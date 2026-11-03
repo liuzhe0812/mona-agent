@@ -69,6 +69,19 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("does not reconnect after closing during pending ticket renewal", async () => {
+    let renew!: (url: string) => void;
+    const client = new MonaClient({
+      url: "ws://test", socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+      onReauth: () => new Promise(resolve => { renew = resolve; }),
+    });
+    client.connect(); lastSocket().fakeOpen(); lastSocket().close();
+    await vi.advanceTimersByTimeAsync(500);
+    client.close();
+    renew("ws://renewed");
+    await Promise.resolve();
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
   it.each(["new_chat", "branch_chat"] as const)("expires an undispatched %s without a late reconnect side effect", async (kind) => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     const creation = kind === "new_chat" ? client.newChat(100) : client.branchChat("source", 0, undefined, 100);

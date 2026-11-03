@@ -5,6 +5,7 @@ import { nowTimestamp } from "@/components/notes/notes-data";
 import type { UIMessage } from "@/lib/types";
 import {
   isTauri,
+  hasWorkspaceStorage,
   listWorkspaceCanvases,
   migrateLegacyCanvases,
   readWorkspaceCanvas,
@@ -85,7 +86,7 @@ export function useConversationCanvases({
   }, [chatId, migrateLegacy, workspaceRoot]);
 
   useEffect(() => {
-    if (!chatId || !workspaceRoot || !isTauri()) return;
+    if (!chatId || !workspaceRoot || !hasWorkspaceStorage()) return;
     let cancelled = false;
     void listWorkspaceCanvases(workspaceRoot, chatId).then((saved) => {
       if (cancelled || saved.length === 0) return;
@@ -105,7 +106,7 @@ export function useConversationCanvases({
 
   const persist = useCallback(async (note: OperationNote) => {
     setTabState(setTabs, note.id, { saveStatus: "saving", error: undefined });
-    if (!isTauri()) {
+    if (!hasWorkspaceStorage()) {
       setTabState(setTabs, note.id, { saveStatus: "saved" });
       return undefined;
     }

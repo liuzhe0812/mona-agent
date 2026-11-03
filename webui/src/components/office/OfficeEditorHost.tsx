@@ -15,6 +15,7 @@ import {
   uploadOfficeCheckpoint,
 } from "@/lib/office-client";
 import { isTauri } from "@/lib/tauri";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 
 import { OfficeEditorFrame } from "./OfficeEditorFrame";
 import { OfficeEditorToolbar, type OfficeEditorActivity } from "./OfficeEditorToolbar";
@@ -200,9 +201,18 @@ export function OfficeEditorHost({
       });
     } else {
       const file = await getOfficeWorkingFile(sessionRef.current.sessionId, ownerSessionKey);
-      const { writeFile } = await import("@tauri-apps/plugin-fs");
-      await writeFile(action.output, new Uint8Array(file));
       const fileName = action.output.split(/[\\/]/).at(-1) || sessionRef.current.displayName;
+      if (getHostedPlatform()) {
+        const url = URL.createObjectURL(new Blob([file]));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else {
+        const { writeFile } = await import("@tauri-apps/plugin-fs");
+        await writeFile(action.output, new Uint8Array(file));
+      }
       setExportedFileName(fileName);
       onExported?.(fileName);
     }
@@ -483,6 +493,10 @@ export function OfficeEditorHost({
   }, [performAction, scheduleCheckpoint, updateSession]);
 
   const requestExport = useCallback(async () => {
+    if (getHostedPlatform()) {
+      requestCheckpoint({ type: "export", output: sessionRef.current.displayName });
+      return;
+    }
     if (!isTauri()) {
       setError("仅 Mona 桌面端支持选择导出位置。");
       return;

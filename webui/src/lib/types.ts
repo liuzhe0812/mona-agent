@@ -579,6 +579,8 @@ export interface DeliveredFile {
   size: number;
   size_human: string;
   mime: string;
+  /** File version observed by the hosted workspace inventory or delivery. */
+  sha256?: string;
   /** Directory inventory entries are returned by workspace/project scans so
    *  empty directories remain visible. Delivery records omit this field. */
   is_dir?: boolean;
@@ -1219,7 +1221,7 @@ export type ConnectionStatus =
 export type InboundEvent =
   | { event: "widget"; chat_id: string; widget: InlineWidgetData; task_id?: string; author_id?: string }
   | { event: "ready"; chat_id: string; client_id: string }
-  | { event: "attached"; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null }
+  | { event: "attached"; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null; office_sessions?: unknown[] }
   | { event: "video_model_binding_result"; ok: boolean; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null; detail?: string; code?: string }
   | {
       event: "message";

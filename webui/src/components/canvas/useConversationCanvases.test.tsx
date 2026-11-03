@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/tauri", () => ({
   isTauri: mocks.isTauri,
+  hasWorkspaceStorage: mocks.isTauri,
   listWorkspaceCanvases: mocks.listWorkspaceCanvases,
   migrateLegacyCanvases: mocks.migrateLegacyCanvases,
   readWorkspaceCanvas: mocks.readWorkspaceCanvas,
