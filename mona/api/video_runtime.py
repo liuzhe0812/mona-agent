@@ -1,14 +1,13 @@
 """Video runtime dependency detection and managed provisioning.
 
-Detects Node.js 22+, FFmpeg, a system Edge/Chrome browser, and yt-dlp. Missing
+Detects FFmpeg, an available rendering browser, and yt-dlp. Missing
 components are requested from Mona's unified runtime manager. Existing legacy
-installs remain readable during migration. Video rendering uses a system browser.
+installs remain readable during migration.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -30,9 +29,6 @@ RESOURCE_ROOT = Path(
 
 FUNASR_MODEL_ASSET = "sensevoice-small-q8.gguf"
 FUNASR_VAD_ASSET = "fsmn-vad.gguf"
-
-NODE_MIN_MAJOR = 22
-
 
 class ComponentStatus(BaseModel):
     """Status of a single runtime dependency."""
@@ -78,18 +74,6 @@ class VideoRuntime:
     def _component_dir(self, component: str) -> Path:
         return self.root / component
 
-    def _cached_node_exe(self) -> Path | None:
-        node_dir = self._component_dir("node")
-        if not node_dir.exists():
-            return None
-        # zip extracts to node-v22.11.0-win-x64/node.exe
-        for exe in node_dir.rglob("node.exe"):
-            return exe
-        for exe in node_dir.rglob("node"):
-            if exe.is_file() and exe.suffix == "":
-                return exe
-        return None
-
     def _cached_ffmpeg_exe(self) -> Path | None:
         ff_dir = self._component_dir("ffmpeg")
         if not ff_dir.exists():
@@ -118,10 +102,6 @@ class VideoRuntime:
             return None
         executable = root / Path(relative)
         return executable if executable.is_file() else None
-
-    @classmethod
-    def _managed_node_exe(cls) -> Path | None:
-        return cls._managed_entrypoint("node-base", "node")
 
     def _cached_ffprobe_exe(self) -> Path | None:
         ff_dir = self._component_dir("ffmpeg")
@@ -203,17 +183,6 @@ class VideoRuntime:
     # Public path getters
     # ------------------------------------------------------------------
 
-    def get_node_path(self) -> str | None:
-        """Return the node executable path (system install or cache)."""
-        system = shutil.which("node")
-        if system:
-            return system
-        managed = self._managed_node_exe()
-        if managed:
-            return str(managed)
-        cached = self._cached_node_exe()
-        return str(cached) if cached else None
-
     def get_ffmpeg_path(self) -> str | None:
         """Return the ffmpeg executable path (system install or cache)."""
         managed = self._managed_entrypoint("ffmpeg", "ffmpeg")
@@ -229,6 +198,8 @@ class VideoRuntime:
         """Return the ffprobe executable path (system install or cache)."""
 
         managed = self._managed_entrypoint("ffmpeg", "ffprobe")
+        if managed is None:
+            managed = self._managed_entrypoint("ffprobe", "ffprobe")
         if managed:
             return str(managed)
         system = shutil.which("ffprobe")
@@ -274,68 +245,8 @@ class VideoRuntime:
         for cand in self._system_chrome_candidates():
             if cand.exists() and cand.is_file():
                 return str(cand)
-        return None
-
-    def get_npx_path(self) -> str | None:
-        """Return the path to npx-cli.js alongside the resolved Node.
-
-        npx-cli.js is invoked via ``node <npx-cli.js>`` to avoid the
-        Windows ``.cmd`` quoting pitfalls of ``create_subprocess_exec``.
-        """
-        node_path = self.get_node_path()
-        if not node_path:
-            return None
-        prefix = Path(node_path).parent
-        candidate = prefix / "node_modules" / "npm" / "bin" / "npx-cli.js"
-        if candidate.exists():
-            return str(candidate)
-        return None
-
-    def build_env(self) -> dict:
-        """Build a child-process environment with runtime PATH prepended."""
-        env = os.environ.copy()
-        paths: list[str] = []
-        node_path = self.get_node_path()
-        if node_path:
-            paths.append(str(Path(node_path).parent))
-        ff_exe = self._cached_ffmpeg_exe()
-        if ff_exe:
-            paths.append(str(ff_exe.parent))
-        ytdlp_exe = self._cached_ytdlp_exe()
-        if ytdlp_exe:
-            paths.append(str(ytdlp_exe.parent))
-        if paths:
-            env["PATH"] = os.pathsep.join(paths + [env.get("PATH", "")])
-        return env
-
-    # ------------------------------------------------------------------
-    # Detection
-    # ------------------------------------------------------------------
-
-    def _check_node(self) -> ComponentStatus:
-        node_path = self.get_node_path()
-        if not node_path:
-            return ComponentStatus(ok=False, error="Node.js not found")
-        code, out, err = _run_sync([node_path, "--version"])
-        if code != 0:
-            return ComponentStatus(
-                ok=False, path=node_path, error=err or "node --version failed"
-            )
-        version = out.strip()
-        match = re.match(r"v?(\d+)", version)
-        if not match:
-            return ComponentStatus(
-                ok=False, path=node_path, version=version, error="Cannot parse version"
-            )
-        major = int(match.group(1))
-        if major < NODE_MIN_MAJOR:
-            return ComponentStatus(
-                ok=False,
-                path=node_path,
-                version=version,
-                error=f"Node {major} < required {NODE_MIN_MAJOR}",
-            )
-        return ComponentStatus(ok=True, version=version, path=node_path)
+        managed = self._managed_entrypoint("browser-chromium", "browser")
+        return str(managed) if managed else None
 
     def _check_ffmpeg(self) -> ComponentStatus:
         ff_path = self.get_ffmpeg_path()
@@ -373,7 +284,7 @@ class VideoRuntime:
     def _check_chrome(self) -> ComponentStatus:
         ch_path = self.get_chrome_path()
         if not ch_path:
-            return ComponentStatus(ok=False, error="Chrome/Edge not found")
+            return ComponentStatus(ok=False, error="视频画面渲染资源尚未准备")
         version = None
         if sys.platform == "win32":
             # 读取 PE 文件版本信息，避免启动浏览器进程（msedge.exe --version
@@ -395,10 +306,9 @@ class VideoRuntime:
     def check_all(self) -> dict:
         """Detect available video dependencies.
 
-        Returns ``{node: {...}, ffmpeg: {...}, chrome: {...}, yt_dlp: {...}}``.
+        Returns ``{ffmpeg: {...}, chrome: {...}, yt_dlp: {...}}``.
         """
         return {
-            "node": self._check_node().model_dump(),
             "ffmpeg": self._check_ffmpeg().model_dump(),
             "chrome": self._check_chrome().model_dump(),
             "yt_dlp": self._check_ytdlp().model_dump(),
@@ -429,44 +339,39 @@ class VideoRuntime:
         component: str,
         progress_cb: "Callable[[int, int], None] | None" = None,
     ) -> dict:
-        """Download and extract a component into Mona's resources directory.
+        """Prepare a component through Mona's unified runtime manager.
 
         Args:
-            component: One of ``"node"``, ``"ffmpeg"``, ``"yt_dlp"``, ``"asr"``.
+            component: One of ``"ffmpeg"``, ``"chrome"``, ``"yt_dlp"``, ``"asr"``.
             progress_cb: Optional callback ``(downloaded_bytes, total_bytes)``.
 
         Returns a dict with ``ok`` and either ``path`` or ``error``.
         """
-        if component == "node":
-            return await self._ensure_node(progress_cb)
         if component == "ffmpeg":
             return await self._ensure_ffmpeg(progress_cb)
+        if component == "chrome":
+            existing = self.get_chrome_path()
+            if existing:
+                return {"ok": True, "path": existing, "cached": True}
+            try:
+                await self._ensure_managed_resource("browser", progress_cb)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+            browser = self.get_chrome_path()
+            if browser:
+                return {"ok": True, "path": browser}
+            return {"ok": False, "error": "画面渲染资源安装后不可用，请在高级功能中修复"}
         if component == "yt_dlp":
             return await self._ensure_ytdlp(progress_cb)
         if component == "asr":
             return await self._ensure_asr(progress_cb)
         return {"ok": False, "error": f"Unknown component: {component}"}
 
-    async def _ensure_node(
-        self, progress_cb: "Callable[[int, int], None] | None"
-    ) -> dict:
-        existing = self.get_node_path()
-        if existing:
-            return {"ok": True, "path": str(existing), "cached": True}
-        try:
-            await self._ensure_managed_resource("node", progress_cb)
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        managed = self._managed_node_exe()
-        if managed:
-            return {"ok": True, "path": str(managed)}
-        return {"ok": False, "error": "Node.js 组件安装后不可用，请在高级功能中修复"}
-
     async def _ensure_ffmpeg(
         self, progress_cb: "Callable[[int, int], None] | None"
     ) -> dict:
-        existing = self._cached_ffmpeg_exe()
-        existing_probe = self._cached_ffprobe_exe()
+        existing = self.get_ffmpeg_path()
+        existing_probe = self.get_ffprobe_path()
         if existing and existing_probe:
             return {
                 "ok": True,

@@ -468,7 +468,10 @@ async def _capture_frames(
     runtime = VideoRuntime()
     browser = runtime.get_chrome_path()
     if not browser:
-        raise ValueError("视频预览组件尚未准备好")
+        prepared = await runtime.ensure_runtime("chrome")
+        if not prepared.get("ok"):
+            raise ValueError(str(prepared.get("error") or "视频预览组件尚未准备好"))
+        browser = prepared["path"]
     script = server._video_skill_dir() / "scripts" / "render.py"
     spec = importlib.util.spec_from_file_location("mona_director_capture", script)
     if spec is None or spec.loader is None:

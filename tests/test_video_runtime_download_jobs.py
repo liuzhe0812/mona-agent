@@ -25,37 +25,42 @@ async def test_background_job_reports_byte_progress(monkeypatch) -> None:
         return {"ok": True, "path": f"/{component}"}
 
     monkeypatch.setattr(jobs.VideoRuntime, "ensure_runtime", ensure)
-    started = jobs.start_runtime_download(["node", "ffmpeg"])
+    started = jobs.start_runtime_download(["ffmpeg"])
     await jobs._tasks[started["jobId"]]
 
     finished = jobs.get_runtime_download_jobs()[0]
     assert finished["state"] == "completed"
     assert finished["progress"] == 100
-    assert finished["components"]["node"]["receivedBytes"] == 100
+    assert finished["components"]["ffmpeg"]["receivedBytes"] == 100
     assert finished["components"]["ffmpeg"]["progress"] == 100
 
 
-async def test_failed_component_is_visible_and_other_components_continue(monkeypatch) -> None:
+async def test_failed_component_is_visible(monkeypatch) -> None:
     async def ensure(_self, component, progress):
-        if component == "ffmpeg":
-            progress(40, 100)
-            return {"ok": False, "error": "network failed"}
-        progress(1, 1)
-        return {"ok": True, "path": f"/{component}"}
+        assert component == "ffmpeg"
+        progress(40, 100)
+        return {"ok": False, "error": "network failed"}
 
     monkeypatch.setattr(jobs.VideoRuntime, "ensure_runtime", ensure)
-    started = jobs.start_runtime_download(["ffmpeg", "node"])
+    started = jobs.start_runtime_download(["ffmpeg"])
     await jobs._tasks[started["jobId"]]
 
     finished = jobs.get_runtime_download_jobs()[0]
     assert finished["state"] == "failed"
     assert finished["components"]["ffmpeg"]["error"] == "network failed"
-    assert finished["components"]["node"]["state"] == "completed"
 
 
-def test_system_browser_is_not_a_downloadable_component() -> None:
-    with pytest.raises(ValueError, match="node or ffmpeg"):
-        jobs.start_runtime_download(["chrome"])
+async def test_rendering_browser_can_be_prepared_and_node_is_rejected(monkeypatch) -> None:
+    async def ensure(_self, component, progress):
+        assert component == "chrome"
+        return {"ok": True, "path": "/managed/browser"}
+
+    monkeypatch.setattr(jobs.VideoRuntime, "ensure_runtime", ensure)
+    started = jobs.start_runtime_download(["chrome"])
+    await jobs._tasks[started["jobId"]]
+    assert jobs.get_runtime_download_jobs()[0]["state"] == "completed"
+    with pytest.raises(ValueError, match="must contain ffmpeg"):
+        jobs.start_runtime_download(["node"])
 
 
 async def test_start_and_status_handlers_return_immediately(monkeypatch) -> None:

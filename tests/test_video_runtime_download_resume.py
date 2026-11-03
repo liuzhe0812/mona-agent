@@ -8,36 +8,20 @@ from mona.api import video_runtime
 from mona.runtime.manager import RuntimeComponentStore
 
 
-def test_video_runtime_reuses_managed_node(monkeypatch, tmp_path) -> None:
-    runtime_root = tmp_path / "managed"
-    archive = tmp_path / "node.zip"
-    with zipfile.ZipFile(archive, "w") as bundle:
-        bundle.writestr(
-            "runtime-manifest.json",
-            json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "id": "node-base",
-                    "version": "22.23.2",
-                    "kind": "node-runtime",
-                    "entrypoints": {"node": "node/node.exe"},
-                }
-            ),
-        )
-        bundle.writestr("node/node.exe", b"node")
-    RuntimeComponentStore(runtime_root).install_archive(archive)
-    monkeypatch.setattr("mona.config.paths.get_managed_runtimes_dir", lambda: runtime_root)
-    monkeypatch.setattr(video_runtime.shutil, "which", lambda _name: None)
+def test_video_runtime_check_does_not_require_node(monkeypatch, tmp_path) -> None:
+    runtime = video_runtime.VideoRuntime(tmp_path / "runtime")
 
-    assert video_runtime.VideoRuntime().get_node_path() == str(
-        runtime_root
-        / "components"
-        / "node-base"
-        / "versions"
-        / "22.23.2"
-        / "node"
-        / "node.exe"
-    )
+    def available():
+        return video_runtime.ComponentStatus(ok=True)
+
+    monkeypatch.setattr(runtime, "_check_ffmpeg", available)
+    monkeypatch.setattr(runtime, "_check_chrome", available)
+    monkeypatch.setattr(runtime, "_check_ytdlp", available)
+
+    status = runtime.check_all()
+
+    assert set(status) == {"ffmpeg", "chrome", "yt_dlp"}
+    assert status["ffmpeg"]["ok"] and status["chrome"]["ok"]
 
 
 def test_video_runtime_resolves_managed_product_components(monkeypatch, tmp_path) -> None:
@@ -99,8 +83,8 @@ async def test_missing_ffmpeg_uses_unified_runtime_manager(monkeypatch, tmp_path
     runtime = video_runtime.VideoRuntime(tmp_path / "legacy")
     monkeypatch.setattr(runtime, "_cached_ffmpeg_exe", lambda: None)
     monkeypatch.setattr(runtime, "_cached_ffprobe_exe", lambda: None)
-    monkeypatch.setattr(runtime, "get_ffmpeg_path", lambda: "managed/ffmpeg.exe")
-    monkeypatch.setattr(runtime, "get_ffprobe_path", lambda: "managed/ffprobe.exe")
+    monkeypatch.setattr(runtime, "get_ffmpeg_path", lambda: "managed/ffmpeg.exe" if calls else None)
+    monkeypatch.setattr(runtime, "get_ffprobe_path", lambda: "managed/ffprobe.exe" if calls else None)
 
     async def ensure(resource: str, _progress=None):
         calls.append(resource)
@@ -115,6 +99,21 @@ async def test_missing_ffmpeg_uses_unified_runtime_manager(monkeypatch, tmp_path
         "ffprobePath": "managed/ffprobe.exe",
     }
     assert calls == ["ffmpeg"]
+
+
+async def test_missing_browser_uses_shared_lazy_resource(monkeypatch, tmp_path) -> None:
+    calls = []
+    runtime = video_runtime.VideoRuntime(tmp_path / "legacy")
+    monkeypatch.setattr(runtime, "get_chrome_path", lambda: "managed/browser" if calls else None)
+
+    async def ensure(resource, _progress=None):
+        calls.append(resource)
+
+    monkeypatch.setattr("mona.runtime.official.ensure_official_runtime_resource", ensure)
+    assert await runtime.ensure_runtime("chrome") == {"ok": True, "path": "managed/browser"}
+    assert calls == ["browser"]
+    assert (await runtime.ensure_runtime("chrome"))["cached"] is True
+    assert calls == ["browser"]
 
 
 async def test_managed_runtime_error_does_not_fall_back(monkeypatch, tmp_path) -> None:

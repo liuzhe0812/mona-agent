@@ -35,8 +35,8 @@ def test_scene_transition_blends_real_frame_pixels(renderer, preset: str) -> Non
         assert middle.getpixel((15, 20))[2] > middle.getpixel((45, 20))[2] > middle.getpixel((75, 20))[2]
 
 
-def test_root_transition_holds_previous_scene_without_shortening_timeline(renderer, tmp_path) -> None:
-    from merge_scenes import build_index_html, compute_timeline, read_scene_transition
+def test_transition_duration_does_not_shorten_timeline(renderer, tmp_path) -> None:
+    from merge_scenes import compute_timeline, read_scene_transition
 
     scenes = []
     for index, preset in enumerate(("cross-fade", "fade-rise", "stagger-rise"), start=1):
@@ -47,11 +47,6 @@ def test_root_transition_holds_previous_scene_without_shortening_timeline(render
     timeline, total = compute_timeline(scenes, storyboard)
     assert [entry[2] for entry in timeline] == [0, 2, 4]
     assert total == 6
-    root = build_index_html(scenes, storyboard)
-    assert 'data-composition-id="main" data-start="0" data-duration="6"' in root
-    assert root.count('data-duration="2.4" data-scene-duration="2"') == 2
-    assert 'animation:mona-fade-rise 0.4s linear both paused;' in root
-    assert 'animation:mona-stagger-rise 0.4s linear both paused;' in root
     assert read_scene_transition(scenes[-1][1], .2) == ("stagger-rise", .2)
 
 

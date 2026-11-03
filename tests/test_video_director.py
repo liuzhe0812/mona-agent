@@ -606,7 +606,7 @@ async def test_authored_scene_exports_through_production_edge_ffmpeg_pipeline(
     name = project.name
     assert name not in server._video_render_tasks or server._video_render_tasks[name].done()
     queued = await server.handle_video_project_export(_Request({
-        "name": name, "quality": "draft", "renderEngine": "auto", "releaseType": "draft",
+        "name": name, "quality": "draft", "releaseType": "draft",
     }))
     assert queued.status == 200
     assert json.loads(queued.body)["ok"] is True
@@ -615,8 +615,6 @@ async def test_authored_scene_exports_through_production_edge_ffmpeg_pipeline(
 
     status = server._read_render_status(project)
     assert status["stage"] == "done", status
-    assert status["requestedEngine"] == "auto"
-    assert status["actualEngine"] == "legacy"
     assert status["audio"] is True
     assert status["resolution"] == [960, 540]
     output = project / "renders" / "output.mp4"

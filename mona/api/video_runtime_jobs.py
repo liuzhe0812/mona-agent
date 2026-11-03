@@ -18,7 +18,7 @@ from loguru import logger
 from mona.api.video_runtime import VideoRuntime
 from mona.config.paths import get_workspace_path
 
-RUNTIME_COMPONENTS = ("node", "ffmpeg")
+RUNTIME_COMPONENTS = ("ffmpeg", "chrome")
 _jobs: dict[str, dict[str, Any]] = {}
 _tasks: dict[str, asyncio.Task] = {}
 _loaded = False
@@ -194,7 +194,7 @@ def start_runtime_download(components: list[str]) -> dict[str, Any]:
     _ensure_loaded()
     normalized = list(dict.fromkeys(components))
     if not normalized or any(item not in RUNTIME_COMPONENTS for item in normalized):
-        raise ValueError("components must contain node or ffmpeg")
+        raise ValueError("components must contain ffmpeg or chrome")
     for job_id, task in _tasks.items():
         if not task.done() and set(normalized).issubset(_jobs[job_id]["components"]):
             return _snapshot(_jobs[job_id])

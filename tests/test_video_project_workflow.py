@@ -595,71 +595,6 @@ async def test_render_task_failure_restores_exportable(
     assert status["message"] == "boom"
 
 
-async def test_render_task_uses_hyperframes_when_requested(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    calls: list = []
-    _patch_render_module(
-        monkeypatch, {"ok": True, "output": "renders/legacy.mp4"}, calls
-    )
-
-    async def hyperframes(*_args, **_kwargs):
-        (project_dir / "renders" / "output.mp4").write_bytes(b"hyperframes")
-        return {
-            "ok": True,
-            "output": "renders/output.mp4",
-            "duration": 2,
-            "fps": 30,
-            "resolution": [1920, 1080],
-            "total_frames": 60,
-            "audio": False,
-        }
-
-    monkeypatch.setattr(server, "_run_hyperframes_engine", hyperframes)
-    await server._run_render_task(
-        project_dir, 0, "standard", "hyperframes", True
-    )
-
-    assert calls == []
-    status = json.loads(
-        (project_dir / ".render_status.json").read_text(encoding="utf-8")
-    )
-    assert status["stage"] == "done"
-    assert status["requestedEngine"] == "hyperframes"
-    assert status["actualEngine"] == "hyperframes"
-    assert status["fallbackReason"] is None
-
-
-async def test_render_task_falls_back_to_legacy_engine(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    calls: list = []
-    _patch_render_module(
-        monkeypatch,
-        {"ok": True, "output": "renders/output.mp4", "fps": 30},
-        calls,
-    )
-
-    async def hyperframes(*_args, **_kwargs):
-        return {"ok": False, "error": "preflight failed"}
-
-    monkeypatch.setattr(server, "_run_hyperframes_engine", hyperframes)
-    await server._run_render_task(project_dir, 0, "standard", "auto", True)
-
-    assert len(calls) == 1
-    status = json.loads(
-        (project_dir / ".render_status.json").read_text(encoding="utf-8")
-    )
-    assert status["stage"] == "done"
-    assert status["requestedEngine"] == "auto"
-    assert status["actualEngine"] == "legacy"
-    assert status["fallbackReason"] == "preflight failed"
-
-
 async def test_render_task_renders_from_scene_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -732,9 +667,6 @@ async def test_export_status_response_is_camelcase(
                 "progress": 100,
                 "total_frames": 360,
                 "need_download": False,
-                "requestedEngine": "auto",
-                "actualEngine": "legacy",
-                "fallbackReason": "preflight failed",
                 "started_at": "2026-08-05T00:00:00",
                 "finished_at": "2026-08-05T00:01:00",
             }
@@ -753,9 +685,6 @@ async def test_export_status_response_is_camelcase(
     assert "total_frames" not in payload
     assert "started_at" not in payload
     assert payload["needDownload"] is False  # False kept; only None dropped
-    assert payload["requestedEngine"] == "auto"
-    assert payload["actualEngine"] == "legacy"
-    assert payload["fallbackReason"] == "preflight failed"
 
 
 async def test_cancel_export_sets_cooperative_stop_signal(
@@ -890,7 +819,6 @@ async def test_delivery_artifacts_include_video_subtitles_and_report(
             "total_frames": 120,
             "audio": True,
         },
-        "hyperframes",
         server.threading.Event(),
     )
 
@@ -904,7 +832,7 @@ async def test_delivery_artifacts_include_video_subtitles_and_report(
         )
     )
     assert report["checks"]["subtitleCueCount"] == 2
-    assert report["renderer"]["engine"] == "hyperframes"
+    assert report["renderer"]["engine"] == "mona-motion"
     assert report["checks"]["assetRightsIssues"] == []
     rights = json.loads(
         (project_dir / "renders" / "asset-rights.json").read_text(
@@ -1309,18 +1237,23 @@ def test_quality_presets_map_to_expected_fps() -> None:
 
 
 def test_full_preview_seeks_scene_motion_and_subtitle_timelines() -> None:
+    scene_html = server._prepare_scene_html_for_preview(
+        "<html><body>scene</body></html>", "preview-project", 640, 360
+    )
     html = server._build_video_preview_html(
         640,
         360,
         2.0,
-        [(1, 2.0, "<html><body>scene</body></html>")],
+        [(1, 2.0, scene_html)],
         project_name="preview-project",
         token="preview-token",
         audio_scene_indices={1},
     )
     assert "function seekFrame(frame, time)" in html
-    assert "timeline.seek(time)" in html
-    assert "win.__monaApplySubtitleTime(time)" in html
+    assert "postMessage({type:'mona-video-seek',seconds:time}, '*')" in html
+    assert "data.type !== 'mona-video-seek'" in scene_html
+    assert "timeline.seek(seconds)" in scene_html
+    assert "window.__monaApplySubtitleTime(seconds)" in scene_html
     assert "seekFrame(frames[nextIndex], localTime)" in html
     assert "/api/video/project/scene/narration?" in html
     assert "new Audio(audioUrl)" in html
@@ -2145,17 +2078,6 @@ async def test_export_does_not_clear_staleness_after_concurrent_edit(monkeypatch
     assert saved["outputStale"] is True
     assert saved["phase"] == "producing"
     assert saved["scenes"][0]["narration"] == "制作期间修改的新旁白"
-
-
-async def test_quality_check_failure_cannot_fall_back(monkeypatch, tmp_path) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    calls: list = []
-    _patch_render_module(monkeypatch, {"ok": True}, calls)
-    monkeypatch.setattr(server, "_run_hyperframes_engine", AsyncMock(return_value={"ok": False, "error": "HyperFrames check failed"}))
-    await server._run_render_task(project_dir, 30, "standard", "auto", True)
-    assert calls == []
-    assert json.loads((project_dir / ".render_status.json").read_text(encoding="utf-8"))["stage"] == "error"
 
 
 _STORYBOARD_MD = """# 分镜
