@@ -7,7 +7,7 @@ import os
 import secrets
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,7 @@ from mona.office.schemas import (
     OfficeSessionClosedMessage,
     OfficeSessionCreateRequest,
     OfficeSessionOpenMessage,
+    OfficeSessionState,
     OfficeSessionStateMessage,
     OfficeSocketMessage,
     OfficeSocketTicketRequest,
@@ -55,6 +56,8 @@ OFFICE_SOCKET_HUB_KEY = web.AppKey("office_socket_hub", object)
 OFFICE_WORKSPACE_KEY = web.AppKey("office_workspace", Path)
 OFFICE_ENGINE_KEY = web.AppKey("office_engine", XlsxEngineService)
 OFFICE_CHECKPOINT_UPLOADS_KEY = web.AppKey("office_checkpoint_uploads", object)
+OFFICE_SOCKET_AUTHORIZER_KEY = web.AppKey("office_socket_authorizer", object)
+OFFICE_STATE_TRANSFORM_KEY = web.AppKey("office_state_transform", object)
 
 _CHECKPOINT_CHUNK_BYTES = 1024 * 1024
 _CHECKPOINT_UPLOAD_TTL_SECONDS = 300
@@ -170,8 +173,9 @@ class OfficeSocketTicketStore:
 
 
 class OfficeSocketHub:
-    def __init__(self) -> None:
+    def __init__(self, state_transform: Callable[[OfficeSessionState], OfficeSessionState] | None = None) -> None:
         self._connections: dict[str, web.WebSocketResponse] = {}
+        self.state_transform = state_transform
 
     async def attach(self, session_id: str, socket: web.WebSocketResponse) -> None:
         previous = self._connections.get(session_id)
@@ -228,9 +232,12 @@ class OfficeSocketHub:
         socket = self._connections.get(session_id)
         if socket is None or socket.closed:
             return
+        state = manager.get_session(session_id).to_state()
+        if self.state_transform is not None:
+            state = self.state_transform(state)
         message = OfficeSessionStateMessage(
             event="office_session_state",
-            session=manager.get_session(session_id).to_state(),
+            session=state,
         )
         await socket.send_json(message.model_dump(by_alias=True, mode="json"))
 
@@ -300,6 +307,12 @@ def _model_response(model, *, status: int = 200) -> web.Response:
     return web.json_response(model.model_dump(by_alias=True, mode="json"), status=status)
 
 
+def _session_state(request: web.Request, session) -> OfficeSessionState:
+    state = session.to_state()
+    transform = request.app.get(OFFICE_STATE_TRANSFORM_KEY)
+    return transform(state) if transform is not None else state
+
+
 @web.middleware
 async def office_error_middleware(request: web.Request, handler) -> web.StreamResponse:
     try:
@@ -354,7 +367,7 @@ async def handle_create_session(request: web.Request) -> web.Response:
         source_path=body.path,
         display_name=body.display_name,
     )
-    return _model_response(session.to_state(), status=201)
+    return _model_response(_session_state(request, session), status=201)
 
 
 async def handle_import(request: web.Request) -> web.Response:
@@ -418,7 +431,7 @@ async def handle_import(request: web.Request) -> web.Response:
             initial_file=temporary,
             source_identity=normalized_identity,
         )
-        return _model_response(session.to_state(), status=200 if was_existing else 201)
+        return _model_response(_session_state(request, session), status=200 if was_existing else 201)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -428,7 +441,7 @@ async def handle_get_session(request: web.Request) -> web.Response:
         request.match_info["session_id"],
         owner_session_key=_owner_session_key(request),
     )
-    return _model_response(session.to_state())
+    return _model_response(_session_state(request, session))
 
 
 async def handle_list_sessions(request: web.Request) -> web.Response:
@@ -436,7 +449,7 @@ async def handle_list_sessions(request: web.Request) -> web.Response:
         owner_session_key=_owner_session_key(request),
     )
     return web.json_response(
-        {"sessions": [session.to_state().model_dump(by_alias=True, mode="json") for session in sessions]}
+        {"sessions": [_session_state(request, session).model_dump(by_alias=True, mode="json") for session in sessions]}
     )
 
 
@@ -784,23 +797,35 @@ async def handle_office_socket(request: web.Request) -> web.WebSocketResponse:
     )
     if session.version.editor_epoch != record.editor_epoch:
         raise web.HTTPUnauthorized(reason="expired office editor epoch")
+    authorize = request.app.get(OFFICE_SOCKET_AUTHORIZER_KEY)
+    if authorize is not None and not await authorize(request, record.owner_session_key, session.session_id):
+        raise web.HTTPUnauthorized(reason="office authorization expired")
 
     socket = web.WebSocketResponse(heartbeat=20, max_msg_size=20 * 1024 * 1024)
     await socket.prepare(request)
     await socket.send_json(
         OfficeSessionOpenMessage(
             event="office_session_open",
-            session=session.to_state(),
+            session=_session_state(request, session),
         ).model_dump(by_alias=True, mode="json")
     )
     attached = False
     try:
         async for message in socket:
             if message.type == WSMsgType.TEXT:
+                if authorize is not None and not await authorize(request, record.owner_session_key, session.session_id):
+                    await socket.close(code=1008, message=b"office authorization expired")
+                    break
                 try:
                     parsed = _SOCKET_MESSAGE_ADAPTER.validate_json(message.data)
                 except ValidationError:
                     await socket.close(code=1008, message=b"invalid office message")
+                    break
+                message_session_id = getattr(parsed, "session_id", None)
+                if isinstance(parsed, (OfficeCommandResultMessage, OfficeInspectResultMessage)):
+                    message_session_id = parsed.result.session_id
+                if message_session_id is not None and message_session_id != session.session_id:
+                    await socket.close(code=1008, message=b"invalid office session")
                     break
                 if not attached:
                     if not isinstance(parsed, OfficeEditorReadyMessage):
@@ -861,16 +886,20 @@ def register_office_routes(
     manager: OfficeSessionManager | None = None,
     engine: XlsxEngineService | None = None,
     workspace: str | Path | None = None,
+    authorize: Callable[[web.Request, str, str], Awaitable[bool]] | None = None,
+    state_transform: Callable[[OfficeSessionState], OfficeSessionState] | None = None,
 ) -> None:
     office_manager = manager or OfficeSessionManager()
     app[OFFICE_MANAGER_KEY] = office_manager
     app[OFFICE_TICKET_STORE_KEY] = OfficeSocketTicketStore()
-    app[OFFICE_SOCKET_HUB_KEY] = OfficeSocketHub()
+    app[OFFICE_SOCKET_HUB_KEY] = OfficeSocketHub(state_transform)
     app[OFFICE_WORKSPACE_KEY] = (
         Path(workspace).expanduser().resolve() if workspace is not None else get_workspace_path().resolve()
     )
     app[OFFICE_ENGINE_KEY] = engine or XlsxEngineService()
     app[OFFICE_CHECKPOINT_UPLOADS_KEY] = OfficeCheckpointUploadStore()
+    app[OFFICE_SOCKET_AUTHORIZER_KEY] = authorize
+    app[OFFICE_STATE_TRANSFORM_KEY] = state_transform
     app.router.add_post("/api/office/sessions", handle_create_session)
     app.router.add_get("/api/office/sessions", handle_list_sessions)
     app.router.add_post("/api/office/import", handle_import)

@@ -211,6 +211,7 @@ def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
     # The removed stock implementation's settings must not prevent startup.
     data.pop("stock", None)
+    data.pop("video", None)
     if "cloudSync" in data:
         data["cloud_sync"] = data.pop("cloudSync")
     defaults = data.get("agents", {}).get("defaults", {})

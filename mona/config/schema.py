@@ -482,14 +482,6 @@ class ComputerUseConfig(Base):
     settle_seconds: float = Field(default=0.15, ge=0, le=2)
 
 
-class VideoModuleConfig(Base):
-    """Video production engine rollout and fallback controls."""
-
-    render_engine: Literal["legacy", "hyperframes", "auto"] = "auto"
-    allow_render_fallback: bool = True
-    hyperframes_version: str = "0.8.16"
-
-
 class ProfileConfig(Base):
     """User-profile dashboard collection and generation limits."""
 
@@ -761,6 +753,7 @@ class DevelopmentConfig(Base):
     codebuddy_api_key_env: str = "CODEBUDDY_API_KEY"
     codebuddy_environment: Literal["internal", "external"] = "internal"
     decision_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    native_work_reconciliation_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     permissions: DevelopmentPermissionsConfig = Field(default_factory=DevelopmentPermissionsConfig)
     max_parallel_subagents: int = Field(default=4, ge=1, le=16)
     max_collaboration_continuations: int = Field(default=4, ge=1, le=16)
@@ -852,7 +845,6 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
-    video: VideoModuleConfig = Field(default_factory=VideoModuleConfig)
     profile: ProfileConfig = Field(default_factory=ProfileConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     stock_vibe: StockVibeConfig = Field(

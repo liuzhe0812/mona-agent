@@ -62,6 +62,19 @@ def test_load_config_rejects_invalid_json_without_changing_it(tmp_path: Path) ->
     assert path.read_bytes() == invalid
 
 
+def test_load_config_discards_removed_video_engine_settings(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "video": {"renderEngine": "hyperframes", "allowRenderFallback": True},
+        "agents": {"defaults": {"provider": "deepseek", "model": "deepseek-chat"}},
+    }), encoding="utf-8")
+
+    config = load_config(path)
+    assert config.agents.defaults.model == "deepseek-chat"
+    save_config(config, path)
+    assert "video" not in json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_context_limit_error_is_learned_as_provider_model_capability() -> None:
     config = Config()
     config.agents.defaults.provider = "deepseek"
