@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import secrets
+import sqlite3
 import stat
 import time
 from dataclasses import dataclass
@@ -92,6 +93,9 @@ class DesktopAPI:
             finally:
                 self.state.close()
 
+    async def restore_editors(self, owner: str, sid: str):
+        return await self.office.list_states(owner, sid)
+
     @staticmethod
     def _owner(request: web.Request) -> str:
         owner = request.get("owner", "")
@@ -169,10 +173,12 @@ class DesktopAPI:
                     "model": None, "api_key_configured": False, "api_key_hint": None},
                 "requires_restart": False, "restart_required_sections": []}
 
-    def _file_row(self, logical: str, *, size: int, modified: float | None = None, directory: bool = False):
+    def _file_row(self, logical: str, *, size: int, modified: float | None = None, directory: bool = False,
+                  sha256: str | None = None):
         return {"path": logical.removeprefix("/workspace/"), "absolute_path": logical,
                 "name": logical.rsplit("/", 1)[-1], "size": size, "size_human": _size(size),
                 "mime": "inode/directory" if directory else _mime(logical), "is_dir": directory,
+                **({"sha256": sha256} if sha256 is not None else {}),
                 **({"modified_at": timestamp(modified)} if modified is not None else {})}
 
     def inventory(self, owner: str, sid: str, *, task_id: str | None = None) -> dict:
@@ -186,18 +192,35 @@ class DesktopAPI:
             info = checked.lstat()
             if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                 raise WorkError("invalid_path", "工作区包含不支持的文件。")
+            digest = None
+            if stat.S_ISREG(info.st_mode):
+                digest, info = self.files._file_digest(checked, self.service.config.workspace_bytes)
             logical = self.files._logical(root, checked)
             rows[logical] = self._file_row(logical, size=info.st_size if stat.S_ISREG(info.st_mode) else 0,
-                                           modified=info.st_mtime, directory=stat.S_ISDIR(info.st_mode))
-        session_rows = []
+                                           modified=info.st_mtime, directory=stat.S_ISDIR(info.st_mode), sha256=digest)
         for item in self.service.store.files(owner, sid):
             stored = self.service.store.file(owner, sid, item["id"])
             _, logical = self._logical(owner, stored["path"])
-            row = rows.get(logical) or self._file_row(logical, size=stored["size"])
+            row = rows.get(logical) or self._file_row(logical, size=stored["size"], sha256=stored["sha256"])
             rows.setdefault(logical, row)
-            session_rows.append(row)
+        recorded = self.state.get(owner, "artifact_index:" + sid, [])
+        if not isinstance(recorded, list) or not all(isinstance(item, dict) for item in recorded):
+            raise WorkError("invalid_state", "文件记录无法读取，请联系管理员。", 503)
+        delivered: dict[str, dict] = {}
+        working: dict[str, dict] = {}
+        for item in recorded:
+            _, logical = self._logical(owner, item.get("path"))
+            row = rows.get(logical)
+            if row is None or row["is_dir"]:
+                continue
+            if item.get("delivered") is True:
+                delivered[logical] = row
+            elif item.get("delivered") is False and task_id and item.get("task_id") == task_id:
+                working[logical] = row
         return {"files": sorted(rows.values(), key=lambda row: (not row["is_dir"], row["path"])),
-                "session_files": session_rows, "task_files": [], "task_id": task_id, "truncated": False}
+                "session_files": list(delivered.values()),
+                "task_files": [row for logical, row in working.items() if logical not in delivered],
+                "task_id": task_id, "truncated": False}
 
     async def read_file(self, owner: str, sid: str, raw: str, artifact_id: str | None = None) -> tuple[str, bytes]:
         self.state.session(owner, sid)
@@ -325,6 +348,10 @@ class DesktopAPI:
             body = self._body(await request.json(), {"command", "args"})
             if not isinstance(body.get("command"), str):
                 raise WorkError("invalid_request", "操作名称无效。")
+            if body["command"] == "move_to_trash" and (not isinstance(body.get("args"), dict)
+                    or not isinstance(body["args"].get("expectedSha256"), str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", body["args"]["expectedSha256"])):
+                raise WorkError("file_version_required", "请刷新文件列表后再删除文件。", 409)
             if body.get("command") in {"canvas_agent_respond", "canvas_agent_stage"}:
                 if self.platform_handler is None:
                     raise WorkError("not_connected", "画布连接尚未就绪，请重新打开画布。", 503)
@@ -335,6 +362,8 @@ class DesktopAPI:
                 if inspect.isawaitable(result):
                     result = await result
                 return web.json_response(result)
+            if body["command"] == "move_to_trash":
+                return web.json_response(await self._trash(owner, body.get("args", {})))
             return web.json_response(self.files.invoke(owner, body.get("command"), body.get("args", {})))
         if path == "/internal/tool" and method == "POST":
             if self.tool_handler is None:
@@ -399,11 +428,87 @@ class DesktopAPI:
             name, data = await self.read_file(owner, sid, request.query.get("path", ""), request.query.get("artifact_id"))
             return self._file_response(name, data, download=request.query.get("download") == "1")
         if path == "/api/artifact-rename" and method == "GET":
-            return web.json_response(self._rename(owner, request.query))
+            return web.json_response(await self._rename(owner, request.query))
         raise WorkError("unsupported_operation", "线上工作台未开放此功能。", 501)
 
-    def _rename(self, owner: str, query) -> dict:
-        sid = self._session(owner, query.get("session_key"))
+    def _renamed_metadata(self, owner: str, logical: str, new_logical: str, name: str) -> dict:
+        updates = {}
+        old_paths = {logical, logical.removeprefix("/workspace/")}
+        keys = self.state.db(owner).execute("SELECT key FROM metadata WHERE key GLOB 'artifact_index:*'").fetchall()
+        for row in keys:
+            records = self.state.get(owner, row["key"])
+            if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+                raise WorkError("invalid_state", "文件记录无法读取，请联系管理员。", 503)
+            renamed = []
+            for item in records:
+                if item.get("path") not in old_paths:
+                    renamed.append(item)
+                    continue
+                value = {**item, "path": new_logical.removeprefix("/workspace/")}
+                if "name" in value:
+                    value["name"] = name
+                if isinstance(item.get("file"), dict):
+                    value["file"] = {**item["file"], "path": new_logical, "absolute_path": new_logical, "name": name}
+                renamed.append(value)
+            if renamed != records:
+                updates[row["key"]] = renamed
+        uploaded = self.state.get(owner, "upload:" + logical)
+        if isinstance(uploaded, dict):
+            updates["upload:" + new_logical] = {**uploaded, "path": new_logical, "name": name}
+            updates["upload:" + logical] = None
+        return updates
+
+    def _saved_file(self, owner: str, logical: str, digest: str | None = None) -> dict:
+        rows = self.service.store.db.execute(
+            "SELECT id,session_id,sha256 FROM files WHERE owner=? AND path=? ORDER BY rowid DESC",
+            (owner, logical.removeprefix("/workspace/"))).fetchall()
+        for row in rows:
+            if digest is None or row["sha256"] == digest:
+                self.state.session(owner, row["session_id"])
+                return {**self.service.store.file(owner, row["session_id"], row["id"]), "session_id": row["session_id"]}
+        if rows:
+            raise WorkError("file_changed", "文件已变化，请刷新文件列表后核对。", 409)
+        raise WorkError("not_found", "未找到该文件。", 404)
+
+    def _save_metadata(self, owner: str, updates: dict):
+        if not updates:
+            return
+        db = self.state.db(owner)
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            for key, value in updates.items():
+                self.state.set(owner, key, value)
+            db.commit()
+        except sqlite3.Error:
+            if db.in_transaction:
+                db.rollback()
+            raise WorkError("file_metadata_pending", "文件已更改，但文件记录未能保存，请刷新后核对。", 503) from None
+
+    async def _trash(self, owner: str, args: dict):
+        self._body(args, {"path", "expectedSha256"})
+        path, logical = self._logical(owner, args.get("path"))
+        updates = {}
+        old_paths = {logical, logical.removeprefix("/workspace/")}
+        for row in self.state.db(owner).execute("SELECT key FROM metadata WHERE key LIKE 'artifact_index:%'").fetchall():
+            records = self.state.get(owner, row["key"])
+            if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+                raise WorkError("invalid_state", "文件记录无法读取，请联系管理员。", 503)
+            filtered = [item for item in records if item.get("path") not in old_paths]
+            if filtered != records:
+                updates[row["key"]] = filtered
+        updates["upload:" + logical] = None
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            stored = self._saved_file(owner, logical, args["expectedSha256"])
+            await self.service.mutate_file(owner, stored["session_id"], stored["id"], "trash", expected_sha256=args["expectedSha256"])
+        else:
+            self.files.invoke(owner, "move_to_trash", args)
+        self._save_metadata(owner, updates)
+        return None
+
+    async def _rename(self, owner: str, query) -> dict:
+        self._session(owner, query.get("session_key"))
         if query.get("scope", "shared") not in {"shared", "project"}:
             raise WorkError("invalid_request", "文件范围无效。")
         name = query.get("new_name", "")
@@ -412,6 +517,15 @@ class DesktopAPI:
         path, logical = self._logical(owner, query.get("path", ""))
         root = self.files.root(owner)
         target = self.files._path(root, self.files._logical(root, path.with_name(name)))
+        new_logical = self.files._logical(root, target)
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            stored = self._saved_file(owner, logical)
+            updates = self._renamed_metadata(owner, logical, new_logical, name)
+            await self.service.mutate_file(owner, stored["session_id"], stored["id"], "rename", expected_sha256=stored["sha256"], destination=new_logical)
+            self._save_metadata(owner, updates)
+            return {"path": new_logical.removeprefix("/workspace/"), "name": name}
         lock = self.files._home(owner) / ".documents.lock"
         if lock.exists() or lock.is_symlink():
             info = lock.lstat()
@@ -422,14 +536,11 @@ class DesktopAPI:
                 try:
                     path.lstat()
                 except FileNotFoundError:
-                    for item in self.service.store.files(owner, sid):
-                        stored = self.service.store.file(owner, sid, item["id"])
-                        if self._logical(owner, stored["path"])[1] == logical:
-                            raise WorkError("unsupported_operation", "此隔离任务文件暂不支持改名，请先下载后重新上传。", 501) from None
                     raise WorkError("not_found", "未找到该文件。", 404) from None
                 _, before = self.files._file_digest(path, self.service.config.workspace_bytes)
                 if target == path:
                     return {"path": logical.removeprefix("/workspace/"), "name": name}
+                updates = self._renamed_metadata(owner, logical, new_logical, name)
                 os.link(path, target)
                 linked = target.lstat()
                 if (linked.st_ino, linked.st_dev, linked.st_size, linked.st_mtime_ns) != (
@@ -444,13 +555,9 @@ class DesktopAPI:
                 except (OSError, WorkError):
                     target.unlink()
                     raise
+                self._save_metadata(owner, updates)
         except FileExistsError:
             raise WorkError("file_conflict", "同名文件已存在，请更换名称。", 409) from None
         except OSError:
             raise WorkError("file_changed", "文件改名未完成，请刷新后核对。", 409) from None
-        new_logical = self.files._logical(root, target)
-        uploaded = self.state.get(owner, "upload:" + logical)
-        if isinstance(uploaded, dict):
-            self.state.set(owner, "upload:" + new_logical, {**uploaded, "path": new_logical, "name": name})
-            self.state.set(owner, "upload:" + logical, None)
         return {"path": new_logical.removeprefix("/workspace/"), "name": name}

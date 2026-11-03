@@ -166,6 +166,20 @@ class DockerSandbox:
         result = json.loads(raw)
         if not isinstance(result, dict):
             raise SandboxError("invalid_file_reply", "工作区文件操作未返回有效结果。")
+        if "error" in result:
+            errors = {
+                "invalid_file_operation": (400, "文件路径或操作参数无效。"),
+                "file_not_found": (404, "文件不存在，已有记录保留。"),
+                "file_exists": (409, "目标名称已存在，请使用其他名称。"),
+                "file_changed": (409, "文件已发生变化，请重新读取后再操作。"),
+                "file_operation_failed": (503, "文件操作未能完成，请核对后重试原请求。"),
+                "file_operation_unknown": (503, "文件操作结果待核对，请检查当前文件，不会自动重复执行。"),
+            }
+            code = result["error"]
+            if set(result) != {"error"} or not isinstance(code, str) or code not in errors:
+                raise SandboxError("invalid_file_reply", "工作区文件操作未返回有效结果。")
+            status, message = errors[code]
+            raise WorkError(code, message, status)
         return result
 
     async def execute(self, command: str) -> dict:

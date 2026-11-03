@@ -191,6 +191,94 @@ async def test_attachments_are_verified_and_retries_do_not_copy_again(environmen
     assert changed.value.status == 409
 
 
+async def test_artifact_groups_follow_recorded_delivery_and_exact_task(environment):
+    e = environment
+    root = e.api.files.root(A)
+    for name in ("delivered.txt", "working.txt", "other-task.txt", "unclassified.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    await e.service.upload(A, SID_A, "5" * 32, "attachment.txt", b"uploaded input")
+    e.api.state.set(A, "artifact_index:" + SID_A, [
+        {"path": "delivered.txt", "task_id": "current", "delivered": True},
+        {"path": "working.txt", "task_id": "current", "delivered": False},
+        {"path": "other-task.txt", "task_id": "other", "delivered": False},
+        {"path": "gone.txt", "task_id": "current", "delivered": True},
+    ])
+    route = PREFIX + "/api/artifacts"
+    response = await e.client.get(route, headers=headers(),
+        params={"session_key": "websocket:" + SID_A, "task_id": "current"})
+    assert response.status == 200
+    value = await response.json()
+    assert [row["name"] for row in value["session_files"]] == ["delivered.txt"]
+    assert [row["name"] for row in value["task_files"]] == ["working.txt"]
+    assert {row["name"] for row in value["files"]} == {
+        "delivered.txt", "working.txt", "other-task.txt", "unclassified.txt", "attachment.txt"}
+    for row in value["files"]:
+        data = b"uploaded input" if row["name"] == "attachment.txt" else row["name"].encode()
+        assert row["sha256"] == hashlib.sha256(data).hexdigest()
+    no_task = await e.client.get(route, headers=headers(), params={"session_key": "websocket:" + SID_A})
+    assert (await no_task.json())["task_files"] == []
+    foreign = await e.client.get(route, headers=headers("B"), params={"session_key": "websocket:" + SID_A})
+    assert foreign.status == 404
+
+
+async def test_rename_updates_only_this_accounts_real_artifact_and_upload_paths(environment):
+    e = environment
+    another = "6" * 32
+    e.service.store.create_session(A, NewSession(request_id=another, title="另一会话"))
+    for owner in (A, B):
+        (e.api.files.root(owner) / "old.txt").write_bytes(b"private result")
+    (e.api.files.root(A) / "existing.txt").write_bytes(b"keep me")
+    digest = hashlib.sha256(b"private result").hexdigest()
+    file = {"path": "/workspace/old.txt", "absolute_path": "/workspace/old.txt", "name": "old.txt",
+            "size": 14, "sha256": digest, "mime": "text/plain"}
+    delivered = {"path": "old.txt", "name": "old.txt", "task_id": "delivery-task", "delivered": True, "file": file}
+    working = {"path": "/workspace/old.txt", "task_id": "working-task", "delivered": False, "file": file}
+    unrelated = {"path": "existing.txt", "task_id": "unrelated", "delivered": True}
+    e.api.state.set(A, "artifact_index:" + SID_A, [delivered, unrelated])
+    e.api.state.set(A, "artifact_index:" + another, [working])
+    e.api.state.set(B, "artifact_index:" + SID_B, [delivered])
+    uploaded = {"path": "/workspace/old.txt", "name": "old.txt", "sha256": digest, "size": 14, "scope": "shared"}
+    e.api.state.set(A, "upload:/workspace/old.txt", uploaded)
+    route = PREFIX + "/api/artifact-rename"
+    query = {"session_key": "websocket:" + SID_A, "path": "old.txt", "new_name": "existing.txt"}
+    denied = await e.client.get(route, headers=headers(), params=query)
+    assert denied.status == 409
+    assert e.api.state.get(A, "artifact_index:" + SID_A) == [delivered, unrelated]
+    response = await e.client.get(route, headers=headers(), params={**query, "new_name": "renamed.txt"})
+    assert response.status == 200 and await response.json() == {"path": "renamed.txt", "name": "renamed.txt"}
+    renamed_file = {**file, "path": "/workspace/renamed.txt", "absolute_path": "/workspace/renamed.txt", "name": "renamed.txt"}
+    assert e.api.state.get(A, "artifact_index:" + SID_A) == [
+        {**delivered, "path": "renamed.txt", "name": "renamed.txt", "file": renamed_file}, unrelated]
+    assert e.api.state.get(A, "artifact_index:" + another) == [{**working, "path": "renamed.txt", "file": renamed_file}]
+    assert e.api.state.get(B, "artifact_index:" + SID_B) == [delivered]
+    assert (e.api.files.root(B) / "old.txt").read_bytes() == b"private result"
+    assert e.api.state.get(A, "upload:/workspace/old.txt") is None
+    assert e.api.state.get(A, "upload:/workspace/renamed.txt") == {**uploaded, "path": "/workspace/renamed.txt", "name": "renamed.txt"}
+    inventory = await e.client.get(PREFIX + "/api/artifacts", headers=headers(),
+        params={"session_key": "websocket:" + another, "task_id": "working-task"})
+    assert [row["name"] for row in (await inventory.json())["task_files"]] == ["renamed.txt"]
+
+
+async def test_trash_compares_the_observed_inventory_digest_before_moving_real_bytes(environment):
+    e = environment
+    path = e.api.files.root(A) / "mutable.txt"
+    path.write_bytes(b"seen version")
+    inventory = await e.client.get(PREFIX + "/api/artifacts", headers=headers(), params={"session_key": "websocket:" + SID_A})
+    observed = (await inventory.json())["files"][0]["sha256"]
+    path.write_bytes(b"newer version")
+    missing = await e.client.post(PREFIX + "/platform/invoke", headers=headers(),
+        json={"command": "move_to_trash", "args": {"path": "/workspace/mutable.txt"}})
+    assert missing.status == 409 and path.read_bytes() == b"newer version"
+    command = {"command": "move_to_trash", "args": {"path": "/workspace/mutable.txt", "expectedSha256": observed}}
+    denied = await e.client.post(PREFIX + "/platform/invoke", headers=headers(), json=command)
+    assert denied.status == 409 and path.read_bytes() == b"newer version"
+    command["args"]["expectedSha256"] = hashlib.sha256(b"newer version").hexdigest()
+    moved = await e.client.post(PREFIX + "/platform/invoke", headers=headers(), json=command)
+    assert moved.status == 200 and not path.exists()
+    slots = list((e.api.files.root(A).parent / "trash").iterdir())
+    assert len(slots) == 1 and (slots[0] / "file").read_bytes() == b"newer version"
+
+
 async def test_legacy_files_use_executor_download_and_documents_rename_without_overwrite(environment):
     e = environment
     fid = "4" * 32

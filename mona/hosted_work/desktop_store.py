@@ -192,10 +192,14 @@ class DesktopStore:
     def delete(self, owner: str, sid: str):
         sid = chat_id(sid)
         self.session(owner, sid)
+        pending = self.service.store.db.execute(
+            "SELECT 1 FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown')",
+            (owner, sid)).fetchone()
+        file_pending = self.service.store.db.execute(
+            "SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone()
+        if pending or file_pending:
+            raise WorkError("user_busy", "此会话还有任务在进行或结果待核对，请先停止并确认结果后再删除。", 409)
         self.db(owner).execute("INSERT OR IGNORE INTO deleted_chats VALUES(?)", (sid,))
-        rows = self.service.store.db.execute("SELECT id FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling')", (owner, sid)).fetchall()
-        for row in rows:
-            self.service.executor.cancel(owner, row[0])
         with self.service.store.transaction():
             for table in ("events", "runs", "files"):
                 if table == "events":

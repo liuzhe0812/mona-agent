@@ -1,5 +1,6 @@
 """Own static release surface: no Gateway, desktop API or other website business routes."""
 import os
+import stat
 from pathlib import Path
 
 from aiohttp import web
@@ -13,7 +14,12 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 
 def _is_link(path: Path) -> bool:
-    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return (stat.S_ISLNK(info.st_mode)
+            or bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)))
 
 
 def _validate_static_directory(directory: Path) -> None:

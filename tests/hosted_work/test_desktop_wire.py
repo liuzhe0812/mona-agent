@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import os
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from mona.hosted_work.desktop_wire import SOCKET_PATH, DesktopWire
 from mona.hosted_work.service import WorkService
 from mona.hosted_work.store import WorkStore, encoded
 from mona.hosted_work.tenant_files import TenantFiles
+from mona.hosted_work.tenant_office import TenantOffice
+from mona.office.api import OFFICE_MANAGER_KEY
 
 ALICE, BOB = "a" * 64, "b" * 64
 
@@ -342,3 +345,89 @@ async def test_office_desktop_frame_is_controlled_and_persisted_once(tmp_path):
         assert rejected.value.code == "protocol_error"
         executor.release.set()
         await receive(socket, "turn_end")
+
+
+async def test_finish_cards_only_use_verified_artifacts_from_this_run(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "delivery", "content": "fixture delivery"})
+        running = await receive(socket, "goal_status", lambda frame: frame.get("status") == "running")
+        await receive(socket, "delta")
+        rid = running["turn_id"]
+        content = b"verified artifact fixture"
+        (state.files.root(ALICE) / "result.txt").write_bytes(content)
+        file = {"path": "/workspace/result.txt", "absolute_path": "/workspace/result.txt", "name": "result.txt",
+                "size": len(content), "size_human": "25 B", "mime": "text/plain",
+                "sha256": hashlib.sha256(content).hexdigest()}
+        state.set(ALICE, "artifact_index:" + sid, [
+            {"path": "result.txt", "task_id": rid, "delivered": True, "file": file},
+            {"path": "other.txt", "task_id": "another-run", "delivered": True, "file": {**file, "name": "wrong"}},
+            {"path": "draft.txt", "task_id": rid, "delivered": False, "file": {**file, "name": "draft"}},
+        ])
+        executor.release.set()
+        delivered = await receive(socket, "deliver_files")
+        assert delivered["files"] == [{**file, "path": "result.txt"}]
+        await receive(socket, "turn_end")
+        run = wire.service.store.run(ALICE, rid)
+        await wire.on_run_finish(ALICE, run, run["result"])
+        assert sum(record.get("event") == "deliver_files" for record, _ in state.records(ALICE, sid)) == 1
+
+
+async def test_office_delivery_validates_real_account_file_bytes(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "office-deliver", "content": "fixture office"})
+        running = await receive(socket, "goal_status", lambda frame: frame.get("status") == "running")
+        await receive(socket, "delta")
+        run = wire.service.store.run(ALICE, running["turn_id"])
+        raw = b"Office export fixture"
+        target = state.files.root(ALICE) / "export.docx"
+        target.write_bytes(raw)
+        event = {"event": "deliver_files", "files": [{"path": "export.docx", "absolute_path": "/workspace/export.docx",
+                 "name": "export.docx", "size": len(raw), "mime": "application/octet-stream"}]}
+        wire.service.store.event(ALICE, run["id"], "desktop", event)
+        await wire.on_run_event(ALICE, run, "desktop", event)
+        delivered = await receive(socket, "deliver_files")
+        digest = hashlib.sha256(raw).hexdigest()
+        assert delivered["files"][0]["sha256"] == digest
+        invalid = {"event": "deliver_files", "files": [{**event["files"][0], "sha256": "0" * 64}]}
+        wire.service.store.event(ALICE, run["id"], "desktop", invalid)
+        with pytest.raises(WorkError) as changed:
+            await wire.on_run_event(ALICE, run, "desktop", invalid)
+        assert changed.value.code == "file_changed"
+        executor.release.set()
+        await receive(socket, "turn_end")
+
+
+async def test_attach_restores_real_office_sessions_without_executing_any_run(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        office = TenantOffice(wire.service.config, authorize_session=state.session,
+                             identity=wire.service.auth.identity, workspace_for_owner=state.files.root)
+        context = await office._context(ALICE, sid)
+        created = context.app[OFFICE_MANAGER_KEY].create_session(
+            owner_session_key="websocket:" + sid, document_type="docs", workspace_root=context.workspace,
+        )
+
+        class RestoreController:
+            async def restore_editors(self, owner, chat):
+                return await office.list_states(owner, chat)
+
+        wire.controller = RestoreController()
+        await socket.close()
+        await office.close()
+        resumed, _ = await connect(client, wire)
+        await resumed.send_json({"type": "attach", "chat_id": sid})
+        restored = await receive(resumed, "attached")
+        document = restored["office_sessions"][0]
+        assert document["sessionId"] == created.session_id
+        assert document["workingPath"] == f"/workspace/.office/{created.session_id}/working.docx"
+        assert not executor.calls
+        assert wire.service.store.session_detail(ALICE, sid)["runs"] == []
+        await office.close()

@@ -38,7 +38,7 @@ def _ensure_directory(parent: Path, name: str) -> Path:
     if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
         raise WorkError("invalid_state", "工作区目录不可用。", 503)
     resolved = path.resolve(strict=True)
-    if resolved.parent != parent:
+    if resolved != path:
         raise WorkError("invalid_state", "工作区目录不可用。", 503)
     path.chmod(0o700)
     return resolved
@@ -83,7 +83,7 @@ class TenantFiles:
                 info = path.lstat()
             except FileNotFoundError:
                 continue
-            if stat.S_ISLNK(info.st_mode):
+            if stat.S_ISLNK(info.st_mode) or path.resolve() != path:
                 raise _bad_path()
             if index < len(parts) - 1 and not stat.S_ISDIR(info.st_mode):
                 raise _bad_path()

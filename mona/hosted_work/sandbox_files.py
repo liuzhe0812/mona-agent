@@ -18,11 +18,19 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 ROOT = Path("/workspace")
+TRASH = ".mona-trash"
 
 
-def relative_path(value: str) -> str:
+class FileOperationError(ValueError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def relative_path(value: str, *, private: bool = False) -> str:
     if not isinstance(value, str) or not value or len(value) > 1024 or "\\" in value or "\x00" in value:
         raise ValueError("invalid workspace path")
     if value.startswith("/workspace/"):
@@ -30,18 +38,20 @@ def relative_path(value: str) -> str:
     parts = PurePosixPath(value).parts
     if not parts or PurePosixPath(value).is_absolute() or any(part in {"..", "."} for part in parts):
         raise ValueError("path is outside workspace")
+    if not private and parts[0] == TRASH:
+        raise ValueError("private workspace path is not accessible")
     return str(PurePosixPath(*parts))
 
 
-def resolve(value: str) -> Path:
-    rel = relative_path(value)
+def resolve(value: str, *, private: bool = False) -> Path:
+    rel = relative_path(value, private=private)
     path = ROOT / rel
     current = ROOT
     for part in PurePosixPath(rel).parts:
         current /= part
         if current.is_symlink():
             raise ValueError("symbolic links are not accepted for file operations")
-    if not path.resolve().is_relative_to(ROOT):
+    if not path.resolve().is_relative_to(ROOT.resolve(strict=True)):
         raise ValueError("path is outside workspace")
     return path
 
@@ -53,7 +63,7 @@ def info(path: Path, limit: int) -> dict:
     data = path.read_bytes()
     if len(data) > limit or len(data) != s.st_size:
         raise ValueError("file changed while reading")
-    return {"path": str(path.relative_to(ROOT)), "name": path.name,
+    return {"path": path.relative_to(ROOT).as_posix(), "name": path.name,
             "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
@@ -112,14 +122,14 @@ def restore_snapshot(data: bytes, limit: int) -> None:
             raise ValueError("workspace snapshot limit exceeded")
         names = set()
         for item in entries:
-            normalized = relative_path(item.filename.rstrip("/"))
+            normalized = relative_path(item.filename.rstrip("/"), private=True)
             mode = item.external_attr >> 16
             if normalized in names or item.compress_type != zipfile.ZIP_STORED:
                 raise ValueError("unsupported workspace archive")
             if mode and stat.S_IFMT(mode) not in {0, stat.S_IFREG, stat.S_IFDIR}:
                 raise ValueError("unsupported archive entry")
             names.add(normalized)
-            path = resolve(normalized)
+            path = resolve(normalized, private=True)
             if item.is_dir():
                 path.mkdir(parents=True, exist_ok=True)
             else:
@@ -133,13 +143,94 @@ def restore_snapshot(data: bytes, limit: int) -> None:
                         target.write(chunk)
 
 
+def _move_file(path: Path, target: Path, expected: str, limit: int) -> dict:
+    def signature(value):
+        return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+    before = path.lstat()
+    current = info(path, limit)
+    if current["sha256"] != expected:
+        raise FileOperationError("file_changed")
+    if signature(before) != signature(path.lstat()):
+        raise FileOperationError("file_changed")
+    # link is exclusive on Linux as well as Windows; rename/replace can overwrite.
+    os.link(path, target, follow_symlinks=False)
+    try:
+        original, linked = path.lstat(), target.lstat()
+        if (not stat.S_ISREG(original.st_mode) or not stat.S_ISREG(linked.st_mode)
+                or original.st_nlink != 2 or linked.st_nlink != 2
+                or signature(original) != signature(before) or signature(linked) != signature(before)
+                or hashlib.sha256(target.read_bytes()).hexdigest() != expected):
+            raise FileOperationError("file_changed")
+        path.unlink()
+    except BaseException:
+        try:
+            original, linked = path.lstat(), target.lstat()
+            if (original.st_dev, original.st_ino) == (linked.st_dev, linked.st_ino) == (before.st_dev, before.st_ino):
+                target.unlink()
+        except FileNotFoundError:
+            # A completed unlink must never discard the only remaining copy.
+            raise FileOperationError("file_operation_unknown") from None
+        raise
+    return {**current, "path": target.relative_to(ROOT).as_posix(), "name": target.name}
+
+
+def _mutate(request: dict, file_limit: int) -> dict:
+    action = request["action"]
+    fields = {"action", "path", "expected_sha256"} | ({"destination"} if action == "rename" else set())
+    if set(request) != fields:
+        raise FileOperationError("invalid_file_operation")
+    expected = request["expected_sha256"]
+    if not isinstance(expected, str) or len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise FileOperationError("invalid_file_operation")
+    try:
+        quiesce()
+        path = resolve(request["path"])
+        target = resolve(request["destination"]) if action == "rename" else None
+        if target is not None:
+            return _move_file(path, target, expected, file_limit)
+        metadata = info(path, file_limit)
+        if metadata["sha256"] != expected:
+            raise FileOperationError("file_changed")
+        trash = resolve(TRASH, private=True)
+        trash.mkdir(mode=0o700, exist_ok=True)
+        slot = trash / uuid4().hex
+        slot.mkdir(mode=0o700)
+        try:
+            audit = {**metadata, "deleted_at": time.time()}
+            fd = os.open(slot / "metadata.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(audit, stream, ensure_ascii=False, separators=(",", ":"))
+            _move_file(path, slot / "file", expected, file_limit)
+        except BaseException:
+            if not (slot / "file").exists():
+                (slot / "metadata.json").unlink(missing_ok=True)
+                slot.rmdir()
+            raise
+        return {**metadata, "trashed": True}
+    except FileOperationError:
+        raise
+    except FileNotFoundError:
+        raise FileOperationError("file_not_found") from None
+    except FileExistsError:
+        raise FileOperationError("file_exists") from None
+    except (ValueError, IsADirectoryError, NotADirectoryError):
+        raise FileOperationError("invalid_file_operation") from None
+    except OSError:
+        raise FileOperationError("file_operation_failed") from None
+
+
 def operate(request: dict, file_limit: int):
     action = request["action"]
+    if action in {"rename", "trash"}:
+        return _mutate(request, file_limit)
     if action == "list":
         directory = ROOT if request.get("path") in (None, "", ".", "/workspace") else resolve(request["path"])
         entries = []
         for path in sorted(directory.iterdir()):
-            entry = {"path": str(path.relative_to(ROOT)), "name": path.name,
+            if path == ROOT / TRASH:
+                continue
+            entry = {"path": path.relative_to(ROOT).as_posix(), "name": path.name,
                      "kind": "link" if path.is_symlink() else "directory" if path.is_dir() else "file"}
             entries.append(entry)
             if len(entries) > 500:
@@ -205,7 +296,10 @@ def main():
         data = sys.stdin.buffer.read(2 * limit + 65537)
         if len(data) > 2 * limit + 65536:
             raise ValueError("request exceeds limit")
-        result = operate(json.loads(data), limit)
+        try:
+            result = operate(json.loads(data), limit)
+        except FileOperationError as exc:
+            result = {"error": exc.code}
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 

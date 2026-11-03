@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -72,6 +73,27 @@ def test_foreign_or_unknown_session_is_rejected(files):
         files.invoke(OWNER_A, "workspace_canvas_list", {"workspaceRoot": "/workspace", "chatId": CHAT_B})
     assert denied.value.status == 404
     assert files.invoke(OWNER_A, "workspace_canvas_list", {"workspaceRoot": "/workspace"}) == []
+
+
+def test_owner_directory_alias_cannot_enter_another_accounts_root(files):
+    other = files.root(OWNER_B)
+    alias = other.parent.parent / OWNER_A
+    if os.name == "nt":
+        created = subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(other.parent)], capture_output=True)
+        if created.returncode:
+            pytest.skip("Directory junction creation unavailable")
+    else:
+        alias.symlink_to(other.parent, target_is_directory=True)
+    try:
+        with pytest.raises(WorkError) as denied:
+            files.root(OWNER_A)
+        assert denied.value.code == "invalid_state"
+        assert other.is_dir()
+    finally:
+        if os.name == "nt":
+            alias.rmdir()
+        else:
+            alias.unlink()
 
 
 def test_deleted_session_does_not_break_another_sessions_list(tmp_path):

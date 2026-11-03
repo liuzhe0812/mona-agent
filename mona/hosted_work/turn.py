@@ -18,10 +18,10 @@ from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.auth_client import AuthClient
 from mona.hosted_work.contracts import WorkError, identifier, private_directory
+from mona.hosted_work.editor_tools import build_editor_tools
 from mona.hosted_work.providers import create_provider
 from mona.hosted_work.sandbox import DockerSandbox
 from mona.hosted_work.tools import HostedTools
-from mona.hosted_work.editor_tools import build_editor_tools
 
 SYSTEM = """你是 Mona 在线 Work 助手。根据用户目标完成信息整理、分析、写作和工作区文件任务。
 仅使用本轮提供的工具。命令和文件操作发生在用户自己的隔离工作区 /workspace，不能访问宿主、其他用户、平台凭据或内网。Shell 没有网络；读取公共网页使用 web_fetch。
@@ -167,6 +167,10 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
         result.update(status="cancelled", message="本轮已停止，已有输出保留。")
     except Exception as exc:
         result.update(status="failed", message=exc.message if isinstance(exc, WorkError) else "在线任务未能完成，请核对已有结果。")
+        if isinstance(exc, WorkError):
+            result["error"] = {"code": exc.code, "status": exc.status}
+            if exc.code == "file_operation_unknown":
+                result["status"] = "unknown"
     finally:
         if provider is not None:
             closer = getattr(provider, "aclose", None) or getattr(provider, "close", None)

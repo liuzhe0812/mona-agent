@@ -106,6 +106,12 @@ async def test_account_and_chat_scopes_are_server_authorized(tmp_path):
         assert await response.read() == b"account A document"
         listed = await client.get(OFFICE_PREFIX + "/sessions", headers=headers())
         assert (await listed.json())["sessions"][0]["workingPath"] == state["workingPath"]
+        states = await office.list_states(ALICE, CHAT_A)
+        assert len(states) == 1 and states[0]["sessionId"] == state["sessionId"]
+        assert states[0]["workingPath"] == state["workingPath"]
+        with pytest.raises(WorkError) as foreign:
+            await office.list_states(BOB, CHAT_A)
+        assert foreign.value.status == 404
 
         external = tmp_path / "private.docx"
         external.write_bytes(b"host file")

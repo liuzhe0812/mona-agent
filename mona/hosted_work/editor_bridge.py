@@ -52,7 +52,9 @@ class EditorBridge:
             result = await self.desktop.wire.request_platform(owner, sid, {
                 "event": "hosted_platform_event", "name": "canvas-agent-request",
                 "request_id": request_id, "payload": payload}, timeout=timeout / 1000)
-        except TimeoutError:
+        except WorkError as error:
+            if error.code != "editor_unavailable":
+                raise
             await self.desktop.wire.emit_to_chat(owner, sid, {"event": "hosted_platform_event", "name": "canvas-agent-cancel",
                                                            "payload": {"requestId": request_id}})
             result = {"ok": False, "status": "outcome_unknown" if args["action"] == "apply" else "unavailable",

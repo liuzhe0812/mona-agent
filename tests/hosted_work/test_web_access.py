@@ -1,11 +1,17 @@
 """Browser-style Origin requests and explicitly approved direct LAN access."""
+import os
+import subprocess
+
 import pytest
 import pytest_asyncio
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from yarl import URL
 
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import private_listener, website_origin
 from mona.hosted_work.contracts import owner_key
+from mona.hosted_work.frontend import register_frontend
 from mona.hosted_work.service import WorkService, create_app
 from mona.hosted_work.store import WorkStore
 
@@ -42,6 +48,19 @@ async def website(tmp_path):
     (static / "hosted-work.html").write_text('<script type="module" crossorigin src="/work/assets/app.js"></script>', encoding="utf-8")
     (static / "assets/app.js").write_text('document.body.dataset.ready="yes";', encoding="utf-8")
     (static / "assets/app.css").write_text("body {margin: 0;}", encoding="utf-8")
+    for editor in ("docs", "sheets", "slides"):
+        directory = static / "office-editor" / editor
+        directory.mkdir(parents=True)
+        (directory / "index.html").write_text("<!doctype html><title>Editor</title>", encoding="utf-8")
+    for name, contents in (("office-editor/assets/editor.js", "export const editor = true;"),
+                           ("office-editor/assets/editor.css", "body {margin: 0;}"),
+                           ("brand/sidebar-app-picker-icons.png", "image"),
+                           ("fonts/font.woff2", "font"), ("alphatab/font/example.woff", "font"),
+                           ("soundfonts/FluidR3_GM/piano.js", "audio")):
+        path = static / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+    (static / "private.txt").write_text("private", encoding="utf-8")
     config = HostedWorkConfig(public_origin="http://172.31.3.176:17175", bind_host="172.31.3.176",
                               allow_insecure_lan_http=True, frontend_dir=str(static))
     calls = []
@@ -75,6 +94,63 @@ async def test_browser_origin_assets_keep_their_mime_type(website):
 
 
 @pytest.mark.asyncio
+async def test_shared_office_and_sidebar_assets_are_public(website):
+    client, calls = website
+    paths = [(f"/work/office-editor/{editor}/index.html", "text/html") for editor in ("docs", "sheets", "slides")]
+    paths += [("/work/office-editor/assets/editor.js", "javascript"),
+              ("/work/office-editor/assets/editor.css", "text/css"),
+              ("/work/brand/sidebar-app-picker-icons.png", "image/png"),
+              ("/work/fonts/font.woff2", None),
+              ("/work/alphatab/font/example.woff", None),
+              ("/work/soundfonts/FluidR3_GM/piano.js", "javascript")]
+    for path, content_type in paths:
+        for method in ("GET", "HEAD"):
+            response = await client.request(method, path, headers={"Host": "172.31.3.176:17175"})
+            assert response.status == 200
+            if content_type:
+                assert content_type in response.headers["Content-Type"]
+            assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_frontend_works_without_optional_assets_or_state_dir(tmp_path):
+    static = tmp_path / "ui"
+    (static / "assets").mkdir(parents=True)
+    (static / "hosted-work.html").write_text("<!doctype html>", encoding="utf-8")
+    app = web.Application()
+    register_frontend(app, HostedWorkConfig(frontend_dir=str(static)))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        assert (await client.get("/work/")).status == 200
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("location", ["office-editor", "office-editor/docs/shortcut"])
+def test_frontend_rejects_linked_static_paths(tmp_path, location):
+    static = tmp_path / "ui"
+    (static / "assets").mkdir(parents=True)
+    (static / "hosted-work.html").write_text("<!doctype html>", encoding="utf-8")
+    external = tmp_path / "outside"
+    external.mkdir()
+    link = static / location
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("creating symlinks is unavailable on this system")
+        if any(char in str(link) + str(external) for char in "&|<>^%!"):
+            pytest.skip("temporary path contains Windows command characters")
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)], check=True, capture_output=True)
+    with pytest.raises(ValueError, match="invalid static Work release"):
+        register_frontend(web.Application(), HostedWorkConfig(frontend_dir=str(static)))
+
+
+@pytest.mark.asyncio
 async def test_root_and_favicon_are_not_login_protected(website):
     client, calls = website
     response = await client.get("/", allow_redirects=False)
@@ -103,7 +179,7 @@ async def test_lan_api_stays_authenticated_and_rejects_foreign_origins(website):
 @pytest.mark.asyncio
 async def test_unknown_host_cannot_bypass_origin_with_dns_rebinding(website):
     client, calls = website
-    for path in ["/work/", "/work/assets/app.js", "/api/work/sessions"]:
+    for path in ["/work/", "/work/assets/app.js", "/work/office-editor/docs/index.html", "/api/work/sessions"]:
         response = await client.get(path, headers={"Host": "attacker.invalid", "Authorization": "Bearer synthetic"})
         assert response.status == 403
     assert not calls
@@ -116,4 +192,7 @@ async def test_static_allowlist_does_not_open_file_or_task_routes(website):
     assert (await client.get("/work/assets/../hosted-work.html")).status == 200  # Only the public HTML entry.
     assert (await client.get("/work/assets/missing.js")).status == 404
     assert (await client.get("/api/work/sessions/" + "a" * 32 + "/files/" + "b" * 32)).status == 401
+    assert (await client.get("/api/work/desktop/api/office/sessions")).status == 401
+    assert (await client.post("/work/office-editor/docs/index.html")).status == 401
+    assert (await client.get(URL("/work/office-editor/%2e%2e/private.txt", encoded=True))).status in (401, 403, 404)
     assert not calls

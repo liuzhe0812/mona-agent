@@ -37,6 +37,14 @@ class ProcessExecutor:
         if process and process.returncode is None:
             process.send_signal(signal.SIGTERM)
 
+    async def file(self, owner: str, operation_id: str, request: dict, on_event) -> dict:
+        if (not isinstance(request, dict) or not isinstance(request.get("action"), str)
+                or request["action"] not in {"rename", "trash"}):
+            raise WorkError("invalid_operation", "此文件操作不可用。")
+        # Existing file lifecycle owns the user lock, snapshot commit and cleanup.
+        return await self.execute({"action": "upload", "owner": owner, "run_id": operation_id,
+                                   "file_request": dict(request)}, on_event)
+
     async def execute(self, payload: dict, on_event) -> dict:
         if sys.platform != "linux":
             raise WorkError("linux_required", "在线任务需要 Ubuntu 隔离环境，未改用本机执行。", 503)

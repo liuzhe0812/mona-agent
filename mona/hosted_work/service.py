@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import mimetypes
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -120,7 +121,11 @@ class WorkService:
                     if self.desktop is not None:
                         index = self.desktop.state.get(owner, "artifact_index:" + sid, [])
                         index = [item for item in index if item["path"] != info["path"]]
-                        index.append({"path": info["path"], "task_id": run_id, "delivered": True})
+                        logical = "/workspace/" + info["path"].removeprefix("/workspace/")
+                        index.append({"path": info["path"], "task_id": run_id, "delivered": True,
+                            "file": {"path": logical, "absolute_path": logical, "name": info["name"],
+                                "size": info["size"], "size_human": f"{info['size']} B", "sha256": info["sha256"],
+                                "mime": mimetypes.guess_type(info["name"])[0] or "application/octet-stream"}})
                         self.desktop.state.set(owner, "artifact_index:" + sid, index)
             # Internal file paths and diagnostic details do not become default UI output.
             public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage") if key in result}
@@ -215,6 +220,57 @@ class WorkService:
             if len(data) != info["size"] or hashlib.sha256(data).hexdigest() != info["sha256"]:
                 raise WorkError("download_failed", "下载文件校验失败。", 503)
             return info["name"], data
+        finally:
+            self.store.finish_file_operation(owner, operation_id, known=known)
+            self._release(owner, engine)
+
+    async def mutate_file(self, owner: str, sid: str, file_id: str, action: str, *,
+                          expected_sha256: str, destination: str | None = None) -> dict:
+        from uuid import uuid4
+
+        info = self.store.file(owner, sid, file_id)
+        if expected_sha256 != info["sha256"]:
+            raise WorkError("file_changed", "文件已变化，请刷新后核对。", 409)
+        if action not in {"rename", "trash"}:
+            raise WorkError("invalid_request", "此文件操作不可用。")
+        target = relative_path(destination) if action == "rename" else info["path"]
+        if action == "rename" and target.rsplit("/", 1)[:-1] != info["path"].rsplit("/", 1)[:-1]:
+            raise WorkError("invalid_path", "请在文件所在位置更改名称。")
+        self.store.require_idle(owner)
+        engine = self._acquire(owner)
+        operation_id, known = uuid4().hex, False
+        try:
+            self.store.begin_file_operation(owner, operation_id, action)
+            command = {"action": action, "path": info["path"], "expected_sha256": expected_sha256}
+            if action == "rename":
+                command["destination"] = target
+            result = await self.executor.file(owner, operation_id, command, self._no_event)
+            known = result.get("status") in {"failed", "cancelled"}
+            if result.get("status") != "completed" or not result.get("workspace_saved"):
+                error = result.get("error", {})
+                messages = {"file_not_found": (404, "未找到该文件，请刷新后核对。"),
+                            "file_exists": (409, "同名文件已存在，请更换名称。"),
+                            "file_changed": (409, "文件已变化，请刷新后核对。"),
+                            "invalid_file_operation": (400, "文件操作无效。")}
+                code = error.get("code") if isinstance(error, dict) else None
+                status, message = messages.get(code, (503, "文件操作未能确认，请刷新后核对，勿重复提交。"))
+                raise WorkError(code if code in messages else "file_operation_failed", message, status)
+            try:
+                current = self._file_info(result["file"])
+            except (KeyError, TypeError, ValueError, WorkError):
+                raise WorkError("file_operation_unknown", "文件操作结果无法核对，请联系管理员，勿重复提交。", 503) from None
+            if (current["path"] != target or current["size"] != info["size"] or current["sha256"] != expected_sha256
+                    or action == "trash" and result["file"].get("trashed") is not True):
+                known = False
+                raise WorkError("file_operation_unknown", "文件操作结果无法核对，请联系管理员，勿重复提交。", 503)
+            with self.store.transaction():
+                if action == "rename":
+                    self.store.db.execute("UPDATE files SET path=?,name=? WHERE owner=? AND path=?",
+                                          (target, current["name"], owner, info["path"]))
+                else:
+                    self.store.db.execute("DELETE FROM files WHERE owner=? AND path=?", (owner, info["path"]))
+            known = True
+            return current
         finally:
             self.store.finish_file_operation(owner, operation_id, known=known)
             self._release(owner, engine)

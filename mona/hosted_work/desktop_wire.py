@@ -206,7 +206,15 @@ class DesktopWire:
         sid = _chat(raw_sid)
         self.state.session(peer.owner, sid)
         peer.chats.add(sid)
-        await peer.socket.send_json({"event": "attached", "chat_id": sid})
+        editors = []
+        if self.controller is not None and hasattr(self.controller, "restore_editors"):
+            restored = self.controller.restore_editors(peer.owner, sid)
+            if inspect.isawaitable(restored):
+                restored = await restored
+            if not isinstance(restored, list):
+                raise WorkError("protocol_error", "文档恢复记录格式无效。", 503)
+            editors = [self._office_state(item) for item in restored]
+        await peer.socket.send_json({"event": "attached", "chat_id": sid, "office_sessions": editors})
         active = self.service.store.db.execute(
             "SELECT id FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown') ORDER BY created DESC LIMIT 1",
             (peer.owner, sid)).fetchone()
@@ -215,17 +223,6 @@ class DesktopWire:
             await peer.socket.send_json(self._goal(run, self.state.get(peer.owner, "run:" + run["id"], {})))
         else:
             await peer.socket.send_json({"event": "goal_status", "chat_id": sid, "status": "idle"})
-        if self.controller is not None and hasattr(self.controller, "restore_editors"):
-            restored = self.controller.restore_editors(peer.owner, sid)
-            if inspect.isawaitable(restored):
-                restored = await restored
-            if not isinstance(restored, list):
-                raise WorkError("protocol_error", "文档恢复记录格式无效。", 503)
-            for item in restored:
-                session = self._office_state(item)
-                await peer.socket.send_json({"event": "message", "chat_id": sid, "kind": "progress",
-                    "text": "已恢复文档：" + session["displayName"],
-                    "agent_ui": {"kind": "office_session", "data": {"session": session}}})
 
     @staticmethod
     def _goal(run: dict, metadata: dict) -> dict:
@@ -344,7 +341,7 @@ class DesktopWire:
                 digest = actual
             if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
                 raise WorkError("protocol_error", "交付文件缺少可核对的摘要。", 503)
-            result.append({"path": logical, "absolute_path": logical, "name": name, "size": size,
+            result.append({"path": logical.removeprefix("/workspace/"), "absolute_path": logical, "name": name, "size": size,
                            "size_human": item.get("size_human") or f"{size / 1024:.1f} KB",
                            "mime": item.get("mime") or mimetypes.guess_type(name)[0] or "application/octet-stream",
                            "sha256": digest})
@@ -364,7 +361,7 @@ class DesktopWire:
             if not isinstance(item, dict) or item.get("local_path"):
                 raise WorkError("invalid_request", "网页附件必须上传文件内容。")
             name, url = item.get("name"), item.get("data_url")
-            if (not isinstance(name, str) or not name or len(name.encode()) > 240 or name in {".", ".."}
+            if (not isinstance(name, str) or not name or len(name) > 160 or len(name.encode()) > 240 or name in {".", ".."}
                     or any(c in name for c in "/\\:") or any(ord(c) < 32 or ord(c) == 127 for c in name)):
                 raise WorkError("invalid_filename", "附件名称无效。")
             match = _DATA_URL.fullmatch(url) if isinstance(url, str) and len(url) <= self.service.config.max_file_bytes * 2 else None
@@ -583,6 +580,9 @@ class DesktopWire:
             raise WorkError("editor_unavailable", "编辑器尚未确认操作结果，请核对后继续。", 503) from None
         finally:
             self._platform.pop(key, None)
+            self._platform_done.setdefault((owner, rid), (sid, ""))
+            while len(self._platform_done) > 256:
+                self._platform_done.pop(next(iter(self._platform_done)))
 
     def platform_pending(self, owner: str, request: str) -> bool:
         matching = [(key, future) for key, future in self._platform.items()

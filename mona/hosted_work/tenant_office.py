@@ -51,11 +51,11 @@ def _directory(root: Path, *parts: str) -> Path:
         raise _invalid_state()
     current = root
     for part in parts:
-        current = current / part
-        if current.is_symlink():
+        expected = current / part
+        if expected.is_symlink():
             raise _invalid_state()
-        current = private_directory(current)
-        if not current.is_relative_to(root):
+        current = private_directory(expected)
+        if current != expected:
             raise _invalid_state()
     return current
 
@@ -68,7 +68,7 @@ def _within(root: Path, path: Path) -> Path:
     current = root
     for part in relative.parts:
         current = current / part
-        if current.is_symlink():
+        if current.is_symlink() or current.resolve() != current:
             raise _invalid_state()
     resolved = path.resolve()
     if not resolved.is_relative_to(root):
