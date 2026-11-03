@@ -968,7 +968,6 @@ export interface VideoRuntimeItem {
 }
 
 export interface VideoRuntimeStatus {
-  node: VideoRuntimeItem;
   ffmpeg: VideoRuntimeItem;
   chrome: VideoRuntimeItem;
 }
@@ -993,7 +992,7 @@ export interface VideoStyleColorTokens {
   [key: string]: string;
 }
 
-export type VideoRuntimeComponent = "node" | "ffmpeg";
+export type VideoRuntimeComponent = "ffmpeg" | "chrome";
 export type VideoRuntimeDownloadState =
   "pending" | "downloading" | "completed" | "failed" | "cancelled";
 
@@ -1312,7 +1311,7 @@ export async function fetchVideoRuntimeCheck(
 
 export async function downloadVideoRuntime(
   token: string,
-  component: string,
+  component: VideoRuntimeComponent,
   base?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
@@ -2071,9 +2070,6 @@ export interface VideoExportStatus {
   needDownload?: boolean;
   startedAt?: string;
   finishedAt?: string;
-  requestedEngine?: "legacy" | "hyperframes" | "auto";
-  actualEngine?: "legacy" | "hyperframes";
-  fallbackReason?: string | null;
   recoverable?: boolean;
   deliveryArtifacts?: Partial<
     Record<
@@ -2111,7 +2107,6 @@ export async function exportVideoProject(
   name: string,
   opts?: {
     quality?: "draft" | "standard" | "high";
-    renderEngine?: "legacy" | "hyperframes" | "auto";
     releaseType?: "draft" | "final";
   },
   base?: string,
@@ -2119,7 +2114,6 @@ export async function exportVideoProject(
   ok: boolean;
   stage?: string;
   message?: string;
-  requestedEngine?: "legacy" | "hyperframes" | "auto";
   error?: string;
 }> {
   const effectiveBase = base ?? (await getServicesHttpBase());

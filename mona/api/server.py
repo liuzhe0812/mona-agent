@@ -4297,6 +4297,32 @@ async def _cancel_computer_use_startup(app: web.Application) -> None:
             await task
 
 
+async def _schedule_bundled_runtime_startup(app: web.Application) -> None:
+    from mona.runtime.bundled import bundled_runtime_root
+    from mona.runtime.official import get_official_runtime_jobs
+
+    if bundled_runtime_root() is None:
+        return
+
+    async def run() -> None:
+        try:
+            await get_official_runtime_jobs().ensure_bundled()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Bundled script environment preparation failed")
+
+    app["bundled_runtime_startup_task"] = asyncio.create_task(run())
+
+
+async def _cancel_bundled_runtime_startup(app: web.Application) -> None:
+    task = app.get("bundled_runtime_startup_task")
+    if isinstance(task, asyncio.Task) and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 async def handle_mcp_list_servers(request: web.Request) -> web.Response:
     """GET /api/mcp/servers - list configured servers with runtime status + masked config."""
     from mona.agent.tools.mcp import BUILTIN_COMPUTER_SERVER_NAME
@@ -6216,7 +6242,7 @@ def _get_video_project_status(project_dir: Path) -> dict:
 
 
 async def handle_video_runtime_check(request: web.Request) -> web.Response:
-    """GET /api/video/runtime-check - detect Node/FFmpeg/Chrome availability."""
+    """GET /api/video/runtime-check - detect FFmpeg/Chrome availability."""
     try:
         from mona.api.video_runtime import VideoRuntime
 
@@ -6359,7 +6385,7 @@ async def handle_doc2note_extract(request: web.Request) -> web.Response:
 
 
 async def handle_video_runtime_download(request: web.Request) -> web.Response:
-    """POST /api/video/runtime-download  body: {"component": "node|ffmpeg"}."""
+    """POST /api/video/runtime-download  body: {"component": "ffmpeg"}."""
     try:
         body = await request.json()
     except Exception:
@@ -6368,9 +6394,9 @@ async def handle_video_runtime_download(request: web.Request) -> web.Response:
         from mona.api.video_runtime import VideoRuntime
 
         component = str(body.get("component", "") or "").strip()
-        if component not in {"node", "ffmpeg"}:
+        if component not in {"ffmpeg", "chrome"}:
             return web.json_response(
-                {"error": "component must be node or ffmpeg"}, status=400
+                {"error": "component must be ffmpeg or chrome"}, status=400
             )
         result = await VideoRuntime().ensure_runtime(component)
         return web.json_response(result)
@@ -9111,7 +9137,6 @@ def _cleanup_render_temporary_files(project_dir: Path) -> None:
     for name in (
         "output.pending.mp4",
         "silent.pending.mp4",
-        "hyperframes-silent.mp4",
     ):
         (renders_dir / name).unlink(missing_ok=True)
 
@@ -9130,7 +9155,6 @@ async def _write_video_delivery_artifacts(
     project_dir: Path,
     meta: dict[str, Any],
     render_result: dict[str, Any],
-    engine: str,
     cancel_event: threading.Event,
     release_type: str = "draft",
 ) -> dict[str, Any]:
@@ -9357,10 +9381,7 @@ async def _write_video_delivery_artifacts(
         "projectVersion": meta.get("projectVersion", 1),
         "styleVersion": meta.get("styleVersion"),
         "releaseType": release_type,
-        "renderer": {
-            "engine": engine,
-            "hyperframesVersion": "0.8.16" if engine == "hyperframes" else None,
-        },
+        "renderer": {"engine": "mona-motion"},
         "output": {
             "duration": render_result.get("duration"),
             "fps": render_result.get("fps"),
@@ -9406,38 +9427,6 @@ async def _write_video_delivery_artifacts(
         "qualityStatus": report["status"],
         "warnings": warnings,
     }
-
-
-def _prepare_hyperframes_snapshot(
-    project_dir: Path, snapshot_scenes_dir: Path
-) -> Path:
-    import importlib.util
-
-    target = snapshot_scenes_dir.parent / "hyperframes"
-    if target.is_dir():
-        shutil.rmtree(target)
-    shutil.copytree(snapshot_scenes_dir, target / "scenes")
-    for file_name in ("storyboard.md", "meta.json"):
-        source = project_dir / file_name
-        if source.is_file():
-            shutil.copyfile(source, target / file_name)
-    for directory_name in ("assets", "style"):
-        source = project_dir / directory_name
-        if source.is_dir():
-            shutil.copytree(source, target / directory_name)
-
-    script = _video_skill_dir() / "scripts" / "merge_scenes.py"
-    module_spec = importlib.util.spec_from_file_location(
-        "mona_video_hyperframes_merge", script
-    )
-    if module_spec is None or module_spec.loader is None:
-        raise RuntimeError("merge_scenes.py module spec load failed")
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
-    result = module.main(target)
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error") or "HyperFrames composition build failed")
-    return target
 
 
 async def _communicate_video_subprocess(
@@ -9687,155 +9676,15 @@ async def _mix_project_audio(
         muxed_output.unlink(missing_ok=True)
 
 
-async def _run_hyperframes_engine(
-    project_dir: Path,
-    snapshot_scenes_dir: Path,
-    fps: int,
-    quality: str,
-    progress_cb: Callable[[str, float, str], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> dict[str, Any]:
-    import importlib.util
-
-    from mona.api.video_runtime import VideoRuntime
-
-    runtime = VideoRuntime()
-    ffmpeg_path = runtime.get_ffmpeg_path()
-    ffprobe_path = runtime.get_ffprobe_path()
-    browser_path = runtime.get_chrome_path()
-    if not ffmpeg_path or not ffprobe_path or not browser_path:
-        return {
-            "ok": False,
-            "error": "HyperFrames runtime requires Node, Chrome, FFmpeg and FFprobe",
-        }
-    node_path = runtime.get_node_path()
-    npx_path = runtime.get_npx_path()
-    if not node_path or not npx_path:
-        return {"ok": False, "error": "HyperFrames runtime requires Node and npx"}
-    hyperframes_root = _prepare_hyperframes_snapshot(
-        project_dir, snapshot_scenes_dir
-    )
-    script = _video_skill_dir() / "scripts" / "hyperframes_cli.py"
-    module_spec = importlib.util.spec_from_file_location(
-        "mona_video_hyperframes_cli", script
-    )
-    if module_spec is None or module_spec.loader is None:
-        return {"ok": False, "error": "HyperFrames CLI module load failed"}
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
-    cli = module.HyperframesCLI(hyperframes_root, runtime, cancel_event)
-    if progress_cb:
-        progress_cb("rendering", 18, "正在检查视频内容...")
-    checked = await cli.check(samples=9)
-    if checked.get("cancelled"):
-        return checked
-    if not checked.get("ok"):
-        return {
-            "ok": False,
-            "error": "HyperFrames check failed",
-            "details": checked,
-        }
-    actual_fps = fps if fps > 0 else {"draft": 24, "standard": 30, "high": 60}[quality]
-    hyperframes_output = hyperframes_root / "renders" / "hyperframes-silent.mp4"
-    silent_output = project_dir / "renders" / "hyperframes-silent.mp4"
-    if progress_cb:
-        progress_cb("rendering", 25, "正在生成视频画面...")
-    rendered = await cli.render(
-        "renders/hyperframes-silent.mp4",
-        quality=quality,
-        fps=actual_fps,
-        workers=1,
-        progress_cb=(
-            (
-                lambda percent, message: progress_cb(
-                    "rendering",
-                    round(25 + min(100, max(0, percent)) * 0.65, 1),
-                    "正在生成视频画面...",
-                )
-            )
-            if progress_cb
-            else None
-        ),
-    )
-    if rendered.get("cancelled"):
-        return rendered
-    if not rendered.get("ok") or not hyperframes_output.is_file():
-        return {
-            "ok": False,
-            "error": "HyperFrames render failed",
-            "details": rendered,
-        }
-    silent_output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(hyperframes_output), silent_output)
-    if progress_cb:
-        progress_cb("encoding", 92, "正在校验视频输出...")
-    probe = await _probe_video_output(silent_output, ffprobe_path, cancel_event)
-    streams = probe.get("streams") or []
-    stream = streams[0] if streams else {}
-    duration = float((probe.get("format") or {}).get("duration") or 0)
-    output = project_dir / "renders" / "output.pending.mp4"
-    narration = project_dir / "audio" / "narration.mp3"
-    if narration.is_file():
-        if progress_cb:
-            progress_cb("muxing", 96, "正在合成旁白音轨...")
-        process = await asyncio.create_subprocess_exec(
-            ffmpeg_path,
-            "-nostdin",
-            "-y",
-            "-i",
-            str(silent_output),
-            "-i",
-            str(narration),
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-af",
-            "apad",
-            "-shortest",
-            str(output),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=0x08000000 if sys.platform == "win32" else 0,
-        )
-        _, stderr = await _communicate_video_subprocess(process, cancel_event)
-        if process.returncode != 0:
-            return {
-                "ok": False,
-                "error": (stderr or b"").decode("utf-8", "replace"),
-            }
-    else:
-        silent_output.replace(output)
-    if not output.is_file() or output.stat().st_size <= 0:
-        return {"ok": False, "error": "HyperFrames output is missing or empty"}
-    return {
-        "ok": True,
-        "output": str(output.relative_to(project_dir)),
-        "absolute_output": str(output),
-        "duration": round(duration, 3),
-        "fps": actual_fps,
-        "resolution": [int(stream.get("width") or 0), int(stream.get("height") or 0)],
-        "total_frames": max(1, int(round(duration * actual_fps))),
-        "audio": narration.is_file(),
-        "engine": "hyperframes",
-    }
-
-
 async def _run_render_task(
     project_dir: Path,
     fps: int,
     quality: str,
-    render_engine: str = "legacy",
-    allow_fallback: bool = True,
     cancel_event: threading.Event | None = None,
     release_type: str = "draft",
 ) -> None:
-    """Render one project with the requested engine and safe fallback."""
+    """Render one project from a snapshot of its approved content."""
     name = project_dir.name
-    requested_engine = render_engine if render_engine in {"legacy", "hyperframes", "auto"} else "legacy"
-    actual_engine = "legacy"
-    fallback_reason: str | None = None
     cancel_event = cancel_event or threading.Event()
     try:
         _raise_if_video_render_cancelled(cancel_event)
@@ -9940,6 +9789,11 @@ async def _run_render_task(
         render_runtime = VideoRuntime()
         render_ffmpeg_path = render_runtime.get_ffmpeg_path()
         render_browser_path = render_runtime.get_chrome_path()
+        if not render_browser_path:
+            prepared = await render_runtime.ensure_runtime("chrome")
+            if not prepared.get("ok"):
+                raise RuntimeError(str(prepared.get("error") or "视频画面渲染资源尚未准备"))
+            render_browser_path = prepared["path"]
 
         _write_render_status(project_dir, {
             "stage": "rendering",
@@ -9955,61 +9809,22 @@ async def _run_render_task(
                 "stage": "rendering",
                 "progress": percent,
                 "message": message,
-                "requestedEngine": requested_engine,
-                "actualEngine": actual_engine,
-                "fallbackReason": fallback_reason,
                 "started_at": prev.get("started_at") or datetime.now().isoformat(),
             })
 
-        result: dict[str, Any]
-        # Authored sandbox scenes use the same seek contract as their native preview.
-        use_hyperframes = meta.get("authoringMode") != "huashu-motion" and (requested_engine == "hyperframes" or (
-            requested_engine == "auto" and not any(scene.get("authored") for scene in scenes)
-        ))
-        if use_hyperframes:
-            actual_engine = "hyperframes"
-            if meta.get("narrationEnabled") and targets:
-                paths = [audio_dir / f"scene_{int(scene['index']):02d}.mp3" for scene in scenes]
-                await asyncio.to_thread(
-                    mod._concat_scene_audio,
-                    [path if path.is_file() else None for path in paths],
-                    audio_dir / "narration.mp3", cancel_event, render_ffmpeg_path,
-                    durations=[float(scene.get("duration") or 5) for scene in scenes],
-                )
-            result = await _run_hyperframes_engine(
-                snapshot_root,
-                snapshot_scenes_dir,
-                fps,
-                quality,
-                _on_render_progress,
-                cancel_event,
-            )
-            if result.get("cancelled") or cancel_event.is_set():
-                raise _VideoRenderCancelledError("视频导出已取消")
-            if not result.get("ok") and allow_fallback and result.get("error") != "HyperFrames check failed":
-                fallback_reason = str(result.get("error") or "HyperFrames failed")[:500]
-                actual_engine = "legacy"
-                _on_render_progress(
-                    "rendering", 15, "正在继续生成视频画面..."
-                )
-        else:
-            result = {"ok": False, "error": "legacy renderer selected"}
-
-        if actual_engine == "legacy" and not result.get("ok"):
-            # render_project is a sync wrapper around render_project_async.
-            # scenes_dir 指向快照目录，渲染与后续编辑隔离。
-            result = await asyncio.to_thread(
-                mod.render_project,
-                str(snapshot_root),
-                fps,
-                quality,
-                _on_render_progress,
-                scenes_dir=snapshot_scenes_dir,
-                cancel_event=cancel_event,
-                output_name="output.pending.mp4",
-                ffmpeg_path=render_ffmpeg_path,
-                browser_path=render_browser_path,
-            )
+        # scenes_dir 指向快照目录，渲染与后续编辑隔离。
+        result = await asyncio.to_thread(
+            mod.render_project,
+            str(snapshot_root),
+            fps,
+            quality,
+            _on_render_progress,
+            scenes_dir=snapshot_scenes_dir,
+            cancel_event=cancel_event,
+            output_name="output.pending.mp4",
+            ffmpeg_path=render_ffmpeg_path,
+            browser_path=render_browser_path,
+        )
 
         _raise_if_video_render_cancelled(cancel_event)
 
@@ -10033,7 +9848,6 @@ async def _run_render_task(
                     snapshot_root,
                     meta,
                     result,
-                    actual_engine,
                     cancel_event,
                     release_type,
                 )
@@ -10076,9 +9890,6 @@ async def _run_render_task(
                 "resolution": result.get("resolution"),
                 "total_frames": result.get("total_frames"),
                 "audio": result.get("audio"),
-                "requestedEngine": requested_engine,
-                "actualEngine": actual_engine,
-                "fallbackReason": fallback_reason,
                 "deliveryArtifacts": delivery["artifacts"],
                 "qualityStatus": delivery["qualityStatus"],
                 "deliveryWarnings": delivery["warnings"],
@@ -10100,16 +9911,11 @@ async def _run_render_task(
                 "stage": "error",
                 "progress": 0,
                 "message": (
-                    "场景内容检查未通过，请修改场景后重新导出"
-                    if result.get("error") == "HyperFrames check failed"
-                    else "视频导出失败，请重试；若仍失败，请重新生成相关场景"
-                    if str(result.get("error") or "").startswith(("HyperFrames", "FFmpeg"))
+                    "视频导出失败，请重试；若仍失败，请重新生成相关场景"
+                    if str(result.get("error") or "").startswith("FFmpeg")
                     else result.get("error", "渲染失败")
                 ),
                 "need_download": result.get("need_download", False),
-                "requestedEngine": requested_engine,
-                "actualEngine": actual_engine,
-                "fallbackReason": fallback_reason,
                 "finished_at": datetime.now().isoformat(),
             })
             # Restore phase to exportable on failure
@@ -10124,9 +9930,6 @@ async def _run_render_task(
             "stage": "cancelled",
             "progress": previous.get("progress", 0),
             "message": "导出已取消，可随时重新导出",
-            "requestedEngine": requested_engine,
-            "actualEngine": actual_engine,
-            "fallbackReason": fallback_reason,
             "recoverable": True,
             "finished_at": datetime.now().isoformat(),
         })
@@ -10142,9 +9945,6 @@ async def _run_render_task(
                 "stage": "cancelled",
                 "progress": previous.get("progress", 0),
                 "message": "导出已取消，可随时重新导出",
-                "requestedEngine": requested_engine,
-                "actualEngine": actual_engine,
-                "fallbackReason": fallback_reason,
                 "recoverable": True,
                 "finished_at": datetime.now().isoformat(),
             })
@@ -10170,9 +9970,6 @@ async def _run_render_task(
             "progress": 0,
             "message": message[:500],
             **({"code": e.code, "retryable": e.retryable} if isinstance(e, TTSError) else {}),
-            "requestedEngine": requested_engine,
-            "actualEngine": actual_engine,
-            "fallbackReason": fallback_reason,
             "finished_at": datetime.now().isoformat(),
         })
         # Restore phase to exportable on failure
@@ -10238,20 +10035,6 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
         if quality not in ("draft", "standard", "high"):
             quality = "standard"
 
-        try:
-            from mona.config.loader import load_config
-
-            video_config = load_config().video
-            configured_engine = str(video_config.render_engine)
-            allow_fallback = bool(video_config.allow_render_fallback)
-        except Exception:
-            configured_engine = "legacy"
-            allow_fallback = True
-        render_engine = str(body.get("renderEngine") or configured_engine).strip()
-        if render_engine not in {"legacy", "hyperframes", "auto"}:
-            return web.json_response(
-                {"error": "invalid render engine"}, status=400
-            )
         release_type = str(body.get("releaseType") or "draft").strip()
         if release_type not in {"draft", "final"}:
             return web.json_response({"error": "invalid release type"}, status=400)
@@ -10296,7 +10079,6 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
             "stage": "rendering",
             "progress": 0,
             "message": "正在准备导出...",
-            "requestedEngine": render_engine,
             "releaseType": release_type,
             "started_at": datetime.now().isoformat(),
         })
@@ -10312,10 +10094,8 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
                 project_dir,
                 fps,
                 quality,
-                render_engine,
-                allow_fallback,
-                cancel_event,
-                release_type,
+                cancel_event=cancel_event,
+                release_type=release_type,
             )
         )
         _video_render_tasks[name] = task
@@ -10325,7 +10105,6 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
             "ok": True,
             "stage": "rendering",
             "message": "导出已开始",
-            "requestedEngine": render_engine,
             "releaseType": release_type,
         })
     except Exception as e:
@@ -10930,9 +10709,6 @@ async def handle_video_project_export_status(request: web.Request) -> web.Respon
             "needDownload": status.get("need_download"),
             "startedAt": status.get("started_at"),
             "finishedAt": status.get("finished_at"),
-            "requestedEngine": status.get("requestedEngine"),
-            "actualEngine": status.get("actualEngine"),
-            "fallbackReason": status.get("fallbackReason"),
             "recoverable": status.get("recoverable"),
             "deliveryArtifacts": status.get("deliveryArtifacts"),
             "qualityStatus": status.get("qualityStatus"),
@@ -11636,6 +11412,8 @@ def create_app(
     app["session_locks"] = {}  # per-user locks, keyed by session_key
     # Event used by POST /shutdown to unwind the gateway's main loop cleanly.
     app["shutdown_event"] = asyncio.Event()
+    app.on_startup.append(_schedule_bundled_runtime_startup)
+    app.on_cleanup.append(_cancel_bundled_runtime_startup)
     app.on_startup.append(_schedule_computer_use_startup)
     app.on_cleanup.append(_cancel_computer_use_startup)
 

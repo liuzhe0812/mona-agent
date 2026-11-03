@@ -87,7 +87,6 @@ const mocks = vi.hoisted(() => ({
   fetchVideoProjects: vi.fn(async () => ({ projects: [] })),
   fetchVideoProjectsIncludingArchived: vi.fn(async () => ({ projects: [] })),
   fetchVideoRuntimeCheck: vi.fn(async () => ({
-    node: { ok: true },
     ffmpeg: { ok: true },
     chrome: { ok: true },
   })),
@@ -326,7 +325,6 @@ beforeEach(() => {
   mocks.fetchVideoProjectsIncludingArchived.mockResolvedValue({ projects: [] });
   mocks.fetchVideoBrandKits.mockResolvedValue({ brandKits: [] });
   mocks.fetchVideoRuntimeCheck.mockResolvedValue({
-    node: { ok: true },
     ffmpeg: { ok: true },
     chrome: { ok: true },
   });
@@ -685,11 +683,12 @@ describe("ProducingPhase", () => {
       fireEvent.change(screen.getByRole("slider", { name: "场景播放位置" }), { target: { value: "2000" } });
       fireEvent.click(screen.getByRole("button", { name: "播放当前场景" }));
       await screen.findByRole("button", { name: "暂停当前场景" });
-      const position = (screen.getByRole("slider", { name: "场景播放位置" }) as HTMLInputElement).value;
       fireEvent.click(screen.getByRole("button", { name: "全屏预览当前场景" }));
       await screen.findByTitle("scene-fullscreen-preview");
 
       rendered.rerender(view(false));
+      const position = (screen.getByRole("slider", { name: "场景播放位置" }) as HTMLInputElement).value;
+      expect(Number(position)).toBeGreaterThanOrEqual(2000);
       expect(screen.queryByTitle("scene-2-preview")).not.toBeInTheDocument();
       expect(screen.queryByTitle("scene-fullscreen-preview")).not.toBeInTheDocument();
       rendered.rerender(view(true));
@@ -1099,9 +1098,8 @@ describe("ProducingPhase", () => {
     expect(screen.getByRole("button", { name: /导出视频/ })).toBeEnabled();
   });
 
-  it("checks the system browser only when export starts", async () => {
+  it("offers managed rendering resources when export needs a browser", async () => {
     mocks.fetchVideoRuntimeCheck.mockResolvedValue({
-      node: { ok: true },
       ffmpeg: { ok: true },
       chrome: { ok: false },
     });
@@ -1118,10 +1116,10 @@ describe("ProducingPhase", () => {
     fireEvent.click(await screen.findByRole("button", { name: /导出视频/ }));
     fireEvent.click(screen.getByRole("button", { name: "开始导出" }));
 
-    expect(
-      await screen.findByText("请安装系统 Edge 或 Chrome 后再导出"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("画面渲染")).toBeInTheDocument();
     expect(mocks.startVideoRuntimeDownload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "一键下载缺失组件" }));
+    await waitFor(() => expect(mocks.startVideoRuntimeDownload).toHaveBeenCalledWith("tok", ["chrome"]));
     expect(mocks.exportVideoProject).not.toHaveBeenCalled();
   });
 
@@ -2185,21 +2183,15 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       stage: "rendering",
       progress: 15,
       message: "正在渲染场景 1/1 · 帧 10/150",
-      actualEngine: "hyperframes",
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
     expect(await screen.findByRole("status")).toHaveTextContent("正在渲染场景 1/1 · 帧 10/150 · 15%");
-    expect(screen.queryByText("HyperFrames")).not.toBeInTheDocument();
-
     // 帧进度事件 → 立即刷新（不依赖轮询节拍）
     mocks.fetchVideoExportStatus.mockResolvedValue({
       stage: "rendering",
       progress: 42,
       message: "正在渲染场景 1/1 · 帧 60/150",
-      requestedEngine: "auto",
-      actualEngine: "legacy",
-      fallbackReason: "preflight failed",
     });
     act(() => {
       client.__emitVideoProjectChanged({
@@ -2209,8 +2201,6 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("正在渲染场景 1/1 · 帧 60/150 · 42%"));
-    expect(screen.queryByText("兼容渲染器")).not.toBeInTheDocument();
-    expect(screen.queryByText(/HyperFrames 已回退|preflight failed/)).not.toBeInTheDocument();
   });
 
   it("allows a running export to be stopped without leaving the workbench", async () => {
@@ -2240,7 +2230,6 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       stage: "rendering",
       progress: 36,
       message: "正在渲染",
-      actualEngine: "hyperframes",
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));

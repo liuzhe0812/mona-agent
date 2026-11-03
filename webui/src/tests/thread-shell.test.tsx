@@ -3758,7 +3758,7 @@ describe("ThreadShell", () => {
     expect(artifactFetches).toBe(2);
   });
 
-  it("moves deleted artifacts to the system trash, never a permanent delete", async () => {
+  it("moves deleted artifacts to the system trash with their observed version, never a permanent delete", async () => {
     const client = makeClient();
     const fileA = {
       path: "a.png",
@@ -3767,6 +3767,7 @@ describe("ThreadShell", () => {
       size: 1,
       size_human: "1 B",
       mime: "image/png",
+      sha256: "a".repeat(64),
     };
     vi.stubGlobal(
       "fetch",
@@ -3809,7 +3810,7 @@ describe("ThreadShell", () => {
     const { moveToTrash } = await import("@/lib/tauri");
     const { remove } = await import("@tauri-apps/plugin-fs");
     await waitFor(() =>
-      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/a.png"),
+      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/a.png", "a".repeat(64)),
     );
     expect(vi.mocked(remove)).not.toHaveBeenCalled();
   });

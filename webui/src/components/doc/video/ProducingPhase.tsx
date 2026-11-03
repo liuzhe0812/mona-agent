@@ -121,7 +121,6 @@ const EXPORT_QUALITY_OPTIONS: Array<{
 ];
 
 const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
-  node: { ok: false },
   ffmpeg: { ok: false },
   chrome: { ok: false },
 };
@@ -1113,7 +1112,6 @@ export function ProducingPhase({
       stage: "rendering",
       progress: 0,
       message: "准备导出...",
-      requestedEngine: res.requestedEngine,
     });
   }, [token, projectName, exportQuality]);
 
@@ -1153,7 +1151,7 @@ export function ProducingPhase({
       try {
         const status = await fetchVideoRuntimeCheck(token);
         setRuntimeStatus(status);
-        runtimeOk = status.node.ok && status.ffmpeg.ok && status.chrome.ok;
+        runtimeOk = status.ffmpeg.ok && status.chrome.ok;
       } catch {
         // Check failed — let the export attempt proceed; the server reports
         // need_download if the runtime is actually missing.
@@ -1204,10 +1202,8 @@ export function ProducingPhase({
   const handleInstallRuntime = useCallback(
     async (component?: RuntimeDepKey) => {
       const targets: VideoRuntimeComponent[] = component
-        ? component === "chrome"
-          ? []
-          : [component]
-        : (["node", "ffmpeg"] as VideoRuntimeComponent[]).filter(
+        ? [component]
+        : (["ffmpeg", "chrome"] as VideoRuntimeComponent[]).filter(
             (k) => !runtimeStatus[k].ok,
           );
       if (targets.length === 0) return;

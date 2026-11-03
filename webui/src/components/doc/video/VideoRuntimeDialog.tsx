@@ -19,7 +19,7 @@ import { Progress } from "@/components/ui/progress";
 import type { VideoRuntimeComponent } from "@/lib/api";
 import { useVideoRuntimeDownloadStore } from "@/lib/video-runtime-download-store";
 
-export type RuntimeDepKey = VideoRuntimeComponent | "chrome";
+export type RuntimeDepKey = VideoRuntimeComponent;
 
 interface RuntimeItem {
   ok: boolean;
@@ -36,16 +36,11 @@ interface VideoRuntimeDialogProps {
 }
 
 const DEPS: Array<{ key: RuntimeDepKey; label: string }> = [
-  { key: "node", label: "Node.js" },
   { key: "ffmpeg", label: "FFmpeg" },
-  { key: "chrome", label: "系统浏览器（Edge / Chrome）" },
+  { key: "chrome", label: "画面渲染" },
 ];
 
-const DOWNLOADABLE_DEPS: VideoRuntimeComponent[] = ["node", "ffmpeg"];
-
-function isDownloadableDep(key: RuntimeDepKey): key is VideoRuntimeComponent {
-  return key !== "chrome";
-}
+const DOWNLOADABLE_DEPS: VideoRuntimeComponent[] = ["ffmpeg", "chrome"];
 
 export function VideoRuntimeDialog({
   open,
@@ -67,17 +62,15 @@ export function VideoRuntimeDialog({
         <DialogHeader>
           <DialogTitle>视频运行环境</DialogTitle>
           <DialogDescription>
-            视频导出会检查 Node.js、FFmpeg 和系统 Edge / Chrome。Node.js 与
-            FFmpeg 可由 Mona 下载，浏览器请使用系统已安装的版本。
+            视频导出需要视频处理和画面渲染资源。已有资源会直接复用，
+            缺少的内容由 Mona 下载并统一管理。
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-2">
           {DEPS.map((dep) => {
             const status = runtimeStatus[dep.key];
-            const download = isDownloadableDep(dep.key)
-              ? latestJob?.components[dep.key]
-              : undefined;
+            const download = latestJob?.components[dep.key];
             const isThisInstalling = download?.state === "downloading";
             const isWaiting = download?.state === "pending";
             const completed = status.ok || download?.state === "completed";
@@ -120,9 +113,7 @@ export function VideoRuntimeDialog({
                     </span>
                   ) : (
                     <span className="text-caption text-destructive">
-                      {dep.key === "chrome"
-                        ? "请安装系统 Edge 或 Chrome 后再导出"
-                        : "未安装"}
+                      尚未准备
                     </span>
                   )}
                 </div>

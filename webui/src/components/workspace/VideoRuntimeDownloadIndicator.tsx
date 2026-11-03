@@ -26,11 +26,11 @@ import {
 } from "@/lib/video-runtime-download-store";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
-const DOWNLOADABLE_COMPONENTS: VideoRuntimeComponent[] = ["node", "ffmpeg"];
+const DOWNLOADABLE_COMPONENTS: VideoRuntimeComponent[] = ["ffmpeg", "chrome"];
 
 const LABELS: Partial<Record<VideoRuntimeComponent, string>> = {
-  node: "Node.js",
   ffmpeg: "FFmpeg",
+  chrome: "画面渲染",
 };
 
 function formatBytes(value: number): string {

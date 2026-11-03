@@ -40,7 +40,6 @@ describe("VideoRuntimeDialog", () => {
         open
         onClose={onClose}
         runtimeStatus={{
-          node: { ok: true, version: "v24" },
           ffmpeg: { ok: false },
           chrome: { ok: true, version: "151" },
         }}
@@ -49,12 +48,13 @@ describe("VideoRuntimeDialog", () => {
     );
 
     expect(screen.getByText("35%")).toBeInTheDocument();
+    expect(screen.queryByText("Node.js")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭，后台继续" }));
     expect(onClose).toHaveBeenCalled();
     expect(useVideoRuntimeDownloadStore.getState().jobs[0].state).toBe("running");
   });
 
-  it("asks the user to install Edge or Chrome instead of downloading a browser", () => {
+  it("can prepare missing rendering resources through Mona", () => {
     const onInstall = vi.fn();
 
     render(
@@ -62,7 +62,6 @@ describe("VideoRuntimeDialog", () => {
         open
         onClose={vi.fn()}
         runtimeStatus={{
-          node: { ok: true, version: "v24" },
           ffmpeg: { ok: true, version: "6.1" },
           chrome: { ok: false },
         }}
@@ -70,13 +69,9 @@ describe("VideoRuntimeDialog", () => {
       />,
     );
 
-    expect(
-      screen.getByText("请安装系统 Edge 或 Chrome 后再导出"),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "一键下载缺失组件" }),
-    ).not.toBeInTheDocument();
-    expect(onInstall).not.toHaveBeenCalled();
+    expect(screen.getByText("画面渲染")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "一键下载缺失组件" }));
+    expect(onInstall).toHaveBeenCalledWith();
   });
 });
 
@@ -85,7 +80,7 @@ describe("VideoRuntimeDownloadIndicator", () => {
     useVideoRuntimeDownloadStore.setState({ jobs: [], error: null });
   });
 
-  it("does not expose legacy Chrome download entries", () => {
+  it("shows managed rendering resources in the existing download indicator", () => {
     useVideoRuntimeDownloadStore.setState({
       error: null,
       jobs: [
@@ -111,6 +106,6 @@ describe("VideoRuntimeDownloadIndicator", () => {
 
     render(<VideoRuntimeDownloadIndicator />);
 
-    expect(screen.queryByRole("button", { name: /视频组件下载/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /视频组件下载/ })).toBeInTheDocument();
   });
 });

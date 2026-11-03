@@ -137,11 +137,11 @@ describe("OverviewPanel", () => {
       message({ role: "user", content: "build report", taskId: "task-report" }),
       message({ toolEvents: [{ name: "web_fetch", arguments: { url: "https://github.com/trending" } }] }),
       message({ role: "user", content: "only top five", taskId: "task-report" }),
-      message({ toolEvents: [{ name: "skill_read", arguments: { name: "html-report" } }] }),
+      message({ toolEvents: [{ name: "skill_read", arguments: { name: "mona-design" } }] }),
     ];
     expect(collectOverviewReferences(messages)).toEqual([
       { id: "web:https://github.com/trending", kind: "web", label: "github.com", url: "https://github.com/trending" },
-      { id: "skill:html-report", kind: "skill", label: "html-report" },
+      { id: "skill:mona-design", kind: "skill", label: "mona-design" },
     ]);
   });
 

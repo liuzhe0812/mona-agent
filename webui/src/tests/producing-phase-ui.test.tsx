@@ -138,7 +138,6 @@ beforeEach(() => {
   mocks.fetchVideoExportPreflight.mockResolvedValue({ ok: true });
   mocks.fetchVideoProjectVersions.mockResolvedValue({ ok: true, versions: [] });
   mocks.fetchVideoRuntimeCheck.mockResolvedValue({
-    node: { ok: true },
     ffmpeg: { ok: true },
     chrome: { ok: true },
   });
@@ -462,23 +461,6 @@ describe("ProducingPhase playback and narration settings", () => {
       .toBeInTheDocument();
   });
 
-  it("hides internal rendering engine and raw fallback details", async () => {
-    mocks.fetchVideoExportStatus.mockResolvedValue({
-      stage: "rendering",
-      progress: 32,
-      message: "正在合成画面",
-      actualEngine: "legacy",
-      fallbackReason: "internal fallback exception",
-    });
-    render(wrap(<ProducingPhase projectName="proj" />));
-
-    expect(await screen.findByRole("status")).toHaveTextContent("正在合成画面 · 32%");
-    expect(screen.queryByText("兼容渲染器")).not.toBeInTheDocument();
-    expect(screen.queryByText("HyperFrames")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("internal fallback exception"),
-    ).not.toBeInTheDocument();
-  });
 });
 
 it("shows real preparation progress and keeps the director action available while scenes are empty", async () => {
