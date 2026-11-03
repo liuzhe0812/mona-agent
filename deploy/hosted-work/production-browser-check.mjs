@@ -357,7 +357,7 @@ async function main() {
     await cdp('Page.navigate', { url: `${ORIGIN}/` });
     await waitFor(() => evaluate(`Boolean(document.querySelector('details.account-menu summary'))`), 30000, 'website_account_menu_missing');
     await evaluate(`document.querySelector('details.account-menu').open = true`);
-    await waitFor(() => evaluate(`Boolean([...document.querySelectorAll('details.account-menu a')].find(item => item.getAttribute('href') === '/work/' && item.textContent.trim() === '进入在线 Work'))`), 30000, 'website_work_entry_unavailable');
+    await waitFor(() => evaluate(`Boolean([...document.querySelectorAll('details.account-menu a')].find(item => item.getAttribute('href') === '/work/' && item.textContent.trim() === '线上工作台'))`), 30000, 'website_work_entry_unavailable');
     report.website_entry = { available: true, canonical_origin: true };
     await evaluate(`document.querySelector('details.account-menu a[href="/work/"]').click()`);
     await waitFor(async () => await buttonReady('新任务') && await evaluate(`Boolean([...document.querySelectorAll('select[aria-label="平台模型"] option')].find(item => item.value === 'qwen' && item.textContent.trim() === 'Qwen3.7 Plus'))`), 30000, 'workspace_or_model_unavailable');

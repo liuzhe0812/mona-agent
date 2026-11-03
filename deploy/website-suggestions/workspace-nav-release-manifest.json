@@ -1,0 +1,47 @@
+{
+  "release": "workspace-nav-20261103-v5",
+  "baseline_source_sha256": "2de1259bab756ba210fb370e71f7590a35fa401876497a6a96fd0ecb17b74d96",
+  "source_files": 93,
+  "changed_files": {
+    "official-site/app/account/AccountNav.tsx": {
+      "before_sha256": "3fb69273a0ad2c10cdddccbdc4e5e013c738ba9fed50ad9187d890a66f0e1b2e",
+      "after_sha256": "62bf34beeb4a4edb2bac0c9be12c951ebdbe4931bfff756198dedfd9d55b0b87"
+    },
+    "official-site/app/page.tsx": {
+      "before_sha256": "8feaf2c0e5788c31f05d593d9a722dcf2a895d26074f0fb6ee315b4aaa08ba20",
+      "after_sha256": "3b870933bddf9993b92be7da77978da75cbdbf9a2a4d4c014a6b7928346906fe"
+    },
+    "official-site/tests/account-browser.test.mjs": {
+      "before_sha256": "e3cddc60a33b2602c021551843cf2ee0bd09ba28cc6546c61324089f5a84f8fd",
+      "after_sha256": "99b81fabcaa90f6cc36c16955983e3b01d607cb6a7077b11a358e43bad2f3c3f"
+    }
+  },
+  "source_archive_sha256": "c5531f8cd21be80a22ad0e26c70d448fdb8b041069a4864f0531d70f34df84bb",
+  "website_archive_sha256": "476635570b448b68fe6d5a1d980ee08f21a72fcfe511fbd579ae3c991288d576",
+  "site_files": 44,
+  "assets": {
+    "js": "assets/static-index-CxiOL-2H.js",
+    "js_sha256": "33835fdb11d092a29fb05b923f1cf01179c8c5470f47133a53c1b454c12fc204",
+    "css": "assets/static-index-CDe3pkQ4.css",
+    "css_sha256": "74724daca51d484bc4bb9230b5c52cccf12df84cc63fe18dd51a15bda761cba7",
+    "index_sha256": "9e0f69ae365038c810c13d74e05a3e3bce124dad9a37a2f649e355c1860dd0b5"
+  },
+  "validation": {
+    "source_manifest_replay": "93 files match",
+    "changed_source_files": 3,
+    "typecheck": "passed",
+    "build": "passed",
+    "index_equals_static_index": true,
+    "cumulative_patch_byte_replay": "all 93 files match",
+    "production_html_js_css": "hashes match",
+    "account_suggestions_wechat_html": "hashes match",
+    "work_api_unauthenticated": 401,
+    "source_scope": "two product files plus existing test assertions",
+    "nginx_master_pid": 343378,
+    "old_assets_retained": 17
+  },
+  "patch_sha256": "adecf56df8984821ecca362f9b2fda6ec617113e5aec3bcabe753200c1408b48",
+  "production_root": "/var/www/mona/site-releases/workspace-nav-20261103-v5/content",
+  "backup": "/var/www/mona/backups/workspace-nav-20261103-v5",
+  "production_nginx_sha256": "6b1dcded81957d99b2cdb9ee38a273be84ef12f62f5eb266f58849a8d71586ce"
+}

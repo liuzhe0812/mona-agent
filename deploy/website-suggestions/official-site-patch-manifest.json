@@ -1,5 +1,5 @@
 {
-  "scope": "Suggestions only, applied to captured production website source",
+  "scope": "Published website suggestions, account menu and main navigation",
   "baseline_source_sha256": "97a753e2adb05919f459f10813a27513aa48d801c740709eb8d178811c16d8e9",
   "files": {
     "official-site/app/suggestions/page.tsx": {
@@ -10,13 +10,9 @@
       "before_sha256": null,
       "after_sha256": "ce3537fe35a7bc528a5bb148f94b7952ce3187166235b08468527d226ec2c474"
     },
-    "official-site/app/page.tsx": {
-      "before_sha256": "3b870933bddf9993b92be7da77978da75cbdbf9a2a4d4c014a6b7928346906fe",
-      "after_sha256": "8feaf2c0e5788c31f05d593d9a722dcf2a895d26074f0fb6ee315b4aaa08ba20"
-    },
     "official-site/app/account/AccountNav.tsx": {
       "before_sha256": "f7b9b287fdffd2f886d90382d090b26b1da0649d9bdade7535a38b28ecc9e65c",
-      "after_sha256": "3fb69273a0ad2c10cdddccbdc4e5e013c738ba9fed50ad9187d890a66f0e1b2e"
+      "after_sha256": "62bf34beeb4a4edb2bac0c9be12c951ebdbe4931bfff756198dedfd9d55b0b87"
     },
     "official-site/static-main.tsx": {
       "before_sha256": "a960b87d9c1ddd17b1cffaacf10bc2d089165202e3f5e917e3948fdfad7f83d3",
@@ -25,6 +21,10 @@
     "official-site/tests/suggestions-browser.test.mjs": {
       "before_sha256": null,
       "after_sha256": "2cca2ff46a3584975dd173886fc0cbe0164419dab3956e10fde60ae8101e9442"
+    },
+    "official-site/tests/account-browser.test.mjs": {
+      "before_sha256": "e3cddc60a33b2602c021551843cf2ee0bd09ba28cc6546c61324089f5a84f8fd",
+      "after_sha256": "99b81fabcaa90f6cc36c16955983e3b01d607cb6a7077b11a358e43bad2f3c3f"
     }
   }
 }
