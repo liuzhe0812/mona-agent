@@ -1,8 +1,10 @@
-# Mona 官网基本 Work：独立在线宿主
+# Mona 线上工作台：独立宿主与共享会话界面
 
 更新：2026-11-03。最新决策：Qwen 免费且不设置个人账号白名单；Codex 使用 Ubuntu 平台专用账号，按对应模型官方 Token 单价扣网站和客户端共用的 Mona 余额，不另建钱包。该决策取代此前“Work 只复用认证、不接钱包”的限制；任务、文件、模型凭据和执行环境仍独立，订阅、支付、云同步与桌面设备逻辑不变。
 
 当前已发布包尚未实现共享钱包计费，不能把 Codex 加入现网模型表冒充收费已上线。Ubuntu/gVisor 已通过实机隔离验收；独立模型配置、计费适配和官网接入分别验收，不将存活状态等同于已开放任务服务。默认示例关闭，桌面更新不会启动在线服务。
+
+2026-11-03 的后续开发直接复用桌面普通会话和右栏组件，增加账号私有 Office、画布存储与浏览器传输适配。用户明确要求本轮只开发和本地验证，不上线、不接云同步；下文既有生产验收记录仍对应旧版基本 Work。共享界面的实际边界见第 11 节。
 
 ## 1. 范围与运行方式
 
@@ -14,7 +16,7 @@
 
 每轮使用独立 Python 宿主和用户容器；可信控制面并非运行在不可信容器里。同一账号任务及文件操作串行。工作区快照、会话和 runtime 数据按账号隔离；同一账号不同会话共用其工作区。平台同一原生账号配置串行，未知结果保留占用，不在另一用户处重用未知执行。
 
-复用现有 AgentRunner、工具协议、检查点和流式钩子，不启动完整桌面 AgentLoop 的模块发现。固定工具只有 list_dir、read_file、write_file、exec、web_fetch、deliver_file。这是一版受限 Work 宿主，不宣称已迁移完整桌面 Skills、长期记忆、Office 实时编辑或浏览器自动化；镜像中未安装的工具不能冒充可用。
+复用现有 AgentRunner、工具协议、检查点和流式钩子，不启动完整桌面 AgentLoop 的模块发现。已发布基本 Work 的固定工具只有 list_dir、read_file、write_file、exec、web_fetch、deliver_file。开发中的共享界面入口另按明确的 desktop_ui 上下文注入原 CanvasTool 和 OfficeTool，不改变旧 API 的工具表。不宣称迁移了完整桌面 Skills、长期记忆或浏览器自动化；镜像中未安装的工具不能冒充可用。
 
 ## 2. 桌面兼容边界
 
@@ -125,3 +127,17 @@ VPS 仅新增 Work location 和专用限流区，经现有 18801 代理到 Ubunt
 独立 Edge 隐身上下文完成真实官网账户菜单、共享会话、Qwen 工具任务、上传下载摘要、刷新不重派、exec 执行中停止、停止后新建任务、两账号隔离和退出撤销。测试会话由现行 Auth 为既有测试账号短时签发并撤销，角色未变；密码登录表单不在本轮重测范围。验收不是模拟网络回包，零余额账号完成 Qwen 任务后钱包与版本保持不变。真实 gVisor 烟测也在目标环境通过，最终无 unknown 任务或遗留 Work 容器。
 
 Work 与隧道用户服务现均启用，Linger=yes；本轮没有重启 Docker、恢复四个暂停 Worker 或重启整机。隧道密钥环无人登录解锁未验收。Codex 原生程序、专用登录和共享钱包计费仍未就绪，公开模型表只有已验收的 Qwen；不能把免费线路验收替代收费线路验收。完整部署与验收留档见根目录两份生产文档和 `output/hosted-work/launch-20261103/acceptance-v3.json`。
+
+## 11. 共用桌面会话组件（本地开发，未部署）
+
+线上入口直接挂载原 `MonaClient`、`ClientProvider`、`ThreadShell`、`ThreadComposer`、`ArtifactSidebar`、`OfficeEditorHost` 和 `ConversationCanvasPanel`；Office 的三个 iframe 也从原编辑器源码构建。不存在另写的会话区或编辑器。浏览器始终保持 `isTauri()=false`，只在平台 I/O 层适配 HTTP、WebSocket、文件、事件和下载；桌面默认实现保留。
+
+`/api/work/desktop` 只实现这些组件需要的兼容接口，不转发完整 Gateway/Services。会话历史沿用原 transcript replay，ID、分页版本和发送请求身份保持稳定。WebSocket 使用绑定账号和客户端的短期单用票据，JWT 不进入 URL；重连只观察已接收任务。Office 恢复信息随 attached 返回，不能变成新的进度消息、历史或模型任务。
+
+账号身份仍来自 Auth。`state/users/<owner-hash>/desktop.sqlite3` 保存该账号的侧栏与 UI 历史，`documents` 是虚拟 `/workspace` 的文件根；Office Manager、工作副本、上传、票据与 checkpoint 再绑定会话。画布沿用原文件格式，保存串行且按 SHA256 校验旧版本，删除也必须提供已读版本。路径逐段拒绝链接及目录联接，不接收前端指定账号根。原 gVisor workspace.zip 保持不透明，只在该账号容器内读取、改名、移入回收区和保存；不得在宿主解压。
+
+原 OfficeTool、CanvasTool 通过明确注入的受限传输连接同一编辑器。模型编辑请求必须对应当前账号仍在执行的 run；超时的修改返回结果未确认，同一请求不再次派发。Office 表格继续复用原 sidecar 协议，但 Linux 二进制必须来自经验证的统一运行时资源包，在按账号和会话建立的 gVisor 中运行；无宿主挂载、无网络、无模型密钥，不回退到宿主运行。未配置或容量不足时明确拒绝。
+
+不接云同步，不改余额、支付、订阅或设备逻辑。浏览器未开放的原生终端和浏览器控制会明确提示使用桌面端。Office 导出使用当前 checkpoint 和正常浏览器下载，不要求网页伪装桌面或选择服务器路径。
+
+本地浏览器验收入口为 `tests/hosted_work/test_shared_ui_browser.py`（显式设置 `MONA_HOSTED_UI_SMOKE=1`），使用真实本地 UI、HTTP/WS、磁盘存储和编辑器，仅认证为隔离测试依赖，不调用模型。它验证编辑、下载内容、刷新恢复、原画布编辑协议、账号隔离和退出清理，不代表真实生产认证、模型或 Linux/gVisor 表格验收。执行记录见 [实施与验收清单](../plans/hosted-work-shared-chat-20261103.md)。
