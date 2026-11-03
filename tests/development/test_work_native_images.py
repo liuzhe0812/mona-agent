@@ -201,7 +201,7 @@ async def test_codebuddy_sdk_control_reply_keeps_mcp_image_blocks(tmp_path, monk
 
 @pytest.mark.asyncio
 async def test_codebuddy_sdk_user_input_transmits_history_images_without_text_encoding(tmp_path, monkeypatch):
-    sdk = pytest.importorskip("codebuddy_agent_sdk")
+    pytest.importorskip("codebuddy_agent_sdk")
     from codebuddy_agent_sdk.transport.base import Transport
     from test_native_host_tools import _work_start
 
@@ -239,8 +239,8 @@ async def test_codebuddy_sdk_user_input_transmits_history_images_without_text_en
             await self.incoming.put(None)
 
     transport = MemoryTransport()
-    client_class = sdk.CodeBuddySDKClient
-    monkeypatch.setattr(sdk, "CodeBuddySDKClient", lambda options: client_class(options, transport=transport))
+    monkeypatch.setattr("mona.development.executors.codebuddy_transport.desktop_transport",
+                        lambda executable, *, options: transport)
     monkeypatch.setenv("CODEBUDDY_CODE_ENTRYPOINT", "sdk-py-client")
     start, _, _, _ = _work_start(tmp_path, monkeypatch, ExecutorId.CODEBUDDY, "Inspect the image.")
     worker = Worker()

@@ -44,8 +44,9 @@ class _SDKBuildOptions:
 
 
 class _SDKBuildClient:
-    def __init__(self, *, options):
+    def __init__(self, *, options, transport=None):
         self.options = options
+        self.transport = transport
 
 
 def _build_sdk_options(monkeypatch, tmp_path, executor, *, readonly=False, host_collaboration=False, is_subagent=False,
@@ -63,6 +64,8 @@ def _build_sdk_options(monkeypatch, tmp_path, executor, *, readonly=False, host_
         tool=tool,
         create_sdk_mcp_server=lambda **kwargs: kwargs,
     )
+    monkeypatch.setattr("mona.development.executors.codebuddy_transport.desktop_transport",
+                        lambda executable, *, options: SimpleNamespace(options=options))
     monkeypatch.setattr(sdk_worker, "sdk_version", lambda _executor: "fixture")
     monkeypatch.setattr(sdk_worker.sys, "platform", platform)
     monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda _name: sdk)

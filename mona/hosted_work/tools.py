@@ -40,7 +40,7 @@ class HostedTool(Tool):
 
 
 class HostedTools:
-    def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]]):
+    def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]], editor_tools=()):
         self.sandbox, self.emit = sandbox, emit
         self.fault: str | None = None
         self.registry = ToolRegistry()
@@ -63,7 +63,9 @@ class HostedTools:
         ]
         for name, description, properties, required, callback in definitions:
             self.registry.register(HostedTool(name, description, properties, required, callback))
-        self.registry.set_allowed_tool_names({item[0] for item in definitions})
+        for tool in editor_tools:
+            self.registry.register(tool)
+        self.registry.set_allowed_tool_names({item[0] for item in definitions} | {tool.name for tool in editor_tools})
 
     async def _file(self, action: str, **kwargs):
         try:

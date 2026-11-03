@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from pydantic import Field
@@ -29,6 +29,8 @@ class SessionStart:
     resume_history: bool = True
     context_window_tokens: int | None = None
     work_prompt: str | None = None
+    work_native_tools: tuple[str, ...] = ()
+    work_native_permission: Callable[[str, str, str, dict], Awaitable[dict]] | None = field(default=None, repr=False)
 
 
 class ExecutorModel(Contract):

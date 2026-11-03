@@ -6,6 +6,7 @@ import base64
 import json
 import urllib.parse
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -117,13 +118,19 @@ class CanvasTool(Tool, ContextAware):
         *,
         workspace: str | Path,
         config: CanvasToolConfig | None = None,
+        invoke: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self.config = config or CanvasToolConfig()
+        self._editor_invoke = invoke
         self._active_canvas_id: str | None = None
         self._active_canvas_path: str | None = None
         self._active_session_key: str | None = None
         self.is_available = False
+
+    async def _invoke_editor(self, command: str, arguments: dict[str, Any]) -> Any:
+        invoke = self._editor_invoke if self._editor_invoke is not None else tauri_invoke_async
+        return await invoke(command, arguments)
 
     def set_context(self, ctx: RequestContext) -> None:
         session_key = str(ctx.session_key or ctx.chat_id or "").strip() or None
@@ -269,10 +276,10 @@ class CanvasTool(Tool, ContextAware):
             activation: dict[str, Any] = {"canvasId": target, "focus": action == "open"}
             if target_path:
                 activation["path"] = target_path
-            await tauri_invoke_async("canvas_activate_sidebar", activation)
+            await self._invoke_editor("canvas_activate_sidebar", activation)
             stage = "ready"
             if action != "open":
-                ready = await tauri_invoke_async("canvas_agent_request", {
+                ready = await self._invoke_editor("canvas_agent_request", {
                     "requestId": f"canvas_{uuid.uuid4().hex}",
                     "canvasId": target,
                     "action": "open",
@@ -284,7 +291,7 @@ class CanvasTool(Tool, ContextAware):
                         "message": "画布编辑器未就绪，本次操作未发送。",
                     }, ensure_ascii=False)
             stage = action
-            result = await tauri_invoke_async("canvas_agent_request", request)
+            result = await self._invoke_editor("canvas_agent_request", request)
         except (OSError, ValueError, RuntimeError) as error:
             return json.dumps({
                 "ok": False,

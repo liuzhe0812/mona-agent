@@ -352,6 +352,9 @@ def main():
         module.create_sdk_mcp_server = create_sdk_mcp_server
         sys.modules[name] = module
     sdk_worker.sdk_version = lambda _executor: "test-peer"
+    from mona.development.executors import codebuddy_transport
+    # This peer replaces vendor SDK and native transport as one test boundary.
+    codebuddy_transport.desktop_transport = lambda *_args, **_kwargs: None
     async def version(*_args, **_kwargs):
         trace({"method": "version"})
         return "0.0.0-test-peer"

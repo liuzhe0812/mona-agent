@@ -40,6 +40,41 @@ _RUNTIME_CONTEXT_END = "\n[/Runtime Context]"
 _CONVERSATION_BACKGROUND = "Conversation background (historical context, not a new request or expanded authorization):"
 
 
+def _sanitize_native_work(value: Any) -> dict[str, Any] | None:
+    """Keep only the native execution identifiers and non-secret audit facts."""
+    if not isinstance(value, dict):
+        return None
+    result = {
+        key: value[key]
+        for key in ("executor", "native_session_id", "native_turn_id")
+        if key in value and (isinstance(value[key], str) or key == "native_turn_id" and value[key] is None)
+    }
+    status = value.get("status")
+    result["status"] = status if status in (
+        "dispatching", "running", "completed", "failed", "interrupted", "unknown"
+    ) else "unknown"
+    calls = value.get("calls")
+    result["calls"] = []
+    if isinstance(calls, list):
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            safe = {key: call[key] for key in ("id", "name", "path") if isinstance(call.get(key), str)}
+            for key in ("native_session_id", "native_turn_id"):
+                identifier = call.get(key)
+                if isinstance(identifier, str) and identifier:
+                    safe[key] = identifier
+                elif key == "native_turn_id" and key in call and identifier is None:
+                    safe[key] = None
+            call_status = call.get("status")
+            safe["status"] = call_status if call_status in ("started", "completed", "failed", "unknown") else "unknown"
+            digest = call.get("command_sha256")
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                safe["command_sha256"] = digest
+            result["calls"].append(safe)
+    return result
+
+
 def _without_shared_recent_history(snapshot: Any, original: Any) -> Any:
     """Remove old host-injected history only from the model projection."""
     def clean(text: str, prefix: str = "") -> str:
@@ -369,6 +404,17 @@ class Session:
             role = message.get("role")
             if role == "assistant" and isinstance(content, str):
                 content = _sanitize_assistant_replay_text(content)
+            native_work = _sanitize_native_work(message.get("native_work")) if model_view and role == "assistant" else None
+            if native_work is not None:
+                record = (
+                    "[原生任务历史执行记录，不是新的执行请求] "
+                    + json.dumps(native_work, ensure_ascii=False)
+                    + "\n其中未确认的任务或操作必须先核对会话和文件结果，不要重放未确认的操作。"
+                )
+                if isinstance(content, list):
+                    content = [*content, {"type": "text", "text": record}]
+                else:
+                    content = f"{content}\n\n{record}" if content else record
             # Synthesize an ``[image: path]`` breadcrumb from the persisted
             # ``media`` kwarg so LLM replay still sees *something* where the
             # image used to be. Without this, an image-only user turn

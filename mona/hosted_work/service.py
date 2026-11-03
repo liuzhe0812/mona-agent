@@ -34,6 +34,7 @@ class WorkService:
         self.active_users: set[str] = set()
         self.active_engines: set[str] = set()
         self.tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.desktop = None
 
     def _acquire(self, owner: str, model_id: str | None = None) -> str | None:
         if owner in self.active_users:
@@ -72,7 +73,7 @@ class WorkService:
             if exc.status != 404:
                 raise
         else:
-            if existing["input"] != request.model_dump() or existing["session_id"] != session_id:
+            if NewTurn.model_validate(existing["input"]).model_dump() != request.model_dump() or existing["session_id"] != session_id:
                 raise WorkError("request_conflict", "发送请求的内容已变化，未重复执行。", 409)
             return existing
         engine = self._acquire(owner, request.model_id)
@@ -101,8 +102,12 @@ class WorkService:
                 return
             else:
                 self.store.event(owner, run_id, kind, value)
+                if self.desktop is not None:
+                    await self.desktop.wire.on_run_event(owner, run, kind, value)
         try:
             payload = {"action": "turn", "owner": owner, "run_id": run_id,
+                       "session_id": sid, "metadata": run["input"].get("metadata", {}),
+                       "desktop_ui": bool(self.desktop and self.desktop.state.get(owner, "run:" + run_id)),
                        "model_id": run["input"]["model_id"], "account_token": token,
                        "history": json.loads(self.store.session(owner, sid)["history"]),
                        "attachments": [self.store.file(owner, sid, fid) for fid in run["input"]["attachment_ids"]]}
@@ -112,14 +117,29 @@ class WorkService:
                     info = self._file_info(artifact)
                     fid = hashlib.sha256((sid + info["path"] + info["sha256"]).encode()).hexdigest()[:32]
                     self.store.add_file(owner, sid, fid, info)
+                    if self.desktop is not None:
+                        index = self.desktop.state.get(owner, "artifact_index:" + sid, [])
+                        index = [item for item in index if item["path"] != info["path"]]
+                        index.append({"path": info["path"], "task_id": run_id, "delivered": True})
+                        self.desktop.state.set(owner, "artifact_index:" + sid, index)
             # Internal file paths and diagnostic details do not become default UI output.
             public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage") if key in result}
             self.store.finish(owner, run_id, result["status"], public)
         except BaseException:
-            self.store.finish(owner, run_id, "unknown", {
-                "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False})
+            try:
+                self.store.finish(owner, run_id, "unknown", {
+                    "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False})
+            except WorkError as exc:
+                if exc.status != 404:
+                    raise
         finally:
             self._release(owner, engine)
+        if self.desktop is not None:
+            try:
+                await self.desktop.wire.on_run_finish(owner, run, {})
+            except WorkError as exc:
+                if exc.status != 404:
+                    raise
 
     @staticmethod
     def _file_info(value: dict) -> dict:
@@ -215,6 +235,19 @@ class WorkService:
 
 
 def create_app(service: WorkService) -> web.Application:
+    from mona.hosted_work.desktop_api import DesktopAPI
+    from mona.hosted_work.editor_bridge import EditorBridge
+
+    desktop = None
+    def get_desktop():
+        nonlocal desktop
+        if desktop is None:
+            desktop = DesktopAPI(service)
+            service.desktop = desktop
+            bridge = EditorBridge(desktop)
+            desktop.tool_handler = bridge.tool
+            desktop.platform_handler = bridge.platform
+        return desktop
     public_origin = website_origin(service.config)
     inflight = 0
     uploading_users: set[str] = set()
@@ -222,10 +255,12 @@ def create_app(service: WorkService) -> web.Application:
     @web.middleware
     async def boundary(request: web.Request, handler):
         nonlocal inflight
-        if inflight >= max(8, service.config.max_concurrent_runs * 4):
+        socket = DesktopAPI.is_socket(request)
+        if not socket and inflight >= max(8, service.config.max_concurrent_runs * 4):
             return web.json_response({"error": "request_capacity", "message": "请求较多，请稍后重试。"}, status=429,
                                      headers={"Cache-Control": "no-store"})
-        inflight += 1
+        if not socket:
+            inflight += 1
         try:
             check_request_host(request, service.config, public_origin)
             if is_public_resource(request):
@@ -235,6 +270,11 @@ def create_app(service: WorkService) -> web.Application:
             origin = request.headers.get("Origin")
             if origin and origin != public_origin:
                 raise WorkError("origin_denied", "当前网页无权访问在线工作区。", 403)
+            if socket:
+                return await get_desktop().socket(request)
+            if DesktopAPI.is_file_ticket(request):
+                async with asyncio.timeout(service.config.tool_timeout_seconds + 60):
+                    return await get_desktop().file_ticket(request)
             if request.path == "/api/work/auth/login" and request.method == "POST":
                 if request.content_length is not None and request.content_length > 8192:
                     raise WorkError("invalid_request", "登录请求过大。", 413)
@@ -257,11 +297,20 @@ def create_app(service: WorkService) -> web.Application:
         except Exception:
             response = web.json_response({"error": "service_error", "message": "在线服务暂时不可用，请核对已有任务后重试。"}, status=503)
         finally:
-            inflight -= 1
+            if not socket:
+                inflight -= 1
         response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
         return response
 
     app = web.Application(middlewares=[boundary], client_max_size=service.config.max_file_bytes + 65536)
+    async def desktop_request(request):
+        return await get_desktop().handle(request)
+    app.router.add_route("*", "/api/work/desktop/{path:.*}", desktop_request)
+    async def close_desktop(_app):
+        await service.close()
+        if desktop is not None:
+            await desktop.close()
+    app.on_cleanup.append(close_desktop)
 
     async def health(request):
         return web.json_response({"service": "mona-hosted-work", "status": "alive",

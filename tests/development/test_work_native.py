@@ -12,7 +12,7 @@ import pytest
 from loguru import logger
 
 from mona.agent.runner import AgentRunner, AgentRunSpec
-from mona.agent.tools.filesystem import WriteFileTool
+from mona.agent.tools.filesystem import ReadFileTool, WriteFileTool
 from mona.agent.tools.registry import ToolRegistry
 from mona.config.loader import load_config, save_config
 from mona.config.schema import Config
@@ -31,6 +31,19 @@ from mona.development.input_content import (
 from mona.development.store import DevelopmentError
 from mona.providers.factory import build_provider_snapshot
 from mona.providers.native_work_provider import NativeWorkProvider, native_history_input
+
+
+class _FixtureBusinessWriteTool(WriteFileTool):
+    @property
+    def name(self):
+        return "fixture_business_write"
+
+
+class _FixtureImageReadTool(ReadFileTool):
+    @property
+    def name(self):
+        return "fixture_image_read"
+
 
 PEER = r'''
 import json, os, sys
@@ -103,7 +116,7 @@ for line in sys.stdin:
                 'error': {'message': 'wording changed', 'codexErrorInfo': 'serverOverloaded'}}})
             continue
         if os.environ.get('PEER_HOLD') != '1':
-            arguments = {'tool': 'write_file', 'arguments': {'path': os.environ['PEER_PATH'], 'content': 'native work'}}
+            arguments = {'tool': 'fixture_business_write', 'arguments': {'path': os.environ['PEER_PATH'], 'content': 'native work'}}
             event('item/started', {'threadId': 'work-thread', 'turnId': 'work-turn',
                 'item': {'id': 'host-work', 'type': 'dynamicToolCall', 'tool': 'mona_tool', 'arguments': arguments}})
             emit({'id': 'host-work', 'method': 'item/tool/call', 'params': {'threadId': 'work-thread',
@@ -155,7 +168,7 @@ def use_peer(tmp_path, monkeypatch, *, outside=False, hold=False, failure="", to
          "PEER_ERROR_INFO": json.dumps(error_info),
          "PEER_TOKEN_USAGE": json.dumps(token_usage)},
         work_model_catalog=catalog)
-    monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile", lambda *_: (profile, catalog))
+    monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile", lambda *_, **_kwargs: (profile, catalog))
     return config, root, output, catalog
 
 
@@ -186,7 +199,7 @@ async def test_agent_binding_reaches_native_transport_without_changing_global_so
                   workspace=root, model="global-other-model", max_iterations=5,
                   runtime_config_loader=lambda: config)
     tools = ToolRegistry()
-    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureBusinessWriteTool(workspace=root, allowed_dir=root))
     history = [{"role": "system", "content": "AGENT_IDENTITY"},
                {"role": "user", "content": "Write once"}]
     async with asyncio.timeout(10):
@@ -219,10 +232,10 @@ async def test_agent_binding_reaches_native_transport_without_changing_global_so
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outside", [False, True])
-async def test_native_tool_calls_use_work_runner_and_workspace_permissions(tmp_path, monkeypatch, outside):
+async def test_business_tool_calls_use_work_runner_and_workspace_permissions(tmp_path, monkeypatch, outside):
     config, root, output, catalog = use_peer(tmp_path, monkeypatch, outside=outside)
     tools = ToolRegistry()
-    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureBusinessWriteTool(workspace=root, allowed_dir=root))
     checkpoints = []
     async def checkpoint(payload):
         checkpoints.append(payload)
@@ -248,7 +261,7 @@ async def test_native_tool_calls_use_work_runner_and_workspace_permissions(tmp_p
     assert "projectSkills" not in start["developerInstructions"]
     assert start["dynamicTools"][0]["name"] == "mona_tool"
     assert start["developerInstructions"] == start["dynamicTools"][0]["description"] == WORK_DESCRIPTION
-    assert "does not make the listed Mona tools read-only" in start["developerInstructions"]
+    assert "checks each call's active workspace and permissions" in start["developerInstructions"]
     assert start["sandbox"] == "read-only"
     assert start["environments"] == []
     assert start["model"] == "native-fixture" and turn["effort"] == "high"
@@ -388,7 +401,7 @@ async def test_native_work_keeps_cumulative_billing_separate_from_last_context(t
         "modelContextWindow": 1_000_000,
     })
     tools = ToolRegistry()
-    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureBusinessWriteTool(workspace=root, allowed_dir=root))
     progress = []
 
     async def progress_callback(_content, *, token_usage=None):
@@ -540,7 +553,7 @@ async def test_work_overload_retry_requires_a_failed_turn_without_output_or_tool
     config, root, output, catalog = use_peer(tmp_path, monkeypatch, failure=failure)
     monkeypatch.setattr(NativeWorkProvider, "_CHAT_RETRY_DELAYS", (0, 0, 0))
     tools = ToolRegistry()
-    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureBusinessWriteTool(workspace=root, allowed_dir=root))
     content = [{"type": "text", "text": "Write once"}]
     if failure == "unknown":
         content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64,"
@@ -679,7 +692,7 @@ def test_work_context_keeps_multiple_message_blocks_without_single_input_count_l
 async def test_long_work_history_reaches_native_model_without_loss_or_replaying_tools(tmp_path, monkeypatch):
     config, root, output, _ = use_peer(tmp_path, monkeypatch)
     tools = ToolRegistry()
-    tools.register(WriteFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureBusinessWriteTool(workspace=root, allowed_dir=root))
     history = [{"role": "system", "content": "MONA_PERSONALITY"}, {"role": "user", "content": "Earlier task"}]
     for index in range(80):
         history.extend([
@@ -934,14 +947,14 @@ class _NativeWorkImageHost:
         read_args = {"path": str(self.state["image_path"]), "force": True}
         try:
             if self.state.get("manual_tool") and self.index == 0:
-                await self._call_tool("read_file", read_args)
+                await self._call_tool("fixture_image_read", read_args)
             elif self.index == 0:
                 await self._call_tool("append_file", append_args)
-                await self._call_tool("read_file", read_args)
+                await self._call_tool("fixture_image_read", read_args)
                 if self.executor != self.state["codebuddy"]:
-                    await self._call_tool("read_file", read_args)
+                    await self._call_tool("fixture_image_read", read_args)
             elif self.index == 1:
-                await self._call_tool("read_file", read_args)
+                await self._call_tool("fixture_image_read", read_args)
             await self.events_queue.put(self._native_event(
                 type="agent.message.completed", payload={"itemId": "answer", "text": "done"}))
             await self.events_queue.put(self._native_event(type="run.completed"))
@@ -1009,7 +1022,7 @@ def _install_native_work_image_hosts(monkeypatch, tmp_path, executor, *, hold=Fa
     catalog.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         "mona.providers.native_work_provider.prepare_codex_work_profile",
-        lambda *_args: (object(), catalog),
+        lambda *_args, **_kwargs: (object(), catalog),
     )
     monkeypatch.setattr(
         "mona.providers.native_work_provider.prepare_sdk_profile",
@@ -1030,7 +1043,6 @@ async def test_native_work_image_history_rebuilds_only_codebuddy_and_carries_usa
     tmp_path, monkeypatch, executor,
 ):
     from mona.agent.tools.base import Tool
-    from mona.agent.tools.filesystem import ReadFileTool
     config, state = _install_native_work_image_hosts(monkeypatch, tmp_path, executor)
     root = tmp_path / "work"
 
@@ -1062,7 +1074,7 @@ async def test_native_work_image_history_rebuilds_only_codebuddy_and_carries_usa
     append_tool = AppendFileTool(append_path)
     tools = ToolRegistry()
     tools.register(append_tool)
-    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureImageReadTool(workspace=root, allowed_dir=root))
     provider = NativeWorkProvider(config, root)
     history = [{"role": "system", "content": "stable Work instructions"},
                {"role": "user", "content": "Inspect photo and append once"}]
@@ -1084,8 +1096,8 @@ async def test_native_work_image_history_rebuilds_only_codebuddy_and_carries_usa
     if executor == "codebuddy":
         assert image_counts == [0, 1, 2]
         assert state["mcp_image_results"] == []
-        assert state["hosts"][0].cancelled_tools == ["read_file"]
-        assert state["hosts"][1].cancelled_tools == ["read_file"]
+        assert state["hosts"][0].cancelled_tools == ["fixture_image_read"]
+        assert state["hosts"][1].cancelled_tools == ["fixture_image_read"]
         assert result.usage == {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21}
         assert result.final_usage["context_window_tokens"] == 1000
         assert "context_tokens" not in result.final_usage
@@ -1112,13 +1124,11 @@ async def test_native_work_context_rebuild_requires_completed_tool_boundary(tmp_
 
 @pytest.mark.asyncio
 async def test_native_work_rebuild_includes_new_user_image_at_completed_tool_boundary(tmp_path, monkeypatch):
-    from mona.agent.tools.filesystem import ReadFileTool
-
     config, state = _install_native_work_image_hosts(monkeypatch, tmp_path, "codebuddy")
     state["manual_tool"] = True
     root = tmp_path / "work"
     tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureImageReadTool(workspace=root, allowed_dir=root))
     provider = NativeWorkProvider(config, root)
     initial = [{"role": "system", "content": "stable Work instructions"},
                {"role": "user", "content": "original goal"}]
@@ -1147,14 +1157,12 @@ async def test_native_work_rebuild_includes_new_user_image_at_completed_tool_bou
 
 @pytest.mark.asyncio
 async def test_native_work_shutdown_failure_does_not_dispatch_rebuilt_context(tmp_path, monkeypatch):
-    from mona.agent.tools.filesystem import ReadFileTool
-
     config, state = _install_native_work_image_hosts(
         monkeypatch, tmp_path, "codebuddy", fail_shutdown=True)
     state["manual_tool"] = True
     root = tmp_path / "work"
     tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace=root, allowed_dir=root))
+    tools.register(_FixtureImageReadTool(workspace=root, allowed_dir=root))
     provider = NativeWorkProvider(config, root)
     initial = [{"role": "system", "content": "stable Work instructions"},
                {"role": "user", "content": "Inspect photo"}]
@@ -1176,3 +1184,115 @@ async def test_native_work_shutdown_failure_does_not_dispatch_rebuilt_context(tm
     assert second.error_code == "native_turn_incomplete"
     with pytest.raises(RuntimeError, match="fixture shutdown failed"):
         await provider.aclose()
+
+
+def test_native_work_filters_only_basic_tool_definitions():
+    from mona.providers.native_work_tools import filter_native_work_tools
+
+    names = ["read_file", "write_file", "edit_file", "apply_patch", "list_dir", "find_files",
+             "grep", "exec", "write_stdin", "list_exec_sessions"]
+    retained = [
+        {"type": "function", "function": {"name": "office", "parameters": {"type": "object"}}},
+        {"name": "skill_script_run", "description": "run skill resources"},
+        {"name": "terminal_exec"},
+        {"name": "search_memory"},
+        {"name": "delegate_agent"},
+        {"name": "browser_observe"},
+        {"name": "load_capability"},
+        {"type": "function", "function": {"name": "mcp_external_exec"}},
+    ]
+    definitions = [retained[0], *({"name": name} for name in names), retained[1],
+                   *({"type": "function", "function": {"name": name}} for name in names),
+                   *retained[2:]]
+    original = copy.deepcopy(definitions)
+
+    filtered = filter_native_work_tools(definitions)
+
+    assert filtered == retained
+    assert all(actual is expected for actual, expected in zip(filtered, retained))
+    assert definitions == original
+
+
+def test_native_work_checkpoint_preserves_tool_recovery_and_existing_assistant(tmp_path):
+    from mona.agent.loop import AgentLoop
+    from mona.session.manager import SessionManager
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.sessions = SessionManager(tmp_path)
+    session = loop.sessions.get_or_create("test:native-checkpoint")
+    session.add_message("user", "Update the project")
+    assistant = {"role": "assistant", "content": "Working", "tool_calls": [
+        {"id": "mona-call", "type": "function", "function": {"name": "office", "arguments": "{}"}},
+    ]}
+    tool_checkpoint = {"phase": "awaiting_tools", "assistant_message": assistant,
+                       "completed_tool_results": [], "pending_tool_calls": assistant["tool_calls"],
+                       "started_tool_call_ids": ["mona-call"]}
+    loop._set_runtime_checkpoint(session, tool_checkpoint)
+    native_work = {"executor": "codebuddy", "native_session_id": "session-1", "native_turn_id": None,
+                   "status": "running", "raw": "PRIVATE_VENDOR_DETAIL", "calls": [{
+                       "id": "native-call", "name": "Bash", "status": "started",
+                       "native_session_id": "earlier-session", "native_turn_id": "earlier-turn",
+                       "path": str(tmp_path), "command_sha256": "a" * 64,
+                       "command": "PRIVATE_COMMAND", "result": "PRIVATE_RESULT"}]}
+    loop._set_runtime_checkpoint(session, {"phase": "native_execution", "native_work": native_work})
+    checkpoint = session.metadata[loop._RUNTIME_CHECKPOINT_KEY]
+    assert checkpoint["phase"] == "awaiting_tools"
+    assert checkpoint["assistant_message"] == assistant
+    assert checkpoint["native_work"]["native_turn_id"] is None
+    assert checkpoint["native_work"]["calls"][0]["native_session_id"] == "earlier-session"
+    assert checkpoint["native_work"]["calls"][0]["native_turn_id"] == "earlier-turn"
+    assert "PRIVATE" not in json.dumps(checkpoint["native_work"])
+    loop._set_runtime_checkpoint(session, {**tool_checkpoint, "phase": "tools_partial",
+                                         "assistant_message": {**assistant, "native_work": native_work}})
+    updated = session.metadata[loop._RUNTIME_CHECKPOINT_KEY]
+    assert updated["native_work"] == checkpoint["native_work"]
+    assert updated["completed_messages"] == [] and "PRIVATE" not in json.dumps(updated)
+
+    session.messages.append(dict(assistant))
+    assert loop._restore_runtime_checkpoint(session)
+    assert [message["role"] for message in session.messages] == ["user", "assistant", "tool"]
+    assert session.messages[1]["content"] == "Working"
+    assert session.messages[1]["native_work"] == checkpoint["native_work"]
+    assert "TOOL_OUTCOME_UNKNOWN" in session.messages[2]["content"]
+    loop.sessions.save(session)
+    loop.sessions.invalidate(session.key)
+    restored = loop.sessions.get_or_create(session.key)
+    assert restored.messages[1]["native_work"] == checkpoint["native_work"]
+    projected = restored.get_history(model_view=True)[1]["content"]
+    assert "native-call" in projected and "不要重放" in projected and "PRIVATE" not in projected
+
+
+def test_native_work_only_checkpoint_and_model_history_are_distinct_from_ui(tmp_path):
+    from mona.agent.loop import AgentLoop
+    from mona.session.manager import SessionManager
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.sessions = SessionManager(tmp_path)
+    session = loop.sessions.get_or_create("test:native-only")
+    session.add_message("user", "Create a file")
+    native_work = {"executor": "codex", "native_session_id": "session-2", "native_turn_id": "turn-1",
+                   "status": "unknown", "calls": [{"id": "item-1", "name": "exec", "status": "unknown",
+                   "native_session_id": "session-1", "native_turn_id": None,
+                   "command_sha256": "PRIVATE_COMMAND"}]}
+    loop._set_runtime_checkpoint(session, {"phase": "native_execution", "native_work": native_work})
+    assert loop._restore_runtime_checkpoint(session)
+    assert len(session.messages) == 2
+    assert "尚未确认" in session.messages[-1]["content"]
+    assert "command_sha256" not in session.messages[-1]["native_work"]["calls"][0]
+    assert session.messages[-1]["native_work"]["calls"][0]["native_turn_id"] is None
+    original = copy.deepcopy(session.messages)
+    ui_history = session.get_history()
+    model_history = session.get_history(model_view=True)
+    assert "原生任务历史执行记录" not in ui_history[-1]["content"]
+    assert "原生任务历史执行记录" in model_history[-1]["content"]
+    assert "item-1" in model_history[-1]["content"] and "不要重放" in model_history[-1]["content"]
+    assert session.messages == original and "PRIVATE_COMMAND" not in json.dumps(model_history)
+
+    loop.max_tool_result_chars = 4000
+    completed = loop.sessions.get_or_create("test:native-completed")
+    completed.add_message("user", "Check the result")
+    loop._save_turn(completed, [{"role": "assistant", "content": "", "native_work": native_work}], 0)
+    assert len(completed.messages) == 2 and completed.messages[-1]["content"] == ""
+    assert "PRIVATE_COMMAND" not in json.dumps(completed.messages)
+    assert len(completed.get_history()) == 1
+    assert "item-1" in completed.get_history(model_view=True)[-1]["content"]

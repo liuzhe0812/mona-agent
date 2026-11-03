@@ -72,6 +72,7 @@ def _field(value: Any, *names: str) -> Any:
 class SDKEventProjector:
     def __init__(self, native_session_id: str, *, host_collaboration: bool = False,
                  work_tool: bool = False, resuming: bool = False, design_resources: bool = False,
+                 native_tools: list[str] | None = None,
                  executor: ExecutorId = ExecutorId.CLAUDE):
         self.native_session_id = native_session_id
         self.executor = executor
@@ -79,6 +80,7 @@ class SDKEventProjector:
         self.host_collaboration = host_collaboration
         self.design_resources = design_resources and not work_tool
         self.work_tool = work_tool
+        self.native_tools = frozenset(native_tools or ())
         self.host_tool = SDK_WORK_TOOL if work_tool else SDK_HOST_TOOL if host_collaboration else None
         self.allowed_host_tools = {name for name in (self.host_tool, SDK_DESIGN_TOOL if self.design_resources else None) if name}
         self.host_server = WORK_SERVER if work_tool else HOST_SERVER
@@ -89,6 +91,7 @@ class SDKEventProjector:
         self.text_seen = False
         self.confirmed = False
         self.tool_ids: set[str] = set()
+        self.native_tool_ids: set[str] = set()
         self.tool_blocks: dict[int, dict[str, Any]] = {}
         # SDKs can split one streamed message into separate authoritative envelopes.
         self.streamed_tool_ids: set[str] = set()
@@ -111,6 +114,7 @@ class SDKEventProjector:
         self.uncertain = False
         self.pending_api_error = None
         self.tool_ids.clear()
+        self.native_tool_ids.clear()
         self.tool_blocks.clear()
         self.streamed_tool_ids.clear()
         self.reasoning_blocks.clear()
@@ -189,6 +193,15 @@ class SDKEventProjector:
         return NativeEvent(type=kind, payload=data, native_turn_id=self.turn_id,
                            native_event_id=identity)
 
+    @staticmethod
+    def _tool_policy_error(tool: str) -> RpcError:
+        error = RpcError("native_policy_violation", "检测到未授权的外部工具调用。", outcome_unknown=True)
+        safe = (re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", tool)
+                and not re.match(r"(?:sk[-_]|pk[-_]|AIza|gh[pousr]_|github_pat_|xox[baprs]-|eyJ)", tool))
+        error.rejected_tool = tool if safe else "<invalid>"
+        error.tool_event_stage = "assistant"
+        return error
+
     def consume(self, message: Any) -> list[NativeEvent]:
         data = plain(message)
         name = type(message).__name__
@@ -196,7 +209,8 @@ class SDKEventProjector:
             "AssistantMessage": "assistant", "UserMessage": "user", "ResultMessage": "result",
             "ErrorMessage": "error"}.get(name)
         parent = data.get("parent_tool_use_id")
-        if parent or kind == "system" and str(data.get("subtype", "")).startswith("task_"):
+        native_result = self.work_tool and kind == "user" and isinstance(parent, str) and parent in self.native_tool_ids
+        if parent and not native_result or kind == "system" and str(data.get("subtype", "")).startswith("task_"):
             # SDK background activity has its own lineage. It must not become the
             # next main turn's text or completion just because it arrived later.
             return []
@@ -269,11 +283,14 @@ class SDKEventProjector:
                                         str(data["uuid"]) if data.get("uuid") else None)]
                 if block.get("type") == "tool_use":
                     tool_id, tool = block.get("id"), block.get("name", "")
-                    if not isinstance(tool_id, str):
+                    if not isinstance(tool_id, str) or not tool_id.strip() or not isinstance(tool, str):
                         raise RpcError("native_tool_identity", "原生工具调用缺少标识。", outcome_unknown=True)
-                    if (self.work_tool and tool != SDK_WORK_TOOL
+                    # WorkBuddy can start a display block before its function
+                    # name is complete. Permission callbacks gate execution;
+                    # validate the final name in the authoritative envelope.
+                    if (not tool or self.work_tool and tool not in self.allowed_host_tools | self.native_tools
                             or tool.startswith("mcp__") and tool not in self.allowed_host_tools):
-                        raise RpcError("native_policy_violation", "检测到未授权的外部工具调用。", outcome_unknown=True)
+                        return []
                     arguments = block.get("input", {})
                     if not isinstance(arguments, dict):
                         arguments = {}
@@ -282,6 +299,8 @@ class SDKEventProjector:
                         self.tool_blocks[index] = {"itemId": tool_id, "name": tool,
                             "arguments": arguments, "partial": "", "seenDeltaIds": set()}
                     self.tool_ids.add(tool_id)
+                    if self.work_tool and tool in self.native_tools:
+                        self.native_tool_ids.add(tool_id)
                     self.streamed_tool_ids.add(tool_id)
                     return [self._event("tool.started", {"itemId": tool_id, "name": tool,
                         "arguments": arguments, "inputStreaming": True}, tool_id + ":started")]
@@ -407,12 +426,16 @@ class SDKEventProjector:
                 if not (block.get("type") == "tool_use" or {"id", "name", "input"}.issubset(block)):
                     continue
                 tool_id, tool = block.get("id"), block.get("name", "")
-                if not isinstance(tool_id, str):
+                if (not isinstance(tool_id, str) or not tool_id.strip()
+                        or not isinstance(tool, str) or not tool.strip()):
                     raise RpcError("native_tool_identity", "原生工具调用缺少标识。", outcome_unknown=True)
-                if (self.work_tool and tool != SDK_WORK_TOOL
+                if (self.work_tool and (tool in {"Skill", "Task", "Agent"}
+                                        or tool != SDK_WORK_TOOL and tool not in self.native_tools)
                         or tool.startswith("mcp__") and tool not in self.allowed_host_tools):
-                    raise RpcError("native_policy_violation", "检测到未授权的外部工具调用。", outcome_unknown=True)
+                    raise self._tool_policy_error(tool)
                 self.tool_ids.add(tool_id)
+                if self.work_tool and tool in self.native_tools:
+                    self.native_tool_ids.add(tool_id)
                 streamed = tool_id in self.streamed_tool_ids
                 result.append(self._event("tool.started", {"itemId": tool_id, "name": tool,
                     "arguments": block.get("input", {}), "inputStreaming": False}, tool_id + (":authoritative" if streamed else ":started")))
@@ -427,7 +450,7 @@ class SDKEventProjector:
             for value in blocks:
                 block = plain(value)
                 tool_id = block.get("tool_use_id")
-                if tool_id not in self.tool_ids:
+                if tool_id not in self.tool_ids or native_result and tool_id != parent:
                     continue
                 content = block.get("content", "")
                 if not isinstance(content, str):

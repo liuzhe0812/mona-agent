@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Literal
@@ -73,6 +74,7 @@ class NewTurn(BaseModel):
     model_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=50000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    metadata: dict = Field(default_factory=dict)
 
     _id = field_validator("request_id")(identifier)
 
@@ -82,6 +84,24 @@ class NewTurn(BaseModel):
         if len(set(values)) != len(values):
             raise ValueError("duplicate attachment ids")
         return [identifier(value) for value in values]
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata(cls, value: dict) -> dict:
+        allowed = {"office_session_id", "office_document_type", "office_display_name", "canvas_id", "canvas_path",
+                   "display_content", "quote", "input_id", "task_id", "media", "ui_theme"}
+        if set(value) - allowed or len(json.dumps(value, ensure_ascii=False).encode()) > 64 * 1024:
+            raise ValueError("invalid conversation context")
+        for key in ("office_session_id", "canvas_id"):
+            if key in value and (not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[key])):
+                raise ValueError("invalid document identity")
+        if "canvas_path" in value:
+            path = value["canvas_path"]
+            if not isinstance(path, str) or not path.startswith("/workspace/") or "\\" in path or ".." in path.split("/"):
+                raise ValueError("invalid document path")
+        if "office_document_type" in value and value["office_document_type"] not in {"docs", "sheets", "slides"}:
+            raise ValueError("invalid document type")
+        return value
 
 
 class RunResult(BaseModel):

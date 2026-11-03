@@ -32,6 +32,7 @@ from mona.development.executors.codex_policy import (
     disabled_skill_overrides,
     similar_command_prefix,
     validate_effective_config,
+    validate_work_rule_sources,
 )
 from mona.development.executors.diagnostics import failed_probe
 from mona.development.executors.host_tools import (
@@ -237,9 +238,21 @@ class CodexExecutor:
             raise
 
     async def _check_policy(self, client: JsonRpcProcess) -> None:
-        reply = await client.request("config/read", {"includeLayers": False, "cwd": str(self.profile.project_root)})
+        native_work = bool(self.profile.work_native_tools)
+        if native_work:
+            version = re.search(r"/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)", self._version or "")
+            if not version or tuple(map(int, version.groups())) < (0, 164, 0):
+                raise RpcError("native_policy_unavailable", "当前程序版本无法保证原生工具逐次审批，未启动任务。")
+        reply = await client.request("config/read", {"includeLayers": native_work, "cwd": str(self.profile.project_root)})
         validate_effective_config(reply, model_endpoint=self.profile.model_endpoint,
-                                  work_model_catalog=self.profile.work_model_catalog)
+                                  work_model_catalog=self.profile.work_model_catalog,
+                                  work_native_tools=self.profile.work_native_tools)
+        if native_work:
+            try:
+                requirements = await client.request("configRequirements/read")
+            except RpcError as exc:
+                raise RpcError("native_policy_unavailable", "当前程序无法核对原生托管规则，未启动任务。") from exc
+            validate_work_rule_sources(reply, self.profile, requirements)
         self._isolation_checked = True
 
     async def probe(self) -> ExecutorProbe:
@@ -375,8 +388,13 @@ class CodexExecutor:
     async def _open(self, start: SessionStart, binding: Binding | None) -> Binding:
         self._validate_start(start)
         work_mode = start.work_prompt is not None
+        native_work = work_mode and bool(start.work_native_tools)
         if work_mode and self.profile.work_model_catalog is None:
             raise RpcError("work_policy_unverified", "此模型引擎尚未启用普通会话的工具权限。")
+        if (work_mode and start.work_native_tools != self.profile.work_native_tools
+                or native_work and (binding is not None or start.work_native_permission is None)
+                or self.profile.work_native_tools and not work_mode):
+            raise RpcError("native_policy_unavailable", "当前原生会话不能保持本轮工具权限，未启动任务。")
         async with self._opening_lock:
             if binding is not None:
                 self._validate_binding(binding)
@@ -395,13 +413,15 @@ class CodexExecutor:
             disabled = disabled_skill_overrides(skills, start.context) if not work_mode else []
             approval_policy, approvals_reviewer, sandbox_policy = _thread_permissions(
                 start.session.permission_mode, start.readonly or work_mode)
+            if native_work:
+                approval_policy, approvals_reviewer, sandbox_policy = "untrusted", "user", "workspace-write"
             params: dict[str, Any] = {
                 "cwd": str(start.context.root), "approvalPolicy": approval_policy,
                 "approvalsReviewer": approvals_reviewer, "sandbox": sandbox_policy,
                 "developerInstructions": WORK_DESCRIPTION if work_mode else start.context.model_context(),
                 "config": {"skills.config": disabled},
             }
-            host_tools = (self._tool_handler is not None and not start.readonly
+            host_tools = (self._tool_handler is not None and (not start.readonly or work_mode)
                           and not start.session.parent_session_id
                           and (binding is None or binding.capabilities.host_subagents))
             design_tools = (not work_mode and self._tool_handler is not None
@@ -459,6 +479,8 @@ class CodexExecutor:
                 if (reply.get("approvalPolicy") != approval_policy
                         or reply.get("approvalsReviewer") != approvals_reviewer):
                     raise RpcError("project_policy_violation", "原生会话审批策略未生效。", outcome_unknown=True)
+                if native_work:
+                    await self._check_policy(client)
                 if native_id in self._threads and binding is None:
                     raise RpcError("binding_mismatch", "新建会话回执重复了已有线程。", outcome_unknown=True)
                 active = binding.model_copy(deep=True) if binding else Binding(
@@ -541,6 +563,8 @@ class CodexExecutor:
                 return DispatchReceipt(input_id=input_id, outcome="unknown", reason="请先核对原生执行状态；未重新发送。")
             if self._client is None or self._client.closed:
                 return DispatchReceipt(input_id=input_id, outcome="rejected", reason="原生连接已关闭，请恢复原会话。")
+            if runtime.start.work_native_tools:
+                await self._check_policy(self._client)
             if (steering and runtime.status not in {"running", "waiting_user"}) or (not steering and runtime.status != "idle"):
                 return DispatchReceipt(input_id=input_id, outcome="rejected", reason="当前轮次状态不接受此输入，请排队或等待。")
             previous_turn = runtime.turn_id
@@ -827,6 +851,34 @@ class CodexExecutor:
         if method == "item/permissions/requestApproval":
             return {"permissions": {}, "scope": "turn"}
         if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+            if runtime is not None and runtime.start.work_prompt is not None:
+                item_id = params.get("itemId")
+                native_tool = "exec_command" if method == "item/commandExecution/requestApproval" else "apply_patch"
+                handler = runtime.start.work_native_permission
+                if (not is_current or runtime.start.readonly or handler is None
+                        or native_tool not in runtime.start.work_native_tools
+                        or not isinstance(item_id, str) or not item_id or len(item_id) > 512):
+                    return {"decision": "decline"}
+                fields = ("command", "cwd") if native_tool == "exec_command" else ("grantRoot",)
+                arguments = {key: params[key] for key in fields if key in params}
+                if native_tool == "exec_command" and (not isinstance(arguments.get("command"), str)
+                                                       or not arguments["command"].strip()
+                                                       or not isinstance(arguments.get("cwd"), str)):
+                    return {"decision": "decline"}
+                runtime.status = "waiting_user"
+                try:
+                    answer = await handler(turn_id, item_id, native_tool, arguments)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    answer = None
+                allowed = (isinstance(answer, dict) and answer.get("allow") is True
+                           and ("arguments" not in answer or answer["arguments"] == arguments)
+                           and runtime.status in {"running", "waiting_user"} and runtime.turn_id == turn_id
+                           and not runtime.desynchronized and self._client is not None and not self._client.closed)
+                if runtime.status == "waiting_user":
+                    runtime.status = "running"
+                return {"decision": "accept" if allowed else "decline"}
             if not is_current or runtime is None or runtime.start.readonly or runtime.start.work_prompt is not None or self._approval_handler is None:
                 return {"decision": "decline"}
             runtime.status = "waiting_user"

@@ -37,7 +37,7 @@ from mona.development.executors.host_tools import (
     tool_unavailable,
 )
 from mona.development.executors.login import ACTIVE_LOGIN_STATES, NativeLogin, idle_login
-from mona.development.executors.rpc import JsonRpcProcess, RemoteRpcError, RpcError
+from mona.development.executors.rpc import JsonRpcProcess, RpcError
 from mona.development.executors.sdk_policy import SDKProfile, sdk_version, worker_command
 from mona.development.input_content import MAX_NATIVE_FRAME_BYTES, MessageContent, validate_content
 
@@ -314,6 +314,20 @@ class SDKExecutor:
         work_tools = work_mode and self.tool_handler is not None
         design_tools = not work_mode and self.tool_handler is not None
         async def request(_identifier, method, params):
+            if method == "work/native-permission":
+                turn_id = params.get("turnId")
+                item_id, name, arguments = params.get("itemId"), params.get("toolName"), params.get("arguments")
+                denied = {"allow": False, "message": "当前轮次或工具权限已变化，本次操作未执行。"}
+                if (not work_mode or start.work_native_permission is None
+                        or turn_id != runtime.turn_id or runtime.status not in {"starting", "running"}
+                        or name not in start.work_native_tools or not isinstance(item_id, str)
+                        or not item_id or len(item_id) > 512 or not isinstance(arguments, dict)):
+                    return denied
+                reply = await start.work_native_permission(turn_id, item_id, name, arguments)
+                if (turn_id != runtime.turn_id or runtime.status not in {"starting", "running"}
+                        or runtime.connection is None or runtime.connection.closed):
+                    return denied
+                return reply
             if method in {"host/collaboration", "host/design-resource"}:
                 turn_id = params.get("turnId")
                 resource = method == "host/design-resource"
@@ -370,7 +384,8 @@ class SDKExecutor:
                 "context": start.context.model_context(), "model": start.model, "resume": resume,
                 "permissionMode": start.session.permission_mode.value,
                 "effort": start.session.model_reasoning_effort if not start.session.model_provider else None,
-                "hostCollaboration": host_tools, "hostDesignResources": design_tools, "workPrompt": start.work_prompt},
+                "hostCollaboration": host_tools, "hostDesignResources": design_tools, "workPrompt": start.work_prompt,
+                "workNativeTools": list(start.work_native_tools)},
                 classify_error=_worker_error)
             if not isinstance(reply, dict) or reply.get("nativeSessionId") != binding.native_session_id:
                 raise RpcError("native_protocol_error", "SDK 初始化回执身份不一致。", outcome_unknown=True)
@@ -425,7 +440,7 @@ class SDKExecutor:
         runtime.status, runtime.turn_id = "starting", "sdk:" + input_id
         try:
             reply = await runtime.connection.request("send", {"inputId": input_id, "text": message})
-            if reply.get("inputId") != input_id or reply.get("turnId") != runtime.turn_id:
+            if not isinstance(reply, dict) or reply.get("inputId") != input_id or reply.get("turnId") != runtime.turn_id:
                 raise RpcError("native_turn_mismatch", "SDK 派发回执不属于当前输入。", outcome_unknown=True)
             runtime.status = "running"
             runtime.emit(NativeEvent(type="run.started", native_turn_id=runtime.turn_id,
@@ -433,11 +448,13 @@ class SDKExecutor:
             for event in runtime.early:
                 self._deliver(runtime, event)
             return DispatchReceipt(input_id=input_id, outcome="accepted", native_turn_id=runtime.turn_id)
-        except (RpcError, asyncio.CancelledError):
-            # An SDK rejection can follow a successful pipe write; do not assume
-            # the original command did not execute just because no receipt arrived.
+        except (RpcError, asyncio.CancelledError) as exc:
+            # Missing acceptance never permits replay. Cancellation still reaches
+            # the owner so it can close this exact execution.
             runtime.status = "unknown"
             runtime.emit(NativeEvent(type="run.unknown", native_turn_id=runtime.turn_id, payload={"reason": "sdk_dispatch_unknown"}))
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             return DispatchReceipt(input_id=input_id, outcome="unknown", native_turn_id=runtime.turn_id)
         finally:
             runtime.dispatching = False
@@ -483,15 +500,20 @@ class SDKExecutor:
         runtime = self._runtime(binding)
         if not force and runtime.status not in {"idle", "not_loaded"}:
             raise RpcError("native_busy", "请先结束原生任务，再释放执行进程。")
-        if runtime.connection and not runtime.connection.closed:
-            with_error = False
-            if not force:
+        if runtime.connection:
+            if runtime.connection.closed and runtime.status not in {"idle", "not_loaded"}:
+                await runtime.connection.close()
+                raise RpcError("native_exit_unconfirmed", "原生连接已断开，执行进程结束状态未确认。", outcome_unknown=True)
+            if not runtime.connection.closed:
                 try:
-                    await runtime.connection.request("close")
-                except RemoteRpcError:
-                    with_error = True
-            if with_error:
-                raise RpcError("native_busy", "原生进程尚未确认可关闭。")
+                    reply = await runtime.connection.request("close", {"force": True} if force else {},
+                                                             timeout=10, classify_error=_worker_error)
+                    if not isinstance(reply, dict) or reply.get("closed") is not True:
+                        raise RpcError("native_exit_unconfirmed", "原生进程未确认结束。", outcome_unknown=True)
+                except BaseException:
+                    if force:
+                        await runtime.connection.close()
+                    raise
             await runtime.connection.close()
         runtime.closed = True
         if not runtime.queue.full():
@@ -502,9 +524,14 @@ class SDKExecutor:
         self._closed = True
         if self._auth_connection:
             await self._auth_connection.close()
+        failure = None
         for runtime in list(self._sessions.values()):
-            if runtime.connection:
-                await runtime.connection.close()
-            runtime.closed = True
-            if not runtime.queue.full():
-                runtime.queue.put_nowait(None)
+            try:
+                await self.close_runtime(runtime.binding, force=True)
+            except (Exception, asyncio.CancelledError) as exc:
+                failure = failure or exc
+                runtime.closed = True
+                if not runtime.queue.full():
+                    runtime.queue.put_nowait(None)
+        if failure is not None:
+            raise failure

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+import zipfile
 from importlib.resources import files as pkg_files
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -156,7 +160,7 @@ def test_work_system_prompt_budget_uses_visible_tools(
     assert "<instructions_for_visualizer>" in prompt
     assert "### Skill: memory" in prompt
     assert "### Skill: my" not in prompt
-    assert "**my**" in prompt
+    assert "**my**" not in prompt
     assert "search_memory" in prompt and "read_memory" in prompt
     if "diagnostics" in capabilities:
         assert loop.tools.get("my").parameters["properties"]["action"]["enum"] == ["check"]
@@ -869,11 +873,54 @@ def test_skill_read_unlocks_resources_only_after_success(monkeypatch, tmp_path) 
     assert not registry.is_visible("skill_reference_read")
     assert "not found" in asyncio.run(registry.execute("skill_read", {"name": "absent-skill"}))
     assert not registry.is_visible("skill_reference_read")
-    assert "# Self-Awareness" in asyncio.run(registry.execute("skill_read", {"name": "my"}))
-    assert registry.is_visible("my")
+    assert "# Mona PPTX" in asyncio.run(registry.execute("skill_read", {"name": "mona-pptx"}))
+    assert not registry.is_visible("my")
     assert registry.is_visible("skill_reference_read")
-    result = asyncio.run(registry.execute("skill_reference_read", {"skill": "my", "ref_path": "examples.md"}))
+    result = asyncio.run(registry.execute("skill_reference_read", {"skill": "mona-pptx", "ref_path": "source-images.md"}))
     assert not result.startswith("Error")
+    asyncio.run(registry.execute("load_capability", {"capabilities": ["diagnostics"]}))
+    assert registry.is_visible("my")
+
+
+def test_optional_skills_package_and_load_only_after_private_install(monkeypatch, tmp_path) -> None:
+    from mona.agent.skills import SkillsLoader
+
+    root = Path(__file__).resolve().parents[2]
+    private_skills = tmp_path / "private-skills"
+    monkeypatch.setattr("mona.config.paths.get_agent_skills_dir", lambda _agent_id: private_skills)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=root / "mona" / "skills")
+    default_names = {item["name"] for item in loader.list_skills(filter_unavailable=False)}
+    assert default_names == {
+        "memory", "long-goal", "skill-creator", "mona-docx", "mona-xlsx", "mona-pptx", "pdf",
+        "prd-document", "mona-design", "mona-motion", "mona-canvas",
+        "mona-visualizer", "image-generation",
+    }
+
+    draft_dir = tmp_path / "reviewable-drafts"
+    initializer = root / "mona" / "skills" / "skill-creator" / "scripts" / "init_skill.py"
+    draft = subprocess.run(
+        [sys.executable, str(initializer), "draft-example", "--path", str(draft_dir)],
+        capture_output=True, text=True, encoding="utf-8", timeout=15,
+    )
+    assert draft.returncode == 0, draft.stdout + draft.stderr
+    assert (draft_dir / "draft-example" / "SKILL.md").is_file()
+    assert loader.resolve_skill_dir("draft-example") is None
+
+    package_script = root / "mona" / "skills" / "skill-creator" / "scripts" / "package_skill.py"
+    archives = tmp_path / "archives"
+    for name in ("github", "tmux"):
+        completed = subprocess.run(
+            [sys.executable, str(package_script), str(root / "expert-library" / "skills" / name), str(archives)],
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        with zipfile.ZipFile(archives / f"{name}.skill") as archive:
+            archive.extractall(private_skills)
+        assert loader.resolve_skill_dir(name) == private_skills / name
+
+    assert (private_skills / "tmux" / "scripts" / "find-sessions.sh").is_file()
+    assert (private_skills / "tmux" / "scripts" / "wait-for-text.sh").is_file()
+    assert {item["name"] for item in loader.list_skills(filter_unavailable=False)} == default_names | {"github", "tmux"}
 
 
 def test_video_skill_read_and_history_restore_full_creation_capabilities_without_permissions(

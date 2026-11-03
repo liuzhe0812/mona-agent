@@ -9,9 +9,9 @@ import os
 import re
 import sys
 import tempfile
+import traceback
 import types
 import uuid
-from contextlib import suppress
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
@@ -44,6 +44,8 @@ from mona.development.input_content import MAX_NATIVE_FRAME_BYTES, sdk_content
 MAX_FRAME = MAX_NATIVE_FRAME_BYTES
 READ_TOOLS = {"Read", "Glob", "Grep", "LS", "NotebookRead"}
 WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+WORK_NATIVE_PERMISSION_TIMEOUT = 5.0
+WORK_NATIVE_HOOK_TIMEOUT = 10.0
 CODEBUDDY_WINDOWS_INSTRUCTIONS = (
     "On Windows, use the PowerShell tool for terminal commands. "
     "Do not call Bash unless it is listed in this session's available tools."
@@ -111,10 +113,13 @@ class Worker:
         self.owner: asyncio.Task | None = None
         self.ready: asyncio.Future | None = None
         self.closing = asyncio.Event()
+        self.cleanup_failed = False
         self.pending: dict[str, asyncio.Future] = {}
         self.next_request = 0
         self.dispatch = asyncio.Lock()
         self.active: str | None = None
+        self.work_native_calls: dict[str, tuple[str, str]] = {}
+        self.work_native_completed: set[str] = set()
         self.tasks: set[asyncio.Task] = set()
         self.auth_owner: asyncio.Task | None = None
         self.auth_ready: asyncio.Future | None = None
@@ -228,7 +233,11 @@ class Worker:
         if start.get("workPrompt") is not None:
             if name == SDK_WORK_TOOL:
                 return sdk.PermissionResultAllow(updated_input=arguments)
-            return sdk.PermissionResultDeny(message="Work 工具只允许通过 Mona 工具通道调用。")
+            item_id = context.get("tool_use_id") if isinstance(context, dict) else getattr(context, "tool_use_id", None)
+            reply = await self.work_native_permission(turn_id, item_id, name, arguments)
+            if reply["allow"]:
+                return sdk.PermissionResultAllow(updated_input=reply["arguments"])
+            return sdk.PermissionResultDeny(message=reply["message"])
         if name == "AskUserQuestion":
             questions = arguments.get("questions")
             if (not isinstance(questions, list) or not 1 <= len(questions) <= 20
@@ -330,6 +339,63 @@ class Worker:
             return sdk.PermissionResultAllow(updated_input=arguments)
         return sdk.PermissionResultDeny(message="用户未同意本次操作。", interrupt=reply == "cancel")
 
+    async def work_native_permission(self, turn_id: str | None, item_id: str | None,
+                                     name: str, arguments: dict) -> dict:
+        denied = {"allow": False, "message": "未能确认本次操作的授权，操作未执行。"}
+        if (not self._current_turn(turn_id) or not isinstance(name, str)
+                or name not in self.projector.native_tools or name in {"Skill", "Task", "Agent"}
+                or name.startswith("mcp__") or not isinstance(arguments, dict)
+                or not isinstance(item_id, str) or not item_id.strip() or len(item_id) > 512):
+            return denied
+        try:
+            async with asyncio.timeout(WORK_NATIVE_PERMISSION_TIMEOUT):
+                reply = await self.ask("work/native-permission", {"turnId": turn_id, "itemId": item_id,
+                    "toolName": name, "arguments": arguments})
+        except (Exception, asyncio.CancelledError):
+            return denied
+        if not self._current_turn(turn_id) or not isinstance(reply, dict):
+            return denied
+        if reply.get("allow") is True and ("arguments" not in reply or isinstance(reply["arguments"], dict)):
+            self.work_native_calls[item_id] = (turn_id, name)
+            return {"allow": True, "arguments": reply.get("arguments", arguments)}
+        if isinstance(reply.get("message"), str) and reply["message"]:
+            denied["message"] = reply["message"]
+        return denied
+
+    async def work_native_pre_tool(self, data: dict, tool_use_id: str | None, context: Any) -> dict:
+        turn_id = self.active
+        name, arguments = data.get("tool_name"), data.get("tool_input")
+        session_id, input_tool_id = data.get("session_id"), data.get("tool_use_id")
+        if (data.get("hook_event_name") == "PreToolUse" and name == SDK_WORK_TOOL
+                and self._current_turn(turn_id)):
+            return {"continue_": True}
+        decision = {"permissionDecision": "deny", "permissionDecisionReason": "当前操作未获授权。"}
+        if (data.get("hook_event_name") == "PreToolUse" and self._current_turn(turn_id)
+                and (session_id is None or session_id == self.projector.native_session_id)
+                and (input_tool_id is None or input_tool_id == tool_use_id)):
+            reply = await self.work_native_permission(turn_id, tool_use_id, name, arguments)
+            if reply["allow"]:
+                decision = {"permissionDecision": "allow", "updatedInput": reply["arguments"]}
+            else:
+                decision["permissionDecisionReason"] = reply["message"]
+        return {"continue_": True, "hookSpecificOutput": {"hookEventName": "PreToolUse", **decision}}
+
+    async def work_native_post_tool(self, data: dict, tool_use_id: str | None, context: Any) -> dict:
+        # WorkBuddy can batch ordinary results behind a blocked MCP call. The
+        # execution hook provides the admitted call's independent receipt.
+        event, name = data.get("hook_event_name"), data.get("tool_name")
+        if (event not in {"PostToolUse", "PostToolUseFailure"} or not self.projector
+                or not self.active or self.projector.finished
+                or data.get("session_id") != self.projector.native_session_id
+                or data.get("tool_use_id", tool_use_id) != tool_use_id
+                or not isinstance(tool_use_id, str) or tool_use_id in self.work_native_completed
+                or self.work_native_calls.get(tool_use_id) != (self.active, name)):
+            return {"continue_": True}
+        self.write({"method": "event", "params": {"type": "tool.completed", "native_turn_id": self.active,
+            "payload": {"itemId": tool_use_id, "isError": event == "PostToolUseFailure", "receiptSource": "native_hook"}}})
+        self.work_native_completed.add(tool_use_id)
+        return {"continue_": True}
+
     async def readonly_pre_tool(self, data: dict, _tool_use_id: str | None, context: Any) -> dict:
         name, arguments = data.get("tool_name"), data.get("tool_input")
         if data.get("hook_event_name") != "PreToolUse" or name not in READ_TOOLS | {SDK_DESIGN_TOOL} or not isinstance(arguments, dict):
@@ -364,8 +430,9 @@ class Worker:
         self.permission_modes = _supported_permission_modes(cls)
         if start["permissionMode"] not in self.permission_modes:
             raise ValueError("sdk_contract_incompatible")
-        permission_mode = _sdk_permission_mode(start, cls)
         work_mode = start.get("workPrompt") is not None
+        work_native_tools = start.get("workNativeTools", [])
+        permission_mode = "default" if work_mode and work_native_tools else _sdk_permission_mode(start, cls)
         if work_mode and (not isinstance(start["workPrompt"], str) or not start["workPrompt"].strip()
                           or start.get("hostCollaboration") or start.get("isSubagent")):
             raise ValueError("invalid_worker_options")
@@ -383,15 +450,33 @@ class Worker:
             system_prompt_append = f"{system_prompt_append}\n\n{CODEBUDDY_WINDOWS_INSTRUCTIONS}"
         if not work_mode and executor == ExecutorId.CODEBUDDY and start["readonly"]:
             system_prompt_append = f"{system_prompt_append}\n\n{CODEBUDDY_READONLY_INSTRUCTIONS}"
-        settings = {"disableAllHooks": work_mode or not start["readonly"], "autoMemoryEnabled": False,
+        settings = {"disableAllHooks": (work_mode and not work_native_tools) or (not work_mode and not start["readonly"]),
+                    "autoMemoryEnabled": False,
                     "disableClaudeAiConnectors": True}
+        if work_mode and work_native_tools:
+            settings["permissions"] = {"ask": work_native_tools}
         options = {"cwd": start["cwd"], "setting_sources": [], "mcp_servers": {}, "hooks": {},
             "can_use_tool": self.permission, "include_partial_messages": True,
             "permission_mode": permission_mode, "allowed_tools": [],
             "disallowed_tools": ["mcp__*", "Skill", "Task", "Agent"],
             "env": {}, "extra_args": {}, "model": start.get("model"),
             "stderr": lambda _: None}
-        if start["readonly"]:
+        if work_mode and work_native_tools:
+            if not callable(getattr(sdk, "HookMatcher", None)):
+                raise ValueError("sdk_contract_incompatible")
+            try:
+                matcher_fields = inspect.signature(sdk.HookMatcher).parameters
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sdk_contract_incompatible") from exc
+            if "timeout" not in matcher_fields:
+                raise ValueError("sdk_contract_incompatible")
+            options["hooks"] = {"PreToolUse": [sdk.HookMatcher(
+                hooks=[self.work_native_pre_tool], timeout=WORK_NATIVE_HOOK_TIMEOUT)]}
+            if executor == ExecutorId.CODEBUDDY:
+                for event in ("PostToolUse", "PostToolUseFailure"):
+                    options["hooks"][event] = [sdk.HookMatcher(
+                        hooks=[self.work_native_post_tool], timeout=WORK_NATIVE_HOOK_TIMEOUT)]
+        elif start["readonly"]:
             if not callable(getattr(sdk, "HookMatcher", None)):
                 raise ValueError("sdk_contract_incompatible")
             options["hooks"] = {"PreToolUse": [sdk.HookMatcher(hooks=[self.readonly_pre_tool])]}
@@ -439,9 +524,9 @@ class Worker:
             if executor == ExecutorId.CODEBUDDY:
                 options["extra_args"]["system-prompt-file"] = str(work_prompt_file)
             if "tools" in fields:
-                options["tools"] = []
+                options["tools"] = work_native_tools
             else:
-                options["extra_args"]["tools"] = ""
+                options["extra_args"]["tools"] = ",".join(work_native_tools)
             options["disallowed_tools"] = [name for name in options["disallowed_tools"] if name != "mcp__*"]
         elif host_tools or design_tools:
             if not callable(getattr(sdk, "tool", None)) or not callable(getattr(sdk, "create_sdk_mcp_server", None)):
@@ -463,6 +548,7 @@ class Worker:
         self.projector = SDKEventProjector(start["nativeSessionId"], host_collaboration=host_tools,
                                            design_resources=design_tools,
                                            work_tool=work_mode,
+                                           native_tools=work_native_tools,
                                            resuming=start.get("resume") is True, executor=executor)
         client_cls = sdk.ClaudeSDKClient if executor == ExecutorId.CLAUDE else sdk.CodeBuddySDKClient
         if executor == ExecutorId.CODEBUDDY:
@@ -527,8 +613,10 @@ class Worker:
                 if not future.done():
                     future.cancel()
             if self.client:
-                with suppress(Exception, asyncio.CancelledError):
+                try:
                     await self.client.disconnect()
+                except (Exception, asyncio.CancelledError):
+                    self.cleanup_failed = True
             self._cleanup_work_prompt_file()
 
     async def receive(self) -> None:
@@ -544,9 +632,18 @@ class Worker:
             self.closing.set()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            payload = {"reason": "sdk_event_stream_failed", "exceptionType": type(exc).__name__,
+                       "errorLocation": f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"}
+            if isinstance(exc, RpcError):
+                payload["errorCode"] = ("native_policy_violation" if exc.code == "native_policy_violation"
+                                        else "native_protocol_error")
+                if getattr(exc, "rejected_tool", None) is not None:
+                    payload["rejectedTool"] = exc.rejected_tool
+                    payload["toolEventStage"] = exc.tool_event_stage
             self.write({"method": "event", "params": {"type": "run.unknown", "native_turn_id": self.active,
-                "payload": {"reason": "sdk_event_stream_failed"}}})
+                "payload": payload}})
             self.closing.set()
 
     async def own_auth(self, executable: str) -> None:
@@ -640,7 +737,7 @@ class Worker:
         if method == "initialize":
             if self.owner:
                 raise ValueError("worker_already_initialized")
-            if set(params) - {"executor", "cwd", "executable", "nativeSessionId", "readonly", "isSubagent", "context", "model", "resume", "hostCollaboration", "hostDesignResources", "workPrompt", "effort", "permissionMode"}:
+            if set(params) - {"executor", "cwd", "executable", "nativeSessionId", "readonly", "isSubagent", "context", "model", "resume", "hostCollaboration", "hostDesignResources", "workPrompt", "workNativeTools", "effort", "permissionMode"}:
                 raise ValueError("invalid_worker_options")
             if params["executor"] not in {"claude", "codebuddy"} or not Path(params["cwd"]).is_dir():
                 raise ValueError("invalid_worker_options")
@@ -656,12 +753,28 @@ class Worker:
             if work_prompt is not None and (not isinstance(work_prompt, str) or not work_prompt.strip()
                                             or params.get("hostCollaboration") or params.get("hostDesignResources")):
                 raise ValueError("invalid_worker_options")
+            native_tools = params.get("workNativeTools", [])
+            if (not isinstance(native_tools, list) or len(native_tools) > 64
+                    or any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", name)
+                           or name in {"Skill", "Task", "Agent"} or name.startswith("mcp__") for name in native_tools)
+                    or len(set(native_tools)) != len(native_tools) or native_tools and work_prompt is None):
+                raise ValueError("invalid_worker_options")
             if params.get("effort") is not None and (not isinstance(params["effort"], str) or not 0 < len(params["effort"]) <= 32):
                 raise ValueError("invalid_worker_options")
             self.start = params
             self.ready = asyncio.get_running_loop().create_future()
             self.owner = asyncio.create_task(self.own_client(params))
             return await asyncio.shield(self.ready)
+        if method == "close":
+            if set(params) - {"force"} or type(params.get("force", False)) is not bool or self.owner is None:
+                raise ValueError("invalid_worker_options")
+            if self.active and not params.get("force", False):
+                raise ValueError("sdk_busy")
+            self.closing.set()
+            await self.owner
+            if self.cleanup_failed:
+                raise RpcError("native_exit_unconfirmed", "原生执行进程未能确认结束。", outcome_unknown=True)
+            return {"closed": True}
         if not self.client or not self.owner or self.owner.done():
             raise ValueError("sdk_not_connected")
         if method == "send":
@@ -673,6 +786,8 @@ class Worker:
                 if self.active:
                     raise ValueError("sdk_busy")
                 self.active = "sdk:" + params["inputId"]
+                self.work_native_calls.clear()
+                self.work_native_completed.clear()
                 self.projector.begin(self.active)
                 try:
                     await self.client.query(params["text"] if isinstance(params["text"], str) else prompt(),
@@ -688,12 +803,6 @@ class Worker:
             return {"outcome": "requested"}
         if method == "status":
             return {"status": "running" if self.active else "idle", "identityConfirmed": self.projector.confirmed}
-        if method == "close":
-            if self.active:
-                raise ValueError("sdk_busy")
-            self.closing.set()
-            await self.owner
-            return {"closed": True}
         raise ValueError("unsupported_worker_method")
 
     async def request(self, message: dict) -> None:

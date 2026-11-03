@@ -332,6 +332,7 @@ class OfficeTool(Tool, ContextAware):
         restrict_to_workspace: bool = False,
         services_port: int = 17174,
         bus: Any | None = None,
+        service_client: OfficeServiceClient | None = None,
     ) -> None:
         from mona.config.paths import get_workspace_path
 
@@ -340,6 +341,7 @@ class OfficeTool(Tool, ContextAware):
         self._restrict = restrict_to_workspace or self.config.restrict_to_workspace
         self._services_port = services_port
         self._bus = bus
+        self._service_client = service_client
         self._owner_session_key = "cli:direct"
         self._active_session_id: str | None = None
         self._request_ctx: RequestContext | None = None
@@ -712,7 +714,7 @@ class OfficeTool(Tool, ContextAware):
         allow_unreviewed: bool = False,
         new_document: bool = False,
     ) -> str | list[dict[str, Any]]:
-        client = OfficeServiceClient.from_port(self._services_port)
+        client = self._service_client if self._service_client is not None else OfficeServiceClient.from_port(self._services_port)
         owner = self._owner_session_key
         if not isinstance(new_document, bool):
             return "Error: new_document must be a boolean"

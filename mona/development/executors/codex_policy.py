@@ -82,6 +82,7 @@ class CodexProfile:
     environment: Mapping[str, str] = field(repr=False)
     model_endpoint: str | None = None
     work_model_catalog: Path | None = None
+    work_native_tools: tuple[str, ...] = ()
 
 
 def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
@@ -130,9 +131,16 @@ def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
     return CodexProfile(tuple(args), home, project_root, env, model_endpoint)
 
 
-def prepare_codex_work_profile(executable: Path, home: Path, root: Path) -> tuple[CodexProfile, Path]:
-    """Use the native catalog's metadata with all filesystem tools removed."""
+def prepare_codex_work_profile(executable: Path, home: Path, root: Path, *,
+                               native_tools: tuple[str, ...] = ()) -> tuple[CodexProfile, Path]:
+    """Keep only the native basic tools authorized for this Work request."""
+    selected = frozenset(native_tools)
+    if (not selected.issubset({"exec_command", "write_stdin", "apply_patch", "view_image"})
+            or ("exec_command" in selected) != ("write_stdin" in selected)):
+        raise RpcError("native_policy_unavailable", "当前原生工具组合不能保持会话权限，未启动任务。")
     profile = prepare_codex_profile(executable, home, root)
+    if selected:
+        _check_empty_rule_directory(profile.home)
     try:
         catalog = json.loads((profile.home / "models_cache.json").read_text(encoding="utf-8"))
         models = catalog["models"]
@@ -141,15 +149,19 @@ def prepare_codex_work_profile(executable: Path, home: Path, root: Path) -> tupl
     except (OSError, ValueError, KeyError) as exc:
         raise RpcError("native_catalog_unavailable", "模型目录尚未同步，请在模型设置中刷新后重试。") from exc
     for model in models:
-        model.update(shell_type="disabled", apply_patch_tool_type=None, experimental_supported_tools=[],
-                     tool_mode="direct", node_repl_disabled=True, include_skills_usage_instructions=False,
+        if "exec_command" not in selected:
+            model["shell_type"] = "disabled"
+        if "apply_patch" not in selected:
+            model["apply_patch_tool_type"] = None
+        model.update(experimental_supported_tools=[], tool_mode="direct",
+                     node_repl_disabled=True, include_skills_usage_instructions=False,
                      include_apps_usage_instructions=False, include_plugin_usage_instructions=False)
     path = profile.home / f".mona-work-models-{uuid4().hex}.json"
     with path.open("x", encoding="utf-8") as stream:
         json.dump({"models": models}, stream, ensure_ascii=False)
     overrides = {
-        "model_catalog_json": str(path), "features.shell_tool": False, "features.shell_snapshot": False,
-        "features.view_image": False,
+        "model_catalog_json": str(path), "features.shell_tool": "exec_command" in selected,
+        "features.shell_snapshot": False, "features.view_image": "view_image" in selected,
         "features.image_generation": False, "features.standalone_web_search": False,
         "web_search": "disabled", "features.js_repl": False, "features.code_mode": False,
         "features.code_mode_only": False,
@@ -162,17 +174,82 @@ def prepare_codex_work_profile(executable: Path, home: Path, root: Path) -> tupl
     command = list(profile.command)
     for key, value in overrides.items():
         command.extend(("-c", f"{key}={_toml(value)}"))
-    return replace(profile, command=tuple(command), work_model_catalog=path), path
+    if selected:
+        projects = "{ " + json.dumps(str(profile.project_root)) + ' = { trust_level = "untrusted" } }'
+        command.extend(("-c", f"projects={projects}"))
+    return replace(profile, command=tuple(command), work_model_catalog=path,
+                   work_native_tools=tuple(native_tools)), path
+
+
+def _check_empty_rule_directory(folder: Path) -> None:
+    try:
+        directory = folder / "rules"
+        if not directory.exists():
+            return
+        if not directory.resolve().is_relative_to(folder.resolve()):
+            raise ValueError("rule directory outside configuration root")
+        for path in directory.rglob("*.rules"):
+            if not path.resolve().is_relative_to(directory.resolve()) or path.stat().st_size:
+                raise ValueError("unverified native execution rules")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RpcError("native_policy_unavailable", "现有原生执行规则可能绕过当前工具权限，未启动任务。") from exc
+
+
+def validate_work_rule_sources(response: dict[str, Any], profile: CodexProfile,
+                               requirements: Any) -> None:
+    """Only an empty, verified policy stack can use per-operation approvals."""
+    if not isinstance(requirements, dict) or "requirements" not in requirements or requirements["requirements"] is not None:
+        raise RpcError("native_policy_unavailable", "无法确认原生托管策略不会扩大工具权限，未启动任务。")
+    config = response["config"]
+    if config.get("project_root_markers") != []:
+        raise RpcError("native_policy_unavailable", "原生项目规则来源未通过权限检查，未启动任务。")
+    layers = response.get("layers")
+    if not isinstance(layers, list) or not layers:
+        raise RpcError("native_policy_unavailable", "原生配置未提供可核对的规则来源，未启动任务。")
+    _check_empty_rule_directory(profile.home)
+    project_trust = []
+    for layer in layers:
+        if not isinstance(layer, dict) or not isinstance(layer.get("name"), dict):
+            raise RpcError("native_policy_unavailable", "原生配置规则来源无法识别，未启动任务。")
+        if layer.get("disabledReason"):
+            continue
+        source = layer["name"]
+        kind = source.get("type")
+        layer_config = layer.get("config")
+        if not isinstance(layer_config, dict):
+            raise RpcError("native_policy_unavailable", "原生配置层未提供可核对的权限内容，未启动任务。")
+        priorities = {"packagedDefaults": -10, "system": 10, "user": 21 if source.get("profile") else 20,
+                      "sessionFlags": 30}
+        projects = layer_config.get("projects")
+        if isinstance(projects, dict) and isinstance(projects.get(str(profile.project_root)), dict):
+            trust = projects[str(profile.project_root)].get("trust_level")
+            if trust is not None:
+                project_trust.append((priorities.get(kind, 100), trust))
+        if kind in {"sessionFlags", "packagedDefaults"}:
+            continue
+        if kind not in {"user", "system"}:
+            raise RpcError("native_policy_unavailable", "原生配置包含无法保证逐次审批的规则来源，未启动任务。")
+        path = source.get("file")
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise RpcError("native_policy_unavailable", "原生配置缺少可核对的规则路径，未启动任务。")
+        folder = Path(path).resolve().parent
+        if kind == "user" and not folder.is_relative_to(profile.home.resolve()):
+            raise RpcError("native_policy_unavailable", "原生用户规则不属于当前受管会话，未启动任务。")
+        _check_empty_rule_directory(folder)
+    if not project_trust or max(project_trust, key=lambda entry: entry[0])[1] != "untrusted":
+        raise RpcError("native_policy_unavailable", "原生项目的实际信任配置未通过检查，未启动任务。")
 
 
 def validate_effective_config(response: Any, *, model_endpoint: str | None = None,
-                              work_model_catalog: Path | None = None) -> None:
+                              work_model_catalog: Path | None = None,
+                              work_native_tools: tuple[str, ...] = ()) -> None:
     if not isinstance(response, dict) or not isinstance(response.get("config"), dict):
         raise RpcError("isolation_unverified", "原生执行者未返回有效配置，未启动开发会话。")
     config = response["config"]
     if work_model_catalog is not None:
-        for key, expected in {"model_catalog_json": str(work_model_catalog), "features.shell_tool": False,
-                              "features.view_image": False, "web_search": "disabled",
+        for key, expected in {"model_catalog_json": str(work_model_catalog),
+                              "features.shell_tool": "exec_command" in work_native_tools,
+                              "features.view_image": "view_image" in work_native_tools, "web_search": "disabled",
                               "model_provider": "mona_work_openai",
                               "model_providers.mona_work_openai.name": "OpenAI",
                               "model_providers.mona_work_openai.wire_api": "responses",

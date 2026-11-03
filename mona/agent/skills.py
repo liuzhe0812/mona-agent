@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import yaml
@@ -19,11 +20,8 @@ BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 PARTNER_VISIBLE_BUILTIN_SKILLS = frozenset({
     "long-goal",
     "memory",
-    "my",
-    "summarize",
     "prd-document",
     "pdf",
-    "html-report",
     "image-generation",
     "mona-docx",
     "mona-xlsx",
@@ -273,9 +271,11 @@ class SkillsLoader:
         requires = skill_meta.get("requires", {})
         required_bins = requires.get("bins", [])
         required_env_vars = requires.get("env", [])
+        supported_os = skill_meta.get("os", [])
         return ", ".join(
             [f"CLI: {command_name}" for command_name in required_bins if not shutil.which(command_name)]
             + [f"ENV: {env_name}" for env_name in required_env_vars if not os.environ.get(env_name)]
+            + ([f"OS: {', '.join(supported_os)}"] if supported_os and sys.platform not in supported_os else [])
         )
 
     def _get_skill_description(self, name: str) -> str:
@@ -318,7 +318,10 @@ class SkillsLoader:
         return payload if isinstance(payload, dict) else {}
 
     def _check_requirements(self, skill_meta: dict) -> bool:
-        """Check if skill requirements are met (bins, env vars)."""
+        """Check if skill requirements are met (platform, bins, env vars)."""
+        supported_os = skill_meta.get("os", [])
+        if supported_os and sys.platform not in supported_os:
+            return False
         requires = skill_meta.get("requires", {})
         required_bins = requires.get("bins", [])
         required_env_vars = requires.get("env", [])

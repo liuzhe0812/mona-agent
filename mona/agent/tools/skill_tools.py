@@ -259,7 +259,7 @@ class SkillScriptRunTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a Python, Node .mjs, or R script bundled with a skill. "
+            "Execute a Python or Node .mjs script bundled with a skill. "
             "Scripts live in <skill_dir>/scripts/. "
             "Use this instead of `exec` for skill-provided scripts — it resolves "
             "the skill directory automatically and runs in a controlled manner."
@@ -344,6 +344,8 @@ class SkillScriptRunTool(Tool):
                 )
             runner = str(resolution.executable)
             env.update(resolution.env)
+            if active_workspace is not None:
+                env["MONA_ACTIVE_WORKSPACE"] = str(active_workspace)
             cmd = [runner, *resolution.prefix_args, str(script_path)]
             if args:
                 cmd.extend(shlex.split(args))
@@ -413,8 +415,8 @@ class SkillReferenceReadTool(Tool):
             "Read a reference file bundled with a skill. "
             "Reference files live in <skill_dir>/references/*.md. "
             "Use this to load design guidelines, style guides, or other reference docs "
-            "that ship with a skill. Mona Design also supports assets/, demos/ and scripts/ "
-            "paths for read-only style images and source code; images return actual image content. "
+            "that ship with a skill. Mona Design also supports assets/ and demos/ "
+            "paths; archived source lives under references/upstream-scripts/. Images return actual image content. "
             "Huashu text, including references, is paged with offset/limit and nextOffset."
         )
 
@@ -429,7 +431,7 @@ class SkillReferenceReadTool(Tool):
                 description="Skill name (directory name).",
             ),
             ref_path=StringSchema(
-                description="Path relative to references/. Mona Design also accepts assets/, demos/ or scripts/ paths relative to its package root.",
+                description="Path relative to references/. Mona Design also accepts assets/ or demos/ paths relative to its package root.",
             ),
             offset=IntegerSchema(0, description="Character offset for Huashu reference or source paging.", minimum=0),
             limit=IntegerSchema(16000, description="Page length for Huashu reference or source text; nextOffset identifies any remainder.", minimum=1, maximum=24000),
@@ -459,7 +461,7 @@ class SkillReferenceReadTool(Tool):
             if Path(ref_path).is_absolute() or PureWindowsPath(ref_path).drive:
                 return "Error: Mona Design resources require a package-relative path."
             resource_path = ref_path
-            if not resource_path.startswith(("assets/", "demos/", "scripts/", "references/")):
+            if not resource_path.startswith(("assets/", "demos/", "references/")):
                 resource_path = "references/" + resource_path
             try:
                 content = read_design_resource(resource_path, offset=offset, limit=limit, root=skill_dir)

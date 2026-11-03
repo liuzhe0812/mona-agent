@@ -616,6 +616,8 @@ def _sdk_worker_peer(monkeypatch):
         tool=sdk_peer.tool,
         create_sdk_mcp_server=sdk_peer.create_sdk_mcp_server,
     )
+    monkeypatch.setattr("mona.development.executors.codebuddy_transport.desktop_transport",
+                        lambda *_args, **_kwargs: None)
     original_import = sdk_worker.importlib.import_module
     monkeypatch.setattr(sdk_worker, "sdk_version", lambda _executor: "test-peer")
     monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda name, *args:
@@ -712,6 +714,8 @@ def _sdk_without_tools_option(monkeypatch):
     monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda name, *args:
                         module if name in {"claude_agent_sdk", "codebuddy_agent_sdk"}
                         else original_import(name, *args))
+    monkeypatch.setattr("mona.development.executors.codebuddy_transport.desktop_transport",
+                        lambda *_args, **_kwargs: None)
     return sdk_worker
 
 

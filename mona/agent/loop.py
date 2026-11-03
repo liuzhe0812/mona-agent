@@ -47,6 +47,7 @@ from mona.session.manager import (
     Session,
     SessionManager,
     SessionSaveError,
+    _sanitize_native_work,
     normalize_message_author,
 )
 from mona.session.task_plan import task_plan_ws_blob
@@ -3155,7 +3156,13 @@ class AgentLoop:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
             model_content = content
-            if role == "assistant" and not content and not entry.get("tool_calls"):
+            if role == "assistant" and "native_work" in entry:
+                native_work = _sanitize_native_work(entry["native_work"])
+                if native_work is None:
+                    entry.pop("native_work")
+                else:
+                    entry["native_work"] = native_work
+            if role == "assistant" and not content and not entry.get("tool_calls") and not entry.get("native_work"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
                 if isinstance(content, str) and len(content) > self.max_tool_result_chars:
@@ -3253,13 +3260,40 @@ class AgentLoop:
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
         """Keep completed iterations as well as the current in-flight tool batch."""
         previous = session.metadata.get(self._RUNTIME_CHECKPOINT_KEY)
+        if payload.get("phase") == "native_execution":
+            native_work = _sanitize_native_work(payload.get("native_work"))
+            if native_work is None:
+                raise ValueError("Native execution checkpoint must include native_work")
+            checkpoint = dict(previous) if isinstance(previous, dict) else {}
+            checkpoint["native_work"] = native_work
+            session.metadata[self._RUNTIME_CHECKPOINT_KEY] = checkpoint
+            self.sessions.save(session)
+            return
+        assistant_message = payload.get("assistant_message")
+        if isinstance(assistant_message, dict) and "native_work" in assistant_message:
+            assistant_message = dict(assistant_message)
+            native_work = _sanitize_native_work(assistant_message.pop("native_work"))
+            if native_work is not None:
+                assistant_message["native_work"] = native_work
+            payload = {**payload, "assistant_message": assistant_message}
         completed = []
         if isinstance(previous, dict):
             completed = list(previous.get("completed_messages") or [])
             old_assistant = previous.get("assistant_message")
-            if isinstance(old_assistant, dict) and old_assistant != payload.get("assistant_message"):
-                completed.extend([old_assistant, *(previous.get("completed_tool_results") or [])])
+            if isinstance(old_assistant, dict):
+                comparable_old = {key: value for key, value in old_assistant.items() if key != "native_work"}
+                comparable_new = (
+                    {key: value for key, value in assistant_message.items() if key != "native_work"}
+                    if isinstance(assistant_message, dict) else assistant_message
+                )
+                if comparable_old != comparable_new:
+                    completed.extend([old_assistant, *(previous.get("completed_tool_results") or [])])
         checkpoint = {**payload, "completed_messages": completed}
+        checkpoint.pop("native_work", None)
+        if isinstance(previous, dict):
+            native_work = _sanitize_native_work(previous.get("native_work"))
+            if native_work is not None:
+                checkpoint["native_work"] = native_work
         checkpoint["completed_tool_results"] = [
             {
                 **message,
@@ -3343,6 +3377,20 @@ class AgentLoop:
                 }
             )
 
+        native_work = _sanitize_native_work(checkpoint.get("native_work"))
+        native_index = next(
+            (index for index in range(len(restored_messages) - 1, -1, -1)
+             if restored_messages[index].get("role") == "assistant"),
+            None,
+        ) if native_work is not None else None
+        if native_work is not None and native_index is None:
+            native_index = len(restored_messages)
+            restored_messages.append({
+                "role": "assistant",
+                "content": "上次任务已中断，操作结果尚未确认。请先核对会话和文件结果，不要重放未确认的操作。",
+                "timestamp": datetime.now().isoformat(),
+            })
+
         overlap = 0
         max_overlap = min(len(session.messages), len(restored_messages))
         for size in range(max_overlap, 0, -1):
@@ -3354,7 +3402,11 @@ class AgentLoop:
             ):
                 overlap = size
                 break
+        previous_count = len(session.messages)
         session.messages.extend(restored_messages[overlap:])
+        if native_index is not None:
+            target_index = previous_count - overlap + native_index
+            session.messages[target_index]["native_work"] = native_work
         for restored in restored_messages[overlap:]:
             normalize_message_author(restored)
             session.update_ui_summary(restored)

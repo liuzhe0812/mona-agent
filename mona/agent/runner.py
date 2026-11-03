@@ -422,9 +422,17 @@ class AgentRunner:
 
         if isinstance(self.provider, NativeWorkProvider):
             provider = self.provider.for_turn(spec.workspace)
+            provider.bind_runtime(spec.tools, spec.checkpoint_callback)
             spec.context_usage_fallback = False
             try:
-                return await AgentRunner(provider)._run(spec)
+                result = await AgentRunner(provider)._run(spec)
+                native_work = provider.native_work_snapshot()
+                if native_work.get("native_session_id"):
+                    for message in reversed(result.messages):
+                        if message.get("role") == "assistant":
+                            message["native_work"] = native_work
+                            break
+                return result
             finally:
                 await provider.aclose()
         return await self._run(spec)
