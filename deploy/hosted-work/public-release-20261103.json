@@ -1,0 +1,97 @@
+{
+  "format": "mona-hosted-work-public-release-v1",
+  "date": "2026-11-03",
+  "public_url": "https://mona-ai.cn/work/",
+  "work_release": "/home/liuzhe/mona-hosted-work/releases/20261030-accounts-committed/content",
+  "work_archive_sha256": "2d543e074457c9b4b685c0df759b1d0db25d58f8e10c91bd36cc6e3afc3f570b",
+  "manifest_files_verified": 667,
+  "operator_config": "/home/liuzhe/mona-hosted-work/config/operator-accounts-v2.json",
+  "operator_config_sha256": "0b2a786f79ba8d8252d8f0e603324235acff05d5376fe5c20d2faed994485358",
+  "public_origin": "https://mona-ai.cn",
+  "models": [
+    {
+      "id": "qwen",
+      "label": "Qwen3.7 Plus",
+      "source": "mona",
+      "api_base": "https://coding.dashscope.aliyuncs.com/v1",
+      "model": "qwen3.7-plus",
+      "api_key_env": "MONA_WORK_MODEL_QWEN_KEY",
+      "user_billing": "free"
+    }
+  ],
+  "paid_codex_enabled": false,
+  "work_wallet_billing_implemented": false,
+  "nginx": {
+    "release": "/opt/mona-work-proxy-releases/20261103-qwen-v1",
+    "config_sha256": "af6f07aef4640cf1d51ed047d88f6251a107f32467e375a567b5209c7b4e20cf",
+    "locations_sha256": "74f4c4605b328c52b917f0a03d3dfa3a51dbb51a7201aa4d7e871263c43e78e4",
+    "limits_sha256": "72cffeadec8be7b7d6d2399003f9b78566d35759c0053ba834f766558085bc4c",
+    "master_pid": 343378,
+    "reload": true
+  },
+  "backups": {
+    "ubuntu": "/home/liuzhe/mona-hosted-work/backups/20261103-qwen-public-v1",
+    "vps": "/var/www/mona/backups/work-public-20261103-qwen-v1"
+  },
+  "units": {
+    "work": {
+      "active": true,
+      "enabled": true,
+      "pid": 2959389
+    },
+    "work_tunnel": {
+      "active": true,
+      "enabled": true,
+      "pid": 423172
+    },
+    "linger": true,
+    "unattended_keyring_unlock_verified": false,
+    "machine_reboot_tested": false
+  },
+  "validation": {
+    "real_linux_gvisor_smoke": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "production_browser": {
+      "success": true,
+      "mocked_responses": false,
+      "password_login_tested": false,
+      "website_shared_session": true,
+      "file_upload_and_download": true,
+      "refresh_no_replay": true,
+      "stop_while_exec": true,
+      "two_account_isolation": true,
+      "logout_revocation": true,
+      "test_sessions_revoked": true,
+      "wallet_unchanged": true,
+      "download_sha256": "72d328bd817190dc3c85945a960e600a56eb6abc6d21e07f7d09e6548f82424d",
+      "result_run_id": "8c8f835b3f88e472e9da6e6e0288c1b3",
+      "stop_run_id": "e8e392c6c472100567579767af1928c9"
+    },
+    "acceptance_file": "output/hosted-work/launch-20261103/acceptance-v3.json",
+    "acceptance_sha256": "deb213a5a6c7175c572730de3ebc4abb1db64ab4e73691bcaa064dd0ec073a22",
+    "browser_script_sha256": "06e39eddc5b8b963da394b78b5187560b4b305083eb2b6e89d7831553e526b33",
+    "remaining_work_containers": 0,
+    "unknown_runs": 0
+  },
+  "coexistence": {
+    "docker_pid": 78383,
+    "paused_workers_still_exited": 4,
+    "oeclaw_qdrant_running": 4,
+    "auth_cwd": "/opt/mona-auth-releases/20261101-auto-billing-030149/content",
+    "auth_pid": 389486,
+    "database_revision": "wallet_overdraft",
+    "one_api_pid": 310825,
+    "mariadb_pid": 310721,
+    "frps_pid": 743,
+    "relay_pid": 275482,
+    "work_visitor_pid": 367299,
+    "auth_or_existing_business_code_changed": false
+  },
+  "remaining": [
+    "Codex native executable and dedicated login",
+    "Codex shared-wallet metering and settlement",
+    "Unattended keyring unlock and full reboot recovery verification"
+  ]
+}

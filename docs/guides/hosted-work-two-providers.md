@@ -2,6 +2,8 @@
 
 适用：当前 Ubuntu release `/home/liuzhe/mona-hosted-work/releases/20261030-accounts-committed/content`，以 `liuzhe` 用户操作。最新需求为：Qwen 免费、无个人账号白名单；Codex 使用平台专用登录，按对应模型官方 Token 价格从网站与客户端共用的 Mona 余额扣费，不另建 Work 钱包。
 
+官网入口的 `hosted_work.public_origin` 必须为 `https://mona-ai.cn`，不加 Ubuntu 的 17175 端口。该端口只用于内部连接；写成 `https://mona-ai.cn:17175` 会导致官网 Host/Origin 校验失败。监听地址与端口仍保留原值。
+
 当前已发布 Work 还没有接入共用余额的预扣、结算与退款。下面可先准备 Qwen 连接及 Codex 登录；Codex 收费适配发布前，不把 Codex 加入现网 `models`，避免向所有已登录用户免费放开。原充值入口和支付流程继续沿用，前面的独立收款选择不适用。
 
 ## 1. Qwen3.7 Plus
@@ -46,14 +48,14 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 
 ## 2. 在 Work 专用目录登录 Codex
 
-把本项目 `deploy/hosted-work/codex-login.sh` 复制到 Ubuntu 的 `/home/liuzhe/mona-hosted-work/codex-login.sh`。该脚本只使用已安装的 Codex，不安装程序，不重启服务，不读取或输出认证文件。它调用当前发布包的目录初始化逻辑，避免先直接登录导致目录缺少受管标记。
+本项目 `deploy/hosted-work/codex-login.sh` 已于 2026-11-03 放到 Ubuntu 的 `/home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh`。该脚本只使用已安装的 Codex，不安装程序，不重启服务，不读取或输出认证文件。它调用当前发布包的目录初始化逻辑，避免先直接登录导致目录缺少受管标记。本次初始化未检测到现有原生程序，所以下述登录步骤仍待程序就绪后执行，不能据此认为 Codex 已接通。
 
 在 Ubuntu 的真实交互终端逐项执行：
 
 ```bash
-bash /home/liuzhe/mona-hosted-work/codex-login.sh --init-config
-bash /home/liuzhe/mona-hosted-work/codex-login.sh login --device-auth
-bash /home/liuzhe/mona-hosted-work/codex-login.sh login status
+bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh --init-config
+bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh login --device-auth
+bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh login status
 ```
 
 在你自己的浏览器完成设备授权，不把登录码或认证文件贴到聊天。官方支持在无浏览器设备上使用 `codex login --device-auth`；凭据位置随 `CODEX_HOME` 与系统凭据存储设置而变。[OpenAI 登录文档](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
@@ -67,8 +69,8 @@ bash /home/liuzhe/mona-hosted-work/codex-login.sh login status
 然后只打开一次交互 CLI，等待模型列表加载，使用 `/model` 查看并选择账号支持的模型，正常退出；无需发送任务：
 
 ```bash
-bash /home/liuzhe/mona-hosted-work/codex-login.sh
-bash /home/liuzhe/mona-hosted-work/codex-login.sh --list-cached-models
+bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh
+bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh --list-cached-models
 ```
 
 当前 Work 要求原生 CLI 提供真实 `models_cache.json`。仅登录不能保证该文件已经生成；最后一步失败时保留错误信息和 CLI 版本，不能自行编造模型缓存。缓存列出模型也不证明账号可以实际调用每个模型，需要后续真实任务验证。
@@ -102,3 +104,16 @@ curl -fsS -H 'Host: mona-ai.cn' -H 'Origin: https://mona-ai.cn' http://172.31.3.
 ```
 
 健康结果只证明入口和配置已加载，不能代替真实模型调用、工具封锁、文件隔离与浏览器验收。Qwen 可以先单独配置并验证；Codex 需完成登录、模型信息和共用余额计费适配后再开放。官网反代由 VPS 侧完成，不重启 Docker 或恢复暂停的 Worker。
+
+## 5. 以后更换或增加 API 模型
+
+模型连接是运营配置，不写死在代码或官网中。修改同一个 `operator-accounts-v2.json` 的 `hosted_work.models`：
+
+- `api_base`：供应商提供的 OpenAI Chat Completions 兼容 Base URL，例如该供应商要求的 `/v1` 地址；这不是完整的 `/chat/completions` URL。
+- `model`：该供应商实际支持的模型 ID。
+- `label`：网站模型下拉框显示的名称。
+- `api_key_env`：`platform.env` 中对应的 Key 变量名，必须以 `MONA_WORK_MODEL_` 开头；新供应商可使用新的变量名，不把 Key 放进 JSON。
+
+只换供应商时可保留现有模型项的 ID，避免已有记录指向不存在的配置；原任务不会因此重新执行。增加线路则在 `models` 中新增一个只含小写字母、数字、横线或下划线的不同 ID。历史任务仍保留原记录，不因改配置自动重算或切换运行中的模型。
+
+配置当前在服务启动时加载：确认 Work 没有运行、取消中或待核对任务，备份配置并更新相关字段，然后只重启 `mona-hosted-work.service`。先验证真实模型响应、工具任务及下载，再开放该线路；不能仅凭模型名称出现就认为可用。官网模型列表来自 Work 服务，不需要重建官网。通用 API 线路当前由平台承担费用；在计费适配完成前，不能把改标签当作已接入共享余额。
