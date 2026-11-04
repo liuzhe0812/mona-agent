@@ -38,6 +38,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
+import { downloadHostedFile, getHostedPlatform } from "@/lib/hosted-platform";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile } from "@/lib/types";
 
@@ -962,6 +963,7 @@ function TreeRow({
   selection: FileSelection;
 }) {
   const openPreview = useFilePreviewStore((s) => s.open);
+  const [downloadError, setDownloadError] = useState("");
   const indent = 8 + depth * 14;
   if (node.isDir) {
     const isCollapsed = collapsed.has(node.path);
@@ -1076,6 +1078,12 @@ function TreeRow({
     openPreview(file, scope, sessionKey);
   };
   const handleOpenWithSystem = () => {
+    if (getHostedPlatform()) {
+      void (async () => {
+        for (const selectedFile of contextFiles) await downloadHostedFile(selectedFile, scope, sessionKey);
+      })().catch(() => setDownloadError("文件未能下载，请刷新文件列表后重试。"));
+      return;
+    }
     if (isTauri()) {
       for (const selectedFile of contextFiles) {
         void openPathWithSystemApp(selectedFile.absolute_path);
@@ -1141,21 +1149,22 @@ function TreeRow({
     </li>
   );
 
-  if (!isTauri()) {
+  if (!isTauri() && !getHostedPlatform()) {
     return row;
   }
 
   return (
-    <ContextMenu>
+    <><ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         <ContextMenuItem
           onClick={handleOpenWithSystem}
           disabled={file.missing}
         >
-          {isMultiple ? `用系统程序打开 ${contextFiles.length} 个文件` : "用系统程序打开"}
+          {getHostedPlatform() ? (isMultiple ? `下载 ${contextFiles.length} 个文件` : "下载文件")
+            : isMultiple ? `用系统程序打开 ${contextFiles.length} 个文件` : "用系统程序打开"}
         </ContextMenuItem>
-        {!isMultiple && <ContextMenuItem onClick={handleRevealInDir} disabled={file.missing}>
+        {!isMultiple && !getHostedPlatform() && <ContextMenuItem onClick={handleRevealInDir} disabled={file.missing}>
           打开所在目录
         </ContextMenuItem>}
         {canRename && !file.missing && !isMultiple && (
@@ -1177,5 +1186,12 @@ function TreeRow({
         )}
       </ContextMenuContent>
     </ContextMenu>
+      <AlertDialog open={Boolean(downloadError)} onOpenChange={(open) => { if (!open) setDownloadError(""); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>下载未完成</AlertDialogTitle><AlertDialogDescription>{downloadError}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>知道了</AlertDialogCancel></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

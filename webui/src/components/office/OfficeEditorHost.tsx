@@ -440,8 +440,8 @@ export function OfficeEditorHost({
   connectRef.current = (renewEditor) => void connect(renewEditor);
 
   useEffect(() => {
-    updateSession(initialSession);
-  }, [initialSession, updateSession]);
+    updateSessionFromServer(initialSession);
+  }, [initialSession, updateSessionFromServer]);
 
   useEffect(() => {
     generatingRef.current = generating;

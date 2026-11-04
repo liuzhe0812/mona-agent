@@ -1578,12 +1578,25 @@ export function ThreadShell({
     setSplitRatio(0.5);
   }, [closePreview, conversationCanvases.selectCanvas, sessionKey, setSplitRatio, setWorkspaceCollapsed]);
 
+  const officeRestoreChatRef = useRef<string | null>(null);
   useEffect(() => {
     if (!chatId || isRoomSession) return;
     return client.onChat(chatId, (event) => {
       if (event.event === "attached") {
-        for (const restored of event.office_sessions ?? []) {
-          if (isOfficeSessionState(restored)) openOfficeEditor(restored);
+        const restored = (event.office_sessions ?? []).filter(isOfficeSessionState);
+        if (officeRestoreChatRef.current !== chatId) {
+          officeRestoreChatRef.current = chatId;
+          for (const item of restored) openOfficeEditor(item);
+        } else {
+          for (const item of restored) if (sessionKey) rememberOfficeSession(sessionKey, item);
+          setOfficeSessions(current => {
+            const added = restored.filter(item => !current[item.sessionId]);
+            return added.length ? { ...current, ...Object.fromEntries(added.map(item => [item.sessionId, item])) } : current;
+          });
+          setRightTabOrder(current => {
+            const added = restored.map(item => `office:${item.sessionId}`).filter(id => !current.includes(id));
+            return added.length ? [...current, ...added] : current;
+          });
         }
         return;
       }
@@ -1591,7 +1604,7 @@ export function ThreadShell({
       const data = event.agent_ui.data as Record<string, unknown> | undefined;
       if (isOfficeSessionState(data?.session)) openOfficeEditor(data.session);
     });
-  }, [chatId, client, isRoomSession, openOfficeEditor]);
+  }, [chatId, client, isRoomSession, openOfficeEditor, sessionKey]);
 
   canvasRouteMessageRef.current = isRoomSession
     ? (content) => ({ content })

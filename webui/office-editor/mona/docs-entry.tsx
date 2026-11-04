@@ -2,6 +2,7 @@ import { Extension, type Editor, type JSONContent } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { checkpointSnapshot } from './checkpoint-snapshot'
 
 import { installScreenTips } from '@genoffice/ui'
 import {
@@ -530,11 +531,14 @@ function MonaDocsEditor(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [followPaused, setFollowPaused] = useState(false)
 
-  embeddedSaveDoc = async (data) => {
+  embeddedSaveDoc = async () => {
     const session = sessionRef.current
     const version = versionRef.current
     if (!session || !version) return { ok: false }
-    const file = data.slice(0)
+    const snapshot = revisionDocsRef.current.get(version.modelRevision)
+    const bytes = snapshot ? await snapshot() : null
+    if (!bytes) return { ok: false }
+    const file = bytes.slice().buffer as ArrayBuffer
     bridgeRef.current?.post({ type: 'office_checkpoint', sessionId: session.sessionId, version, file }, [file])
     return { ok: true, path: `mona://${session.sessionId}` }
   }
@@ -601,7 +605,9 @@ function MonaDocsEditor(): React.JSX.Element {
   function rememberRevision(version: DocumentVersion, content: JSONContent): void {
     void content
     const snapshot = embeddedApiRef.current?.snapshot()
-    if (snapshot) revisionDocsRef.current.set(version.modelRevision, snapshot)
+    if (snapshot && !revisionDocsRef.current.has(version.modelRevision)) {
+      revisionDocsRef.current.set(version.modelRevision, checkpointSnapshot(snapshot))
+    }
     while (revisionDocsRef.current.size > 32) {
       const first = revisionDocsRef.current.keys().next().value
       if (first === undefined) break
@@ -635,7 +641,7 @@ function MonaDocsEditor(): React.JSX.Element {
       suppressRef.current = false
     }
     revisionDocsRef.current.clear()
-    rememberRevision(message.version, api.editor.getJSON())
+    revisionDocsRef.current.set(message.version.modelRevision, () => Promise.resolve(new Uint8Array(message.file)))
     setStatus('')
     bridgeRef.current?.post({
       type: 'office_editor_ready',

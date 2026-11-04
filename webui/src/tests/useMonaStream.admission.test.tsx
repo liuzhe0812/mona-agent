@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -42,23 +42,28 @@ afterEach(() => clients.splice(0).forEach((client) => client.close()));
 
 describe("chat admission and runtime recovery", () => {
 
-  it("clears the composer run strip on turn_end before the same turn's idle frame", () => {
+  it("finishes the matching hosted task and lets the user send the next message", async () => {
     const { client, socket, wrapper } = setup();
     let stream!: ReturnType<typeof useMonaStream>;
     function Composer() {
       stream = useMonaStream("chat", empty);
       return <ThreadComposer onSend={stream.send} onStop={() => void stream.stop()}
         isStreaming={stream.isStreaming} isAwaitingModelResponse={stream.isAwaitingModelResponse}
-        isCompacting={stream.isCompacting} runStartedAt={stream.runStartedAt} />;
+        isCompacting={stream.isCompacting} runStartedAt={stream.runStartedAt} stopping={stream.stopping} />;
     }
     render(<Composer />, { wrapper });
     act(() => stream.send("first request"));
-    const inputId = stream.messages[0].id;
+    const { input_id: inputId, task_id: taskId } = socket.messages[0];
+    const turnId = "a".repeat(32);
+    expect(taskId).toMatch(/^task_/);
+    expect(taskId).not.toBe(turnId);
+    expect(stream.currentTaskId).toBe(taskId);
     act(() => {
       socket.emit({ event: "message_accepted", chat_id: "chat", input_id: inputId });
-      socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 100, turn_id: "turn-a", input_id: inputId });
-      socket.emit({ event: "delta", chat_id: "chat", text: "The answer is complete." });
-      socket.emit({ event: "stream_end", chat_id: "chat" });
+      socket.emit({ event: "artifact_task_started", chat_id: "chat", task_id: taskId });
+      socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 100, turn_id: turnId, input_id: inputId });
+      socket.emit({ event: "delta", chat_id: "chat", text: "The answer is complete.", task_id: taskId, stream_id: `${turnId}:1` });
+      socket.emit({ event: "stream_end", chat_id: "chat", stream_id: `${turnId}:1` });
     });
     expect(stream.messages.at(-1)?.content).toBe("The answer is complete.");
     expect(stream.isStreaming).toBe(true);
@@ -66,16 +71,24 @@ describe("chat admission and runtime recovery", () => {
     expect(screen.getByRole("button", { name: "Stop response" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "keep this draft" } });
 
-    act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "turn-a", task_id: stream.currentTaskId! }));
+    act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: turnId, input_id: inputId, task_id: taskId }));
     expect(client.getRunStartedAt("chat")).toBeNull();
     expect(stream.isStreaming).toBe(false);
+    expect(stream.stopping).toBe(false);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     expect(screen.getByRole("textbox")).toHaveValue("keep this draft");
-    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle", turn_id: "turn-a" }));
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle", turn_id: turnId }));
     expect(stream.runStartedAt).toBeNull();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(socket.messages).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(socket.messages).toHaveLength(2));
+    expect(socket.messages[1]).toMatchObject({ content: "keep this draft", chat_id: "chat" });
+    expect(socket.messages[1].task_id).toMatch(/^task_/);
+    expect(socket.messages[1].task_id).not.toBe(taskId);
+    expect(stream.isStreaming).toBe(true);
+    expect(screen.getByRole("button", { name: "Stop response" })).toBeInTheDocument();
   });
 
   it("keeps a newer turn running when the previous turn's completion arrives late", () => {

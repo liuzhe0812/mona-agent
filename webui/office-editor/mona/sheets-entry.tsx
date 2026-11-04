@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { checkpointSnapshot } from './checkpoint-snapshot'
 import { HorizontalAlign, type ICellData } from '@univerjs/core'
 import '@univerjs/preset-sheets-core/lib/index.css'
 import { installScreenTips } from '@genoffice/ui'
@@ -170,6 +171,7 @@ type SheetOperation =
   | { op: 'set_conditional_format'; payload: { sheet: string; range: string; rule: Record<string, unknown> } }
 
 interface SheetRevisionSnapshot {
+  checkpoint?: () => Promise<ArrayBuffer>
   edits: CellEdit[]
   structuralOps: SheetStructuralOps[]
   sheetPlan?: SheetEditPlan
@@ -743,6 +745,7 @@ function MonaSheetsEditor(): React.JSX.Element {
   }
 
   function rememberRevision(revision: number): void {
+    if (revisionSnapshotsRef.current.has(revision)) return
     revisionSnapshotsRef.current.set(revision, structuredClone({
       edits: [...editsRef.current.values()],
       structuralOps: [...structuralOpsRef.current].map(([sheetName, ops]) => ({
@@ -970,6 +973,7 @@ function MonaSheetsEditor(): React.JSX.Element {
     pendingReviewTargetsRef.current = new Set(message.pendingReviewTargets ?? [])
     recentChangedTargetsRef.current = []
     rememberRevision(message.version.modelRevision)
+    revisionSnapshotsRef.current.get(message.version.modelRevision)!.checkpoint = () => Promise.resolve(message.file.slice(0))
     const workbook = parseWorkbook(await bridgeRef.current!.engineOpen())
     workbook.sheets = workbook.sheets.map((sheet) => ({ ...sheet, originalName: sheet.name }))
     workbookRef.current = workbook
@@ -1881,7 +1885,7 @@ function MonaSheetsEditor(): React.JSX.Element {
     if (!session || !source || version.editorEpoch !== session.version.editorEpoch) return
     const snapshot = revisionSnapshotsRef.current.get(version.modelRevision)
     if (!snapshot) throw new Error('请求的表格版本已不在 checkpoint 窗口中。')
-    const file = await buildXlsxCheckpoint(
+    snapshot.checkpoint ??= checkpointSnapshot(() => buildXlsxCheckpoint(
       source,
       snapshot.edits,
       snapshot.structuralOps,
@@ -1891,7 +1895,8 @@ function MonaSheetsEditor(): React.JSX.Element {
         cfStates: snapshot.cfStates,
         pageSetupStates: snapshot.pageSetupStates,
       },
-    )
+    ))
+    const file = (await snapshot.checkpoint()).slice(0)
     bridgeRef.current!.post(
       { type: 'office_checkpoint', sessionId: session.sessionId, version, file },
       [file],

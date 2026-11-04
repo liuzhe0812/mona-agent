@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { checkpointSnapshot } from './checkpoint-snapshot'
 import { installScreenTips } from '@genoffice/ui'
 
 import {
@@ -851,7 +852,9 @@ function MonaSlidesEditor(): React.JSX.Element {
   }
 
   function rememberFile(version: DocumentVersion, document: SlidesDocument): void {
-    revisionFilesRef.current.set(version.modelRevision, snapshotSlidesDocument(document.opened))
+    if (!revisionFilesRef.current.has(version.modelRevision)) {
+      revisionFilesRef.current.set(version.modelRevision, checkpointSnapshot(snapshotSlidesDocument(document.opened)))
+    }
     while (revisionFilesRef.current.size > 32) {
       const first = revisionFilesRef.current.keys().next().value
       if (first === undefined) break

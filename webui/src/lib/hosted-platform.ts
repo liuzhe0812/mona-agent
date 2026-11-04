@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+
 export interface HostedPlatformConfiguration {
   apiBase: string;
   token: string;
@@ -88,4 +90,28 @@ export async function invokeHostedPlatform<T>(command: string, args?: Record<str
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ command, args: args ?? {} }),
   });
+}
+
+
+export async function downloadHostedFile(file: { path: string; name: string; sha256?: string }, scope: string, sessionKey: string | null): Promise<void> {
+  const current = getHostedPlatform();
+  if (!current) throw new HostedPlatformError("工作台连接尚未就绪。");
+  const query = new URLSearchParams({ path: file.path, scope });
+  if (sessionKey) query.set("session_key", sessionKey);
+  const response = await hostedPlatformFetch(`${current.apiBase}/api/file-preview?${query}`);
+  if (!response.ok) throw new HostedPlatformError("文件暂时无法下载，请刷新文件列表后重试。", response.status);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (getHostedPlatform() !== current) throw new HostedPlatformError("账号已变化，请在原账号中重新下载文件。");
+  if (file.sha256) {
+    const digest = Array.from(sha256(bytes), value => value.toString(16).padStart(2, "0")).join("");
+    if (digest !== file.sha256) throw new HostedPlatformError("文件已变化，请刷新文件列表后重新下载。", 409);
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type: response.headers.get("Content-Type") ?? "application/octet-stream" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

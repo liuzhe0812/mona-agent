@@ -242,6 +242,42 @@ describe("OfficeEditorHost", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("saves the latest editor revision when an older session prop is received", async () => {
+    const initial = officeSession({ type: "docs", displayName: "方案.docx" });
+    const latest = { editorEpoch: "epoch-1", modelRevision: 1 };
+    const saved = officeSession({
+      type: "docs", displayName: "方案.docx", version: latest, checkpointVersion: latest,
+      savedVersion: latest, dirty: false, saveState: "clean", editorConnected: true,
+    });
+    state.getOfficeSession.mockResolvedValueOnce(initial).mockResolvedValue(saved);
+    state.uploadOfficeCheckpoint.mockResolvedValue({});
+    state.saveOfficeSession.mockResolvedValue({});
+    const onClosed = vi.fn();
+    const view = render(<OfficeEditorHost initialSession={initial} ownerSessionKey="websocket:chat-1" onClosed={onClosed} />);
+
+    await act(async () => state.frameOnLoad?.());
+    await act(async () => Promise.resolve());
+    const socket = state.socket;
+    if (!socket) throw new Error("socket was not created");
+    act(() => socket.emit({ event: "office_session_open", session: initial }));
+    act(() => state.editorHandler?.({ type: "office_editor_ready", sessionId: initial.sessionId, version: initial.version }));
+    act(() => state.editorHandler?.({
+      type: "office_user_change", sessionId: initial.sessionId, version: latest, changedTargets: ["body"],
+    }));
+
+    view.rerender(<OfficeEditorHost initialSession={{ ...initial, version: { ...initial.version } }}
+      ownerSessionKey="websocket:chat-1" onClosed={onClosed} />);
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(state.bridgePosts).toContainEqual({ type: "office_checkpoint_request", version: latest });
+    const file = new ArrayBuffer(8);
+    await act(async () => state.editorHandler?.({ type: "office_checkpoint", sessionId: initial.sessionId, version: latest, file }));
+    await waitFor(() => expect(state.uploadOfficeCheckpoint).toHaveBeenCalledWith(initial.sessionId, "websocket:chat-1", latest, file));
+    expect(state.saveOfficeSession).toHaveBeenCalledWith(initial.sessionId, "websocket:chat-1", {
+      overwriteSource: false, version: latest,
+    });
+  });
+
   it("reconnects the socket without reopening and overwriting the live editor model", async () => {
     vi.useFakeTimers();
     const initial = officeSession();
