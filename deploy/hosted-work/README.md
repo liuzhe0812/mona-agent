@@ -1,5 +1,7 @@
 # 在线 Work 独立发布
 
+2026-11-04 共享界面发布尚未完成联合验收；v6 修正已备妥但因 Ubuntu 管理连接中断未切换。精确版本、校验和与继续步骤见 [本次发布记录](../../docs/plans/hosted-work-production-20261104.md)。
+
 本目录仅提供人工审核的部署材料，不会被桌面端自动使用、安装或启动。
 完整边界、验证命令和上线准入见 `docs/architecture/hosted-work.md`。
 
@@ -10,7 +12,9 @@
 - `mona-hosted-work.service.example` 是独立 systemd 单元示例，不是安装脚本。服务账号对 Docker 的访问属于高权限控制面，不能授予网站用户，也不能在工具容器内挂载该 socket。
 - 现有 Ubuntu 文档记录使用 Snap Docker 且承载其他 Worker。不要为了本功能迁移 Docker、停止或清理其容器。先核实 gVisor 和隔离环境兼容性；缺失时本服务拒绝启动，不降级。
 
-前端在 `webui/` 执行 `node node_modules/vite/bin/vite.js build --config vite.hosted.config.ts`，产物为 `webui/dist-hosted-work/`。随后在仓库根目录运行 `python deploy/hosted-work/build-release.py --output output/hosted-work/work-release.tar.gz`，得到独立、带哈希清单的发布包，不包含桌面前端、Auth 源码或任何配置凭据。安装到一个新的 releases 子目录，测试通过后仅切换自己的 systemd 单元；保留旧版本供回退。
+前端在独立、已核对源码的 `webui/` 执行 `npm run build:hosted`，同时构建工作台和原 Office 的三个入口，产物为 `webui/dist-hosted-work/`。随后在仓库根目录运行 `python deploy/hosted-work/build-release.py --output output/hosted-work/work-release.tar.gz`，得到独立、带哈希清单的发布包，包含 Office 空白模板，不包含 Auth 源码、配置凭据或用户状态。安装到一个新的 releases 子目录，测试通过后仅切换自己的 systemd 单元；保留旧版本供回退。
+
+Ubuntu 表格还需要对应 Linux 架构的完整 Office 资源，不能使用 Windows `.exe`。`MONA_RESOURCES_DIR` 指向含 `office-editor/templates/`、Linux `manifest.json` 和 `sheets/xlsx-sidecar` 的已验证资源根。该程序只在 gVisor 内运行；表格容器的 `/workspace` 明确为 exec，`/tmp` 仍为 noexec，其余运行时、网络、挂载和资源限制保持。不对普通 Work 容器放宽此项。
 
 服务通过 frontend_dir 自己提供 `/work/` 和 assets，API 为 `/api/work/`；登录及退出经 `/api/work/auth/` 代理到认证服务的 `/auth/web/login` 和 `/auth/web/logout`，当前受保护请求只调用 `/auth/identity`。无需官网路由读取任何 Work 数据；后续收费适配复用原钱包，但不放开既有 /v1 设备鉴权，不改变充值、支付、设备或同步路由。新版本必须在依赖接口上线后才能切换。
 

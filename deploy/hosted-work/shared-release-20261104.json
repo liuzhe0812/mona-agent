@@ -1,0 +1,70 @@
+{
+  "format": "mona-hosted-work-shared-release-v1",
+  "date": "2026-11-04",
+  "public_url": "https://mona-ai.cn/work/",
+  "overall_acceptance_complete": false,
+  "active_at_last_ssh_verification": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261104-shared-work-v5/content",
+    "pid": 3659232,
+    "source_base": "408f82f5f",
+    "archive_sha256": "387ef13e272f0d469f9011a8c80e41c73ce9d5d70f785e4aea5b43a572d3ecee",
+    "files_verified": 3536
+  },
+  "prepared_v6": {
+    "deployed": false,
+    "artifact": "output/hosted-work/shared-release-20261104/work-shared-v6-final.tar.gz",
+    "bytes": 40642648,
+    "files": 3998,
+    "sha256": "5a1c5d2833a96fedd7977a88beed12e1133ba2829d3e415cbb1cc4c70d8cb27c",
+    "vps_private_staging": "/opt/mona-work-staging/shared-20261104-v6",
+    "activation_script_sha256": "f2a41dbf400ef1d8b72d8b1177b08cf96795421515006c80f41cc04ef26a39c2",
+    "backend_commit": "ec243435d",
+    "frontend_commit": "33c64f79d"
+  },
+  "office_resources": {
+    "root": "/home/liuzhe/mona-hosted-work/resources/20261104-shared-editors",
+    "platform": "linux",
+    "arch": "x64",
+    "version": "0.1.0",
+    "elf_linkage": "static-pie",
+    "sidecar_bytes": 11836272,
+    "sidecar_sha256": "35f2d758217d5791fe53bad2dac919a292db538c93d3f7cb06611c6fb9508930",
+    "real_gvisor_formula_and_isolation_passed": true
+  },
+  "proxy": {
+    "release": "/opt/mona-work-proxy-releases/20261104-shared-v1",
+    "locations_sha256": "7f546749b15efcb11abf1d9a4dbdf9afb4c22254c378aa685cf993e49f98a9f3",
+    "nginx_master_pid": 343378,
+    "work_websocket_upgrade": true,
+    "site_static_root_changed": false
+  },
+  "validation": {
+    "ubuntu_v5": { "passed": 213, "skipped": 2 },
+    "real_gvisor_office": { "passed": 1, "skipped": 0 },
+    "public_qwen_execution": true,
+    "public_browser_download_sha256": "02c048979ee690ec86b077f8c31c42eca8a3da438179b13eddcc628888d94762",
+    "website_shared_session": true,
+    "refresh_no_replay": true,
+    "real_word_ai_edit_observed": true,
+    "word_export_accepted": false,
+    "all_qa_website_sessions_revoked": true,
+    "wallet_unchanged": true,
+    "failed_browser_reports_preserved": true,
+    "mocked_production_responses": false
+  },
+  "coexistence": {
+    "docker_restarted": false,
+    "paused_workers_restarted": false,
+    "auth_business_or_wallet_code_changed": false,
+    "cloud_sync_enabled": false,
+    "paid_codex_enabled": false
+  },
+  "blocked_on": "Computer moved to 192.168.43.15; Ubuntu 172.31.3.176 SSH is unreachable. Existing VPS route cannot replace management access.",
+  "remaining": [
+    "Activate verified v6 through an authorized Ubuntu management connection",
+    "Verify real identity reply and UI task completion",
+    "Verify Word checkpoint/save/export, Excel and PPT end to end",
+    "Verify canvas, real stop, cross-account access and logout on final release"
+  ],
+  "details": "docs/plans/hosted-work-production-20261104.md"
+}
