@@ -261,6 +261,7 @@ class SheetCell(OfficeWireModel):
 class OfficeSummaryResult(OfficeWireModel):
     mode: Literal["summary"]
     document_type: OfficeDocumentType
+    warnings: list[str] = Field(default_factory=list)
     sheet_count: int | None = Field(default=None, ge=0)
     sheets: list[SheetInfo] = Field(default_factory=list)
     block_count: int | None = Field(default=None, ge=0)

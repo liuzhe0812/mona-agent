@@ -87,6 +87,8 @@ def _read_regular(root: Path, path: Path, limit: int) -> bytes:
 class _XlsxSandbox(DockerSandbox):
     async def _invoke(self, arguments: list[str], **kwargs):
         if arguments and arguments[0] == "create":
+            arguments = [value.replace("/workspace:rw,", "/workspace:rw,exec,", 1)
+                         if value.startswith("/workspace:rw,") else value for value in arguments]
             arguments = ["create", "--label", "mona.work-kind=xlsx", *arguments[1:]]
         return await super()._invoke(arguments, **kwargs)
 

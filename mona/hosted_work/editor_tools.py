@@ -102,7 +102,11 @@ class _EditorScope:
             for key, item in value.items():
                 if key in _PATH_FIELDS and isinstance(item, str):
                     path = Path(item)
-                    if item.startswith("/workspace/") or path.is_absolute() and path.is_relative_to(self.root):
+                    if key in {"workingPath", "working_path"} and item.startswith("/workspace/.office/"):
+                        if not re.fullmatch(r"/workspace/\.office/[A-Za-z0-9_-]{1,128}/working\.(docx|xlsx|pptx)", item):
+                            raise _invalid_path()
+                        item = None
+                    elif item.startswith("/workspace/") or path.is_absolute() and path.is_relative_to(self.root):
                         item = self.logical_path(item)
                     elif path.is_absolute() and path.is_relative_to(self.sessions):
                         item = None if key in {"workingPath", "working_path"} else (

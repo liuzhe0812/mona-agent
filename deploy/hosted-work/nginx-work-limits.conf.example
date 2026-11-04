@@ -1,3 +1,7 @@
 # HTTP context; install as a separate conf.d file before enabling the Work locations.
 limit_req_zone $binary_remote_addr zone=mona_work_requests:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=mona_work_login:10m rate=5r/m;
+map $http_upgrade $mona_work_connection {
+    default upgrade;
+    '' '';
+}

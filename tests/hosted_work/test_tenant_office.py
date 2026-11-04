@@ -1,6 +1,7 @@
 """The existing Office protocol stays inside an authenticated account and chat."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -123,6 +124,28 @@ async def test_account_and_chat_scopes_are_server_authorized(tmp_path):
         assert denied.status == 422
         assert external.read_bytes() == b"host file"
         assert office.workspace(ALICE) != office.workspace(BOB)
+
+
+async def test_live_summary_accepts_editor_quality_warnings_without_closing_socket(tmp_path):
+    client, office, _ = await make_client(tmp_path)
+    async with client:
+        state = await create(client)
+        socket, _ = await connect(client, state)
+        request = asyncio.create_task(client.post(OFFICE_PREFIX + "/sessions/" + state["sessionId"] + "/inspect",
+            headers=headers(), json={"sessionId": state["sessionId"], "query": {"mode": "summary"}}))
+        async with asyncio.timeout(3):
+            message = await socket.receive_json()
+            while message.get("event") != "office_inspect_command":
+                message = await socket.receive_json()
+        await socket.send_json({"event": "office_inspect_result", "result": {"ok": True,
+            "requestId": message["command"]["requestId"], "sessionId": state["sessionId"], "version": state["version"],
+            "result": {"mode": "summary", "documentType": "docs", "blockCount": 1, "warnings": ["保留原有样式"]}}})
+        response = await asyncio.wait_for(request, 3)
+        assert response.status == 200
+        assert (await response.json())["result"]["warnings"] == ["保留原有样式"]
+        assert not socket.closed
+        await socket.close()
+    await office.close()
 
 
 async def test_checkpoint_upload_isolated_and_shared_version_protocol(tmp_path):

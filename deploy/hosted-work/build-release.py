@@ -24,6 +24,11 @@ def main() -> None:
     for subtree in ("mona/development/sandbox_node", "deploy/hosted-work"):
         files.update((root / subtree).rglob("*"))
     files.update(root / name for name in ("pyproject.toml", "docs/architecture/hosted-work.md"))
+    for extension in ("docx", "xlsx", "pptx"):
+        template = root / "src-tauri/resources/office-editor/templates" / ("blank." + extension)
+        if not template.is_file():
+            raise SystemExit("Office blank templates must be present in the release sources.")
+        files.add(template)
     selected = sorted(path for path in files if path.is_file() and "__pycache__" not in path.parts)
     manifest = {}
     for path in selected:

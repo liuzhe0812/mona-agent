@@ -94,7 +94,7 @@ async def test_shared_editor_save_restore_download_and_account_isolation():
                 await page.get_by_role("button", name="展开工作区", exact=True).click()
                 await page.get_by_role("button", name="新建标签页", exact=True).click()
                 await page.get_by_role("menuitem", name="Word", exact=True).click()
-                document = page.frame_locator('iframe[title="文档编辑器"]').locator('.doc-page[contenteditable="true"]').first
+                document = page.frame_locator('iframe[title="文档编辑器"]:visible').locator('.doc-page[contenteditable="true"]').first
                 await document.fill("MONA_LOCAL_DOC_SAVED")
                 await page.get_by_role("button", name="保存", exact=True).click()
                 await playwright_api.expect(page.get_by_text("已保存", exact=True)).to_be_visible()
@@ -105,13 +105,25 @@ async def test_shared_editor_save_restore_download_and_account_isolation():
                     assert "MONA_LOCAL_DOC_SAVED" in exported.read("word/document.xml").decode()
                 report["word_edit_save_download"] = True
                 await page.screenshot(path=str(output / "office.png"))
+                sid = store.list_sessions(OWNER)[0]["id"]
+                background = await context.request.post(origin + BASE + "/api/office/sessions",
+                    headers={"Authorization": "Bearer local-ui-a", "X-Mona-Session-Key": "websocket:" + sid},
+                    data={"ownerSessionKey": "websocket:" + sid, "type": "docs", "displayName": "后台恢复文档"})
+                assert background.status == 201
+                background_state = await background.json()
+                await service.desktop.wire.emit_to_chat(OWNER, sid, {"event": "attached", "chat_id": sid,
+                    "office_sessions": await service.desktop.office.list_states(OWNER, sid)})
+                await page.get_by_role("tab", name=background_state["displayName"], exact=True).wait_for()
+                await playwright_api.expect(page.get_by_role("tab", name="新建 Word.docx", exact=True)).to_have_attribute("aria-selected", "true")
+                report["editor_restore_preserves_focus"] = True
 
                 await page.get_by_role("button", name="新建标签页", exact=True).click()
                 await page.get_by_role("menuitem", name="思维导图", exact=True).click()
+                await page.get_by_role("tab", name="未命名思维导图", exact=True).wait_for()
                 await page.locator("me-tpc").first.dblclick()
                 await page.locator("#input-box").fill("MONA_LOCAL_CANVAS_SAVED")
                 await page.locator("#input-box").press("Enter")
-                folder = output / "users" / OWNER / "documents/canvases"
+                folder = Path(state) / "users" / OWNER / "documents/canvases"
                 await eventually(lambda: any("MONA_LOCAL_CANVAS_SAVED" in path.read_text(encoding="utf-8") for path in folder.glob("*.mona-canvas")))
                 saved_path = next(folder.glob("*.mona-canvas"))
                 saved = json.loads(saved_path.read_text(encoding="utf-8"))
@@ -192,6 +204,8 @@ async def test_shared_editor_save_restore_download_and_account_isolation():
                 assert not executor.calls and not errors and not failures
                 report.update(passed=True, page_errors=errors, failed_requests=failures)
             finally:
+                if "page" in locals() and not report.get("passed"):
+                    await page.screenshot(path=str(output / "failure.png"))
                 await browser.close()
     finally:
         await runner.cleanup()

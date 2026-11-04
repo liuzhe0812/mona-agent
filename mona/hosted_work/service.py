@@ -122,7 +122,8 @@ class WorkService:
                         index = self.desktop.state.get(owner, "artifact_index:" + sid, [])
                         index = [item for item in index if item["path"] != info["path"]]
                         logical = "/workspace/" + info["path"].removeprefix("/workspace/")
-                        index.append({"path": info["path"], "task_id": run_id, "delivered": True,
+                        ui_task = self.desktop.state.get(owner, "run:" + run_id, {}).get("frame", {}).get("task_id") or run_id
+                        index.append({"path": info["path"], "task_id": ui_task, "run_id": run_id, "delivered": True,
                             "file": {"path": logical, "absolute_path": logical, "name": info["name"],
                                 "size": info["size"], "size_human": f"{info['size']} B", "sha256": info["sha256"],
                                 "mime": mimetypes.guess_type(info["name"])[0] or "application/octet-stream"}})

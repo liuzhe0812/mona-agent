@@ -303,6 +303,8 @@ async def test_sidecar_container_keeps_the_existing_policy_and_has_an_explicit_r
 
     actual = invoke.call_args.args[0]
     assert actual[:3] == ["create", "--label", "mona.work-kind=xlsx"]
-    assert actual[3:] == arguments[1:]
+    assert next(value for value in actual if value.startswith("/workspace:")) == (
+        f"/workspace:rw,exec,nosuid,nodev,size={config.workspace_bytes},uid=1000,gid=1000,mode=700")
+    assert [value.replace("/workspace:rw,exec,", "/workspace:rw,", 1) for value in actual[3:]] == arguments[1:]
     assert "--network=none" in actual and "--runtime=runsc" in actual and "--read-only" in actual
     assert not any(item.startswith(("--mount", "--volume", "--privileged")) for item in actual)

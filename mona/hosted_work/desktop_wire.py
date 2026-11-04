@@ -59,6 +59,11 @@ def _chat(value: Any) -> str:
     return chat_id(_scope(value, "会话标识"))
 
 
+def _task(metadata: dict, run_id: str) -> str:
+    value = metadata.get("frame", {}).get("task_id")
+    return _scope(value, "任务标识") if value is not None else run_id
+
+
 class DesktopWire:
     def __init__(self, service, state, controller=None):
         self.service, self.state, self.controller = service, state, controller
@@ -250,6 +255,8 @@ class DesktopWire:
         self.state.records(peer.owner, sid)
         input_id = _scope(frame.get("input_id"), "消息标识")
         content = frame.get("content")
+        if frame.get("task_id") is not None:
+            _scope(frame["task_id"], "任务标识")
         if not isinstance(content, str) or not content.strip():
             raise WorkError("invalid_request", "消息内容不能为空。")
         selected = {key: frame[key] for key in _FRAME_FIELDS if key in frame}
@@ -295,6 +302,9 @@ class DesktopWire:
         if key not in self._announced:
             self._announced.add(key)
             metadata = self.state.get(owner, "run:" + run["id"], {})
+            start = {"event": "artifact_task_started", "task_id": _task(metadata, run["id"])}
+            self.state.append(owner, run["session_id"], start, "run:" + run["id"] + ":task_started")
+            await self.emit_to_chat(owner, run["session_id"], start)
             await self.emit_to_chat(owner, run["session_id"], self._goal(run, metadata))
 
     @staticmethod
@@ -457,6 +467,7 @@ class DesktopWire:
         if stored["session_id"] != sid or stored["status"] not in {"running", "cancelling"}:
             return
         metadata = self.state.get(owner, "run:" + rid, {})
+        task_id = _task(metadata, rid)
         self._record_user(owner, stored, metadata)
         await self._started(owner, stored)
         row = self.service.store.db.execute("SELECT seq,kind,data FROM events WHERE owner=? AND run_id=? ORDER BY seq DESC LIMIT 1", (owner, rid)).fetchone()
@@ -474,12 +485,12 @@ class DesktopWire:
             if not isinstance(text, str):
                 raise WorkError("protocol_error", "模型输出格式无效。", 503)
             self._stream_text[key].append(text)
-            record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), "task_id": rid}
+            record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), "task_id": task_id}
             active = True
         elif kind == "desktop":
             ui = data.get("agent_ui")
             if data.get("event") == "deliver_files":
-                record = {"event": "deliver_files", "task_id": rid, "inline_media": False,
+                record = {"event": "deliver_files", "task_id": task_id, "inline_media": False,
                           "files": await self._delivery_files(owner, sid, data.get("files"), read_contents=True)}
             elif (data.get("event") != "message" or data.get("kind") != "progress"
                     or not isinstance(data.get("text"), str) or not isinstance(ui, dict)
@@ -487,7 +498,7 @@ class DesktopWire:
                 raise WorkError("protocol_error", "编辑器事件格式无效。", 503)
             else:
                 session = self._office_state(ui["data"].get("session"))
-                record = {"event": "message", "kind": "progress", "text": data["text"], "task_id": rid,
+                record = {"event": "message", "kind": "progress", "text": data["text"], "task_id": task_id,
                           "agent_ui": {"kind": "office_session", "data": {"session": session}}}
         else:
             if active:
@@ -495,7 +506,7 @@ class DesktopWire:
                 self.state.append(owner, sid, ending, f"run:{rid}:event:{row['seq']}:stream_end")
                 await self.emit_to_chat(owner, sid, ending)
             active = False
-            record = {"event": "message", "kind": "progress", "text": str(data.get("message") or "正在处理任务"), "task_id": rid}
+            record = {"event": "message", "kind": "progress", "text": str(data.get("message") or "正在处理任务"), "task_id": task_id}
             if isinstance(data.get("tools"), list):
                 record["tool_events"] = [{"version": 1, "phase": "start", "name": name,
                                            "call_id": f"{rid}:{row['seq']}:{i}"}
@@ -524,11 +535,12 @@ class DesktopWire:
         if self.state.get(owner, "wire_finished:" + rid) == status:
             return
         metadata = self.state.get(owner, "run:" + rid, {})
+        task_id = _task(metadata, rid)
         self._record_user(owner, stored, metadata)
         verified = [item["file"] for item in self.state.get(owner, "artifact_index:" + sid, [])
-                    if isinstance(item, dict) and item.get("task_id") == rid and item.get("delivered") is True
+                    if isinstance(item, dict) and item.get("run_id", item.get("task_id")) == rid and item.get("delivered") is True
                     and isinstance(item.get("file"), dict)]
-        delivery = {"event": "deliver_files", "task_id": rid, "inline_media": False,
+        delivery = {"event": "deliver_files", "task_id": task_id, "inline_media": False,
                     "files": await self._delivery_files(owner, sid, verified, read_contents=False)} if verified else None
         index, active = self._streams.pop((owner, rid), (0, False))
         if active:
@@ -537,7 +549,7 @@ class DesktopWire:
             await self.emit_to_chat(owner, sid, end)
         text = stored["result"].get("content", "")
         streamed = "".join(self._stream_text.pop((owner, rid), []))
-        record = {"event": "message", "text": text, "task_id": rid, "token_usage": stored["result"].get("usage", {})}
+        record = {"event": "message", "text": text, "task_id": task_id, "token_usage": stored["result"].get("usage", {})}
         if index:
             record["stream_id"] = rid + ":" + str(index)
         if not text or status != "completed":
@@ -555,7 +567,7 @@ class DesktopWire:
         if status == "unknown":
             await self.emit_to_chat(owner, sid, self._goal(stored, metadata))
         else:
-            ending = {"event": "turn_end", "turn_id": rid, "input_id": metadata.get("input_id"), "task_id": rid,
+            ending = {"event": "turn_end", "turn_id": rid, "input_id": metadata.get("input_id"), "task_id": task_id,
                       "token_usage": stored["result"].get("usage", {})}
             self.state.append(owner, sid, ending, f"run:{rid}:turn_end:{status}")
             await self.emit_to_chat(owner, sid, ending)

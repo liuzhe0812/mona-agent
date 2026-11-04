@@ -166,12 +166,12 @@ async def test_messages_use_real_service_and_are_idempotent_across_reconnection(
         socket, _ = await connect(client, wire)
         sid = await new_chat(socket)
         assert await new_chat(socket) == sid
-        frame = {"type": "message", "chat_id": sid, "input_id": "message-one", "content": "fixture question"}
+        frame = {"type": "message", "chat_id": sid, "input_id": "message-one", "task_id": "task_ui_question", "content": "fixture question"}
         await socket.send_json(frame)
         assert (await receive(socket, "message_accepted"))["input_id"] == "message-one"
         run = await receive(socket, "goal_status", lambda item: item.get("status") == "running")
         assert run["turn_id"] and run["input_id"] == "message-one"
-        await receive(socket, "delta")
+        assert (await receive(socket, "delta"))["task_id"] == "task_ui_question"
         await socket.close()
 
         resumed, _ = await connect(client, wire)
@@ -182,7 +182,8 @@ async def test_messages_use_real_service_and_are_idempotent_across_reconnection(
         await receive(resumed, "message_accepted")
         assert len(executor.calls) == 1
         executor.release.set()
-        await receive(resumed, "turn_end")
+        ending = await receive(resumed, "turn_end")
+        assert ending["task_id"] == "task_ui_question" and ending["turn_id"] == run["turn_id"]
         task = wire.service.tasks.get((ALICE, run["turn_id"]))
         if task:
             await task

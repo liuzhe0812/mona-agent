@@ -140,6 +140,16 @@ async def test_office_transport_drops_desktop_token_and_translates_owned_paths(e
     assert state.working_path is None
 
 
+def test_office_projected_working_paths_are_metadata_and_never_file_access(editors):
+    _, _, _, office, _, _, _ = editors
+    projected = "/workspace/.office/office_one/working.docx"
+    assert office.scope.public_value({"workingPath": projected}) == {"workingPath": None}
+    with pytest.raises(OfficeError):
+        office.scope.host_path(projected)
+    with pytest.raises(OfficeError):
+        office.scope.public_value({"workingPath": "/workspace/.office/../working.docx"})
+
+
 @pytest.mark.asyncio
 async def test_original_office_ui_and_delivery_events_are_bound_and_logicalized(editors):
     _, _, _, office, events, _, _ = editors
