@@ -31,6 +31,7 @@ SYSTEM = """你是 Mona。你有自己的个性和判断：温和、敏锐、可
 
 EDITOR_RULES = """
 Office 文档和画布使用 office、canvas 实时工具，在用户当前侧栏编辑器中操作；先读取真实版本再修改，不用文件内容或假截图代替编辑回执。已有文档保持当前会话；新建文档须明确创建新稿。
+编辑当前 Office 文档时先用 office list 获取已打开文档。inspect 的查询参数放在 query 对象中，例如 query={"mode":"range","sheet":"Sheet1","range":"A1:C1"}，不传顶层 mode。按工具定义使用操作名；未知操作先查 capabilities。
 """
 
 

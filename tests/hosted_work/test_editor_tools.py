@@ -68,6 +68,20 @@ def editors(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_office_accepts_only_a_matching_redundant_inspect_mode(editors, monkeypatch):
+    _, _, _, office, _, _, _ = editors
+    execute = AsyncMock(return_value='{"ok":true}')
+    monkeypatch.setattr(OfficeTool, "execute", execute)
+    query = {"mode": "range", "sheet": "Sheet1", "range": "A1:C1"}
+    assert json.loads(await office.execute("inspect", mode="range", query=query))["ok"]
+    execute.assert_awaited_once_with("inspect", query=query)
+    execute.reset_mock()
+    result = json.loads(await office.execute("inspect", mode="summary", query=query))
+    assert result["error"]["code"] == "INVALID_OPERATION"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_canvas_optional_di_and_default_tauri_route_are_preserved(tmp_path, monkeypatch):
     default = CanvasTool(workspace=tmp_path)
     native = AsyncMock(return_value={"ok": True})

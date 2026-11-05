@@ -294,8 +294,12 @@ class _HostedOfficeTool(OfficeTool):
         try:
             if action not in _OFFICE_ACTIONS:
                 raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "线上 Office 仅使用实时文档编辑接口。")
+            query = kwargs.get("query")
+            if action == "inspect" and isinstance(query, dict) and kwargs.get("mode") == query.get("mode"):
+                kwargs.pop("mode", None)
             if any(key not in self.parameters["properties"] for key in kwargs):
-                raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "Office 操作参数无效。")
+                raise OfficeError(OfficeErrorCode.INVALID_OPERATION,
+                                  "Office 操作参数无效。查询模式只放在 query.mode，不要传顶层 mode；其他参数须符合工具定义。")
             if kwargs.get("session_id") is not None and not _EDITOR_ID.fullmatch(kwargs["session_id"]):
                 raise _invalid_path()
             for key in ("path", "output"):
