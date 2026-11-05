@@ -316,15 +316,21 @@ async def main():
                 assert float(cells["A1"].findtext("{*}v")) == 6 and float(cells["B1"].findtext("{*}v")) == 7
                 assert cells["C1"].findtext("{*}f").lstrip("=").replace(" ", "") == "A1*B1"
             report["excel_ai_formula_export"] = True
+            report["phase"] = "excel_restore"
             await page.reload()
             await page.get_by_role("tab", name=state["displayName"], exact=True).click()
             await expect(frame.locator(".ribbon-tabs").first).to_have_css("display", "flex")
             await expect(page.get_by_role("button", name="导出", exact=True)).to_be_enabled(timeout=60000)
-            restored = await api("/api/work/desktop/api/office/sessions/" + state["sessionId"] + "/inspect", method="post",
-                account_headers={**headers, "X-Mona-Session-Key": "websocket:" + await sid()},
-                data={"sessionId": state["sessionId"], "query": {"mode": "range", "sheet": "Sheet1", "range": "A1:C1", "includeFormula": True}})
-            assert restored.get("ok") is True
-            assert [cell["value"] for cell in restored["result"]["rows"][0]] == [6, 7, 42]
+            async with asyncio.timeout(15):
+                while True:
+                    restored = await api("/api/work/desktop/api/office/sessions/" + state["sessionId"] + "/inspect", method="post",
+                        account_headers={**headers, "X-Mona-Session-Key": "websocket:" + await sid()},
+                        data={"sessionId": state["sessionId"], "query": {"mode": "range", "sheet": "Sheet1", "range": "A1:C1", "includeFormula": True}})
+                    assert restored.get("ok") is True
+                    report["excel_restored_values"] = [cell["value"] for cell in restored["result"]["rows"][0]]
+                    if report["excel_restored_values"] == [6, 7, 42]:
+                        break
+                    await asyncio.sleep(0.25)
             report["excel_formula_refresh_restore"] = True
             await page.screenshot(path=str(output / "excel.png"))
 
@@ -369,6 +375,8 @@ async def main():
                         break
                     await asyncio.sleep(0.5)
             report["stop_real_exec"] = True
+            await expect(page.get_by_role("button", name="发送消息", exact=True)).to_be_visible()
+            report["stop_returns_to_composer"] = True
             other_headers = {"Authorization": "Bearer " + credentials["other_token"], "Origin": ORIGIN}
             denied = await context.request.get(ORIGIN + "/api/work/sessions/" + await sid(), headers=other_headers)
             assert denied.status == 404
