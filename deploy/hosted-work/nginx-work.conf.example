@@ -1,5 +1,7 @@
 # Include these locations inside the existing mona-ai.cn HTTPS server.
 # The HTTP-context zones in nginx-work-limits.conf.example must be installed first.
+# Large immutable assets can use nginx-work-static.conf.example after a verified
+# static release is installed on the VPS; API and user data remain on Ubuntu.
 
 location = /work {
     if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn/work/$is_args$args; }

@@ -124,7 +124,10 @@ async def test_frontend_works_without_optional_assets_or_state_dir(tmp_path):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        assert (await client.get("/work/")).status == 200
+        response = await client.get("/work/")
+        assert response.status == 200
+        assert "font-src 'self' data:;" in response.headers["Content-Security-Policy"]
+        assert "script-src 'self';" in response.headers["Content-Security-Policy"]
     finally:
         await client.close()
 

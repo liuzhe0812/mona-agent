@@ -1,0 +1,23 @@
+# Optional: include in the same HTTPS server as nginx-work.conf.example.
+# Replace RELEASE with a new, manifest-verified static release. Copy only the
+# public webui/dist-hosted-work files, never server source or user state.
+# These specific prefixes take precedence over the existing /work/ proxy.
+# Keep /api/work/ and the main Work HTML on the Ubuntu service.
+
+location ^~ /work/assets/ {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    alias /var/www/mona/work-releases/RELEASE/content/assets/;
+    autoindex off;
+    disable_symlinks on;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+}
+
+location ^~ /work/office-editor/ {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    alias /var/www/mona/work-releases/RELEASE/content/office-editor/;
+    autoindex off;
+    disable_symlinks on;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+}

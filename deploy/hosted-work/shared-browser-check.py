@@ -10,6 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from urllib.parse import quote, quote_plus, urlsplit, urlunsplit
 from uuid import uuid4
 
 from playwright.async_api import async_playwright, expect
@@ -29,6 +30,78 @@ async def main():
     assert all(isinstance(credentials.get(key), str) and re.fullmatch(r"[\x21-\x7e]{1,8192}", credentials[key])
                for key in ("token", "other_token"))
     report = {"production": True, "mocked_responses": False, "passed": False, "phase": "start"}
+    page_errors, failures, request_failures, console_errors = [], [], [], []
+
+    def sanitize(value, limit=500):
+        text = str(value)
+        for key in ("token", "other_token"):
+            secret = credentials[key]
+            for encoded in (secret, quote(secret, safe=""), quote_plus(secret, safe=""), json.dumps(secret)[1:-1]):
+                text = text.replace(encoded, "[redacted]")
+        text = re.sub(r"(?i)\b(?:https?|wss?)://[^\s\"'<>`]+",
+                      lambda match: re.split(r"[?#]", match.group(), maxsplit=1)[0], text)
+        text = re.sub(r"(/[^\s\"'<>?]+)\?[^\s\"'<>]*", r"\1", text)
+        text = re.sub(r"(?i)\bbearer\s+[^\s\"',;]+", "Bearer [redacted]", text)
+        text = re.sub(r"(?i)(\b(?:access[_-]?token|refresh[_-]?token|token|ticket|secret|api[_-]?key|password|authorization)\b[\"']?\s*[:=]\s*[\"']?)[^\s\"',;&}\]]+",
+                      r"\1[redacted]", text)
+        return text[:limit]
+
+    def clean_url(value, *, path_only=False):
+        try:
+            parts = urlsplit(value)
+            value = parts.path if path_only else urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path, "", ""))
+        except ValueError:
+            value = "[invalid URL]"
+        return sanitize(value)
+
+    def record(items, value):
+        if len(items) < 100:
+            items.append(value)
+
+    async def frame_diagnostics(page):
+        async def inspect(frame):
+            value = {"url": clean_url(frame.url)}
+            try:
+                data = await asyncio.wait_for(frame.evaluate("""() => {
+                    const style = (selector) => {
+                        const node = document.querySelector(selector);
+                        if (!node) return null;
+                        const value = getComputedStyle(node);
+                        return { display: value.display, font: value.font, fontFamily: value.fontFamily, fontSize: value.fontSize };
+                    };
+                    return {
+                        readyState: document.readyState,
+                        bodyClass: document.body?.className ?? null,
+                        roots: {
+                            docs: style('.mona-docs-editor'),
+                            sheets: style('.mona-sheets-editor'),
+                            slides: style('.mona-slides-editor'),
+                        },
+                        app: style('.app'),
+                        ribbonTabs: style('.ribbon-tabs'),
+                        stylesheets: Array.from(document.styleSheets).slice(0, 50).map(sheet => ({
+                            href: sheet.href, disabled: sheet.disabled, media: sheet.media.mediaText,
+                        })),
+                    };
+                }"""), timeout=2)
+                value["readyState"] = sanitize(data["readyState"])
+                value["bodyClass"] = sanitize(data["bodyClass"]) if data["bodyClass"] is not None else None
+                def clean_style(style):
+                    return {key: sanitize(item) for key, item in style.items()} if style else None
+                value["roots"] = {key: clean_style(style) for key, style in data["roots"].items()}
+                value["app"] = clean_style(data["app"])
+                value["ribbonTabs"] = clean_style(data["ribbonTabs"])
+                value["stylesheets"] = [{"href": clean_url(sheet["href"]) if sheet["href"] else None,
+                                         "disabled": bool(sheet["disabled"]), "media": sanitize(sheet["media"])}
+                                        for sheet in data["stylesheets"]]
+            except Exception as error:
+                value["inspection_error_type"] = type(error).__name__
+            return value
+
+        frames = [frame for frame in page.frames if frame != page.main_frame]
+        return {"frames": await asyncio.gather(*(inspect(frame) for frame in frames[:25])),
+                "omitted_frames": max(0, len(frames) - 25)}
+
     browser = None
     async with async_playwright() as playwright:
         try:
@@ -40,7 +113,7 @@ async def main():
             await seed(context, credentials["token"])
             page = await context.new_page()
             page.set_default_timeout(25000)
-            sent, page_errors, failures, offices = [], [], [], []
+            sent, offices = [], []
             closing = [False]
             def socket_created(socket):
                 assert all(credentials[key] not in socket.url for key in ("token", "other_token"))
@@ -53,15 +126,32 @@ async def main():
                         pass
                 socket.on("framesent", frame)
             page.on("websocket", socket_created)
-            page.on("pageerror", lambda error: page_errors.append(str(error)[:500]))
-            page.on("response", lambda response: failures.append({"path": response.url.split("?", 1)[0].removeprefix(ORIGIN), "status": response.status})
-                    if response.url.startswith(ORIGIN) and response.status >= 400
-                    and not (closing[0] and response.status == 401) else None)
+            page.on("pageerror", lambda error: record(page_errors, sanitize(error)))
+            page.on("console", lambda message: record(console_errors, sanitize(message.text)) if message.type == "error" else None)
+            page.on("requestfailed", lambda request: record(request_failures, {"path": clean_url(request.url, path_only=True),
+                                                                                "failure": sanitize(request.failure or "unknown")}))
+            async def failed_response(response):
+                if not response.url.startswith(ORIGIN) or response.status < 400 or (closing[0] and response.status == 401):
+                    return
+                item = {"path": clean_url(response.url, path_only=True), "status": response.status}
+                record(failures, item)
+                if "/office/" in item["path"]:
+                    try:
+                        body = await asyncio.wait_for(response.json(), timeout=2)
+                        item["error"] = sanitize(json.dumps(body.get("error", {}), ensure_ascii=False), 1800)
+                        if item["path"].endswith("/engine/range"):
+                            payload = response.request.post_data_json
+                            item["range_request"] = {key: payload.get(key) for key in ("sheetId", "range")}
+                    except Exception:
+                        pass
+            page.on("response", failed_response)
             headers = {"Authorization": "Bearer " + credentials["token"], "Origin": ORIGIN}
             async def api(path, *, method="get", data=None, account_headers=None):
                 response = await context.request.fetch(ORIGIN + path, method=method,
                     headers=account_headers or headers, data=data)
-                assert response.ok, f"API {path.split('?')[0]} returned {response.status}"
+                if not response.ok:
+                    body = await response.json()
+                    raise AssertionError(f"API {path.split('?')[0]} returned {response.status}: " + sanitize(json.dumps(body), 1200))
                 return None if response.status == 204 else await response.json()
             async def sid():
                 value = await page.evaluate("JSON.parse(sessionStorage.getItem('mona-hosted-work-v1')).selected")
@@ -104,6 +194,7 @@ async def main():
                 frame = page.frame_locator(f'iframe[title="{frame_title}"]:visible')
                 await frame.locator("body").wait_for()
                 await expect(page.get_by_role("button", name="导出", exact=True)).to_be_enabled(timeout=60000)
+                await expect(frame.locator(".ribbon-tabs").first).to_have_css("display", "flex")
                 return frame, state
             async def export(name):
                 async with page.expect_download(timeout=60000) as download:
@@ -205,12 +296,19 @@ async def main():
             await page.reload()
             await page.get_by_role("tab", name=state["displayName"], exact=True).click()
             await expect(frame.locator(".doc-page").first).to_contain_text(ai_marker)
+            await expect(frame.locator(".ribbon-tabs").first).to_have_css("display", "flex")
             report["word_edit_ai_save_export_restore"] = True
             await page.screenshot(path=str(output / "word.png"))
 
             report["phase"] = "excel"
             frame, state = await new_office("Excel", "表格编辑器")
             await finish(await begin("用 office 编辑当前 Excel 的 Sheet1，写 A1=6、B1=7、C1 的公式为 =A1*B1。操作当前工作簿，保留其余内容，不新建文件；完成后确认 C1 为42。"))
+            inspected = await api("/api/work/desktop/api/office/sessions/" + state["sessionId"] + "/inspect", method="post",
+                account_headers={**headers, "X-Mona-Session-Key": "websocket:" + await sid()},
+                data={"sessionId": state["sessionId"], "query": {"mode": "range", "sheet": "Sheet1", "range": "A1:C1", "includeFormula": True}})
+            assert inspected.get("ok") is True
+            assert [cell["value"] for cell in inspected["result"]["rows"][0]] == [6, 7, 42]
+            report["excel_actual_calculated_values"] = [6, 7, 42]
             excel = await export("excel.xlsx")
             with zipfile.ZipFile(excel) as archive:
                 tree = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
@@ -218,6 +316,16 @@ async def main():
                 assert float(cells["A1"].findtext("{*}v")) == 6 and float(cells["B1"].findtext("{*}v")) == 7
                 assert cells["C1"].findtext("{*}f").lstrip("=").replace(" ", "") == "A1*B1"
             report["excel_ai_formula_export"] = True
+            await page.reload()
+            await page.get_by_role("tab", name=state["displayName"], exact=True).click()
+            await expect(frame.locator(".ribbon-tabs").first).to_have_css("display", "flex")
+            await expect(page.get_by_role("button", name="导出", exact=True)).to_be_enabled(timeout=60000)
+            restored = await api("/api/work/desktop/api/office/sessions/" + state["sessionId"] + "/inspect", method="post",
+                account_headers={**headers, "X-Mona-Session-Key": "websocket:" + await sid()},
+                data={"sessionId": state["sessionId"], "query": {"mode": "range", "sheet": "Sheet1", "range": "A1:C1", "includeFormula": True}})
+            assert restored.get("ok") is True
+            assert [cell["value"] for cell in restored["result"]["rows"][0]] == [6, 7, 42]
+            report["excel_formula_refresh_restore"] = True
             await page.screenshot(path=str(output / "excel.png"))
 
             report["phase"] = "ppt"
@@ -278,17 +386,29 @@ async def main():
             denied = await context.request.get(ORIGIN + "/api/work/sessions", headers=headers)
             assert denied.status == 401
             assert not page_errors and not failures, "Unexpected UI/network failures"
-            report.update(logout_revoked=True, page_errors=page_errors, failed_requests=failures, message_frames=len(sent), passed=True, phase="complete")
+            report.update(logout_revoked=True, page_errors=page_errors, failed_requests=failures,
+                          request_failures=request_failures, console_errors=console_errors, office_styles_applied=True,
+                          message_frames=len(sent), passed=True, phase="complete")
         except Exception as error:
-            message = str(error)
-            for key in ("token", "other_token"):
-                message = message.replace(credentials[key], "[redacted]")
-            report.update(error_type=type(error).__name__, error=message[:1800])
+            report.update(error_type=type(error).__name__, error=sanitize(error, 1800),
+                          page_errors=page_errors, failed_requests=failures,
+                          request_failures=request_failures, console_errors=console_errors)
             if "page" in locals():
-                await page.screenshot(path=str(output / "failure.png"))
+                try:
+                    report["iframe_diagnostics"] = await asyncio.wait_for(frame_diagnostics(page), timeout=5)
+                except Exception as diagnostic_error:
+                    report["iframe_diagnostics_error_type"] = type(diagnostic_error).__name__
+                try:
+                    await asyncio.wait_for(page.screenshot(path=str(output / "failure.png")), timeout=5)
+                except Exception as screenshot_error:
+                    report["screenshot_error_type"] = type(screenshot_error).__name__
         finally:
             if browser:
-                await browser.close()
+                try:
+                    await browser.close()
+                except Exception:
+                    if report["passed"]:
+                        raise
             (output / "acceptance.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(report, ensure_ascii=True))
     return 0 if report["passed"] else 1

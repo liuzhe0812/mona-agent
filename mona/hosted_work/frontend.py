@@ -9,7 +9,7 @@ from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import PUBLIC_STATIC_DIRS
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
+       "font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; "
        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 
