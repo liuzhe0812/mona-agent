@@ -2,6 +2,7 @@
 
 These checks never log into Codex, start a model task, or validate a production model.
 """
+import asyncio
 import copy
 import json
 import os
@@ -25,6 +26,21 @@ from mona.hosted_work.store import WorkStore
 
 ADMIN_URL = "/api/work/admin/codex"
 MODEL = "native-fixture"
+
+
+@pytest.mark.asyncio
+async def test_chunked_configuration_reads_the_complete_body_and_bounds_it(online, tmp_path):
+    initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()
+    body = json.dumps({"expected_revision": initial["revision"], "configuration": configuration(tmp_path)}).encode()
+    async def chunks(content):
+        yield content[:15]
+        await asyncio.sleep(0.01)
+        yield content[15:]
+    response = await online.client.put(ADMIN_URL, headers=headers(), data=chunks(body))
+    assert response.status == 200
+    saved = online.path.read_bytes()
+    response = await online.client.put(ADMIN_URL, headers=headers(), data=chunks(body + b" " * 8192))
+    assert response.status == 413 and online.path.read_bytes() == saved
 
 
 def operator_file(tmp_path, section="hosted_work"):

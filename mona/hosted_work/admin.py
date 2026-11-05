@@ -174,9 +174,11 @@ class CodexAdmin:
                 return web.json_response(self.snapshot())
             if request.content_length is not None and request.content_length > 8192:
                 raise WorkError("invalid_request", "配置内容过大。", 413)
-            raw = await request.content.read(8193)
-            if len(raw) > 8192:
-                raise WorkError("invalid_request", "配置内容过大。", 413)
+            raw = bytearray()
+            async for chunk in request.content.iter_chunked(8192):
+                raw.extend(chunk)
+                if len(raw) > 8192:
+                    raise WorkError("invalid_request", "配置内容过大。", 413)
             if request.method == "PUT":
                 return web.json_response(await self.save(SaveCodex.model_validate_json(raw)))
             if json.loads(raw) != {}:
