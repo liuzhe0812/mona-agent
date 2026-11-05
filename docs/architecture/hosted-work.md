@@ -1,5 +1,15 @@
 # Mona 线上工作台：独立宿主与共享会话界面
 
+## 2026-11-06 会话执行链共用边界（本地候选，尚未部署）
+
+普通会话共用应用的 `AgentRunner`、`ContextBuilder`、`Consolidator`、能力按需加载、内置 Skill 模板、`UserQuestions`/提问工具、计划/目标工具、`WorkTurnController`、`SubagentManager`、恢复投影和标题生成。Hosted 仅适配账号、逻辑工作区、持久化和 HTTP/WS；不是另一套模型循环。共享类新增的依赖注入参数均保留桌面缺省行为。
+
+`ContextBuilder` 的记忆与 Skill 加载器显式注入。每个账号的可信子进程只在已经校验的 `state/users/<owner>/runtime/config.json` 下构造记忆；禁止父进程切换全局配置、构造默认 `SessionManager` 或调用桌面 vault 回退。摘要游标与前缀指纹在专表保存，原文历史和模型投影分开；动态 Office/附件信息放在 user runtime context，单轮 system prompt 保持稳定。记忆搜索只连接本账号已有 MEMORY/SOUL/events；笔记、资料库与全会话索引未接入时明确 unavailable，不把网页附件当成已入库知识。
+
+问答、预览与追加输入绑定 owner/session/run。预览先下载并核对真实图像字节，存入隔离预览目录；短期媒体票据只在请求时生成，历史只存逻辑路径。重复问答/输入批次保持幂等；取消、未知状态或服务重启不自动选答案、不重放写入。子任务共用同一个 Runner，结果作为 runtime 注入返回主任务；每个子任务有独立工具/能力集合和编辑器状态，主任务结束前核对真实退出和交付。
+
+模型用量展示取最后一次请求，累计用量继续保留独立字段。Widget 的 streaming 仅发送空代码；完整代码通过原共享校验后才显示。上下文、文件编辑、计划、目标与结束均沿应用原协议更新现有 UI。发布状态和必要验收见 [实施清单](../plans/hosted-work-full-parity-20261105.md)。下文旧版本“当前”属于记录当时，不能代替根目录最新生产状态。
+
 2026-11-05：生产已切至 v10，共享会话仍复用第 11 节所列桌面原组件。网页隐藏新对话欢迎右块、猫形提示词入口和左下退出按钮，桌面保留；Office 465 个产物与 v8 逐字节一致，未重新构建或修改。Ubuntu 当前 release 为 `/home/liuzhe/mona-hosted-work/releases/20261105-skills-ui-v10/content`，PID `34615`；VPS 继续使用 v9 静态 root `/var/www/mona/work-releases/20261105-skills-ui-v9/content` 的 3,890 个文件及原代理，Nginx master `420299` 不变。v10 仅修改 executor 的 Widget 事件白名单和对应测试，前端、Skill 与 Office 均与 v9 一致。
 
 v9 包含 13 套内置 Skill、761 个资源，支持发现、按需读取、引用、真实样张、素材复制与隔离脚本；不读取私有/专家/用户配置，也不引入 ContextBuilder 或 memory(always)。当前网页工具可支持 Word、Excel、PPT、画布、设计、PRD、visualizer 共 7 套；PDF、生图、视频、记忆、长期目标和 Skill 私有安装缺对应工具服务，不能宣称 13 套全部可执行。设计仅支持参考和 Office，浏览器自动操作尚未接入。高级脚本要求 Python >=3.13，实时公开 runtime catalog 仅登记 Windows 基座；Linux 依赖缺失时返回 `runtime_unavailable`，不回退宿主。

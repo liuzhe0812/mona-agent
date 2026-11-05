@@ -1,0 +1,39 @@
+{
+  "release": "20261106-harness-work-v17",
+  "created_at": "2026-11-05T17:30:27.111400+00:00",
+  "deployed": false,
+  "production_validation": false,
+  "base_release": "20261105-stream-work-v15",
+  "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-v17.delta.tar.gz",
+  "sha256": "61235ab8373bb7d96e3e65a48e02b86181ea175fc55d5b1c29d1721fb777703a",
+  "bytes": 888466,
+  "changed_files": 82,
+  "release_files": 5636,
+  "shared_code": [
+    "mona/agent/context.py",
+    "mona/agent/loop.py",
+    "mona/agent/subagent.py",
+    "mona/agent/runner.py",
+    "mona/agent/tools/memory_tools.py",
+    "mona/agent/tools/registry.py",
+    "mona/config/schema.py",
+    "mona/templates/SOUL.md",
+    "mona/utils/prompt_templates.py"
+  ],
+  "office_and_frontend_unchanged": true,
+  "unrelated_interaction_changes_excluded": true,
+  "blocking_reason": "Ubuntu SSH 172.31.3.176:22 timeout; no backend upload or service mutation",
+  "validation": {
+    "workspace_related": "528 passed, 17 skipped, 1 known Codex baseline deselected; one extra image-input test passed",
+    "isolated_candidate": "481 passed across candidate suite and focused dependency/image reruns; 17 skipped, 1 known Codex baseline deselected",
+    "real_local_browser": "1 passed; v16 assets; synthetic identity and model event edges only",
+    "real_production_model": "not run for this candidate"
+  },
+  "canvas": "queued separately after harness development per user instruction",
+  "release_manifest_sha256": "56329cccbbf62c6f71211976cff589008e225e8722601b075a4023e8c712e53e",
+  "base_release_manifest_sha256": "6fe059f0097d52d4906c2b39d48de2424912b2802a95a94b410459a37edb6165",
+  "code_commits": [
+    "1d24d63a6",
+    "cadfb0a62"
+  ]
+}
