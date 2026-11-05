@@ -132,7 +132,7 @@ export function ArtifactSidebar({
     { kind: "ppt" as const, label: "PPT", spritePosition: "-41px -50px" },
     { kind: "word" as const, label: "Word", spritePosition: "-77px -50px" },
     { kind: "excel" as const, label: "Excel", spritePosition: "-114px -50px" },
-  ];
+  ].filter((item) => !getHostedPlatform() || (item.kind !== "browser" && item.kind !== "terminal"));
   return (
     <div className="flex h-full min-w-0 flex-col bg-card">
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
