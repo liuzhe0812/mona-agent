@@ -40,6 +40,8 @@ v8 最终复核原有 8 个容器的 ID、状态和启动时间及其他服务�
 
 ## 2. 桌面兼容边界
 
+共享执行循环不等于完整 harness 已迁移：网页当前仍独立组装 system、工具集合与受限 Skill 目录。应用 `UserQuestionPanel` 和客户端回答方法可共用，但生产 Hosted 尚未注册 `AskUserQuestionTool`、处理回答/重连快照或提供等待前的安全样张预览，因此未指定风格的新 PPT 的完整方向确认流程尚未对齐，不能宣称整套 Skill 执行链路一致。2026-11-05 本地修正改为复用应用 `skills_section.md` 并允许公开只读内置参考跨 Skill 依赖；复制/脚本仍要求对应 Skill 成功加载，私人层仍禁止。该修正因 Ubuntu 管理连接不可达尚未发布。
+
 桌面入口、Gateway/Services、工具授权、原生账号及既有数据目录不变。新增配置只有显式启动在线宿主才使用，桌面不自动生成用户容器。
 
 执行侧共用通用 AgentRunner、Provider 和工具协议代码，任务和文件状态独立；账号余额及收费流水由同一个 Auth 钱包负责。HostedWorkConfig 虽定义在统一 schema 中，但不挂入桌面 Config，不会进入桌面设置保存和同步。NativeWorkProvider 的 native_home 是显式可选参数，未指定时保留桌面原行为。在线网页有独立 HTML、Vite 配置、缓存和输出，发布时固定通用源码版本。桌面或在线服务任一侧升级，不要求另一侧同时升级。
