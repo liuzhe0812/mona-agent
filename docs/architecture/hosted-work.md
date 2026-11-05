@@ -88,6 +88,12 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 
 ## 6. 文件与部署入口
 
+网页普通 Work 继续直接使用共享 `AgentRunner`，进度 Hook 继承应用 `AgentProgressHook`，通道适配只负责将推理、回答、工具与 Widget 转成既有桌面事件；保留真实 call/turn/input ID，不另造核心循环或逐轮固定提示。参数做有界展示，工具原始结果只保留在执行历史中，不重复塞入进度。失败关闭已有流并显示安全原因，unknown 不重派或伪装完成。
+
+窗口统一使用 `resolve_model_context_window_details` 与应用供应商目录。Hosted 不读取个人配置，不走桌面 IPC；已知目录标记已知，未发现时保留统一默认来源。旧 `context_window_tokens` 仅兼容为额外输入预算 cap，默认不再套用 32768，不能把运营 cap 当模型容量。任务结果中的 diagnostic 与父进程告警仅记录原因、阶段、异常类型、窗口来源、单次占用峰值及 HTTP 状态，不记录凭据、正文或原始 stderr。
+
+Office 导出已沿用应用的交付协议。对同轮再次 `deliver_file`，适配器只命中当前 scope 中已登记的逻辑路径/大小/SHA，重新核对后复用 `DeliverFileTool`，由同一 bus 去重；临时 workspace context 必须恢复，核对间变化仍拒绝。同名未登记文件不得借账号文档根旁路交付，继续原 gVisor 生命周期；不同会话或新轮次不继承该登记。核心 Office 与全部编辑器产物保持共用。
+
 Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 只存连接与计价模型映射草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
 
 当前共享钱包的原生 Work 计费桥尚未实现，管理页 `billing.ready=false`、`public_enabled=false`。公开模型列表过滤 Codex，任务准入也明确拒绝 Codex，防止手动加入运行模型后免费执行；Qwen 继续对所有已登录账号免费。管理员连接探测使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把订阅登录或连接成功当作收费已上线。

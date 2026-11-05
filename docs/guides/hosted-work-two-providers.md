@@ -24,6 +24,8 @@
 
 `source=mona` 是此版本通用 API 适配器的配置值。这里不使用原账号服务的模型钱包或 `/v1` 网关。
 
+上下文容量由应用共用模型目录解析，不再给所有网页模型套用 32K 默认值。无需为当前 Qwen 手填窗口；若保留旧 `context_window_tokens`，它会作为额外输入预算 cap，而不是供应商容量声明。运行与设置页共用同一解析结果，来源和真实单次占用峰值记录在任务诊断中。
+
 在 Ubuntu 本机编辑 `/home/liuzhe/mona-hosted-work/config/platform.env`，写入下列环境变量，等号后填写实际套餐 Key；不要将 Key 放进聊天、命令行参数或 Git：
 
 ```text

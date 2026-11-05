@@ -1,0 +1,177 @@
+{
+  "release": "20261105-stream-work-v15",
+  "recorded_at": "2026-11-05T08:59:40.447979+00:00",
+  "root_cause": {
+    "run_id": "40c1253365acf9492ba486d6b6b523a0",
+    "reason": "web adapter defaulted to 32768 tokens instead of resolving the shared application model catalog",
+    "original_outcome_preserved": "failed; editor checkpoint revision 9; not finally saved/exported"
+  },
+  "code_commits": [
+    "29af3fe1a",
+    "4f5702349"
+  ],
+  "base_release": "20261105-codex-admin-v13",
+  "base_release_manifest_sha256": "1864fa5482d12b23815d6ebe71df17537da87d8eecf4bd1485e46dc232257847",
+  "packages": [
+    {
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\stream-incident-20261105\\work-stream-v14.delta.tar.gz",
+      "bytes": 343326,
+      "sha256": "ea4445c61127adf4fc3c9cbce0805c609b4669431ea286c89c6029c51e6616b7",
+      "files": 5598,
+      "changed_files": 9
+    },
+    {
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\stream-incident-20261105\\work-delivery-v15.delta.tar.gz",
+      "bytes": 309171,
+      "sha256": "f9f567e70b7be94faf748d49ca45253254d159d9c9286cf9c7218d8d71e855fb",
+      "files": 5600,
+      "changed_files": 5
+    }
+  ],
+  "activation": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-stream-work-v15/content",
+    "pid": "123126",
+    "files_verified": 5600,
+    "counts_before": {
+      "sessions": 15,
+      "runs": 26,
+      "files": 6
+    },
+    "existing_rows_preserved": true,
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-stream-work-v15",
+    "docker_or_other_services_changed": false
+  },
+  "production": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "session_id": "a3b0d103a86b90fc28d631ad8d9e63fa",
+    "run_id": "81668ca2a4e21e892da6bc52e39e9c29",
+    "status": "completed",
+    "diagnostic": {
+      "stop_reason": "completed",
+      "iterations": 4,
+      "context_window_tokens": 1000000,
+      "context_window_source": "catalog",
+      "max_context_tokens": 76811,
+      "provider_status": null
+    },
+    "usage": {
+      "prompt_tokens": 306153,
+      "completion_tokens": 256,
+      "total_tokens": 306409,
+      "cached_tokens": 228480
+    },
+    "pptx_sha256": "56ea7dcf238a331432943e68ee5887266529615d6a12b56f72c880714cff746f",
+    "slides": 3,
+    "tool_calls": 3,
+    "matched_finishes": 3,
+    "event_kinds": {
+      "ready": 2,
+      "attached": 15,
+      "goal_status": 16,
+      "message_accepted": 1,
+      "artifact_task_started": 1,
+      "office_session_open": 1,
+      "office_session_state": 2,
+      "reasoning_delta": 19,
+      "reasoning_end": 4,
+      "message": 6,
+      "office_inspect_command": 1,
+      "deliver_files": 1,
+      "delta": 4,
+      "stream_end": 1,
+      "turn_end": 1,
+      "artifacts_changed": 1,
+      "session_updated": 1
+    },
+    "refresh_does_not_repeat": true,
+    "page_errors": [],
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "observe": {
+    "passed": true,
+    "model_requests": 0,
+    "ppt_editor_restored": true,
+    "process_expanded": true,
+    "page_errors": [],
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    }
+  },
+  "final_state": {
+    "passed": true,
+    "ubuntu": {
+      "units": {
+        "mona-hosted-work": {
+          "MainPID": "123126",
+          "NRestarts": "0",
+          "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261105-stream-work-v15/content",
+          "ActiveState": "active"
+        },
+        "mona-work-tunnel": {
+          "MainPID": "423172",
+          "NRestarts": "0",
+          "WorkingDirectory": "!/home/liuzhe",
+          "ActiveState": "active"
+        }
+      },
+      "files_verified": 5600,
+      "manifest_sha256": "6fe059f0097d52d4906c2b39d48de2424912b2802a95a94b410459a37edb6165",
+      "frontend_agent_and_office_unchanged": true,
+      "operator_config_only_frontend_changed": true,
+      "config_permission": "0o600",
+      "docker_pid": "78383",
+      "containers_unchanged": true,
+      "counts": {
+        "sessions": 15,
+        "runs": 27,
+        "files": 6
+      },
+      "run_statuses": {
+        "cancelled": 2,
+        "completed": 20,
+        "failed": 4,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "original_run_still_failed": true,
+      "original_ppt": {
+        "sha256": "26d0cc98591c67cd321265628e7b2d2e686e44f6a4d3ab2e5a4271f11671d8d9",
+        "version": {
+          "editorEpoch": "epoch_6fca8503a21b4090b96be17a2ff55363",
+          "modelRevision": 9
+        },
+        "checkpoint_version": {
+          "editorEpoch": "epoch_6fca8503a21b4090b96be17a2ff55363",
+          "modelRevision": 9
+        },
+        "saved_version": null
+      }
+    },
+    "vps": {
+      "units": {
+        "nginx": "420299",
+        "mariadb": "420210",
+        "mona-work-visitor": "367299"
+      },
+      "auth_pid": "389486",
+      "oneapi_pid": "310825",
+      "website_and_work_proxy_unchanged": true
+    }
+  },
+  "pushed": false
+}
