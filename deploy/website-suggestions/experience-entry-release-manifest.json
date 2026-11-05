@@ -60,5 +60,11 @@
       "version": 0
     },
     "wallet_unchanged": true
+  },
+  "published_archive": {
+    "archive": "/opt/mona-website-staging/experience-entry-20261105-v6/website-live-published.tar.gz",
+    "bytes": 13289076,
+    "sha256": "c8703abe6b237b21e6382a322d14930da34fcec4090252948cd227b8d3c6d7ab",
+    "files": 64
   }
 }

@@ -1,0 +1,185 @@
+{
+  "release": "20261105-codex-admin-v13",
+  "recorded_at": "2026-11-05T07:13:18.299343+00:00",
+  "admin_entry": "https://mona-ai.cn/work/admin/",
+  "paid_codex_enabled": false,
+  "paid_codex_blockers": [
+    "dedicated program path, authentication and model not configured",
+    "shared wallet reservation and settlement bridge not implemented"
+  ],
+  "qwen": {
+    "all_accounts": true,
+    "free": true,
+    "new_rate_limits": false
+  },
+  "artifacts": [
+    {
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\codex-admin-20261105-v1\\work-codex-admin-v11.delta.tar.gz",
+      "bytes": 2950944,
+      "sha256": "4dda1ad3d8c3dca6c6c28b6abf69f5770cf387d82f05306da5efd57ee04ae13a",
+      "files": 5534,
+      "changed_files": 359,
+      "office_unchanged": 465,
+      "base_archive_sha256": "9acadecb959bc9ab562c382f5f35d0a59d3eef1fc33d8d030f0ecc529c9173c4"
+    },
+    {
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\codex-admin-20261105-v1\\work-codex-admin-v12.delta.tar.gz",
+      "bytes": 295681,
+      "sha256": "9b567cbe84a400fe925d8d9f5403196d39b658c2577afed04c499c2d79d34328",
+      "files": 5534,
+      "changed_files": 2,
+      "base_release": "20261105-codex-admin-v11"
+    },
+    {
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\codex-admin-20261105-v1\\work-labels-v13.delta.tar.gz",
+      "sha256": "1e8d95a9389d317677b0006ced606b3c3df168f9545043fb053a7bba340945a0",
+      "bytes": 2489654,
+      "files": 5596,
+      "changed_files": 63,
+      "base_release": "20261105-codex-admin-v12"
+    }
+  ],
+  "base_v10_archive_sha256": "9acadecb959bc9ab562c382f5f35d0a59d3eef1fc33d8d030f0ecc529c9173c4",
+  "production": {
+    "passed": true,
+    "ubuntu": {
+      "units": {
+        "mona-hosted-work": {
+          "MainPID": "83169",
+          "NRestarts": "0",
+          "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261105-codex-admin-v13/content",
+          "ActiveState": "active"
+        },
+        "mona-work-tunnel": {
+          "MainPID": "423172",
+          "NRestarts": "0",
+          "WorkingDirectory": "!/home/liuzhe",
+          "ActiveState": "active"
+        }
+      },
+      "files_verified": 5596,
+      "manifest_sha256": "1864fa5482d12b23815d6ebe71df17537da87d8eecf4bd1485e46dc232257847",
+      "config_permission": "0o600",
+      "only_config_changes": "frontend_dir plus default Codex draft",
+      "docker_pid": "78383",
+      "original_containers_unchanged": true,
+      "counts": {
+        "sessions": 14,
+        "runs": 23,
+        "files": 6
+      },
+      "runs": {
+        "cancelled": 2,
+        "completed": 18,
+        "failed": 2,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "dedicated_auth_present": false
+    },
+    "vps": {
+      "units": {
+        "nginx": {
+          "MainPID": "420299",
+          "ActiveState": "active"
+        },
+        "mariadb": {
+          "MainPID": "420210",
+          "ActiveState": "active"
+        },
+        "mona-work-visitor": {
+          "MainPID": "367299",
+          "ActiveState": "active"
+        }
+      },
+      "auth_pid": 389486,
+      "oneapi_pid": "310825",
+      "static_files_verified": 4298,
+      "website_files_verified": 64,
+      "only_work_include_and_website_static_root_changed": true,
+      "existing_website_assets_and_changelog_preserved": true,
+      "other_service_pids_unchanged": true
+    }
+  },
+  "work_static": {
+    "static_root": "/var/www/mona/work-releases/20261105-codex-admin-v13/content",
+    "files_verified": 4298,
+    "proxy": "/opt/mona-work-proxy-releases/20261105-codex-admin-v13/work-locations.conf",
+    "proxy_sha256": "be53292bd57eaa670d45d7b17dbe1baa82476d30e67d3d33bb90820f3f2fe2fa",
+    "backup": "/var/www/mona/backups/codex-admin-20261105-v13",
+    "nginx_master_pid": "420299",
+    "only_work_include_changed": true
+  },
+  "backend": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-codex-admin-v13/content",
+    "pid": "83169",
+    "files_verified": 5596,
+    "counts_before": {
+      "sessions": 14,
+      "runs": 23,
+      "files": 6
+    },
+    "existing_rows_preserved": true,
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-codex-admin-v13",
+    "docker_or_other_services_changed": false
+  },
+  "acceptance": {
+    "admin": {
+      "passed": true,
+      "production": true,
+      "mocked_responses": false,
+      "model_task_sent": false,
+      "anonymous_ui": true,
+      "anonymous_api": 401,
+      "ordinary_account_denied": true,
+      "save_and_reload": true,
+      "stale_revision": 409,
+      "login_instructions_and_no_unbilled_switch": true,
+      "public_models": [
+        {
+          "id": "qwen",
+          "label": "Qwen3.7 Plus",
+          "source": "mona"
+        }
+      ],
+      "page_errors": [],
+      "all_test_sessions_revoked": true,
+      "wallet_after": {
+        "available_units": 0,
+        "reserved_units": 0,
+        "active_requests": 0,
+        "version": 0
+      },
+      "wallet_unchanged": true
+    },
+    "requested_ui": {
+      "passed": true,
+      "model_task_sent": false,
+      "website_entry_label": "立即体验",
+      "claude_and_workbuddy_hidden": true,
+      "return_website_link_works": true,
+      "workspace_loaded": true,
+      "qwen_visible": true,
+      "page_errors": [],
+      "failed_assets": [],
+      "all_test_sessions_revoked": true,
+      "wallet_after": {
+        "available_units": 0,
+        "reserved_units": 0,
+        "active_requests": 0,
+        "version": 0
+      },
+      "wallet_unchanged": true
+    }
+  },
+  "code_commits": [
+    "a0c472817",
+    "cb787e483",
+    "4bff027e7",
+    "9d6381a0c",
+    "4ee72b087"
+  ],
+  "pushed": false
+}

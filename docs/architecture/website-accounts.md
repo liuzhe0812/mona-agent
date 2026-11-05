@@ -18,6 +18,8 @@
 
 ## 身份、存储和安全
 
+线上工作台管理员配置入口为 `/work/admin/`。其管理 API 每次独立调用现有 `/auth/identity/admin`，不能根据前端会话里的角色字段授权；普通网站账号只保留原工作台使用权限。Codex 连接草稿只在 Ubuntu 的运营配置中保存，认证文件不经过官网，公开网页不含配置和凭据。管理页上线不表示收费线路上线；在共享钱包计费连接完成前不开放 Codex，Qwen 继续对所有已登录账号免费。当前生产事实以根目录上线手册为准。
+
 新增五张认证表：website_profiles、website_sessions、website_email_codes、website_wechat_attempts、website_wechat_identities。账户 ID、原 users/订阅/余额表不迁移到其他系统。新增账号沿用原注册策略创建用户及其初始业务记录。后续 Work 收费复用同一个钱包，须经服务端预扣和真实用量结算；网站登录令牌本身不授予结算权限，也不放开旧桌面模型访问通道。
 
 网页登录令牌仍为 account scope，额外带 wsid 和 credential_version。get_current_user 在存在 wsid 时检查具体会话归属、有效期和撤销；普通旧账号/桌面令牌不因网页退出而被撤销。网站令牌不能管理新旧桌面设备，也不能利用旧模型访问过渡通道签发模型令牌；历史 account 和桌面令牌维持原行为。个人页面只允许当前网页登录修改自己的资料，不接受 user_id、is_admin 等字段。

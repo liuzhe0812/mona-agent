@@ -88,6 +88,10 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 
 ## 6. 文件与部署入口
 
+Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 只存连接与计价模型映射草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
+
+当前共享钱包的原生 Work 计费桥尚未实现，管理页 `billing.ready=false`、`public_enabled=false`。公开模型列表过滤 Codex，任务准入也明确拒绝 Codex，防止手动加入运行模型后免费执行；Qwen 继续对所有已登录账号免费。管理员连接探测使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把订阅登录或连接成功当作收费已上线。
+
 - `mona/hosted_work/`：在线 API、会话状态、可信执行宿主、模型/工具适配、沙箱、人工核对。
 - `mona/config/schema.py`：唯一显式配置定义。
 - `webui/src/hosted-work/`、`webui/hosted-work.html`、`webui/vite.hosted.config.ts`：独立网页。

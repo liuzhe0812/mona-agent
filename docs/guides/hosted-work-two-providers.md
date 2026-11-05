@@ -1,6 +1,6 @@
 # Ubuntu Work：Qwen 与 Codex 两条线路
 
-适用：当前 Ubuntu release `/home/liuzhe/mona-hosted-work/releases/20261030-accounts-committed/content`，以 `liuzhe` 用户操作。最新需求为：Qwen 免费、无个人账号白名单；Codex 使用平台专用登录，按对应模型官方 Token 价格从网站与客户端共用的 Mona 余额扣费，不另建 Work 钱包。
+适用：Ubuntu 的独立 Work 服务，以 `liuzhe` 用户操作；实际 release 以根目录生产记录和 `systemctl --user show mona-hosted-work -p WorkingDirectory` 为准。Qwen 对所有账号免费、不设个人白名单；Codex 使用平台专用登录，目标为按对应模型官方 Token 价格从网站与客户端共用的 Mona 余额扣费，不另建 Work 钱包。
 
 官网入口的 `hosted_work.public_origin` 必须为 `https://mona-ai.cn`，不加 Ubuntu 的 17175 端口。该端口只用于内部连接；写成 `https://mona-ai.cn:17175` 会导致官网 Host/Origin 校验失败。监听地址与端口仍保留原值。
 
@@ -46,7 +46,22 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 
 上游限制：这个域名属于阿里云 Coding Plan，Key 与百炼通用按量 Key 不互通。阿里云说明限制其用于编程工具交互，并限制自定义应用后端及多人共享。以上保留运营者明确指定的端点，连接配置不表示已取得多人网站用途的供应商授权；该限制不通过改 label 或隐藏 Key 消失。[阿里云 Coding Plan](https://help.aliyun.com/zh/model-studio/coding-plan)
 
-## 2. 在 Work 专用目录登录 Codex
+## 2. 管理员配置入口
+
+访问 `https://mona-ai.cn/work/admin/`；使用现有管理后台或官网的管理员账号登录。页面使用原 Auth 的管理员身份校验，普通注册账号返回 403。网站不接收和回显 Codex 密钥、认证文件或设备登录码。
+
+1. 填写 Ubuntu 上**已经安装**的 Codex 程序绝对路径、显示名称和认证方式，保存配置。
+2. 展开“Ubuntu 登录命令”，在 Ubuntu 的真实终端以 `liuzhe` 执行页面生成的命令。ChatGPT 使用设备授权；API Key 方式仅在本机通过 CLI 标准输入提供 Key。不要发送到聊天或放入命令参数。
+3. 返回页面检查连接，从实际原生缓存模型列表选择模型并保存，再次检查。仅探测成功不代表真实模型任务或扣费验收已通过。
+4. 计价模型 ID 应对应现有管理后台“模型服务 → 模型计价”；当前只保存映射草稿，不另设价格表。共享余额计费桥尚未完成，页面明确显示未开放，不提供假启用开关。
+
+连接草稿保存在 `operator-accounts-v2.json` 的 `hosted_work.codex`，字段为 `cli_path`、`model`、`billing_model`、`label`、`auth_mode`。保存不重启服务，按版本校验防止覆盖其他管理员的新修改，仅更新该字段；原配置备份和新配置权限均为 600。它不是公开 `models` 的一项，未计费 Codex 不会被加入公开模型列表，服务端同时拒绝执行。
+
+CLI 使用固定的 Work 专用 `CODEX_HOME=/home/liuzhe/mona-hosted-work/config/development/native/codex` 和独立空登录目录；不读取个人桌面配置。程序未配置、未认证、认证方式不符、协议或隔离校验不通过、所选模型不在原生缓存及账户模型列表中，均不能显示连接已验证。检查连接不创建模型任务，不调用余额和支付接口。
+
+Qwen 对其他账号免费，不关联此 Codex 草稿，不新增收费、白名单或限流设置。现有平台安全与隔离配置保留。
+
+## 3. 历史命令行准备方式（旧脚本，不用于新管理入口）
 
 本项目 `deploy/hosted-work/codex-login.sh` 已于 2026-11-03 放到 Ubuntu 的 `/home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh`。该脚本只使用已安装的 Codex，不安装程序，不重启服务，不读取或输出认证文件。它调用当前发布包的目录初始化逻辑，避免先直接登录导致目录缺少受管标记。本次初始化未检测到现有原生程序，所以下述登录步骤仍待程序就绪后执行，不能据此认为 Codex 已接通。
 
@@ -75,7 +90,7 @@ bash /home/liuzhe/mona-hosted-work/ops-20261103/codex-login.sh --list-cached-mod
 
 当前 Work 要求原生 CLI 提供真实 `models_cache.json`。仅登录不能保证该文件已经生成；最后一步失败时保留错误信息和 CLI 版本，不能自行编造模型缓存。缓存列出模型也不证明账号可以实际调用每个模型，需要后续真实任务验证。
 
-## 3. 记录 Codex 模型，等待计费适配
+## 4. 记录 Codex 模型，等待计费适配
 
 CLI 登录及缓存检查成功后，记录选定的真实模型 ID。下面是连接结构草案；共用余额计费适配和真实结算验收通过前，不加入现网运行配置：
 
@@ -92,7 +107,7 @@ CLI 登录及缓存检查成功后，记录选定的真实模型 ID。下面是�
 
 Codex 的程序化使用方式和账号授权范围以官方说明为准；本连接适配未新增公共环境使用授权。[OpenAI 鉴权与自动化说明](https://learn.chatgpt.com/docs/auth#sign-in-with-an-api-key)
 
-## 4. 加载配置并联调
+## 5. 加载运行模型配置并联调
 
 确认没有运行中、取消中或待核对的任务后，只重启本 Work 服务：
 
@@ -105,7 +120,7 @@ curl -fsS -H 'Host: mona-ai.cn' -H 'Origin: https://mona-ai.cn' http://172.31.3.
 
 健康结果只证明入口和配置已加载，不能代替真实模型调用、工具封锁、文件隔离与浏览器验收。Qwen 可以先单独配置并验证；Codex 需完成登录、模型信息和共用余额计费适配后再开放。官网反代由 VPS 侧完成，不重启 Docker 或恢复暂停的 Worker。
 
-## 5. 以后更换或增加 API 模型
+## 6. 以后更换或增加 API 模型
 
 模型连接是运营配置，不写死在代码或官网中。修改同一个 `operator-accounts-v2.json` 的 `hosted_work.models`：
 
