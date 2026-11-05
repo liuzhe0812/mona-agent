@@ -31,7 +31,7 @@ async def test_request_larger_than_old_32k_cap_reaches_the_existing_runner():
         pass
     result = await run_turn(config(), {"model_id": "qwen", "run_id": "c" * 32,
         "history": [{"role": "user", "content": "mona context " * 20000}]}, sandbox, model, emit)
-    assert result["status"] == "completed" and len(model.requests) == 2 and len(sandbox.calls) == 1
+    assert result["status"] == "completed" and len(model.requests) == 3 and len(sandbox.calls) == 1
     assert result["diagnostic"]["context_window_tokens"] == 1_000_000
     assert result["diagnostic"]["context_window_source"] == "catalog"
 

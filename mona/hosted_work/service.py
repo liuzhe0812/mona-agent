@@ -96,11 +96,23 @@ class WorkService:
 
     async def _drive(self, owner: str, token: str, run: dict, engine: str | None):
         run_id, sid = run["id"], run["session_id"]
+        title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
             if kind == "history":
                 self.store.save_history(owner, run_id, value["messages"])
             elif kind == "checkpoint":
                 self.store.save_checkpoint(owner, run_id, value)
+            elif kind == "context":
+                self.store.save_context(owner, sid, value)
+            elif kind == "title":
+                title = value.get("title")
+                if not isinstance(title, str) or not title.strip() or len(title) > 60 or any(ord(c) < 32 for c in title):
+                    raise WorkError("protocol_error", "会话名称格式无效。", 503)
+                if not self._title_user_edited(owner, sid):
+                    changed = self.store.db.execute("UPDATE sessions SET title=? WHERE owner=? AND id=? AND title=?",
+                        (title, owner, sid, title_before)).rowcount
+                    if changed and self.desktop is not None:
+                        await self.desktop.wire.emit_to_chat(owner, sid, {"event": "session_updated", "scope": "metadata"})
             elif kind == "artifact":
                 # Do not publish download IDs before a saved snapshot is verified.
                 return
@@ -109,11 +121,18 @@ class WorkService:
                 if self.desktop is not None:
                     await self.desktop.wire.on_run_event(owner, run, kind, value)
         try:
+            desktop_run = self.desktop.state.get(owner, "run:" + run_id, {}) if self.desktop else {}
+            if self.desktop is not None and hasattr(self.desktop, "inputs"):
+                await self.desktop.inputs.start(owner, sid, run_id, task=asyncio.current_task())
             payload = {"action": "turn", "owner": owner, "run_id": run_id,
                        "session_id": sid, "metadata": run["input"].get("metadata", {}),
                        "desktop_ui": bool(self.desktop and self.desktop.state.get(owner, "run:" + run_id)),
                        "model_id": run["input"]["model_id"], "account_token": token,
                        "history": json.loads(self.store.session(owner, sid)["history"]),
+                       "context_state": self.store.context_state(owner, sid),
+                       "task_id": desktop_run.get("frame", {}).get("task_id") or run_id,
+                       "input_id": desktop_run.get("input_id"),
+                       "title_user_edited": self._title_user_edited(owner, sid),
                        "attachments": [self.store.file(owner, sid, fid) for fid in run["input"]["attachment_ids"]]}
             result = await self.executor.execute(payload, event)
             if result.get("workspace_saved"):
@@ -132,7 +151,7 @@ class WorkService:
                                 "mime": mimetypes.guess_type(info["name"])[0] or "application/octet-stream"}})
                         self.desktop.state.set(owner, "artifact_index:" + sid, index)
             # Internal file paths and diagnostic details do not become default UI output.
-            public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage", "diagnostic") if key in result}
+            public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage", "final_usage", "diagnostic") if key in result}
             if result["status"] != "completed":
                 diagnostic = result.get("diagnostic") or {}
                 logger.warning("Hosted Work run={} status={} reason={} iterations={} provider_status={} stage={} exception_type={}",
@@ -150,7 +169,13 @@ class WorkService:
                 if exc.status != 404:
                     raise
         finally:
-            self._release(owner, engine)
+            try:
+                if self.desktop is not None and hasattr(self.desktop, "questions"):
+                    await self.desktop.questions.cancel_run(owner, sid, run_id)
+                if self.desktop is not None and hasattr(self.desktop, "inputs"):
+                    await self.desktop.inputs.finish(owner, sid, run_id)
+            finally:
+                self._release(owner, engine)
         if self.desktop is not None:
             try:
                 await self.desktop.wire.on_run_finish(owner, run, {})
@@ -167,10 +192,22 @@ class WorkService:
             raise WorkError("invalid_file", "文件结果未通过校验。", 503)
         return {"path": path, "name": path.rsplit("/", 1)[-1], "size": size, "sha256": digest}
 
+    def _title_user_edited(self, owner: str, sid: str) -> bool:
+        if self.store.session(owner, sid)["initial_title"] != "新任务":
+            return True
+        if self.desktop is not None:
+            overrides = self.desktop.state.sidebar(owner).get("title_overrides", {})
+            return bool(overrides.get("websocket:" + sid) or overrides.get(sid))
+        return False
+
     async def stop(self, owner: str, run_id: str):
         run = self.store.run(owner, run_id)
         if run["status"] in {"running", "cancelling"}:
             self.store.cancelling(owner, run_id)
+            if self.desktop is not None and hasattr(self.desktop, "questions"):
+                await self.desktop.questions.cancel_run(owner, run["session_id"], run_id)
+            if self.desktop is not None and hasattr(self.desktop, "inputs"):
+                await self.desktop.inputs.pause(owner, run["session_id"], run_id)
             self.executor.cancel(owner, run_id)
         return self.store.run(owner, run_id)
 
@@ -371,7 +408,8 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
         response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
         return response
 
-    app = web.Application(middlewares=[boundary], client_max_size=service.config.max_file_bytes + 65536)
+    app = web.Application(middlewares=[boundary], client_max_size=max(service.config.max_file_bytes + 65536,
+                                                                  service.config.max_history_bytes * 4 // 3 + 65536))
     if operator_config_path is not None:
         from mona.hosted_work.admin import CodexAdmin
         CodexAdmin(operator_config_path).register(app)

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ID = re.compile(r"^[a-f0-9]{32}$")
 TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "unknown"})
@@ -72,11 +72,17 @@ class NewTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     request_id: str
     model_id: str = Field(min_length=1, max_length=64)
-    text: str = Field(min_length=1, max_length=50000)
+    text: str = Field(max_length=50000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
     metadata: dict = Field(default_factory=dict)
 
     _id = field_validator("request_id")(identifier)
+
+    @model_validator(mode="after")
+    def _content(self):
+        if not self.text.strip() and not self.attachment_ids:
+            raise ValueError("a message requires text or attachments")
+        return self
 
     @field_validator("attachment_ids")
     @classmethod

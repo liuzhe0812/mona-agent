@@ -850,6 +850,7 @@ class HostedWorkConfig(Base):
     max_sessions_per_user: int = Field(default=100, ge=1, le=1000)
     max_runs_per_session: int = Field(default=200, ge=1, le=2000)
     run_timeout_seconds: int = Field(default=900, ge=30, le=3600)
+    question_timeout_seconds: int = Field(default=600, ge=30, le=3600)
     tool_timeout_seconds: int = Field(default=120, ge=1, le=600)
     max_iterations: int = Field(default=30, ge=1, le=100)
     sandbox_memory_mb: int = Field(default=768, ge=256, le=8192)

@@ -74,7 +74,7 @@ async def test_tool_events_retain_call_identity_and_never_duplicate_private_resu
 
 
 @pytest.mark.asyncio
-async def test_widget_completion_is_forwarded_once_without_streaming_or_code_in_tool_events():
+async def test_widget_completion_is_forwarded_once_and_streaming_never_contains_code():
     events = []
     async def emit(kind, value):
         events.append((kind, value))
@@ -88,11 +88,12 @@ async def test_widget_completion_is_forwarded_once_without_streaming_or_code_in_
                                tool_results=[result], tool_events=[{"status": "ok"}])
     hook = WorkHook(emit)
     await hook.before_execute_tools(context)
-    assert not [value for kind, value in events if kind == "widget"]
+    assert [value for kind, value in events if kind == "widget"] == [
+        {"id": "widget-id", "title": "图形", "code": "", "loadingMessages": [], "status": "streaming"}]
     await hook.after_iteration(context)
     widgets = [value for kind, value in events if kind == "widget"]
-    assert len(widgets) == 1
-    assert widgets[0]["id"] == "widget-id" and widgets[0]["status"] == "complete" and widgets[0]["code"] == code
+    assert len(widgets) == 2
+    assert widgets[1]["id"] == "widget-id" and widgets[1]["status"] == "complete" and widgets[1]["code"] == code
     assert not any(event.get("name") == "show_widget" for kind, value in events if kind == "progress"
                    for event in value.get("tool_events", []))
 
@@ -123,8 +124,13 @@ class LargeFileSandbox:
         self.requests = []
 
     async def file(self, request):
+        import base64
+        import hashlib
+
         self.requests.append(request)
-        return {"path": "large.txt", "content": "synthetic-secret-key-" + "z" * 90000}
+        data = ("synthetic-secret-key-" + "z" * 90000).encode()
+        return {"path": "large.txt", "name": "large.txt", "data": base64.b64encode(data).decode(),
+                "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
 @pytest.mark.asyncio

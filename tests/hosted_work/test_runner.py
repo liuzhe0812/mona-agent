@@ -30,6 +30,9 @@ class ModelBoundary(LLMProvider):
     async def chat_stream(self, messages, tools=None, on_content_delta=None, **kwargs):
         self.requests.append((json.loads(json.dumps(messages)), tools))
         if len(self.requests) == 1:
+            return LLMResponse(content="", tool_calls=[ToolCallRequest(id="load", name="load_capability",
+                arguments={"capabilities": ["development"]})], finish_reason="tool_calls")
+        if len(self.requests) == 2:
             return LLMResponse(content="", tool_calls=[ToolCallRequest(id="call1", name="write_file",
                 arguments={"path": "result.txt", "content": "实际工具写入"})], finish_reason="tool_calls")
         if on_content_delta:
@@ -57,8 +60,10 @@ async def test_existing_runner_executes_only_explicit_online_tools():
     assert result["status"] == "completed" and result["content"] == "任务完成"
     assert sandbox.calls == [{"action": "write", "path": "result.txt", "content": "实际工具写入", "expected_sha256": None}]
     names = {tool["function"]["name"] for tool in model.requests[0][1]}
-    assert names == {"read_file", "write_file", "list_dir", "exec", "web_fetch", "deliver_file", "skill_list", "skill_read"}
-    assert model.requests[1][0][0] == model.requests[0][0][0]
+    assert names == {"read_file", "list_dir", "web_fetch", "deliver_file", "skill_list", "skill_read",
+                     "load_capability", "update_plan", "spawn"}
+    assert {"write_file", "exec"} <= {tool["function"]["name"] for tool in model.requests[1][1]}
+    assert all(request[0][0] == model.requests[0][0][0] for request in model.requests)
     assert any(kind == "checkpoint" and value.get("phase") == "tools_started" for kind, value in events)
     assert any(kind == "history" and any(message.get("role") == "tool" for message in value["messages"]) for kind, value in events)
     assert any(kind == "delta" and value["text"] == "任务完成" for kind, value in events)
@@ -101,7 +106,43 @@ async def test_unknown_command_aborts_without_model_retry():
         pass
     result = await run_turn(config, {"model_id": "official", "run_id": "b" * 32,
         "history": [{"role": "user", "content": "work"}]}, sandbox, model, emit)
-    assert result["status"] == "failed" and len(model.requests) == 1 and len(sandbox.calls) == 1
+    assert result["status"] == "failed" and len(model.requests) == 2 and len(sandbox.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_initial_image_uses_verified_bytes_and_keeps_empty_original_text():
+    import base64
+    import hashlib
+
+    raw = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5m8AAAAASUVORK5CYII=")
+    attachment = {"path": "uploads/fixture/image.png", "name": "image.png", "size": len(raw),
+                  "sha256": hashlib.sha256(raw).hexdigest()}
+
+    class ImageSandbox:
+        async def file(self, request):
+            assert request["path"] == attachment["path"]
+            return {**attachment, **({"data": base64.b64encode(raw).decode()} if request["action"] == "download" else {})}
+
+    class VisionModel(ModelBoundary):
+        def get_capabilities(self, model):
+            return ModelCapabilities(supports_tool_calling=True, supports_vision=True)
+
+        async def chat_stream(self, messages, **_kwargs):
+            blocks = messages[-1]["content"]
+            assert isinstance(blocks, list) and blocks[0]["type"] == "image_url"
+            assert base64.b64decode(blocks[0]["image_url"]["url"].split(",", 1)[1]) == raw
+            return LLMResponse(content="图像已收到。")
+
+    events = []
+    async def emit(kind, value):
+        events.append((kind, value))
+    config = HostedWorkConfig(models={"vision": {"label": "Vision fixture", "model": "fixture-model"}})
+    result = await run_turn(config, {"model_id": "vision", "run_id": "e" * 32,
+        "history": [{"role": "user", "content": "", "timestamp": "2026-11-06T01:00:00Z"}],
+        "attachments": [attachment]}, ImageSandbox(), VisionModel(), emit)
+    assert result["status"] == "completed"
+    saved = [value["messages"] for kind, value in events if kind == "history"][-1]
+    assert saved[0]["content"] == "" and saved[-1]["content"] == "图像已收到。"
 
 
 def test_native_home_override_is_explicit_and_preserves_desktop_default(tmp_path):

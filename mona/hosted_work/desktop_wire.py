@@ -29,7 +29,8 @@ _OWNER = re.compile(r"^[a-f0-9]{64}$")
 _DATA_URL = re.compile(r"^data:([A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+)?;base64,(.*)$", re.DOTALL)
 _CONTEXT_FIELDS = {"ui_theme", "quote", "office_session_id", "office_document_type", "office_display_name",
                    "canvas_id", "canvas_path"}
-_FRAME_FIELDS = _CONTEXT_FIELDS | {"chat_id", "input_id", "content", "display_content", "doc_paths", "media", "task_id"}
+_FRAME_FIELDS = _CONTEXT_FIELDS | {"chat_id", "input_id", "content", "display_content", "doc_paths", "media", "task_id",
+                                   "target_turn_id", "resume_input"}
 
 
 @dataclass(slots=True)
@@ -146,7 +147,7 @@ class DesktopWire:
 
     async def _error(self, peer: _Peer, frame: dict, error: WorkError):
         kind = frame.get("type")
-        fields = {key: frame[key] for key in ("chat_id", "request_id", "input_id")
+        fields = {key: frame[key] for key in ("chat_id", "request_id", "input_id", "target_turn_id")
                   if isinstance(frame.get(key), str) and len(frame[key]) <= 200}
         if kind == "doc_upload":
             await peer.socket.send_json({"event": "doc_upload_result", "ok": False,
@@ -154,12 +155,32 @@ class DesktopWire:
         elif kind == "stop_work_turn":
             await peer.socket.send_json({"event": "work_turn_stop_result", "ok": False,
                                          "code": error.code, "detail": error.message, **fields})
+        elif kind == "answer_user_question":
+            await peer.socket.send_json({"event": "answer_user_question_result", "ok": False,
+                                         "code": error.code, "detail": error.message, **fields})
         else:
             await peer.socket.send_json({"event": "error", "code": error.code, "detail": error.message,
                                          **fields, **({"message_rejected": True} if kind == "message" else {})})
 
     async def _dispatch(self, peer: _Peer, frame: dict):
         kind = frame.get("type")
+        if kind == "answer_user_question":
+            sid = _chat(frame.get("chat_id"))
+            request = _scope(frame.get("request_id"), "回答标识")
+            fields = {"event": "answer_user_question_result", "chat_id": sid, "request_id": request}
+            try:
+                answer = getattr(getattr(self.controller, "questions", None), "answer", None)
+                if not callable(answer):
+                    raise WorkError("question_unavailable", "回答暂时无法提交，请刷新会话后重试。", 503)
+                if "answers" not in frame:
+                    raise WorkError("invalid_answer", "回答格式无效。")
+                self.state.session(peer.owner, sid)
+                answer(peer.owner, sid, frame.get("question_id"), frame["answers"], attached=sid in peer.chats)
+            except WorkError as exc:
+                await peer.socket.send_json({**fields, "ok": False, "detail": exc.message, "code": exc.code})
+            else:
+                await peer.socket.send_json({**fields, "ok": True})
+            return
         if kind == "new_chat":
             source = _scope(frame.get("request_id"), "请求标识")
             if frame.get("workspace") not in (None, "", "/workspace") or frame.get("agent_kind"):
@@ -221,6 +242,31 @@ class DesktopWire:
                 raise WorkError("protocol_error", "文档恢复记录格式无效。", 503)
             editors = [self._office_state(item) for item in restored]
         await peer.socket.send_json({"event": "attached", "chat_id": sid, "office_sessions": editors})
+        for name in ("task_plan", "goal_state"):
+            saved = self.state.get(peer.owner, name + ":" + sid)
+            if not isinstance(saved, dict):
+                continue
+            run = self.service.store.run(peer.owner, saved.get("run_id", ""))
+            if run["session_id"] != sid:
+                raise WorkError("protocol_error", "任务状态不属于当前会话。", 503)
+            if name == "task_plan":
+                latest = self.service.store.db.execute(
+                    "SELECT id FROM runs WHERE owner=? AND session_id=? ORDER BY created DESC LIMIT 1",
+                    (peer.owner, sid)).fetchone()
+                if latest is None or latest[0] != run["id"]:
+                    continue
+            metadata = self.state.get(peer.owner, "run:" + run["id"], {})
+            event = self._task_state(saved.get("snapshot"), sid, run["id"], _task(metadata, run["id"]), metadata.get("input_id"))
+            await peer.socket.send_json({**event, "chat_id": sid})
+        snapshot = getattr(getattr(self.controller, "questions", None), "snapshot", None)
+        questions = snapshot(peer.owner, sid) if callable(snapshot) else []
+        if not isinstance(questions, list):
+            raise WorkError("protocol_error", "提问恢复记录格式无效。", 503)
+        await peer.socket.send_json({"event": "user_questions", "chat_id": sid, "requests": questions})
+        inputs = getattr(self.controller, "inputs", None)
+        if inputs is not None:
+            for snapshot in await inputs.snapshot(peer.owner, sid):
+                await peer.socket.send_json({"event": "work_input_state", **snapshot})
         active = self.service.store.db.execute(
             "SELECT id FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown') ORDER BY created DESC LIMIT 1",
             (peer.owner, sid)).fetchone()
@@ -242,7 +288,8 @@ class DesktopWire:
             self.state.records(owner, run["session_id"])
             return
         frame = metadata.get("frame", {})
-        record = {"event": "user", "text": frame.get("content", run["input"]["text"])}
+        record = {"event": "user", "text": frame.get("content", run["input"]["text"]),
+                  "input_id": metadata.get("input_id"), "turn_id": run["id"]}
         for key in ("display_content", "quote", "task_id"):
             if frame.get(key):
                 record[key] = frame[key]
@@ -258,8 +305,42 @@ class DesktopWire:
         content = frame.get("content")
         if frame.get("task_id") is not None:
             _scope(frame["task_id"], "任务标识")
-        if not isinstance(content, str) or not content.strip():
+        if not isinstance(content, str) or not content.strip() and not (frame.get("media") or frame.get("doc_paths")):
             raise WorkError("invalid_request", "消息内容不能为空。")
+        target = frame.get("target_turn_id")
+        resume = frame.get("resume_input", False)
+        if not isinstance(resume, bool):
+            raise WorkError("invalid_request", "消息恢复标记无效。")
+        if target is not None:
+            identifier(target)
+        active = self.service.store.db.execute(
+            "SELECT id FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown') ORDER BY created DESC LIMIT 1",
+            (peer.owner, sid)).fetchone()
+        inputs = getattr(self.controller, "inputs", None)
+        # Explicit steering never becomes an independent task if the target
+        # finishes between a browser send and admission.
+        if target is not None or resume:
+            if active is None or target != active[0] or inputs is None:
+                raise WorkError("input_turn_conflict", "原任务已结束或尚待核对，未继续执行追加内容。", 409)
+            paths = frame.get("doc_paths", [])
+            steering = getattr(self.controller, "steering", None)
+            if not isinstance(paths, list):
+                raise WorkError("invalid_request", "附件信息无效。")
+            if frame.get("media"):
+                if steering is None:
+                    raise WorkError("feature_unavailable", "此会话暂时无法接收图片。", 503)
+                paths = [*paths, *steering.stage_media(peer.owner, sid, input_id, frame["media"])]
+            attachments = steering.prepare(peer.owner, sid, input_id, paths) if steering is not None else []
+            if paths and steering is None:
+                raise WorkError("feature_unavailable", "此会话暂时无法接收附件。", 503)
+            metadata = {key: frame[key] for key in ("ui_theme", "office_session_id", "office_document_type",
+                        "office_display_name", "display_content", "quote", "task_id") if key in frame}
+            peer.chats.add(sid)
+            await inputs.enqueue(peer.owner, sid, target, input_id, content, resume=resume,
+                                 attachments=attachments, metadata=metadata)
+            await peer.socket.send_json({"event": "message_accepted", "chat_id": sid, "input_id": input_id,
+                                         "target_turn_id": target})
+            return
         selected = {key: frame[key] for key in _FRAME_FIELDS if key in frame}
         fingerprint = hashlib.sha256(json.dumps(selected, sort_keys=True, ensure_ascii=False,
                                                 separators=(",", ":"), allow_nan=False).encode()).hexdigest()
@@ -274,7 +355,18 @@ class DesktopWire:
             if frame.get("media") or frame.get("doc_paths"):
                 if self.controller is None or not hasattr(self.controller, "prepare_attachments"):
                     raise WorkError("feature_unavailable", "附件尚未接入当前执行环境。", 503)
-                attachments = self.controller.prepare_attachments(peer.owner, sid, frame)
+                attachment_frame = dict(frame)
+                if frame.get("media"):
+                    steering = getattr(self.controller, "steering", None)
+                    if steering is None:
+                        raise WorkError("feature_unavailable", "此会话暂时无法接收图片。", 503)
+                    paths = frame.get("doc_paths", [])
+                    if not isinstance(paths, list):
+                        raise WorkError("invalid_request", "附件信息无效。")
+                    paths = [*paths, *steering.stage_media(peer.owner, sid, input_id, frame["media"])]
+                    attachment_frame.update(media=[], doc_paths=paths)
+                    selected["doc_paths"] = paths
+                attachments = self.controller.prepare_attachments(peer.owner, sid, attachment_frame)
                 if inspect.isawaitable(attachments):
                     attachments = await attachments
             context = {key: frame[key] for key in _CONTEXT_FIELDS if key in frame}
@@ -316,6 +408,60 @@ class DesktopWire:
         if session.working_path is not None and session.working_path != logical_path:
             raise WorkError("protocol_error", "编辑器返回了非工作区路径。", 503)
         return session.model_dump(by_alias=True, mode="json")
+
+    @staticmethod
+    def _task_state(data: dict, sid: str, rid: str, task_id: str, input_id: str | None) -> dict:
+        if (not isinstance(data, dict) or not isinstance(data.get("event"), str)
+                or data["event"] not in {"task_plan", "goal_state"}
+                or any(data.get(key, value) not in (None, value) for key, value in
+                       {"chat_id": sid, "turn_id": rid, "task_id": task_id, "input_id": input_id}.items())):
+            raise WorkError("protocol_error", "任务状态不属于当前会话。", 503)
+        name = data["event"]
+        blob = data.get(name)
+        if not isinstance(blob, dict):
+            raise WorkError("protocol_error", "任务状态格式无效。", 503)
+        if name == "task_plan":
+            from mona.session.task_plan import task_plan_ws_blob
+
+            if blob.get("task_id") not in (None, task_id):
+                raise WorkError("protocol_error", "任务计划不属于当前任务。", 503)
+            blob = task_plan_ws_blob({"task_plan": {**blob, "task_id": task_id}})
+        else:
+            if type(blob.get("active")) is not bool:
+                raise WorkError("protocol_error", "任务目标格式无效。", 503)
+            if any(key in blob and not isinstance(blob[key], str) for key in ("objective", "ui_summary")):
+                raise WorkError("protocol_error", "任务目标格式无效。", 503)
+            blob = {"active": blob["active"], **{key: blob[key][:limit] for key, limit in
+                    (("objective", 601), ("ui_summary", 120)) if key in blob}}
+        return {"event": name, name: blob}
+
+    def _file_edits(self, owner: str, values: list) -> list[dict]:
+        if not isinstance(values, list) or not 1 <= len(values) <= 100:
+            raise WorkError("protocol_error", "文件编辑记录格式无效。", 503)
+        root = self.state.files.root(owner)
+        edits = []
+        for item in values:
+            if (not isinstance(item, dict) or not isinstance(item.get("call_id"), str)
+                    or not isinstance(item.get("tool"), str) or not isinstance(item.get("status"), str)
+                    or item.get("tool") not in {"write_file", "edit_file", "apply_patch"}
+                    or item.get("status") not in {"editing", "done", "error"}
+                    or any(type(item.get(key)) is not int or item[key] < 0 for key in ("added", "deleted"))):
+                raise WorkError("protocol_error", "文件编辑记录格式无效。", 503)
+            edit = {key: item[key] for key in ("version", "call_id", "tool", "phase", "added", "deleted",
+                    "approximate", "status", "binary", "pending") if key in item}
+            raw = item.get("absolute_path") or item.get("path")
+            if not isinstance(raw, str):
+                raise WorkError("protocol_error", "文件编辑路径无效。", 503)
+            if raw == "" and item.get("pending") is True and item["status"] == "editing":
+                edit["path"] = ""
+            else:
+                logical = raw if raw.startswith("/workspace/") else "/workspace/" + raw
+                path = self.state.files._path(root, logical)
+                edit.update(path=path.relative_to(root).as_posix(), absolute_path=logical)
+            if item["status"] == "error":
+                edit["error"] = "文件修改未能完成，请核对已有内容后继续。"
+            edits.append(edit)
+        return edits
 
     async def _delivery_files(self, owner: str, sid: str, values: list, *, read_contents: bool) -> list[dict]:
         if not isinstance(values, list) or not 1 <= len(values) <= 128:
@@ -479,6 +625,7 @@ class DesktopWire:
         key = owner, rid
         index, active = self._streams.get(key, (0, False))
         identity = {"task_id": task_id, "turn_id": rid, "input_id": metadata.get("input_id")}
+        persist = True
         if kind == "delta":
             if not active:
                 index += 1
@@ -496,10 +643,14 @@ class DesktopWire:
             if (not isinstance(widget["id"], str) or not 1 <= len(widget["id"]) <= 256
                     or not isinstance(widget["title"], str) or not isinstance(widget["code"], str)
                     or len(widget["code"]) > 128000 or not isinstance(widget["status"], str)
-                    or widget["status"] not in {"complete", "error"}
+                    or widget["status"] not in {"streaming", "complete", "error"}
                     or not isinstance(widget["loadingMessages"], list) or len(widget["loadingMessages"]) > 4
                     or any(not isinstance(message, str) or len(message) > 1000 for message in widget["loadingMessages"])):
                 raise WorkError("protocol_error", "图形事件格式无效。", 503)
+            if widget["status"] == "streaming":
+                if widget["code"]:
+                    raise WorkError("protocol_error", "图形预览尚未通过完整校验。", 503)
+                persist = False
             if widget["status"] == "complete" and _validate_widget(widget["code"])[0]:
                 raise WorkError("protocol_error", "图形内容未通过校验。", 503)
             widget["title"] = widget["title"][:512]
@@ -510,7 +661,11 @@ class DesktopWire:
                       "turn_id": rid, "input_id": metadata.get("frame", {}).get("input_id")}
         elif kind == "desktop":
             ui = data.get("agent_ui")
-            if data.get("event") == "deliver_files":
+            if data.get("event") in ("task_plan", "goal_state"):
+                record = self._task_state(data, sid, rid, task_id, metadata.get("input_id"))
+                self.state.set(owner, record["event"] + ":" + sid, {"run_id": rid, "snapshot": record})
+                persist = False
+            elif data.get("event") == "deliver_files":
                 record = {"event": "deliver_files", "task_id": task_id, "inline_media": False,
                           "files": await self._delivery_files(owner, sid, data.get("files"), read_contents=True)}
             elif (data.get("event") != "message" or data.get("kind") != "progress"
@@ -521,6 +676,19 @@ class DesktopWire:
                 session = self._office_state(ui["data"].get("session"))
                 record = {"event": "message", "kind": "progress", "text": data["text"], "task_id": task_id,
                           "agent_ui": {"kind": "office_session", "data": {"session": session}}}
+        elif data.get("kind") == "context_usage":
+            usage = data.get("token_usage")
+            if not isinstance(usage, dict):
+                raise WorkError("protocol_error", "上下文用量格式无效。", 503)
+            record = {"event": "context_usage", "token_usage": usage, **identity}
+            persist = False
+        elif data.get("kind") == "context_compacting":
+            if type(data.get("active")) is not bool:
+                raise WorkError("protocol_error", "上下文整理状态无效。", 503)
+            record = {"event": "message", "kind": "progress", "text": "",
+                      "context_compacting": data["active"], **identity}
+        elif data.get("kind") == "file_edit":
+            record = {"event": "file_edit", "edits": self._file_edits(owner, data.get("edits")), **identity}
         elif data.get("kind") in {"reasoning_delta", "reasoning_end"}:
             if data["kind"] == "reasoning_delta":
                 text = data.get("text")
@@ -563,7 +731,8 @@ class DesktopWire:
                 record["tool_events"] = [{"version": 1, "phase": "start", "name": name,
                                            "call_id": f"{rid}:{row['seq']}:{i}"}
                                           for i, name in enumerate(data["tools"]) if isinstance(name, str)]
-        self.state.append(owner, sid, record, f"run:{rid}:event:{row['seq']}")
+        if persist:
+            self.state.append(owner, sid, record, f"run:{rid}:event:{row['seq']}")
         self.state.set(owner, "wire_seq:" + rid, row["seq"])
         self._streams[key] = index, active
         await self.emit_to_chat(owner, sid, record)
@@ -608,8 +777,9 @@ class DesktopWire:
             await self.emit_to_chat(owner, sid, end)
         text = stored["result"].get("content", "")
         streamed = "".join(self._stream_text.pop((owner, rid), []))
+        usage = stored["result"].get("final_usage") or stored["result"].get("usage", {})
         record = {"event": "message", "text": text, "task_id": task_id, "turn_id": rid,
-                  "input_id": metadata.get("input_id"), "token_usage": stored["result"].get("usage", {})}
+                  "input_id": metadata.get("input_id"), "token_usage": usage}
         if index and status == "completed":
             record["stream_id"] = rid + ":" + str(index)
         if not text or status != "completed":
@@ -627,7 +797,7 @@ class DesktopWire:
             await self.emit_to_chat(owner, sid, self._goal(stored, metadata))
         else:
             ending = {"event": "turn_end", "turn_id": rid, "input_id": metadata.get("input_id"), "task_id": task_id,
-                      "token_usage": stored["result"].get("usage", {})}
+                      "token_usage": usage}
             self.state.append(owner, sid, ending, f"run:{rid}:turn_end:{status}")
             await self.emit_to_chat(owner, sid, ending)
         await self.emit_to_chat(owner, sid, {"event": "artifacts_changed"})

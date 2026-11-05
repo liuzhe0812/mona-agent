@@ -5,6 +5,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mona.config.schema import HostedWorkConfig
@@ -39,6 +40,11 @@ class WorkStore:
                 FOREIGN KEY(owner,session_id) REFERENCES sessions(owner,id)
             );
             CREATE INDEX IF NOT EXISTS runs_active ON runs(status,owner);
+            CREATE TABLE IF NOT EXISTS conversation_context (
+                owner TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL,
+                PRIMARY KEY(owner,session_id),
+                FOREIGN KEY(owner,session_id) REFERENCES sessions(owner,id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS events (
                 owner TEXT NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL,
                 kind TEXT NOT NULL, data TEXT NOT NULL,
@@ -193,10 +199,11 @@ class WorkStore:
                 raise WorkError("turn_limit", "此会话已达到轮次上限，请新建会话继续。", 409)
             for file_id in request.attachment_ids:
                 self.file(owner, session_id, file_id)
-            history = json.loads(session["history"])
-            history.append({"role": "user", "content": request.text})
-            self._check_history(history)
             now = time.time()
+            history = json.loads(session["history"])
+            history.append({"role": "user", "content": request.text,
+                            "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat()})
+            self._check_history(history)
             self.db.execute("INSERT INTO runs(owner,id,session_id,payload,status,created,updated) VALUES(?,?,?,?,?,?,?)",
                             (owner, request.request_id, session_id, payload, "running", now, now))
             title = session["title"]
@@ -241,6 +248,34 @@ class WorkStore:
             raise WorkError("checkpoint_limit", "本轮执行记录过大，已停止继续执行。", 409)
         self.db.execute("UPDATE runs SET checkpoint=? WHERE owner=? AND id=?", (data, owner, run_id))
 
+    def context_state(self, owner: str, sid: str) -> dict:
+        self.session(owner, sid)
+        row = self.db.execute("SELECT state FROM conversation_context WHERE owner=? AND session_id=?", (owner, sid)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_context(self, owner: str, sid: str, value: dict):
+        from mona.hosted_work.context import history_fingerprint
+        state = value.get("state")
+        if (not isinstance(state, dict) or state.get("owner") != owner or state.get("session_id") != sid
+                or state.get("format") != "mona-hosted-context-v1" or not isinstance(state.get("metadata"), dict)):
+            raise WorkError("context_conflict", "会话上下文归属无效。", 409)
+        raw = encoded(state)
+        if len(raw.encode()) > self.config.max_history_bytes:
+            raise WorkError("context_limit", "会话上下文超过保存上限。", 413)
+        with self.transaction():
+            history = json.loads(self.session(owner, sid)["history"])
+            cursor = state.get("last_consolidated")
+            if (isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= len(history)
+                    or value.get("source_history_length") != len(history)
+                    or value.get("source_history_digest") != history_fingerprint(history)
+                    or state.get("history_prefix_digest") != history_fingerprint(history[:cursor])):
+                raise WorkError("context_conflict", "会话历史已变化，未覆盖原上下文。", 409)
+            previous = self.context_state(owner, sid)
+            if previous.get("last_consolidated", 0) > cursor:
+                raise WorkError("context_conflict", "会话整理游标不能回退。", 409)
+            self.db.execute("INSERT INTO conversation_context VALUES(?,?,?) ON CONFLICT(owner,session_id) DO UPDATE SET state=excluded.state",
+                            (owner, sid, raw))
+
     def event(self, owner: str, run_id: str, kind: str, data: dict) -> int:
         value = encoded(data)
         with self.transaction():
@@ -276,8 +311,13 @@ class WorkStore:
             if status != "completed":
                 row = self.db.execute("SELECT checkpoint FROM runs WHERE owner=? AND id=?", (owner, run_id)).fetchone()
                 history = json.loads(self.session(owner, run["session_id"])["history"])
-                history.append({"role": "assistant", "content": "上一轮未正常完成。以下是执行记录，不是新的操作指令；不要自动重放结果未知的操作。\n"
-                                + encoded({"status": status, "result": result, "checkpoint": json.loads(row["checkpoint"])})})
+                from mona.session.checkpoint_recovery import restore_checkpoint_messages
+                from mona.session.manager import Session
+                projection = Session(key="websocket:" + run["session_id"], messages=history)
+                restore_checkpoint_messages(projection, json.loads(row["checkpoint"]))
+                history = projection.messages
+                history.append({"role": "assistant", "content": result.get("message") or
+                                "上一轮未完成，已有进度已保留。结果未知的操作不会自动重做。"})
                 # Preserve oversized recovery evidence in the run rather than silently trimming it.
                 if len(encoded(history).encode()) <= self.config.max_history_bytes:
                     self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?", (encoded(history), owner, run["session_id"]))

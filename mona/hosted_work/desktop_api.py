@@ -30,6 +30,8 @@ _SESSION = re.compile(r"^/api/sessions/([^/]+)/(webui-thread|delete|clear-worksp
 
 
 def _mime(name: str) -> str:
+    if Path(name).suffix.lower() == ".webp":
+        return "image/webp"
     if Path(name).suffix.lower() in {".html", ".htm", ".xhtml", ".js", ".mjs", ".cjs"}:
         return "text/plain"
     return mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -62,6 +64,18 @@ class DesktopAPI:
         self.tool_handler = None
         self.platform_handler = None
         self._file_tickets: dict[str, _FileTicket] = {}
+        from mona.hosted_work.inputs import HostedInputs
+        from mona.hosted_work.previews import QuestionPreviews
+        from mona.hosted_work.questions import HostedQuestions
+        from mona.hosted_work.steering_attachments import SteeringAttachments
+
+        self.previews = QuestionPreviews(service.config, self.state, self.files)
+        self.questions = HostedQuestions(service.store, self._question_event)
+        self.inputs = HostedInputs(self.state, emit=self._question_event)
+        self.steering = SteeringAttachments(self)
+
+    async def _question_event(self, owner: str, sid: str, frame: dict):
+        await self.wire.emit_to_chat(owner, sid, frame)
 
     @property
     def wire(self):
@@ -85,6 +99,7 @@ class DesktopAPI:
     async def close(self):
         self._file_tickets.clear()
         try:
+            await self.questions.close()
             if self._wire is not None:
                 await self._wire.close()
         finally:
@@ -226,6 +241,10 @@ class DesktopAPI:
 
     async def read_file(self, owner: str, sid: str, raw: str, artifact_id: str | None = None) -> tuple[str, bytes]:
         self.state.session(owner, sid)
+        if self.previews.handles(raw):
+            if artifact_id:
+                raise WorkError("not_found", "未找到该文件。", 404)
+            return self.previews.read(owner, sid, raw)
         path, logical = self._logical(owner, raw)
         if artifact_id:
             stored = self.service.store.file(owner, sid, identifier(artifact_id))
@@ -244,20 +263,25 @@ class DesktopAPI:
 
     def media_url(self, owner: str, token: str, sid: str, raw: str) -> str:
         self.state.session(owner, sid)
-        path, logical = self._logical(owner, raw)
         if not token or len(token) > 8192:
             raise WorkError("login_required", "请重新登录。", 401)
-        try:
-            path.lstat()
-        except FileNotFoundError:
-            stored = next((self.service.store.file(owner, sid, item["id"])
-                           for item in self.service.store.files(owner, sid)
-                           if self._logical(owner, self.service.store.file(owner, sid, item["id"])["path"])[1] == logical), None)
-            if stored is None:
-                raise WorkError("not_found", "未找到该文件。", 404) from None
-            digest = stored["sha256"]
+        if self.previews.handles(raw):
+            _, data = self.previews.read(owner, sid, raw)
+            digest = hashlib.sha256(data).hexdigest()
+            logical = raw if raw.startswith("/") else "/workspace/" + raw
         else:
-            digest, _ = self.files._file_digest(path, self.service.config.max_file_bytes)
+            path, logical = self._logical(owner, raw)
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                stored = next((self.service.store.file(owner, sid, item["id"])
+                               for item in self.service.store.files(owner, sid)
+                               if self._logical(owner, self.service.store.file(owner, sid, item["id"])["path"])[1] == logical), None)
+                if stored is None:
+                    raise WorkError("not_found", "未找到该文件。", 404) from None
+                digest = stored["sha256"]
+            else:
+                digest, _ = self.files._file_digest(path, self.service.config.max_file_bytes)
         now = time.monotonic()
         self._file_tickets = {key: value for key, value in self._file_tickets.items() if value.expires > now}
         if len(self._file_tickets) >= 2048:
@@ -265,6 +289,18 @@ class DesktopAPI:
         ticket = secrets.token_urlsafe(32)
         self._file_tickets[ticket] = _FileTicket(owner, token, sid, logical, digest, now + 60)
         return self.service.config.public_origin.rstrip("/") + PREFIX + "/media/" + ticket
+
+    def history_media(self, owner: str, token: str, sid: str, paths: list[str]):
+        media = []
+        for path in paths:
+            try:
+                mime = _mime(path)
+                if mime.startswith(("image/", "video/")):
+                    media.append({"kind": "image" if mime.startswith("image/") else "video",
+                                  "url": self.media_url(owner, token, sid, path), "name": Path(path).name})
+            except WorkError:
+                continue  # A missing preview is not replaced with another account's file.
+        return media
 
     @staticmethod
     def _file_response(name: str, data: bytes, *, download: bool = False):
@@ -402,7 +438,8 @@ class DesktopAPI:
                     before = int(request.query["before"]) if "before" in request.query else None
                 except ValueError:
                     raise WorkError("invalid_cursor", "历史位置无效。") from None
-                return web.json_response(self.state.history(owner, sid, limit=limit, before=before, revision=request.query.get("revision")))
+                return web.json_response(self.state.history(owner, sid, limit=limit, before=before, revision=request.query.get("revision"),
+                    augment_user_media=lambda paths: self.history_media(owner, request["account_token"], sid, paths)))
             if action == "delete" and method == "GET":
                 self.state.delete(owner, sid)
                 return web.json_response({"deleted": True})

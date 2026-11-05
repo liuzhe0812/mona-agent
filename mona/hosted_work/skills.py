@@ -28,7 +28,7 @@ _NEEDS = {
 }
 _LIMITS = {
     "mona-docx": "实时 Office 可用；高级脚本仍需符合声明的 Linux 运行时。",
-    "mona-pptx": "实时 Office 和设计参考可用；结构化风格提问与用户样张预览尚未接入，不能声称已完成该流程；高级脚本仍需符合声明的 Linux 运行时。",
+    "mona-pptx": "实时 Office 和设计参考可用；高级脚本仍需符合声明的 Linux 运行时。",
     "mona-design": "可读取设计方法、真实样张与源码，并用于现有 Office；浏览器自动观察和操作未接入。",
     "prd-document": "文字和当前 Office 输出可用；其它媒介依赖各自实际可用的工具。",
 }
@@ -76,6 +76,8 @@ class HostedSkills:
                       if _NAME.fullmatch(item["name"])}
         self.allowed_names = set(allowed_names)
         self.loaded: set[str] = set()
+        self.restored_read_ids: set[str] = set()
+        self._capability_permissions_set = False
         self.staged: dict[str, str] = {}
         self.reader = SkillReadTool(loader=self.loader, track_usage=False)
         self.reference_reader = SkillReferenceReadTool(loader=self.loader, track_usage=False)
@@ -90,7 +92,9 @@ class HostedSkills:
                     if fn.get("name") == "skill_read":
                         try:
                             args = fn.get("arguments", {})
-                            calls[call.get("id")] = json.loads(args) if isinstance(args, str) else args
+                            call_id = call.get("id")
+                            if isinstance(call_id, str) and call_id:
+                                calls[call_id] = json.loads(args) if isinstance(args, str) else args
                         except (ValueError, TypeError):
                             pass
             elif message.get("role") == "tool":
@@ -102,6 +106,7 @@ class HostedSkills:
                 if (isinstance(args, dict) and isinstance(args.get("name"), str) and args["name"] in self.names
                         and any(text.startswith("Skill: ") for text in texts if isinstance(text, str))):
                     self.loaded.add(args["name"])
+                    self.restored_read_ids.add(message["tool_call_id"])
 
     def file(self, name: str, relative: str, *, loaded: bool = True, allow_directory: bool = False) -> Path:
         if name not in self.names or (loaded and name not in self.loaded):
@@ -138,9 +143,12 @@ class HostedSkills:
             self.file(name, "SKILL.md", loaded=False)
             metadata = self.loader.get_skill_metadata(name) or {}
             missing = sorted(_NEEDS.get(name, set()) - self.allowed_names)
+            limitations = _LIMITS.get(name)
+            if name == "mona-pptx" and "ask_user_question" not in self.allowed_names:
+                limitations += "当前入口没有结构化提问和用户样张预览，不得声称已完成该流程。"
             rows.append({"name": name, "description": metadata.get("short_description") or metadata.get("description", name),
                          "available": not missing, "missing_tools": missing,
-                         **({"limitations": _LIMITS[name]} if name in _LIMITS else {})})
+                         **({"limitations": limitations} if limitations else {})})
         return rows
 
     def summary(self):
@@ -258,4 +266,13 @@ class HostedSkills:
         self._allow_resources()
 
     def _allow_resources(self):
-        self.tools.registry.set_allowed_tool_names(self.initial_names | (self.resource_names if self.loaded else set()))
+        if self.tools.registry.has("load_capability"):
+            if not self._capability_permissions_set:
+                # Authorization and per-turn model visibility are separate. The
+                # shared loader filters these tools dynamically; individual
+                # Skill paths still enforce their own load and scope checks.
+                self.tools.registry.set_allowed_tool_names(self.initial_names | self.resource_names)
+                self._capability_permissions_set = True
+        else:
+            # Compatibility for internal users that do not register a loader.
+            self.tools.registry.set_allowed_tool_names(self.initial_names | (self.resource_names if self.loaded else set()))

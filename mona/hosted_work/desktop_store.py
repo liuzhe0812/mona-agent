@@ -105,18 +105,23 @@ class DesktopStore:
             rows = db.execute("SELECT data,created FROM transcript WHERE chat_id=? ORDER BY seq", (sid,)).fetchall()
         return [(json.loads(row[0]), row[1]) for row in rows]
 
-    def history(self, owner: str, sid: str, *, limit: int = 80, before: int | None = None, revision: str | None = None):
+    def history(self, owner: str, sid: str, *, limit: int = 80, before: int | None = None, revision: str | None = None,
+                augment_user_media=None):
         sid = chat_id(sid)
         records = self.records(owner, sid)
         current_revision = hashlib.sha256(encoded([row[0] for row in records]).encode()).hexdigest()
         if revision and revision != current_revision:
             raise WorkError("history_changed", "会话历史已更新，请重新读取。", 409)
-        messages = replay_transcript_to_ui_messages([row[0] for row in records])
+        messages = replay_transcript_to_ui_messages([row[0] for row in records], augment_user_media=augment_user_media)
         ordinal = 0
         for index, message in enumerate(messages):
             source = message.get("sourceTranscriptIndex", 0)
             message["createdAt"] = int(records[min(source, len(records) - 1)][1] * 1000) if records else 0
             message["historyPosition"] = index
+            if message.get("role") == "user" and records:
+                input_id = records[min(source, len(records) - 1)][0].get("input_id")
+                if isinstance(input_id, str) and input_id:
+                    message["id"] = input_id
             if message.get("role") == "assistant" and message.get("kind") != "trace":
                 ordinal += 1
                 message["assistantOrdinal"] = ordinal
@@ -202,7 +207,7 @@ class DesktopStore:
             raise WorkError("user_busy", "此会话还有任务在进行或结果待核对，请先停止并确认结果后再删除。", 409)
         self.db(owner).execute("INSERT OR IGNORE INTO deleted_chats VALUES(?)", (sid,))
         with self.service.store.transaction():
-            for table in ("events", "runs", "files"):
+            for table in ("events", "runs", "files", "conversation_context"):
                 if table == "events":
                     self.service.store.db.execute("DELETE FROM events WHERE owner=? AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))
                 else:

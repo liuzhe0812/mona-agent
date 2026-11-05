@@ -60,9 +60,13 @@ async def test_unregistered_document_with_same_name_does_not_shadow_sandbox_file
     (office.scope.root / "shared.pptx").write_bytes(b"unregistered office file")
 
     result = json.loads(await tools.registry.execute("deliver_file", {"path": "/workspace/shared.pptx"}))
-    assert result == {"offered": True, **metadata}
+    expected = {**metadata, "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+    assert result == {"offered": True, **expected}
     sandbox.file.assert_awaited_once_with({"action": "stat", "path": "/workspace/shared.pptx"})
-    assert not delivery_events(events) and ("artifact", metadata) in events
+    assert not delivery_events(events) and ("artifact", expected) not in events
+    assert tools.pending_delivery_files == [expected]
+    await tools.flush_deliveries()
+    assert ("artifact", expected) in events and not tools.pending_delivery_files
 
 
 @pytest.mark.asyncio
@@ -79,8 +83,10 @@ async def test_export_registered_by_another_run_does_not_authorize_document_deli
     tools, sandbox, metadata, _ = make_tools(editors, editor_tools=other_editors)
 
     result = json.loads(await tools.registry.execute("deliver_file", {"path": "/workspace/shared.pptx"}))
-    assert result == {"offered": True, **metadata}
+    expected = {**metadata, "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+    assert result == {"offered": True, **expected}
     sandbox.file.assert_awaited_once_with({"action": "stat", "path": "/workspace/shared.pptx"})
+    assert tools.pending_delivery_files == [expected]
 
 
 @pytest.mark.asyncio

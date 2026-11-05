@@ -127,11 +127,15 @@ def test_files_cannot_cross_user_or_conversation(store):
 def test_stop_preserves_checkpoint_and_is_not_success(store):
     session(store)
     store.create_run(OWNER, SID, turn())
-    store.save_checkpoint(OWNER, RID, {"phase": "tools_started", "started_tool_call_ids": ["call1"]})
+    call = {"id": "call1", "type": "function", "function": {"name": "write_file", "arguments": "{}"}}
+    store.save_checkpoint(OWNER, RID, {"phase": "tools_started", "started_tool_call_ids": ["call1"],
+        "assistant_message": {"role": "assistant", "content": "", "tool_calls": [call]},
+        "pending_tool_calls": [call]})
     store.cancelling(OWNER, RID)
     store.finish(OWNER, RID, "cancelled", {"workspace_saved": True})
     assert store.run(OWNER, RID)["status"] == "cancelled"
     assert "call1" in store.session(OWNER, SID)["history"]
+    assert "TOOL_OUTCOME_UNKNOWN" in store.session(OWNER, SID)["history"]
 
 
 def test_sandbox_arguments_are_fail_closed_and_contain_no_host_mounts():

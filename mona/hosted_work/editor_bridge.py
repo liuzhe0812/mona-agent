@@ -1,6 +1,7 @@
 """Renderer RPC for the unchanged canvas editor and tool protocol."""
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 
@@ -26,6 +27,41 @@ class EditorBridge:
         if run["session_id"] != sid or run["status"] != "running":
             raise WorkError("execution_stopped", "本轮已经结束，未继续编辑。", 409)
         args, command = body["args"], body["command"]
+        if command in {"input_poll", "input_ack"}:
+            expected = {"request_id", "limit"} if command == "input_poll" else {"request_id"}
+            if not isinstance(args, dict) or set(args) != expected:
+                raise WorkError("invalid_request", "追加消息请求格式无效。")
+            if command == "input_poll":
+                result = await self.desktop.inputs.poll(owner, sid, rid, args["request_id"], limit=args["limit"])
+                result = self.desktop.steering.enrich(owner, sid, result)
+            else:
+                result = {"states": await self.desktop.inputs.acknowledge(owner, sid, rid, args["request_id"])}
+            return web.json_response({"result": result})
+        if command == "user_question" and isinstance(args, dict) and set(args) == {"ask_id", "questions"}:
+            try:
+                async with asyncio.timeout(25):
+                    result = await self.desktop.questions.ask(owner, sid, rid, args["ask_id"], args["questions"])
+            except TimeoutError:
+                result = {"status": "pending"}
+            else:
+                result = {"status": "cancelled", "answers": []} if result.get("cancelled") else {"status": "answered", **result}
+            return web.json_response({"result": result})
+        if command == "question_preview" and isinstance(args, dict) and set(args) == {"ask_id", "files"}:
+            files = self.desktop.previews.prepare(owner, sid, rid, args["ask_id"], args["files"])
+            key = f"run:{rid}:question-preview:{args['ask_id']}"
+            from mona.hosted_work.desktop_wire import _task
+
+            metadata = self.desktop.state.get(owner, "run:" + rid, {})
+            record = {"event": "deliver_files", "presentation": "question_preview", "inline_media": True,
+                      "task_id": _task(metadata, rid), "turn_id": rid, "input_id": metadata.get("input_id"), "files": files}
+            already = self.desktop.state.get(owner, key, False)
+            self.desktop.state.append(owner, sid, record, key)
+            if not already:
+                self.desktop.state.set(owner, key, True)
+                await self.desktop.wire.emit_to_chat(owner, sid,
+                    {**record, "media_urls": self.desktop.history_media(owner, request["account_token"], sid,
+                                                                      [file["absolute_path"] for file in files])})
+            return web.json_response({"result": {"ok": True}})
         if not isinstance(args, dict) or command not in {"canvas_activate_sidebar", "canvas_agent_request"}:
             raise WorkError("invalid_request", "此编辑命令不可用。")
         canvas_id = args.get("canvasId")

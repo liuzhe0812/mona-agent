@@ -3,13 +3,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mona.agent.tools.base import Tool
+from mona.agent.tools.capabilities import (
+    CAPABILITY_TOOL_GROUPS,
+    activate_capabilities_for_history,
+    activate_capabilities_for_media,
+    bind_capability_context,
+)
+from mona.agent.tools.context import RequestContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.config.schema import HostedWorkConfig
+from mona.hosted_work.capabilities import HostedLoadCapabilityTool, retained_capability_history
 from mona.hosted_work.contracts import WorkError
+from mona.hosted_work.filesystem import HostedReadFileTool
 from mona.hosted_work.public_web import fetch_public_text
 from mona.hosted_work.sandbox import DockerSandbox, SandboxError
 
@@ -42,19 +52,28 @@ class HostedTool(Tool):
 
 class HostedTools:
     def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]], editor_tools=(),
-                 *, session_id: str | None = None, history=(), config: HostedWorkConfig | None = None):
+                 *, session_id: str | None = None, history=(), config: HostedWorkConfig | None = None,
+                 metadata: dict[str, Any] | None = None, attachments=()):
         self.sandbox, self.emit = sandbox, emit
         self.config = config or getattr(sandbox, "config", HostedWorkConfig())
         self.fault: str | None = None
+        self.pending_delivery_files: list[dict] = []
+        excluded = set().union(*(CAPABILITY_TOOL_GROUPS[name] for name in ("browser", "computer", "terminal")))
+        # Image loading in the shared loader still needs a builtin-only loader
+        # injection before an image backend may be registered in hosted Work.
+        excluded.add("generate_image")
+        editor_tools = tuple(tool for tool in editor_tools if tool.name not in excluded)
         self._document_delivery = next((tool.deliver_existing_file for tool in editor_tools
                                         if callable(getattr(tool, "deliver_existing_file", None))), None)
         self.registry = ToolRegistry()
+        context = RequestContext(channel="websocket" if session_id else "hosted", chat_id=session_id or "direct",
+                                 session_key="websocket:" + session_id if session_id else None,
+                                 metadata=metadata if isinstance(metadata, dict) else {})
+        bind_capability_context(context)
         text = {"type": "string", "minLength": 1, "maxLength": 1024}
         definitions = [
             ("list_dir", "查看当前可访问目录中的文件。",
              {"path": text}, [], self.list_dir),
-            ("read_file", "读取 UTF-8 文件；若返回 next_offset，用它继续读取剩余内容。",
-             {"path": text, "offset": {"type": "integer", "minimum": 0}}, ["path"], self.read_file),
             ("write_file", "创建或更新 UTF-8 文件；修改已有文件须提供先前读取的 expected_sha256。",
              {"path": text, "content": {"type": "string", "maxLength": 200000},
               "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
@@ -68,11 +87,13 @@ class HostedTools:
         ]
         for name, description, properties, required, callback in definitions:
             self.registry.register(HostedTool(name, description, properties, required, callback))
+        self.registry.register(HostedReadFileTool(self._file, max_file_bytes=self.config.max_file_bytes))
         for tool in editor_tools:
             self.registry.register(tool)
-        allowed = {item[0] for item in definitions} | {tool.name for tool in editor_tools}
+        allowed = {item[0] for item in definitions} | {tool.name for tool in editor_tools} | {"read_file"}
+        self.registry.register(HostedLoadCapabilityTool(workspace="/workspace", agent_id="mona", registry=self.registry))
+        allowed.add("load_capability")
         if session_id:
-            from mona.agent.tools.context import RequestContext
             from mona.agent.tools.visualizer import ShowWidgetTool
 
             widget = ShowWidgetTool()
@@ -84,6 +105,10 @@ class HostedTools:
 
         self.skills = HostedSkills(self, allowed, history=history)
         self.skills.register()
+        media = [item.get("path") for item in attachments or ()
+                 if isinstance(item, dict) and isinstance(item.get("path"), str)]
+        activate_capabilities_for_media(media)
+        activate_capabilities_for_history(retained_capability_history(history, self.skills.restored_read_ids))
 
     async def _file(self, action: str, **kwargs):
         try:
@@ -96,9 +121,6 @@ class HostedTools:
 
     async def list_dir(self, path: str = "."):
         return json.dumps(await self._file("list", path=path), ensure_ascii=False)
-
-    async def read_file(self, path: str, offset: int = 0):
-        return json.dumps(await self._file("read", path=path, offset=offset), ensure_ascii=False)
 
     async def write_file(self, path: str, content: str, expected_sha256: str | None = None):
         return json.dumps(await self._file("write", path=path, content=content,
@@ -123,5 +145,12 @@ class HostedTools:
             if result is not None:
                 return result
         metadata = await self._file("stat", path=path)
-        await self.emit("artifact", metadata)
+        metadata = {**metadata, "mime": mimetypes.guess_type(metadata.get("name", path))[0] or "application/octet-stream"}
+        self.pending_delivery_files[:] = [item for item in self.pending_delivery_files if item.get("path") != metadata["path"]]
+        self.pending_delivery_files.append(metadata)
         return json.dumps({"offered": True, **metadata}, ensure_ascii=False)
+
+    async def flush_deliveries(self):
+        for metadata in self.pending_delivery_files:
+            await self.emit("artifact", metadata)
+        self.pending_delivery_files.clear()
