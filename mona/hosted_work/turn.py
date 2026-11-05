@@ -155,7 +155,10 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
     except asyncio.CancelledError:
         await hook.flush()
         return {"status": "failed" if tools.fault else "cancelled", "content": "",
-                "message": tools.fault or "本轮已停止，已有输出保留。"}
+                "message": tools.fault or "本轮已停止，已有输出保留。",
+                "diagnostic": {"stop_reason": "workspace_operation_failed" if tools.fault else "cancelled",
+                               "iterations": hook.iteration + 1, "context_window_tokens": window.tokens,
+                               "context_window_source": window.source, "max_context_tokens": hook.max_context_tokens}}
 
 
 async def execute_payload(config: HostedWorkConfig, payload: dict, emit):

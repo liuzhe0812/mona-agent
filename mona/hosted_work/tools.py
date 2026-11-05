@@ -46,6 +46,8 @@ class HostedTools:
         self.sandbox, self.emit = sandbox, emit
         self.config = config or getattr(sandbox, "config", HostedWorkConfig())
         self.fault: str | None = None
+        self._document_delivery = next((tool.deliver_existing_file for tool in editor_tools
+                                        if callable(getattr(tool, "deliver_existing_file", None))), None)
         self.registry = ToolRegistry()
         text = {"type": "string", "minLength": 1, "maxLength": 1024}
         definitions = [
@@ -116,6 +118,10 @@ class HostedTools:
             return "Error: " + exc.message
 
     async def deliver_file(self, path: str):
+        if self._document_delivery is not None:
+            result = await self._document_delivery(path)
+            if result is not None:
+                return result
         metadata = await self._file("stat", path=path)
         await self.emit("artifact", metadata)
         return json.dumps({"offered": True, **metadata}, ensure_ascii=False)

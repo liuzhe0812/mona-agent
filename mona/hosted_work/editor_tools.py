@@ -13,7 +13,9 @@ import httpx
 
 from mona.agent.tools.canvas import CanvasTool
 from mona.agent.tools.context import RequestContext
+from mona.agent.tools.deliver_file import DeliverFileTool
 from mona.agent.tools.office import OfficeTool, OfficeToolConfig
+from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import private_listener, website_origin
@@ -52,6 +54,7 @@ class _EditorScope:
     endpoint: str
     origin: str
     limit: int
+    file_limit: int
     token: str = field(repr=False)
 
     @property
@@ -227,6 +230,8 @@ class _RendererInvoker:
 class _EditorBus:
     def __init__(self, scope: _EditorScope, emit: Emit):
         self.scope, self.emit = scope, emit
+        self.delivered: dict[str, tuple[int, str]] = {}
+        self.expected_delivery: dict[str, tuple[int, str]] | None = None
 
     async def publish_outbound(self, message: OutboundMessage):
         scope = self.scope
@@ -238,8 +243,20 @@ class _EditorBus:
                 "task_id": scope.run_id, "text": message.content, "kind": "progress",
                 "agent_ui": metadata[OUTBOUND_META_AGENT_UI]}))
         if metadata.get("_deliver_files"):
-            await self.emit("desktop", scope.public_value({"event": "deliver_files", "chat_id": scope.session_id,
-                "files": metadata["_deliver_files"]}))
+            files, verified = [], {}
+            for item in metadata["_deliver_files"]:
+                path = scope.host_path(item.get("absolute_path") or item.get("path"))
+                digest, info = TenantFiles._file_digest(path, scope.file_limit)
+                logical = scope.logical_path(str(path))
+                verified[logical] = (info.st_size, digest)
+                if self.expected_delivery is not None and self.expected_delivery.get(logical) != verified[logical]:
+                    raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "已交付文件发生变化，请重新导出后再交付。")
+                if self.delivered.get(logical) != verified[logical]:
+                    files.append({**item, "size": info.st_size, "sha256": digest})
+            if files:
+                await self.emit("desktop", scope.public_value({"event": "deliver_files", "chat_id": scope.session_id,
+                    "files": files}))
+            self.delivered.update(verified)
 
 
 class _HostedCanvasTool(CanvasTool):
@@ -271,16 +288,44 @@ class _HostedCanvasTool(CanvasTool):
 class _HostedOfficeTool(OfficeTool):
     def __init__(self, scope: _EditorScope, emit: Emit):
         self.scope = scope
+        bus = _EditorBus(scope, emit)
+        self._delivery_bus = bus
+        self._delivery = DeliverFileTool(send_callback=bus.publish_outbound, workspace=scope.root,
+                                        restrict_to_workspace=True)
         client = OfficeServiceClient(scope.endpoint + "/api/work/desktop", token="hosted-editor-transport",
                                      transport=_OfficeTransport(scope))
         super().__init__(workspace=scope.root, config=OfficeToolConfig(restrict_to_workspace=True),
-                         restrict_to_workspace=True, bus=_EditorBus(scope, emit), service_client=client)
+                         restrict_to_workspace=True, bus=bus, service_client=client)
 
     def _active_workspace(self) -> Path:
         return self.scope.root
 
     def set_context(self, ctx: RequestContext):
-        super().set_context(self.scope.context(ctx))
+        context = self.scope.context(ctx)
+        super().set_context(context)
+        self._delivery.set_context(context)
+
+    async def deliver_existing_file(self, path: str) -> str | None:
+        """Reuse desktop delivery for an existing document; sandbox files keep their own lifecycle."""
+        try:
+            target = self.scope.host_path(path)
+            expected = self._delivery_bus.delivered.get(self.scope.logical_path(str(target)))
+            if expected is None:
+                return None
+            digest, info = TenantFiles._file_digest(target, self.scope.file_limit)
+            if (info.st_size, digest) != expected:
+                raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "已交付文件发生变化，请重新导出当前文稿后再交付。")
+            workspace_token = set_current_workspace(self.scope.root)
+            self._delivery_bus.expected_delivery = {self.scope.logical_path(str(target)): expected}
+            try:
+                return self.scope.tool_result(await self._delivery.execute(paths=[str(target)]))
+            finally:
+                self._delivery_bus.expected_delivery = None
+                reset_current_workspace(workspace_token)
+        except OfficeError as error:
+            return _failure(error)
+        except (OSError, WorkError):
+            return _failure(OfficeError(OfficeErrorCode.INVALID_OPERATION, "已交付文件无法读取，请核对后重新导出。"))
 
     def _assets(self, value):
         if isinstance(value, dict):
@@ -334,7 +379,7 @@ def build_editor_tools(config: HostedWorkConfig, payload: dict, emit: Emit) -> t
     host = private_listener(config.bind_host)
     scope = _EditorScope(root, state.resolve() / "users" / owner / "office" / session_id / "sessions",
                          owner, run_id, session_id, f"http://{'[' + host + ']' if ':' in host else host}:{config.port}",
-                         website_origin(config), 2 * config.max_file_bytes + 65536, token)
+                         website_origin(config), 2 * config.max_file_bytes + 65536, config.max_file_bytes, token)
     tools = (_HostedCanvasTool(scope), _HostedOfficeTool(scope, emit))
     context = RequestContext(channel="websocket", chat_id=session_id, session_key=scope.session_key,
                              metadata=payload.get("metadata") or {})
