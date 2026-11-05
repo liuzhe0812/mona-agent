@@ -6,6 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuPortal, DropdownMenuSub,
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/api";
 import { DevelopmentApiError } from "@/lib/development-api";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { cn } from "@/lib/utils";
 import { ProviderMark } from "./ProviderMark";
 import { EffortSlider } from "./EffortSlider";
@@ -59,7 +60,11 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
   const tooltipLabel = selected
     ? [triggerLabel, !triggerLabel.includes(selected.providerLabel) ? selected.providerLabel : null, selectedEffort ? `思考强度：${effortLabel(selectedEffort)}` : null].filter(Boolean).join(" · ")
     : triggerLabel;
-  const sources = useMemo(() => orderedSources([...PRIMARY_SOURCES, ...options.map((o) => sourceId(o.provider, o.isBuiltin))], providerOrder), [options, providerOrder]);
+  const hosted = !!getHostedPlatform();
+  const sources = useMemo(() => {
+    const ordered = orderedSources([...PRIMARY_SOURCES, ...options.map((o) => sourceId(o.provider, o.isBuiltin))], providerOrder);
+    return hosted ? ordered.filter((id) => id !== "anthropic" && id !== "native:codebuddy") : ordered;
+  }, [options, providerOrder, hosted]);
   const names = new Map(options.map((o) => [sourceId(o.provider, o.isBuiltin), sourceLabel(sourceId(o.provider, o.isBuiltin), o.providerLabel)]));
   const normalized = query.trim().toLocaleLowerCase();
   const visible = options.filter((option) => {

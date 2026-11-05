@@ -64,6 +64,7 @@ describe("hosted desktop conversation composition", () => {
     const view = render(<WorkApp />);
     expect(await screen.findByTestId("shared-thread-shell")).toHaveTextContent("A的会话");
     expect(screen.getByTestId("shared-chat-list")).toHaveTextContent("A的会话");
+    expect(screen.getByRole("link", { name: "返回官网" })).toHaveAttribute("href", "/");
     expect(fixtures.thread.mock.lastCall?.[0].client).toBeInstanceOf(MonaClient);
     expect(getHostedPlatform()?.token).toBe("synthetic-A");
     expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();

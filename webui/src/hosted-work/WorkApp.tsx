@@ -270,7 +270,7 @@ function Conversations({ saved, updateSaved, report, onModelNameChange }: Worksp
   return <div className="flex h-full min-h-0 overflow-hidden bg-background">
     {sidebarOpen && <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border/45 bg-sidebar lg:w-[264px] xl:w-[272px]">
       <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border/55 px-3">
-        <a className="flex min-w-0 items-center gap-2 text-caption font-semibold" href="/"><ArrowLeft className="h-3.5 w-3.5" aria-hidden />线上工作台</a>
+        <a className="flex min-w-0 items-center gap-2 text-caption font-semibold" href="/"><ArrowLeft className="h-3.5 w-3.5" aria-hidden />返回官网</a>
         <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="新建会话" title="新建会话"
           disabled={creating} onClick={() => void run(() => create())}><Plus className="h-3.5 w-3.5" aria-hidden /></Button>
       </header>

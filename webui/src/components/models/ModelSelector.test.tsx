@@ -5,6 +5,7 @@ import { ProviderMark } from "./ProviderMark";
 import { modelKey, sourceId, useModelPreferences, type ModelOption } from "./model-sources";
 import { developmentModels, developmentModelRoute } from "@/components/development/development-models";
 import { DevelopmentApiError } from "@/lib/development-api";
+import { configureHostedPlatform } from "@/lib/hosted-platform";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
 const models: ModelOption[] = [
@@ -253,6 +254,32 @@ describe("source-first unified model selector", () => {
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "搜索模型" })).not.toBeInTheDocument());
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ provider: "custom-relay", model: "same-model" }), null);
     expect(sourceId("custom-relay")).toBe("custom-relay");
+  });
+  it("hides Claude and WorkBuddy sources only in hosted Work", async () => {
+    const options: ModelOption[] = [
+      models[0], models[3],
+      { provider: "native:claude", providerLabel: "Anthropic", model: "claude-model", label: "Claude 模型", executor: "claude", active: false },
+      { provider: "native:codebuddy", providerLabel: "WorkBuddy", model: "buddy-model", label: "WorkBuddy 模型", executor: "codebuddy", active: false },
+    ];
+    const release = configureHostedPlatform({ apiBase: "/api/work/desktop", token: "test-token" });
+    try {
+      await open(vi.fn(), options);
+      expect(screen.getByRole("tab", { name: "Mona AI" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "OpenAI" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "OpenAI · 原生示例" })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Anthropic" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "WorkBuddy" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Anthropic" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "WorkBuddy" })).not.toBeInTheDocument();
+    } finally {
+      cleanup();
+      release();
+    }
+    await open(vi.fn(), options);
+    expect(screen.getByRole("tab", { name: "Anthropic" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "WorkBuddy" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Anthropic" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "WorkBuddy" })).toBeInTheDocument();
   });
   it("has no model favorites and keeps sources distinct", async () => {
     await open();
