@@ -795,12 +795,9 @@ describe('Sheets command atomic rollback', () => {
         },
       },
     })
-    await Promise.resolve()
-    await Promise.resolve()
-
-    const response = state.posts.find((message) => (
-      typeof message === 'object' && message !== null &&
-      'type' in message && message.type === 'office_inspect_result'
+    const response = await waitForPost((message) => (
+      isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'inspect-style-1'
     )) as {
       result?: {
         ok?: boolean
@@ -812,6 +809,79 @@ describe('Sheets command atomic rollback', () => {
       bold: true,
       horizontalAlign: 'center',
     }))
+  })
+
+  it('inspects new cells without reading beyond the original workbook', async () => {
+    vi.resetModules()
+    resetFakeState()
+    const originalRead = TestBridge.prototype.engineReadRange
+    const ranges: Array<{ startRow: number; endRow: number; startColumn: number; endColumn: number }> = []
+    const strictNative = vi.spyOn(TestBridge.prototype, 'engineReadRange').mockImplementation(async (payload) => {
+      const range = payload?.range
+      if (!range || range.startRow < 0 || range.startColumn < 0 || range.endRow > 1 || range.endColumn > 2
+        || range.startRow > range.endRow || range.startColumn > range.endColumn
+        || Object.keys(range).some((key) => !['startRow', 'endRow', 'startColumn', 'endColumn'].includes(key))) {
+        throw new Error('Range is outside the worksheet.')
+      }
+      ranges.push({ ...range })
+      return originalRead.call(TestBridge.prototype, payload)
+    })
+    try {
+      const bridge = await openSheets(new ArrayBuffer(0))
+      ranges.length = 0
+      bridge.emit({ type: 'office_command', command: {
+        sessionId: 'session-1', operationId: 'write-new-cell',
+        expectedVersion: { editorEpoch: 'epoch-1', modelRevision: 0 },
+        operations: [{ op: 'set_cell', payload: { sheet: 'Sheet1', cell: 'D3', value: 99 } }],
+      } })
+      const applied = await waitForPost((message) => isRecord(message) && message.type === 'office_command_result'
+        && isRecord(message.result) && message.result.operationId === 'write-new-cell')
+      expect(applied.result).toEqual(expect.objectContaining({ ok: true }))
+
+      for (const [requestId, range] of [['mixed-range', 'A1:D3'], ['new-cell', 'D3']]) {
+        bridge.emit({ type: 'office_inspect', command: {
+          sessionId: 'session-1', requestId,
+          query: { mode: 'range', sheet: 'Sheet1', range, includeFormula: true, includeStyle: false },
+        } })
+        const inspected = await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+          && isRecord(message.result) && message.result.requestId === requestId)
+        const result = inspected.result as { ok?: boolean; result?: { rows?: Array<Array<{ value?: unknown }>> } }
+        expect(result.ok).toBe(true)
+        const rows = result.result?.rows
+        if (range === 'A1:D3') {
+          expect(rows?.[0]?.[0]?.value).toBe('原始 A1')
+          expect(rows?.[1]?.[0]?.value).toBe('原始 A2')
+          expect(rows?.[2]?.[3]?.value).toBe(99)
+        } else {
+          expect(rows?.[0]?.[0]?.value).toBe(99)
+        }
+      }
+      expect(ranges).toEqual([{ startRow: 0, endRow: 1, startColumn: 0, endColumn: 2 }])
+
+      const desktopApi = (window as unknown as { desktopApi: {
+        readWorkbookRange: (request: {
+          sessionId: string; sheetId: string
+          range: { startRow: number; endRow: number; startColumn: number; endColumn: number }
+        }) => Promise<{ cells: unknown[] }>
+      } }).desktopApi
+      const blank = await desktopApi.readWorkbookRange({
+        sessionId: 'engine-session', sheetId: 'sheet-1',
+        range: { startRow: 2, endRow: 2, startColumn: 3, endColumn: 3 },
+      })
+      expect(blank.cells).toEqual([])
+      expect(ranges).toHaveLength(1)
+      await desktopApi.readWorkbookRange({
+        sessionId: 'engine-session', sheetId: 'sheet-1',
+        range: Object.assign({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 3 },
+          { rangeType: 1, startAbsoluteRefType: 2, endAbsoluteRefType: 2 }),
+      })
+      expect(ranges).toEqual([
+        { startRow: 0, endRow: 1, startColumn: 0, endColumn: 2 },
+        { startRow: 0, endRow: 1, startColumn: 0, endColumn: 2 },
+      ])
+    } finally {
+      strictNative.mockRestore()
+    }
   })
 
   it('keeps changed ranges pending and reports formula errors until inspected and fixed', async () => {

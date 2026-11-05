@@ -737,11 +737,22 @@ function MonaSheetsEditor(): React.JSX.Element {
   }
 
   embeddedReadWorkbookRange = async (request) => {
-    const result = parseEngineRange(await bridgeRef.current!.engineReadRange({
-      sheetId: request.sheetId,
-      range: request.range,
-    }))
+    const result = await readOriginalRange(request.sheetId, request.range)
     return embeddedRangeResult(result)
+  }
+
+  async function readOriginalRange(sheetId: string, bounds: RangeBounds): Promise<EngineRangeResult> {
+    const original = originalSheetsRef.current.get(sheetId)
+    if (!original) return { cells: [] }
+    const range = {
+      startRow: bounds.startRow,
+      startColumn: bounds.startColumn,
+      endRow: Math.min(bounds.endRow, original.rowCount - 1),
+      endColumn: Math.min(bounds.endColumn, original.columnCount - 1),
+    }
+    // The native workbook is the original file; new cells live in the edit journal.
+    if (range.startRow > range.endRow || range.startColumn > range.endColumn) return { cells: [] }
+    return parseEngineRange(await bridgeRef.current!.engineReadRange({ sheetId, range }))
   }
 
   function rememberRevision(revision: number): void {
@@ -925,7 +936,7 @@ function MonaSheetsEditor(): React.JSX.Element {
     const structuralOps = structuralOpsRef.current.get(sheet.name) ?? []
     const fileBounds = screenRangeToFileRange(structuralOps, bounds)
     if (!fileBounds) return
-    const result = parseEngineRange(await bridgeRef.current!.engineReadRange({ sheetId: sheet.id, range: fileBounds }))
+    const result = await readOriginalRange(sheet.id, fileBounds)
     const worksheet = worksheetByName(runtime, sheet.name)
     if (!worksheet) throw new Error(`找不到工作表：${sheet.name}`)
     suppressEventsRef.current = true
