@@ -88,6 +88,8 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 
 ## 6. 文件与部署入口
 
+2026-11-05 网页菜单 v16 起，VPS 同时提供无账号数据的 `/work/`、`/work/hosted-work.html` 静态入口和公开资源，沿用原 CSP/no-store；前端发布与 Ubuntu API 发布可独立进行。页面入口和 assets 必须指向同一已验证静态版本并保留旧 hash。动态 `/work/widget-frame.html?channel=...`、管理 API、账号 API 和 WebSocket 仍由 Ubuntu 处理，不把动态 Widget 模板直接当普通静态页面提供。浏览器/终端未接入时，Hosted 新建菜单隐藏两项；桌面保留。
+
 网页普通 Work 继续直接使用共享 `AgentRunner`，进度 Hook 继承应用 `AgentProgressHook`，通道适配只负责将推理、回答、工具与 Widget 转成既有桌面事件；保留真实 call/turn/input ID，不另造核心循环或逐轮固定提示。参数做有界展示，工具原始结果只保留在执行历史中，不重复塞入进度。失败关闭已有流并显示安全原因，unknown 不重派或伪装完成。
 
 窗口统一使用 `resolve_model_context_window_details` 与应用供应商目录。Hosted 不读取个人配置，不走桌面 IPC；已知目录标记已知，未发现时保留统一默认来源。旧 `context_window_tokens` 仅兼容为额外输入预算 cap，默认不再套用 32768，不能把运营 cap 当模型容量。任务结果中的 diagnostic 与父进程告警仅记录原因、阶段、异常类型、窗口来源、单次占用峰值及 HTTP 状态，不记录凭据、正文或原始 stderr。

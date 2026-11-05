@@ -1,0 +1,85 @@
+{
+  "release": "20261105-hide-web-tools-v16",
+  "scope": "Hide browser and terminal from hosted new-tab menu only",
+  "code_commit": "ad64f494f",
+  "source_file": "webui/src/components/deliver/ArtifactSidebar.tsx",
+  "source_before_sha256": "ca7085120ecd57562e2ff6703a65fef4bc135a96152431479f001f4afd6ea434",
+  "source_after_sha256": "84e5e937593daab5de3245fc147683e0e5020cbc56d8dbc40d64751471979be8",
+  "backend_last_verified": {
+    "MainPID": "123126",
+    "NRestarts": "0",
+    "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261105-stream-work-v15/content",
+    "ActiveState": "active"
+  },
+  "backend_restarted": false,
+  "ubuntu_management_connection_lost_after_preflight": true,
+  "package": {
+    "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\hide-web-tools-20261105\\work-hide-tools-v16.delta.tar.gz",
+    "bytes": 2497886,
+    "sha256": "5d514f3702c6ed70a7eee2055f71ec7767c8adf8debb717857d5f52aa4d96758",
+    "files": 5662,
+    "changed_files": 63,
+    "base_release": "20261105-stream-work-v15"
+  },
+  "published": {
+    "static_root": "/var/www/mona/work-releases/20261105-hide-web-tools-v16/content",
+    "files_verified": 4360,
+    "proxy": "/opt/mona-work-proxy-releases/20261105-hide-web-tools-v16b/work-locations.conf",
+    "proxy_sha256": "658ddd81bcddb8b3988cbcec1d90f1c7992c394d1452dd744893d44938b78814",
+    "backup": "/var/www/mona/backups/hide-web-tools-20261105-v16b",
+    "nginx_master_pid": "420299",
+    "only_work_include_changed": true,
+    "public_html_on_vps": true,
+    "ubuntu_service_not_changed": true,
+    "html_and_csp_verified": true
+  },
+  "acceptance": {
+    "passed": true,
+    "model_requests": 0,
+    "visible_menu_items": [
+      "工作区",
+      "流程图",
+      "思维导图",
+      "PPT",
+      "Word",
+      "Excel"
+    ],
+    "hidden_menu_items": [
+      "浏览器",
+      "终端"
+    ],
+    "page_errors": [],
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "final": {
+    "passed": true,
+    "static_files_verified": 4360,
+    "static_manifest_sha256": "d1e6a5b9cb0489d602a1613b8e74997d6eb044655fe2ec8eec8018132084d0c0",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "auth_pid": "389486",
+    "oneapi_pid": "310825",
+    "only_work_include_changed": true,
+    "backend_public_health": {
+      "service": "mona-hosted-work",
+      "status": "alive",
+      "models_configured": true
+    },
+    "anonymous_api_status": 401,
+    "dynamic_widget_still_proxied": true,
+    "ubuntu_service_not_modified": true
+  },
+  "first_html_attempt_rolled_back": true,
+  "desktop_menu_preserved": true,
+  "pushed": false
+}
