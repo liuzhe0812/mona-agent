@@ -1,0 +1,188 @@
+{
+  "format": "mona-hosted-skills-ui-release-v1",
+  "date": "2026-11-05",
+  "public_url": "https://mona-ai.cn/work/",
+  "acceptance_scope": "Hosted UI trim, read-only builtin Skill definitions/resources and tools supported by the existing hosted runtime",
+  "acceptance_complete_for_scope": true,
+  "all_builtin_skill_functionality_enabled": false,
+  "backend": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-skills-ui-v10/content",
+    "pid": "34615",
+    "files_verified": 5185,
+    "changed_from_v9": [
+      "mona/hosted_work/executor.py",
+      "tests/hosted_work/test_executor_events.py"
+    ],
+    "archive": "/home/liuzhe/mona-hosted-work/builds/20261104-shared-editors/work-skills-ui-v10.tar.gz",
+    "archive_bytes": 105590706,
+    "archive_sha256": "9acadecb959bc9ab562c382f5f35d0a59d3eef1fc33d8d030f0ecc529c9173c4",
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-skills-ui-v10",
+    "qa_resolution": {
+      "id": "417ef98f379041d4e21cd2ac2be1f58b",
+      "tracking_closed": true,
+      "result_still_unknown": true,
+      "replayed": false
+    },
+    "frontend_and_skills_identical_to_v9": true,
+    "linux_executor_tests": "4 passed in 0.84s"
+  },
+  "frontend": {
+    "static_root": "/var/www/mona/work-releases/20261105-skills-ui-v9/content",
+    "files_verified": 3890,
+    "proxy": "/opt/mona-work-proxy-releases/20261105-skills-ui-v9/work-locations.conf",
+    "proxy_sha256": "d54849cc56009a2a50f18fcd4cbc4f353984d5a1e277d478fca9477eb8190394",
+    "nginx_master_pid": "420299",
+    "backup": "/var/www/mona/backups/skills-ui-20261105-v9",
+    "only_work_include_changed": true
+  },
+  "builtin_skills": {
+    "definitions_packaged": 13,
+    "resource_files": 761,
+    "private_or_expert_skills_scanned": false,
+    "available": [
+      "mona-canvas",
+      "mona-design",
+      "mona-docx",
+      "mona-pptx",
+      "mona-visualizer",
+      "mona-xlsx",
+      "prd-document"
+    ],
+    "blocked": [
+      {
+        "name": "image-generation",
+        "missing_tools": [
+          "generate_image"
+        ]
+      },
+      {
+        "name": "long-goal",
+        "missing_tools": [
+          "complete_goal",
+          "long_task"
+        ]
+      },
+      {
+        "name": "memory",
+        "missing_tools": [
+          "read_memory",
+          "search_memory"
+        ]
+      },
+      {
+        "name": "mona-motion",
+        "missing_tools": [
+          "video"
+        ]
+      },
+      {
+        "name": "pdf",
+        "missing_tools": [
+          "pdf"
+        ]
+      },
+      {
+        "name": "skill-creator",
+        "missing_tools": [
+          "skill_create"
+        ]
+      }
+    ],
+    "advanced_scripts_missing_linux_runtime": true,
+    "current_public_runtime_catalog_check": "output/hosted-work/skills-ui-20261105-v1/linux-runtime-check.json"
+  },
+  "removed_web_only": [
+    "Today focus / Continue work / host-database-note shortcuts",
+    "Cat prompt prelude",
+    "Work sidebar logout entry"
+  ],
+  "desktop_ui_preserved": true,
+  "office_files_unchanged_from_v8": 465,
+  "validation": {
+    "production": {
+      "production": true,
+      "mocked_responses": false,
+      "passed": true,
+      "phase": "complete",
+      "session_id": "b2fac264305a61e1d6fff24d1aacb38d",
+      "red_box_sections_removed": true,
+      "discovery_evidence": "production-v1.json",
+      "current_run": "8581c7135926a977a49adb866ff187ee",
+      "completed_runs": [
+        "7916036f68347db58fa9a191378a7a9c",
+        "8581c7135926a977a49adb866ff187ee"
+      ],
+      "real_interactive_widget": true,
+      "widget_restore_without_model_replay": true,
+      "skill_asset_actual_sha256": "3f1f1a39a6564577a1781c3b458552aa723bd82b8d9cd05d3d03469c6d68ade1",
+      "other_account_denied": true,
+      "message_frames": 2,
+      "page_errors": [],
+      "failed_requests": [],
+      "logout_api_preserved": true,
+      "unauthorized_clears_private_view": true,
+      "all_test_sessions_revoked": true,
+      "wallet_after": {
+        "available_units": 0,
+        "reserved_units": 0,
+        "active_requests": 0,
+        "version": 0
+      },
+      "wallet_unchanged": true
+    },
+    "discovery_evidence": "output/hosted-work/skills-ui-20261105-v1/production-v1.json",
+    "actual_tool_trace": [
+      "deliver_file",
+      "show_widget",
+      "skill_asset_copy",
+      "skill_list",
+      "skill_read",
+      "skill_reference_read"
+    ],
+    "linux_skills": "output/hosted-work/skills-ui-20261105-v1/linux-skills-acceptance.json",
+    "linux_unit_tests": 16,
+    "executor_transport_unit_tests_linux": 4,
+    "ui_unit_tests": 7,
+    "widget_unit_tests": 6,
+    "route_unit_tests_windows": {
+      "passed": 28,
+      "skipped": 1
+    },
+    "widget_wire_tests": 3,
+    "readonly_loader_di_tests": 6,
+    "strict_parent_csp_widget_browser": "output/hosted-work/skills-ui-20261105-v1/widget-browser-smoke.json",
+    "acceptance_script_commit": "b04e9918f"
+  },
+  "coexistence": {
+    "original_data": {
+      "sessions": {
+        "before": 12,
+        "current": 14,
+        "all_original_fields_unchanged": true
+      },
+      "runs": {
+        "before": 18,
+        "current": 22,
+        "all_original_fields_unchanged": true
+      },
+      "files": {
+        "before": 5,
+        "current": 6,
+        "all_original_fields_unchanged": true
+      }
+    },
+    "original_containers_unchanged": true,
+    "docker_pid": "78383",
+    "other_services_unchanged": true,
+    "no_pending_or_unknown_runs": true,
+    "no_unconfirmed_file_operations": true,
+    "qa_unknown_only_tracking_closed": true
+  },
+  "commits": [
+    "d6d26b421",
+    "f6be94e49",
+    "9c0e81b03",
+    "8671ffbf1"
+  ],
+  "details": "docs/plans/hosted-work-skills-ui-20261105.md"
+}

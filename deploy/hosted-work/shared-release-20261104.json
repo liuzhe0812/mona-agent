@@ -4,21 +4,20 @@
   "public_url": "https://mona-ai.cn/work/",
   "overall_acceptance_complete": true,
   "active_at_last_ssh_verification": {
-    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-shared-work-v8/content",
-    "pid": 4147521,
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-skills-ui-v10/content",
+    "pid": 34615,
     "source_base": "408f82f5f",
-    "archive": "output/hosted-work/shared-release-20261104/work-shared-v8.tar.gz",
-    "archive_sha256": "77b066dfbb893449b55cbb9316f578038e3bb7ad46a42aac05e6b1ce39300467",
-    "bytes": 44110794,
-    "files_verified": 4118,
-    "patch_commits": [
-      "ec243435d",
-      "33c64f79d",
-      "82faee739",
-      "1a86e7b78",
-      "0104783cd"
-    ],
-    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-shared-work-v8"
+    "archive": "output/hosted-work/skills-ui-20261105-v1/work-skills-ui-v10.tar.gz",
+    "archive_sha256": "9acadecb959bc9ab562c382f5f35d0a59d3eef1fc33d8d030f0ecc529c9173c4",
+    "bytes": 105590706,
+    "files_verified": 5185,
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-skills-ui-v10",
+    "latest_patch_commits": [
+      "d6d26b421",
+      "f6be94e49",
+      "9c0e81b03",
+      "8671ffbf1"
+    ]
   },
   "prepared_v6": {
     "deployed": true,
@@ -43,12 +42,12 @@
     "real_gvisor_formula_and_isolation_passed": true
   },
   "proxy": {
-    "release": "/opt/mona-work-proxy-releases/20261105-shared-v7-static",
-    "locations_sha256": "93fc5b522d53f73ed8d0c346623537602f0e034f34e17903b7fa4c384c07ac05",
+    "release": "/opt/mona-work-proxy-releases/20261105-skills-ui-v9",
+    "locations_sha256": "d54849cc56009a2a50f18fcd4cbc4f353984d5a1e277d478fca9477eb8190394",
     "nginx_master_pid": 420299,
     "work_websocket_upgrade": true,
     "site_static_root_changed": false,
-    "backup": "/var/www/mona/backups/work-static-20261105-v7",
+    "backup": "/var/www/mona/backups/skills-ui-20261105-v9",
     "only_work_include_changed": true
   },
   "validation": {
@@ -135,7 +134,8 @@
         "bytes": 31838,
         "sha256": "2dfe3ae7a1177d38ea9358102a2d372b32d8c7a777b6dfc8107fbf1bd5205d7c"
       }
-    }
+    },
+    "latest_skills_ui_report": "output/hosted-work/skills-ui-20261105-v1/production-v2.json"
   },
   "coexistence": {
     "docker_restarted": false,
@@ -150,18 +150,18 @@
     "candidate_unit_stopped": true,
     "original_records_unchanged": {
       "sessions": {
-        "before": 9,
-        "current": 11,
+        "before": 12,
+        "current": 14,
         "all_original_fields_unchanged": true
       },
       "runs": {
-        "before": 14,
-        "current": 18,
+        "before": 18,
+        "current": 22,
         "all_original_fields_unchanged": true
       },
       "files": {
         "before": 5,
-        "current": 5,
+        "current": 6,
         "all_original_fields_unchanged": true
       }
     }
@@ -175,12 +175,14 @@
   "details": "docs/plans/hosted-work-production-20261104.md",
   "acceptance_scope": "Qwen shared hosted workspace; no cloud sync, paid Codex or WeChat OAuth",
   "frontend": {
-    "release": "/var/www/mona/work-releases/20261105-shared-work-v7/content",
-    "static_files_verified": 3548,
-    "archive_sha256": "1ff2d5cb4666b4d2edbcc5df16a3b7ab77ae04a21882e9919cbe33ecf0e474a0",
-    "backend_v8_frontend_identical_to_v7": true,
-    "api_html_and_user_data_remain_on_ubuntu": true
+    "release": "/var/www/mona/work-releases/20261105-skills-ui-v9/content",
+    "static_files_verified": 3890,
+    "backend_v10_frontend_identical_to_v9": true,
+    "html_api_and_account_scoped_work_data_on_ubuntu": true,
+    "account_authentication_on_vps": true
   },
   "remaining_required_for_this_release": [],
-  "cloud_sync": "Deferred by user; disabled"
+  "cloud_sync": "Deferred by user; disabled",
+  "builtin_skill_release": "deploy/hosted-work/skills-ui-release-20261105.json",
+  "all_builtin_skill_functionality_enabled": false
 }

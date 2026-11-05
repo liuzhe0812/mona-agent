@@ -1,10 +1,24 @@
 # 在线 Work 独立发布
 
-2026-11-05 管理网络已恢复，共享界面已由 v5 经 v6、v7 切换至 Ubuntu v8，release 为 `/home/liuzhe/mona-hosted-work/releases/20261105-shared-work-v8/content`，PID `4147521`、NRestarts=0。归档 `output/hosted-work/shared-release-20261104/work-shared-v8.tar.gz` 有 4,118 个清单文件、44,110,794 字节，SHA256 `77b066dfbb893449b55cbb9316f578038e3bb7ad46a42aac05e6b1ce39300467`；切换备份为 `/home/liuzhe/mona-hosted-work/backups/20261105-shared-work-v8`，原配置、状态和 Key 保留。v8 仅修改 Hosted Office 对重复且同值的顶层 `mode` 的兼容、工具说明及对应 1 项回归，前端产物与 v7 逐字节一致；此前 v6 未切换与管理网络中断是 2026-11-04 的历史状态。
+2026-11-05 当前线上为 Ubuntu v10：`/home/liuzhe/mona-hosted-work/releases/20261105-skills-ui-v10/content`，PID `34615`，备份 `/home/liuzhe/mona-hosted-work/backups/20261105-skills-ui-v10`。归档 `output/hosted-work/skills-ui-20261105-v1/work-skills-ui-v10.tar.gz` 有 5,185 个清单文件、105,590,706 字节，SHA256 `9acadecb959bc9ab562c382f5f35d0a59d3eef1fc33d8d030f0ecc529c9173c4`。v10 只调整 executor 的 Widget 事件白名单及对应测试，前端、Skill 和 Office 与 v9 一致；VPS 静态与代理沿用 v9。
 
-本次 Qwen 共享工作台发布验收已完成：最终真实生产验收 `output/hosted-work/shared-release-20261104/production-v8-final-20261105.json` 的 `passed=true`，覆盖 Excel 实际读取 `[6,7,42]`、公式导出及刷新后重读，PPT 模型编辑及导出 XML，思维导图保存恢复，执行中停止、另一账号 404 和退出后 401。三条消息为 Excel、PPT 和停止任务，基础文件复用既有 run。Mona 人设、任务收尾与 Word 人工和 AI 编辑、保存、导出、恢复采用 `production-v6-static-20261105.json` 的真实通过结果，相关 Word 产物此后未改；本轮未重测密码登录或桌面成品。
+网页移除欢迎右块、猫形提示词入口和左下退出按钮，桌面保留。v9 打包 13 套内置 Skill、761 个资源，接入发现、按需读取、引用、真实样张、素材复制和隔离脚本，不加载私有/专家/用户配置、ContextBuilder 或 memory(always)。网页工具目前支持 Word、Excel、PPT、画布、设计、PRD、visualizer 7 套；PDF、生图、视频、记忆、长期目标及 Skill 私有安装缺对应工具服务，不能称 13 套全部可执行。设计目前只支持参考和 Office，浏览器自动操作尚未接入。高级脚本要求 Python >=3.13，实时公开 runtime catalog 仅登记 Windows 基座，Linux 依赖缺失时明确返回 `runtime_unavailable`，不回退宿主。
+
+标准库案例检索已在真实 gVisor 执行，素材 SHA 一致、容器精确清理。Widget 复用原 `show_widget`、MonaClient 事件和隔离 iframe，公开 bootstrap 不含用户代码或凭据；主页面 CSP 未放宽，sandbox 无 same-origin，真实本地浏览器计数器交互和拒绝访问父 DOM 均已验证。Linux 关联测试 16 项、Windows UI 7 项、Widget 6 项、后端路由 28 项通过（另 1 项跳过），DI 6 项、Wire 3 项、类型检查与独立构建通过；Office 465 个产物与 v8 一致，未重新构建或修改。
+
+公网真实 Qwen 验收 `output/hosted-work/skills-ui-20261105-v1/production-v2.json` 的 `passed=true`：真实 Skill 发现、读取与引用，Widget 计数器 0→1、刷新后仍可交互且无额外模型帧，素材复制交付的 SHA256 `3f1f1a39a6564577a1781c3b458552aa723bd82b8d9cd05d3d03469c6d68ade1`，另一账号 404、退出后 401 和返回登录均通过；测试令牌撤销，钱包余额与版本保持 0，页面异常和 HTTP 失败均为 0。仅有两条新模型消息。
+
+v9 首次 Widget 被父进程白名单拒绝的失败记录保留；相关自有任务核实容器/进程结束后离线结束追踪，状态 `interrupted`、结果仍未知且未重派。v10 仅将 Widget 加入白名单，未知事件仍拒绝，新增 4 项 executor 回归在 Windows 和 Linux 均通过。最终无活动或 unknown 任务、未确认文件操作或额外 Work 容器；Docker、原 8 容器、Work 隧道及 VPS 原服务保持，其他站点配置未变，3,890 个静态文件再次验 SHA 通过。v9 切换前 12 会话/18 任务/5 文件与备份一致，验收后为 14/22/6。提交 `d6d26b421`、`f6be94e49`、`9c0e81b03`、`8671ffbf1`。
+
+## 2026-11-05 v8 验收（历史）
+
+当时共享界面由 v5 经 v6、v7 切换至 Ubuntu v8，release 为 `/home/liuzhe/mona-hosted-work/releases/20261105-shared-work-v8/content`，PID `4147521`、NRestarts=0。归档 `output/hosted-work/shared-release-20261104/work-shared-v8.tar.gz` 有 4,118 个清单文件、44,110,794 字节，SHA256 `77b066dfbb893449b55cbb9316f578038e3bb7ad46a42aac05e6b1ce39300467`；切换备份为 `/home/liuzhe/mona-hosted-work/backups/20261105-shared-work-v8`，原配置、状态和 Key 保留。v8 仅修改 Hosted Office 对重复且同值的顶层 `mode` 的兼容、工具说明及对应 1 项回归，前端产物与 v7 逐字节一致；此前 v6 未切换与管理网络中断是 2026-11-04 的历史状态。
+
+v8 的 Qwen 共享工作台发布验收已完成：真实生产验收 `output/hosted-work/shared-release-20261104/production-v8-final-20261105.json` 的 `passed=true`，覆盖 Excel 实际读取 `[6,7,42]`、公式导出及刷新后重读，PPT 模型编辑及导出 XML，思维导图保存恢复，执行中停止、另一账号 404 和退出后 401。三条消息为 Excel、PPT 和停止任务，基础文件复用既有 run。Mona 人设、任务收尾与 Word 人工和 AI 编辑、保存、导出、恢复采用 `production-v6-static-20261105.json` 的真实通过结果，相关 Word 产物此后未改；当时未重测密码登录或桌面成品。
 
 最终验收无页面异常、HTTP 失败和请求传输失败；控制台有 16 条 Univer 隐藏布局宽度日志，内容、导出和恢复均通过。测试令牌已撤销，测试钱包余额及版本保持 0。v7 的 Sheets 14 项、CSP 1 项、Office 类型检查和构建通过，v8 另通过 1 项 Office 兼容回归；云同步、付费 Codex 和微信网站登录仍未开放。
+
+## 部署说明
 
 本目录仅提供人工审核的部署材料，不会被桌面端自动使用、安装或启动。
 完整边界、验证命令和上线准入见 `docs/architecture/hosted-work.md`。
@@ -26,11 +40,11 @@ Ubuntu 表格还需要对应 Linux 架构的完整 Office 资源，不能使用 
 
 `nginx-work-limits.conf.example` 放在 Nginx 的 http 配置中，`nginx-work.conf.example` 的 location 放在现有 HTTPS server 中；它们只作用于 Work。2026-11-03 已部署该配置，公网 origin 为 `https://mona-ai.cn`，内部目标仍为原私网接口。切换前备份原配置，`nginx -t` 通过后仅热加载；旧 worker 退出需要短暂时间，重复检查必须取得 JSON 401 等真实 Work 响应，不能将 SPA HTML 当作 API 成功。
 
-大文件直供可参考 `nginx-work-static.conf.example`：从已验清单的 `webui/dist-hosted-work/` 只发布公共静态产物到新的 VPS release，逐项核对摘要并与 Ubuntu 的工作台版本配对；不复制服务源码、凭据或用户状态。当前静态目录 `/var/www/mona/work-releases/20261105-shared-work-v7/content` 的 3,548 个文件均已逐项核对 SHA，代理配置 `/opt/mona-work-proxy-releases/20261105-shared-v7-static/work-locations.conf` 的 SHA256 为 `93fc5b522d53f73ed8d0c346623537602f0e034f34e17903b7fa4c384c07ac05`，备份在 `/var/www/mona/backups/work-static-20261105-v7`。本轮 Nginx 仅热加载，master PID `420299` 不变；Docker、Work 隧道和四个暂停 Worker 未重启。
+大文件直供可参考 `nginx-work-static.conf.example`：从已验清单的 `webui/dist-hosted-work/` 只发布公共静态产物到新的 VPS release，逐项核对摘要并与 Ubuntu 的工作台版本配对；不复制服务源码、凭据或用户状态。当前静态目录 `/var/www/mona/work-releases/20261105-skills-ui-v9/content` 有 3,890 个文件，代理配置 `/opt/mona-work-proxy-releases/20261105-skills-ui-v9/work-locations.conf` 的 SHA256 为 `d54849cc56009a2a50f18fcd4cbc4f353984d5a1e277d478fca9477eb8190394`，备份在 `/var/www/mona/backups/skills-ui-20261105-v9`。本轮 Nginx 仅热加载，master PID `420299` 不变。
 
-最终复核原 8 个容器的 ID、状态与启动时间不变，没有额外 Work 容器；Docker PID `78383`、隧道 PID `423172` 和其他服务 PID/启动时间均保持，其他站点配置与官网 root 未改。v8 切换前的 9 个会话、14 条任务、5 条文件字段与备份一致，验收后为 11、18、5，无运行中、取消中或 unknown 任务，也无未知文件操作；本轮自有候选单元已停止、状态保留。
+v8 验收时复核原 8 个容器的 ID、状态与启动时间不变，没有额外 Work 容器；Docker PID `78383`、隧道 PID `423172` 和其他服务 PID/启动时间均保持，其他站点配置与官网 root 未改。v8 切换前的 9 个会话、14 条任务、5 条文件字段与备份一致，当时验收后为 11、18、5，无运行中、取消中或 unknown 任务，也无未知文件操作；当时的自有候选单元已停止、状态保留。
 
-2026-11-03 的基础工作台发布与验收摘要在 `public-release-20261103.json`，只记录公开端点、凭据变量名称和非敏感摘要，不包含密钥或网站会话。当时免费 Qwen 已通过真实任务、下载、停止及隔离验收；本轮 v8 的联合验收以本文开头状态为准。Codex 收费和无人登录的整机重启恢复仍未验收。
+2026-11-03 的基础工作台发布与验收摘要在 `public-release-20261103.json`，只记录公开端点、凭据变量名称和非敏感摘要，不包含密钥或网站会话。当时免费 Qwen 已通过真实任务、下载、停止及隔离验收；当前 v10 联合验收以本文开头状态为准。Codex 收费和无人登录的整机重启恢复仍未验收。
 
 2026-11-03 基础工作台的真实生产浏览器验收入口为 `production-browser-check.mjs --url https://mona-ai.cn/work/ --output output/hosted-work/<新目录>`；共享组件联合验收入口为 `shared-browser-check.py --output output/hosted-work/<新目录>`。用 stdin JSON 传入两枚既有专用测试账号的短期网站会话 `{token, other_token}`，不放参数或磁盘；脚本不会模拟接口。输出目录不得已存在，结果中的失败或待核对状态不得改写成成功。操作前先核对没有待处理的旧任务，并在测试后确认自己的会话已撤销、容器已清理。
 
