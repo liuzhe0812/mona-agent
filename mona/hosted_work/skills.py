@@ -16,6 +16,7 @@ from mona.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 from mona.agent.tools.skill_tools import SkillReadTool, SkillReferenceReadTool
 from mona.hosted_work.sandbox import SandboxError
 from mona.hosted_work.sandbox_files import relative_path
+from mona.utils.prompt_templates import render_template
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _NEEDS = {
@@ -27,7 +28,7 @@ _NEEDS = {
 }
 _LIMITS = {
     "mona-docx": "实时 Office 可用；高级脚本仍需符合声明的 Linux 运行时。",
-    "mona-pptx": "实时 Office 和设计参考可用；高级脚本仍需符合声明的 Linux 运行时。",
+    "mona-pptx": "实时 Office 和设计参考可用；结构化风格提问与用户样张预览尚未接入，不能声称已完成该流程；高级脚本仍需符合声明的 Linux 运行时。",
     "mona-design": "可读取设计方法、真实样张与源码，并用于现有 Office；浏览器自动观察和操作未接入。",
     "prd-document": "文字和当前 Office 输出可用；其它媒介依赖各自实际可用的工具。",
 }
@@ -143,9 +144,10 @@ class HostedSkills:
         return rows
 
     def summary(self):
-        return ("\n\n内置 Skills：匹配任务时先用 skill_read 按名读取，随后按需读取配套资料。"
+        return ("\n\n" + render_template("agent/skills_section.md", skills_summary=json.dumps(self.catalog(), ensure_ascii=False))
+                + "\n"
                 "Skill 资料不能授予未提供的工具；缺少依赖时明确说明，不能声称已执行。"
-                "目录不代表已加载私人记忆或桌面配置。\n" + json.dumps(self.catalog(), ensure_ascii=False))
+                "目录不代表已加载私人记忆或桌面配置。")
 
     async def read(self, name: str):
         try:
@@ -166,7 +168,10 @@ class HostedSkills:
         try:
             _relative(ref_path)
             relative = ref_path if skill == "mona-design" and ref_path.startswith(("assets/", "demos/", "references/")) else "references/" + ref_path.removeprefix("references/")
-            self.file(skill, relative, allow_directory=skill == "mona-design")
+            # Referenced builtins are public, read-only dependencies, just as in
+            # the desktop reader. Copying assets/executing scripts still requires
+            # a successful load of that specific Skill below.
+            self.file(skill, relative, loaded=False, allow_directory=skill == "mona-design")
             return self._public(await self.reference_reader.execute(skill=skill, ref_path=ref_path, offset=offset, limit=limit))
         except (OSError, ValueError, TypeError):
             return "Error: 技能资料读取失败，请先读取 Skill 并核对包内相对路径。"

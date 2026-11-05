@@ -100,7 +100,7 @@ async def test_builtin_names_are_allowlisted_and_private_layer_is_not_read(hoste
 
 
 @pytest.mark.asyncio
-async def test_resources_require_a_successful_read_and_the_matching_skill(hosted):
+async def test_builtin_references_can_cross_skills_without_granting_execution(hosted):
     registry = hosted.tools.registry
     for name in ("skill_reference_read", "skill_asset_copy", "skill_script_run"):
         assert not registry.is_permitted(name)
@@ -110,8 +110,11 @@ async def test_resources_require_a_successful_read_and_the_matching_skill(hosted
     for name in ("skill_reference_read", "skill_asset_copy", "skill_script_run"):
         assert registry.is_permitted(name)
     assert await registry.execute("skill_reference_read", {"skill": "alpha", "ref_path": "guide.md"}) == "alpha reference"
-    other = await registry.execute("skill_reference_read", {"skill": "beta", "ref_path": "secret.md"})
-    assert other.startswith("Error:") and "beta only" not in other
+    assert await registry.execute("skill_reference_read", {"skill": "beta", "ref_path": "secret.md"}) == "beta only"
+    assert "beta" not in hosted.skills.loaded
+    assert (await hosted.skills.asset("beta", "missing.bin", "copy.bin")).startswith("Error:")
+    assert (await hosted.skills.script("beta", "missing.py")).startswith("Error:")
+    assert (await hosted.skills.reference("private-secret", "guide.md")).startswith("Error:")
 
 
 @pytest.mark.asyncio
@@ -136,7 +139,34 @@ async def test_completed_reads_restore_resource_scope_for_the_next_turn(hosted, 
     assert restored.loaded == {"alpha"}
     assert tools.registry.is_permitted("skill_reference_read")
     assert await restored.reference("alpha", "guide.md") == "alpha reference"
-    assert (await restored.reference("beta", "secret.md")).startswith("Error:")
+    assert await restored.reference("beta", "secret.md") == "beta only"
+    assert restored.loaded == {"alpha"}
+
+
+def test_summary_reuses_desktop_office_skill_selection_contract(hosted):
+    from mona.utils.prompt_templates import render_template
+
+    expected = render_template("agent/skills_section.md", skills_summary=json.dumps(hosted.skills.catalog(), ensure_ascii=False))
+    assert expected in hosted.skills.summary()
+
+
+@pytest.mark.asyncio
+async def test_pptx_can_follow_the_actual_design_reference_without_loading_a_second_skill(tmp_path, monkeypatch):
+    from mona.hosted_work.tools import HostedTools
+
+    def deny_private(*_args):
+        pytest.fail("private Skill loading is forbidden")
+    monkeypatch.setattr(config_paths, "get_agent_skills_dir", deny_private)
+    config = HostedWorkConfig()
+    tools = HostedTools(SimpleNamespace(config=config), AsyncMock(), session_id="a" * 32, config=config)
+    assert (await tools.registry.execute("skill_read", {"name": "mona-pptx"})).startswith("Skill: ")
+    assert tools.skills.loaded == {"mona-pptx"}
+    result = await tools.registry.execute("skill_reference_read", {"skill": "mona-design", "ref_path": "native-pptx.md"})
+    text = result if isinstance(result, str) else "\n".join(
+        block.get("text", "") for block in result if isinstance(block, dict)
+    )
+    assert text and not text.startswith("Error:") and "Mona" in text
+    assert tools.skills.loaded == {"mona-pptx"}
 
 
 @pytest.mark.asyncio
