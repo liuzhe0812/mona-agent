@@ -82,7 +82,7 @@ class ProcessExecutor:
                     if value.get("status") not in {"completed", "failed", "cancelled", "unknown"}:
                         raise WorkError("protocol_error", "任务执行状态无法确认。", 503)
                     result = value
-                elif kind in {"delta", "progress", "artifact", "history", "checkpoint", "desktop"}:
+                elif kind in {"delta", "progress", "artifact", "history", "checkpoint", "desktop", "widget"}:
                     await on_event(kind, value)
                 else:
                     raise WorkError("protocol_error", "任务执行状态无法确认。", 503)
