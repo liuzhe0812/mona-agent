@@ -1,17 +1,27 @@
 {
   "format": "mona-hosted-work-shared-release-v1",
-  "date": "2026-11-04",
+  "date": "2026-11-05",
   "public_url": "https://mona-ai.cn/work/",
-  "overall_acceptance_complete": false,
+  "overall_acceptance_complete": true,
   "active_at_last_ssh_verification": {
-    "release": "/home/liuzhe/mona-hosted-work/releases/20261104-shared-work-v5/content",
-    "pid": 3659232,
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261105-shared-work-v8/content",
+    "pid": 4147521,
     "source_base": "408f82f5f",
-    "archive_sha256": "387ef13e272f0d469f9011a8c80e41c73ce9d5d70f785e4aea5b43a572d3ecee",
-    "files_verified": 3536
+    "archive": "output/hosted-work/shared-release-20261104/work-shared-v8.tar.gz",
+    "archive_sha256": "77b066dfbb893449b55cbb9316f578038e3bb7ad46a42aac05e6b1ce39300467",
+    "bytes": 44110794,
+    "files_verified": 4118,
+    "patch_commits": [
+      "ec243435d",
+      "33c64f79d",
+      "82faee739",
+      "1a86e7b78",
+      "0104783cd"
+    ],
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261105-shared-work-v8"
   },
   "prepared_v6": {
-    "deployed": false,
+    "deployed": true,
     "artifact": "output/hosted-work/shared-release-20261104/work-shared-v6-final.tar.gz",
     "bytes": 40642648,
     "files": 3998,
@@ -19,7 +29,8 @@
     "vps_private_staging": "/opt/mona-work-staging/shared-20261104-v6",
     "activation_script_sha256": "f2a41dbf400ef1d8b72d8b1177b08cf96795421515006c80f41cc04ef26a39c2",
     "backend_commit": "ec243435d",
-    "frontend_commit": "33c64f79d"
+    "frontend_commit": "33c64f79d",
+    "superseded_by": "20261105-shared-work-v8"
   },
   "office_resources": {
     "root": "/home/liuzhe/mona-hosted-work/resources/20261104-shared-editors",
@@ -32,39 +43,144 @@
     "real_gvisor_formula_and_isolation_passed": true
   },
   "proxy": {
-    "release": "/opt/mona-work-proxy-releases/20261104-shared-v1",
-    "locations_sha256": "7f546749b15efcb11abf1d9a4dbdf9afb4c22254c378aa685cf993e49f98a9f3",
-    "nginx_master_pid": 343378,
+    "release": "/opt/mona-work-proxy-releases/20261105-shared-v7-static",
+    "locations_sha256": "93fc5b522d53f73ed8d0c346623537602f0e034f34e17903b7fa4c384c07ac05",
+    "nginx_master_pid": 420299,
     "work_websocket_upgrade": true,
-    "site_static_root_changed": false
+    "site_static_root_changed": false,
+    "backup": "/var/www/mona/backups/work-static-20261105-v7",
+    "only_work_include_changed": true
   },
   "validation": {
-    "ubuntu_v5": { "passed": 213, "skipped": 2 },
-    "real_gvisor_office": { "passed": 1, "skipped": 0 },
+    "ubuntu_v5": {
+      "passed": 213,
+      "skipped": 2
+    },
+    "real_gvisor_office": {
+      "passed": 1,
+      "skipped": 0
+    },
     "public_qwen_execution": true,
     "public_browser_download_sha256": "02c048979ee690ec86b077f8c31c42eca8a3da438179b13eddcc628888d94762",
     "website_shared_session": true,
     "refresh_no_replay": true,
     "real_word_ai_edit_observed": true,
-    "word_export_accepted": false,
+    "word_export_accepted": true,
     "all_qa_website_sessions_revoked": true,
     "wallet_unchanged": true,
     "failed_browser_reports_preserved": true,
-    "mocked_production_responses": false
+    "mocked_production_responses": false,
+    "production_report": "output/hosted-work/shared-release-20261104/production-v8-final-20261105.json",
+    "identity_word_report": "output/hosted-work/shared-release-20261104/production-v6-static-20261105.json",
+    "reply_completes_in_ui": true,
+    "mona_identity_reply": "我是 Mona。随时在这儿，有什么需要帮忙的，或者想聊点什么，直接说就好。",
+    "excel_actual_calculated_values": [
+      6,
+      7,
+      42
+    ],
+    "excel_restored_values": [
+      6,
+      7,
+      42
+    ],
+    "excel_formula_export_and_restore": true,
+    "ppt_ai_export": true,
+    "mindmap_save_refresh": true,
+    "real_exec_stage_stop": true,
+    "stop_returns_to_composer": true,
+    "two_account_isolation": true,
+    "logout_revoked": true,
+    "office_styles_applied": true,
+    "page_errors": [],
+    "failed_requests": [],
+    "request_failures": [],
+    "non_blocking_console_messages": [
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0",
+      "The column width is less than 0, need to adjust page width to make it great than 0"
+    ],
+    "password_login_retested": false,
+    "desktop_packaged_app_retested": false,
+    "sheets_targeted_tests": 14,
+    "csp_targeted_tests": 1,
+    "hosted_office_compatibility_targeted_tests": 1,
+    "acceptance_script_commit": "c1eca41f5",
+    "exported_artifacts": {
+      "word": {
+        "path": "output/hosted-work/shared-release-20261104/browser-v6-static-20261105/word.docx",
+        "bytes": 11983,
+        "sha256": "bd2e74ea4907e01cc34b76ea206beb96a31cf751c46391872f2c231b85ccc063"
+      },
+      "excel": {
+        "path": "output/hosted-work/shared-release-20261104/browser-v8-final-20261105/excel.xlsx",
+        "bytes": 6024,
+        "sha256": "f7a3247a3fd7a827eb140354a5d3dfa05d1854db5826d69f73456b63745f694e"
+      },
+      "ppt": {
+        "path": "output/hosted-work/shared-release-20261104/browser-v8-final-20261105/slides.pptx",
+        "bytes": 31838,
+        "sha256": "2dfe3ae7a1177d38ea9358102a2d372b32d8c7a777b6dfc8107fbf1bd5205d7c"
+      }
+    }
   },
   "coexistence": {
     "docker_restarted": false,
     "paused_workers_restarted": false,
     "auth_business_or_wallet_code_changed": false,
     "cloud_sync_enabled": false,
-    "paid_codex_enabled": false
+    "paid_codex_enabled": false,
+    "original_container_ids_status_and_start_times_unchanged": true,
+    "original_services_pid_and_start_times_unchanged": true,
+    "no_active_or_unknown_runs": true,
+    "no_leftover_work_containers": true,
+    "candidate_unit_stopped": true,
+    "original_records_unchanged": {
+      "sessions": {
+        "before": 9,
+        "current": 11,
+        "all_original_fields_unchanged": true
+      },
+      "runs": {
+        "before": 14,
+        "current": 18,
+        "all_original_fields_unchanged": true
+      },
+      "files": {
+        "before": 5,
+        "current": 5,
+        "all_original_fields_unchanged": true
+      }
+    }
   },
-  "blocked_on": "Computer moved to 192.168.43.15; Ubuntu 172.31.3.176 SSH is unreachable. Existing VPS route cannot replace management access.",
+  "blocked_on": null,
   "remaining": [
-    "Activate verified v6 through an authorized Ubuntu management connection",
-    "Verify real identity reply and UI task completion",
-    "Verify Word checkpoint/save/export, Excel and PPT end to end",
-    "Verify canvas, real stop, cross-account access and logout on final release"
+    "WeChat OAuth needs an approved website application and server credentials",
+    "Paid Codex platform login and shared-wallet settlement are not enabled",
+    "Unattended host reboot/keyring unlock has not been verified"
   ],
-  "details": "docs/plans/hosted-work-production-20261104.md"
+  "details": "docs/plans/hosted-work-production-20261104.md",
+  "acceptance_scope": "Qwen shared hosted workspace; no cloud sync, paid Codex or WeChat OAuth",
+  "frontend": {
+    "release": "/var/www/mona/work-releases/20261105-shared-work-v7/content",
+    "static_files_verified": 3548,
+    "archive_sha256": "1ff2d5cb4666b4d2edbcc5df16a3b7ab77ae04a21882e9919cbe33ecf0e474a0",
+    "backend_v8_frontend_identical_to_v7": true,
+    "api_html_and_user_data_remain_on_ubuntu": true
+  },
+  "remaining_required_for_this_release": [],
+  "cloud_sync": "Deferred by user; disabled"
 }
