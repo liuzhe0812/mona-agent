@@ -16,7 +16,7 @@ import shlex
 import shutil
 import sys
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.agent.tools.base import Tool
@@ -25,6 +25,9 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+
+if TYPE_CHECKING:
+    from mona.agent.skills import SkillsLoader
 
 
 def _coerce_agent_id(value: Any) -> str:
@@ -78,12 +81,14 @@ class SkillReadTool(Tool):
         *,
         track_usage: bool = True,
         agent_id: str = MONA_AGENT_ID,
+        loader: SkillsLoader | None = None,
     ) -> None:
         # When Dream reads skills for dedup/maintenance, it must NOT bump
         # access counters — otherwise maintenance would reset the inactivity
         # clock and archival would never happen.
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._loader = loader
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -117,7 +122,7 @@ class SkillReadTool(Tool):
     async def execute(self, name: str | None = None, **kwargs: Any) -> str | list[dict[str, Any]]:
         if not name:
             return "Error: name parameter is required."
-        loader = _skills_loader(self._agent_id)
+        loader = self._loader if self._loader is not None else _skills_loader(self._agent_id)
         content = loader.load_skill(name)
         if content is None:
             return f"Error: skill '{name}' not found."
@@ -397,9 +402,11 @@ class SkillReferenceReadTool(Tool):
         *,
         track_usage: bool = True,
         agent_id: str = MONA_AGENT_ID,
+        loader: SkillsLoader | None = None,
     ) -> None:
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._loader = loader
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -451,7 +458,8 @@ class SkillReferenceReadTool(Tool):
         # Prevent path traversal
         if ".." in ref_path:
             return f"Error: invalid ref_path '{ref_path}'."
-        skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
+        loader = self._loader if self._loader is not None else _skills_loader(self._agent_id)
+        skill_dir = loader.resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         ref_path = ref_path.replace("\\", "/")

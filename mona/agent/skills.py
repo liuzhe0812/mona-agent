@@ -52,6 +52,7 @@ class SkillsLoader:
         *,
         agent_id: str = MONA_AGENT_ID,
         package_skill_dirs: list[Path] | None = None,
+        include_private_skills: bool = True,
     ):
         from mona.config.paths import get_agent_skills_dir
         self.workspace = workspace
@@ -59,7 +60,8 @@ class SkillsLoader:
         # Agent-private skills live OUTSIDE the workspace
         # (~/.mona/agents/<agent_id>/skills/) for the _FsTool hard boundary
         # (multi-agent phase 1).
-        self.workspace_skills = get_agent_skills_dir(self.agent_id)
+        self._include_private_skills = include_private_skills
+        self.workspace_skills = get_agent_skills_dir(self.agent_id) if include_private_skills else None
         # Package skills ship inside the read-only agent package; they sit
         # between agent-private and platform-builtin skills in priority
         # (multi-agent guide section 7.3).
@@ -127,9 +129,10 @@ class SkillsLoader:
         # Priority: agent-private > agent package > platform builtin (guide 7.3).
         skills: list[dict[str, str]] = []
         seen: set[str] = set()
-        self._append_with_priority(
-            skills, self._skill_entries_from_dir(self.workspace_skills, "workspace"), seen
-        )
+        if self._include_private_skills and self.workspace_skills is not None:
+            self._append_with_priority(
+                skills, self._skill_entries_from_dir(self.workspace_skills, "workspace"), seen
+            )
         for skill_dir in self.package_skill_dirs:
             # Manifest ``skills[]`` entries are CONCRETE skill directories
             # (completion guide 8.1): each entry contributes exactly one
@@ -192,9 +195,10 @@ class SkillsLoader:
         Returns the first directory that contains ``<name>/SKILL.md``, or
         None when the skill does not exist in any layer.
         """
-        private = self.workspace_skills / name
-        if (private / "SKILL.md").exists():
-            return private
+        if self._include_private_skills and self.workspace_skills is not None:
+            private = self.workspace_skills / name
+            if (private / "SKILL.md").exists():
+                return private
         for package_dir in self.package_skill_dirs:
             if package_dir.name == name and (package_dir / "SKILL.md").exists():
                 return package_dir

@@ -103,6 +103,67 @@ def _ctx(agent_id: str) -> ToolContext:
     return ToolContext(config=SimpleNamespace(), workspace=".", agent_id=agent_id)
 
 
+def test_builtin_only_skips_private_directory_and_allows_package_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.agent.skills import SkillsLoader
+
+    private = tmp_path / "private"
+    _write_skill(private, "shared", body="# private content")
+    _write_skill(private, "private-only", body="# private only")
+    builtin = tmp_path / "builtin"
+    builtin_path = _write_skill(builtin, "shared", body="# builtin content")
+    package_path = _write_skill(tmp_path / "package", "package-skill", body="# package content")
+
+    def reject_private_lookup(_agent_id: str) -> Path:
+        pytest.fail("builtin-only loading must not resolve a private directory")
+
+    monkeypatch.setattr(config_paths, "get_agent_skills_dir", reject_private_lookup)
+    loader = SkillsLoader(
+        tmp_path,
+        builtin_skills_dir=builtin,
+        package_skill_dirs=[package_path.parent],
+        include_private_skills=False,
+    )
+    # Assigning the legacy path must not re-enable the explicitly disabled layer.
+    loader.workspace_skills = private
+    entries = loader.list_skills(filter_unavailable=False)
+    assert {(entry["name"], entry["source"], entry["path"]) for entry in entries} == {
+        ("shared", "builtin", str(builtin_path)),
+        ("package-skill", "package", str(package_path)),
+    }
+    assert "# builtin content" in (loader.load_skill("shared") or "")
+    assert loader.resolve_skill_dir("private-only") is None
+    assert loader.load_skill("private-only") is None
+
+
+@pytest.mark.asyncio
+async def test_readers_use_injected_loader_without_default_factory_or_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mona.agent.skills import SkillsLoader
+    from mona.agent.tools import skill_tools
+
+    builtin = tmp_path / "builtin"
+    skill = _write_skill(builtin, "shared", body="# trusted builtin\n")
+    references = skill.parent / "references"
+    references.mkdir()
+    (references / "guide.md").write_text("trusted reference", encoding="utf-8")
+
+    def reject_default(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("injected readers must not access the default loader or usage store")
+
+    monkeypatch.setattr(config_paths, "get_agent_skills_dir", reject_default)
+    monkeypatch.setattr(skill_tools, "_skills_loader", reject_default)
+    monkeypatch.setattr(skill_usage, "bump_access", reject_default)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, include_private_skills=False)
+    read = SkillReadTool(loader=loader, track_usage=False)
+    reference = SkillReferenceReadTool(loader=loader, track_usage=False)
+    assert await read.execute(name="shared") == "# trusted builtin\n"
+    assert await reference.execute(skill="shared", ref_path="guide.md") == "trusted reference"
+    assert "not found" in await read.execute(name="missing")
+
+
 # ---------------------------------------------------------------------------
 # skill_read: layered resolution per agent
 # ---------------------------------------------------------------------------
