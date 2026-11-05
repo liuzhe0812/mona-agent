@@ -39,6 +39,9 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist-hosted-work"),
     emptyOutDir: true,
     target: "es2022",
-    rollupOptions: { input: path.resolve(__dirname, "hosted-work.html") },
+    rollupOptions: { input: {
+      "hosted-work": path.resolve(__dirname, "hosted-work.html"),
+      "hosted-admin": path.resolve(__dirname, "hosted-admin.html"),
+    } },
   },
 });
