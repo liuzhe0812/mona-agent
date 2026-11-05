@@ -47,6 +47,8 @@ class WorkService:
             model = self.config.models.get(model_id)
             if model is None:
                 raise WorkError("invalid_model", "所选模型未开放。")
+            if model.source == "codex":
+                raise WorkError("billing_unavailable", "Codex 余额计费尚未接通，暂未开放。", 503)
             if model.source != "mona":
                 engine = str(Path(model.native_config_path).resolve()) + ":" + model.source
                 for uncertain_id in self.store.unknown_models():
@@ -291,7 +293,7 @@ class WorkService:
                 await asyncio.gather(*pending, return_exceptions=True)
 
 
-def create_app(service: WorkService) -> web.Application:
+def create_app(service: WorkService, *, operator_config_path: Path | None = None) -> web.Application:
     from mona.hosted_work.desktop_api import DesktopAPI
     from mona.hosted_work.editor_bridge import EditorBridge
 
@@ -341,7 +343,8 @@ def create_app(service: WorkService) -> web.Application:
             if not authorization.startswith("Bearer "):
                 raise WorkError("login_required", "请先登录 Mona 账号。", 401)
             token = authorization[7:]
-            owner = await service.auth.identity(token)
+            owner = await (service.auth.admin_identity(token) if request.path.startswith("/api/work/admin/")
+                           else service.auth.identity(token))
             request["owner"], request["account_token"] = owner, token
             async with asyncio.timeout(service.config.tool_timeout_seconds + 60):
                 response = await handler(request)
@@ -360,6 +363,9 @@ def create_app(service: WorkService) -> web.Application:
         return response
 
     app = web.Application(middlewares=[boundary], client_max_size=service.config.max_file_bytes + 65536)
+    if operator_config_path is not None:
+        from mona.hosted_work.admin import CodexAdmin
+        CodexAdmin(operator_config_path).register(app)
     async def desktop_request(request):
         return await get_desktop().handle(request)
     app.router.add_route("*", "/api/work/desktop/{path:.*}", desktop_request)
@@ -390,7 +396,7 @@ def create_app(service: WorkService) -> web.Application:
 
     async def models(request):
         return web.json_response({"models": [{"id": key, "label": model.label, "source": model.source}
-                                            for key, model in service.config.models.items()],
+                                            for key, model in service.config.models.items() if model.source != "codex"],
                                   "max_file_bytes": service.config.max_file_bytes})
 
     async def sessions(request):

@@ -124,7 +124,7 @@ class DesktopAPI:
         return value
 
     def settings(self, owner: str) -> dict:
-        models = self.service.config.models
+        models = {key: model for key, model in self.service.config.models.items() if model.source != "codex"}
         selected = self.state.model(owner)
         selection = models.get(selected)
         max_tokens = selection.max_output_tokens if selection else 4096

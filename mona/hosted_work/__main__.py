@@ -48,7 +48,7 @@ def main():
         store = WorkStore(root / "sessions.sqlite3", config)
         store.recover()
         service = WorkService(config, store, auth, ProcessExecutor(config))
-        app = create_app(service)
+        app = create_app(service, operator_config_path=path)
         async def shutdown(_app):
             await service.close()
             store.close()

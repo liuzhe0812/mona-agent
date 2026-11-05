@@ -167,10 +167,11 @@ class DesktopStore:
 
     def model(self, owner: str) -> str:
         value = self.get(owner, "model_id")
-        return value if value in self.service.config.models else next(iter(self.service.config.models), "")
+        models = {key: item for key, item in self.service.config.models.items() if item.source != "codex"}
+        return value if value in models else next(iter(models), "")
 
     def set_model(self, owner: str, value: str):
-        if value not in self.service.config.models:
+        if value not in self.service.config.models or self.service.config.models[value].source == "codex":
             raise WorkError("invalid_model", "此模型未开放。")
         self.set(owner, "model_id", value)
 

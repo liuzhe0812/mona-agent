@@ -54,13 +54,22 @@ class AuthClient:
             raise WorkError("logout_unconfirmed", "退出尚未确认，请稍后重试。", 503) from exc
 
     async def identity(self, token: str) -> str:
+        return await self._identity(token, admin=False)
+
+    async def admin_identity(self, token: str) -> str:
+        return await self._identity(token, admin=True)
+
+    async def _identity(self, token: str, *, admin: bool) -> str:
         if (not isinstance(token, str) or not token or len(token) > 8192
                 or not token.isascii() or any(ord(c) < 33 or ord(c) == 127 for c in token)):
             raise WorkError("login_required", "请先登录 Mona 账号。", 401)
         try:
             async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=15) as client:
-                async with client.stream("GET", self.origin + "/auth/identity",
+                endpoint = "/auth/identity/admin" if admin else "/auth/identity"
+                async with client.stream("GET", self.origin + endpoint,
                         headers={"Authorization": "Bearer " + token, "Accept": "application/json"}) as response:
+                    if admin and response.status_code == 403:
+                        raise WorkError("admin_required", "仅管理员可以配置线上工作台。", 403)
                     if response.status_code in {401, 403}:
                         raise WorkError("login_required", "登录已失效，请重新登录。", 401)
                     if (response.status_code != 200 or

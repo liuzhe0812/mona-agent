@@ -9,6 +9,7 @@ from mona.hosted_work.contracts import WorkError
 
 _PRIVATE_NETWORKS = tuple(map(ip_network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")))
 _PUBLIC_PATHS = frozenset({"/", "/healthz", "/work", "/work/", "/work/hosted-work.html",
+                           "/work/admin", "/work/admin/", "/work/hosted-admin.html",
                            "/work/widget-frame.html", "/favicon.ico"})
 PUBLIC_STATIC_DIRS = ("assets", "office-editor", "brand", "fonts", "alphatab", "soundfonts")
 _PUBLIC_STATIC_PREFIXES = tuple(f"/work/{name}/" for name in PUBLIC_STATIC_DIRS)

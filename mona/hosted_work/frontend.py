@@ -48,6 +48,9 @@ def register_frontend(app: web.Application, config: HostedWorkConfig) -> None:
     entry = root / "hosted-work.html"
     if not entry.is_file() or _is_link(entry):
         raise ValueError("invalid static Work release")
+    admin_entry = root / "hosted-admin.html"
+    if _is_link(admin_entry) or (admin_entry.exists() and not admin_entry.is_file()):
+        raise ValueError("invalid static Work release")
     widget_path = root / "widget-frame.html"
     if _is_link(widget_path):
         raise ValueError("invalid static Work release")
@@ -83,6 +86,10 @@ def register_frontend(app: web.Application, config: HostedWorkConfig) -> None:
     async def home(request):
         raise web.HTTPFound("/work/")
 
+    async def admin(request):
+        return web.FileResponse(admin_entry, headers={"Cache-Control": "no-store", "Content-Security-Policy": CSP,
+                                                     "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
+
     async def favicon(request):
         return web.Response(status=204, headers={"Cache-Control": "public, max-age=86400"})
 
@@ -100,6 +107,10 @@ def register_frontend(app: web.Application, config: HostedWorkConfig) -> None:
     app.router.add_get("/work", index)
     app.router.add_get("/work/", index)
     app.router.add_get("/work/hosted-work.html", index)
+    if admin_entry.is_file():
+        app.router.add_get("/work/admin", admin)
+        app.router.add_get("/work/admin/", admin)
+        app.router.add_get("/work/hosted-admin.html", admin)
     if widget_template is not None:
         app.router.add_get("/work/widget-frame.html", widget_frame)
     for name, directory in static_directories:

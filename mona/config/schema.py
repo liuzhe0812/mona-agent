@@ -811,6 +811,24 @@ class HostedWorkModel(Base):
     reasoning_effort: str | None = None
 
 
+class HostedCodexSettings(Base):
+    """Administrator-owned connection draft; never a public model or a credential store."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    cli_path: str = Field(default="", max_length=2048)
+    model: str = Field(default="", max_length=200)
+    billing_model: str = Field(default="", max_length=200)
+    label: str = Field(default="Codex", min_length=1, max_length=80)
+    auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
+
+    @field_validator("cli_path", "model", "billing_model", "label")
+    @classmethod
+    def _plain_value(cls, value: str) -> str:
+        if value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("configuration values must be plain text")
+        return value
+
+
 class HostedWorkConfig(Base):
     """Independent hosted Work service. Desktop startup does not consume this config."""
 
@@ -824,6 +842,7 @@ class HostedWorkConfig(Base):
     allow_insecure_lan_http: bool = False
     port: int = Field(default=17175, ge=1024, le=65535)
     models: dict[str, HostedWorkModel] = Field(default_factory=dict)
+    codex: HostedCodexSettings = Field(default_factory=HostedCodexSettings)
     sandbox_image: str = ""
     sandbox_runtime: Literal["runsc"] = "runsc"
     max_concurrent_runs: int = Field(default=2, ge=1, le=16)
