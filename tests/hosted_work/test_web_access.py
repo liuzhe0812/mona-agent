@@ -11,7 +11,7 @@ from yarl import URL
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import private_listener, website_origin
 from mona.hosted_work.contracts import owner_key
-from mona.hosted_work.frontend import register_frontend
+from mona.hosted_work.frontend import WIDGET_CHANNEL, WIDGET_LIMIT, register_frontend
 from mona.hosted_work.service import WorkService, create_app
 from mona.hosted_work.store import WorkStore
 
@@ -46,6 +46,7 @@ async def website(tmp_path):
     static = tmp_path / "ui"
     (static / "assets").mkdir(parents=True)
     (static / "hosted-work.html").write_text('<script type="module" crossorigin src="/work/assets/app.js"></script>', encoding="utf-8")
+    (static / "widget-frame.html").write_text(f'<html><script>var channel="{WIDGET_CHANNEL}"</script></html>', encoding="utf-8")
     (static / "assets/app.js").write_text('document.body.dataset.ready="yes";', encoding="utf-8")
     (static / "assets/app.css").write_text("body {margin: 0;}", encoding="utf-8")
     for editor in ("docs", "sheets", "slides"):
@@ -115,6 +116,65 @@ async def test_shared_office_and_sidebar_assets_are_public(website):
 
 
 @pytest.mark.asyncio
+async def test_widget_frame_requires_one_valid_channel_and_preserves_main_csp(website):
+    client, calls = website
+    channel = "a1" * 24
+    path = "/work/widget-frame.html?channel=" + channel
+    headers = {"Host": "172.31.3.176:17175"}
+    for method in ("GET", "HEAD"):
+        response = await client.request(method, path, headers=headers)
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith("text/html")
+        assert response.headers["Content-Security-Policy"] == "sandbox allow-scripts; frame-ancestors 'self'"
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        if method == "GET":
+            assert await response.text() == f'<html><script>var channel="{channel}"</script></html>'
+    for suffix in ("", "?channel=", "?channel=" + "a" * 47, "?channel=" + "A" * 48,
+                   "?channel=" + "g" * 48, "?channel=" + channel + "&channel=" + channel,
+                   "?channel=" + channel + "&extra=1"):
+        assert (await client.get("/work/widget-frame.html" + suffix, headers=headers)).status == 400
+    assert (await client.post(path, headers=headers)).status == 401
+    assert (await client.get(path, headers={"Host": "attacker.invalid"})).status == 403
+    main = await client.get("/work/", headers=headers)
+    assert "script-src 'self';" in main.headers["Content-Security-Policy"]
+    assert not calls
+
+
+@pytest.mark.parametrize("contents", [b"no placeholder", WIDGET_CHANNEL.encode() * 2,
+                                       b"\xff" + WIDGET_CHANNEL.encode(),
+                                       WIDGET_CHANNEL.encode() + b"x" * WIDGET_LIMIT],
+                         ids=["missing", "duplicate", "invalid-utf8", "too-large"])
+def test_frontend_rejects_invalid_widget_template(tmp_path, contents):
+    static = tmp_path / "ui"
+    (static / "assets").mkdir(parents=True)
+    (static / "hosted-work.html").write_text("<!doctype html>", encoding="utf-8")
+    (static / "widget-frame.html").write_bytes(contents)
+    with pytest.raises(ValueError, match="invalid static Work release"):
+        register_frontend(web.Application(), HostedWorkConfig(frontend_dir=str(static)))
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+def test_frontend_rejects_non_regular_widget_template(tmp_path, kind):
+    static = tmp_path / "ui"
+    (static / "assets").mkdir(parents=True)
+    (static / "hosted-work.html").write_text("<!doctype html>", encoding="utf-8")
+    target = static / "widget-frame.html"
+    if kind == "directory":
+        target.mkdir()
+    else:
+        external = tmp_path / "outside.html"
+        external.write_text(WIDGET_CHANNEL, encoding="utf-8")
+        try:
+            target.symlink_to(external)
+        except OSError:
+            pytest.skip("creating symlinks is unavailable on this system")
+    with pytest.raises(ValueError, match="invalid static Work release"):
+        register_frontend(web.Application(), HostedWorkConfig(frontend_dir=str(static)))
+
+
+@pytest.mark.asyncio
 async def test_frontend_works_without_optional_assets_or_state_dir(tmp_path):
     static = tmp_path / "ui"
     (static / "assets").mkdir(parents=True)
@@ -128,6 +188,7 @@ async def test_frontend_works_without_optional_assets_or_state_dir(tmp_path):
         assert response.status == 200
         assert "font-src 'self' data:;" in response.headers["Content-Security-Policy"]
         assert "script-src 'self';" in response.headers["Content-Security-Policy"]
+        assert (await client.get("/work/widget-frame.html?channel=" + "a" * 48)).status == 404
     finally:
         await client.close()
 

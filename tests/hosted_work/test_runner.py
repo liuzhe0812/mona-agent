@@ -57,11 +57,36 @@ async def test_existing_runner_executes_only_explicit_online_tools():
     assert result["status"] == "completed" and result["content"] == "任务完成"
     assert sandbox.calls == [{"action": "write", "path": "result.txt", "content": "实际工具写入", "expected_sha256": None}]
     names = {tool["function"]["name"] for tool in model.requests[0][1]}
-    assert names == {"read_file", "write_file", "list_dir", "exec", "web_fetch", "deliver_file"}
+    assert names == {"read_file", "write_file", "list_dir", "exec", "web_fetch", "deliver_file", "skill_list", "skill_read"}
     assert model.requests[1][0][0] == model.requests[0][0][0]
     assert any(kind == "checkpoint" and value.get("phase") == "tools_started" for kind, value in events)
     assert any(kind == "history" and any(message.get("role") == "tool" for message in value["messages"]) for kind, value in events)
     assert any(kind == "delta" and value["text"] == "任务完成" for kind, value in events)
+
+
+@pytest.mark.asyncio
+async def test_skill_read_exposes_resources_without_changing_the_turn_system_prompt():
+    class SkillsModel(ModelBoundary):
+        async def chat_stream(self, messages, tools=None, **kwargs):
+            self.requests.append((json.loads(json.dumps(messages)), tools))
+            if len(self.requests) == 1:
+                return LLMResponse(content="", tool_calls=[ToolCallRequest(id="read-skill", name="skill_read",
+                    arguments={"name": "mona-xlsx"})], finish_reason="tool_calls")
+            if len(self.requests) == 2:
+                assert "skill_reference_read" in {tool["function"]["name"] for tool in tools}
+                return LLMResponse(content="", tool_calls=[ToolCallRequest(id="read-reference", name="skill_reference_read",
+                    arguments={"skill": "mona-xlsx", "ref_path": "office-example.md"})], finish_reason="tool_calls")
+            return LLMResponse(content="已读取技能与参考资料。")
+
+    config = HostedWorkConfig(models={"official": {"label": "Mona", "model": "fixture-model"}})
+    model, events = SkillsModel(), []
+    async def emit(kind, value):
+        events.append((kind, value))
+    result = await run_turn(config, {"model_id": "official", "run_id": "c" * 32,
+        "history": [{"role": "user", "content": "读取表格技能"}]}, SandboxBoundary(), model, emit)
+    assert result["status"] == "completed" and len(model.requests) == 3
+    assert all(request[0][0] == model.requests[0][0][0] for request in model.requests)
+    assert any(kind == "progress" and "mona-xlsx" in value.get("message", "") for kind, value in events)
 
 
 @pytest.mark.asyncio

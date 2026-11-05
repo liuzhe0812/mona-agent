@@ -348,6 +348,99 @@ async def test_office_desktop_frame_is_controlled_and_persisted_once(tmp_path):
         await receive(socket, "turn_end")
 
 
+async def test_widget_is_account_scoped_and_replayed_without_reexecution(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    async with client:
+        alice, _ = await connect(client, wire)
+        sid = await new_chat(alice)
+        bob, _ = await connect(client, wire, owner=BOB, token="token-b", client_id="client-b")
+        await new_chat(bob, "bob-chat")
+        await receive(bob, "session_updated")
+        await bob.send_json({"type": "attach", "chat_id": sid})
+        assert (await receive(bob, "error"))["code"] == "not_found"
+
+        frame = {"type": "message", "chat_id": sid, "input_id": "widget-message",
+                 "task_id": "task_widget_ui", "content": "draw a graph"}
+        await alice.send_json(frame)
+        await receive(alice, "message_accepted")
+        running = await receive(alice, "goal_status", lambda item: item.get("status") == "running")
+        await receive(alice, "delta")
+        rid = running["turn_id"]
+        run = wire.service.store.run(ALICE, rid)
+        widget = {"id": "call_widget", "title": "实际图形", "code": '<svg viewBox="0 0 680 80"><text x="10" y="30">图形内容</text></svg>',
+                  "loadingMessages": ["正在绘制"], "status": "complete"}
+
+        # Only a durable event belonging to the active run can become a UI event.
+        with pytest.raises(WorkError) as undurable:
+            await wire.on_run_event(ALICE, run, "widget", widget)
+        assert undurable.value.code == "protocol_error"
+        wire.service.store.event(ALICE, rid, "widget", widget)
+        await wire.on_run_event(ALICE, run, "widget", widget)
+        shown = await receive(alice, "widget")
+        assert shown == {"event": "widget", "chat_id": sid, "widget": widget, "author_id": "mona",
+                         "task_id": "task_widget_ui", "turn_id": rid, "input_id": "widget-message"}
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(bob.receive_json(), timeout=0.1)
+        with pytest.raises(WorkError) as foreign:
+            state.history(BOB, sid)
+        assert foreign.value.status == 404
+
+        # Duplicate event delivery and reconnect must not create another widget or rerun the task.
+        await wire.on_run_event(ALICE, run, "widget", widget)
+        await alice.close()
+        resumed, _ = await connect(client, wire)
+        await resumed.send_json({"type": "attach", "chat_id": sid})
+        await receive(resumed, "attached")
+        assert (await receive(resumed, "goal_status"))["turn_id"] == rid
+        await resumed.send_json(frame)
+        await receive(resumed, "message_accepted")
+        assert len(executor.calls) == 1
+        executor.release.set()
+        await receive(resumed, "turn_end")
+        widgets = [item for item in state.history(ALICE, sid)["messages"] if item.get("kind") == "widget"]
+        assert len(widgets) == 1
+        assert widgets[0]["id"] == "widget:task_widget_ui:call_widget"
+        assert widgets[0]["taskId"] == "task_widget_ui" and widgets[0]["widget"] == widget
+        assert len(executor.calls) == 1
+
+
+async def test_widget_rejects_unsafe_or_invalid_events_and_sanitizes_errors(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "widget-errors", "content": "draw"})
+        running = await receive(socket, "goal_status", lambda item: item.get("status") == "running")
+        await receive(socket, "delta")
+        run = wire.service.store.run(ALICE, running["turn_id"])
+        valid = {"id": "call_widget", "title": "图形", "code": '<svg viewBox="0 0 680 80"></svg>',
+                 "loadingMessages": ["正在绘制"], "status": "complete"}
+        invalid_events = [
+            {**valid, "code": '<script src="https://untrusted.example/script.js"></script>'},
+            {**valid, "code": '<svg viewBox="0 0 10 10"></svg>'},
+            {**valid, "id": []},
+            {**valid, "status": []},
+            {**valid, "loadingMessages": "正在绘制"},
+            {**valid, "status": "streaming"},
+        ]
+        for event in invalid_events:
+            wire.service.store.event(ALICE, run["id"], "widget", event)
+            with pytest.raises(WorkError) as rejected:
+                await wire.on_run_event(ALICE, run, "widget", event)
+            assert rejected.value.code == "protocol_error"
+        assert not any(record.get("event") == "widget" for record, _ in state.records(ALICE, sid))
+
+        error = {**valid, "status": "error", "code": "private invalid content", "error": "private details"}
+        wire.service.store.event(ALICE, run["id"], "widget", error)
+        await wire.on_run_event(ALICE, run, "widget", error)
+        shown = await receive(socket, "widget")
+        assert shown["widget"] == {**{key: value for key, value in valid.items() if key not in {"code", "status"}},
+                                   "code": "", "status": "error", "error": "图形暂时无法展示，请让 Mona 调整后重试。"}
+        assert "private" not in encoded(shown)
+        executor.release.set()
+        await receive(socket, "turn_end")
+
+
 async def test_finish_cards_only_use_verified_artifacts_from_this_run(tmp_path):
     client, wire, executor, state = await make_client(tmp_path)
     async with client:

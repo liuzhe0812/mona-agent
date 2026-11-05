@@ -1,5 +1,6 @@
 """Own static release surface: no Gateway, desktop API or other website business routes."""
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from mona.hosted_work.access import PUBLIC_STATIC_DIRS
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; "
        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+WIDGET_CHANNEL = "MONA_HOSTED_WIDGET_CHANNEL_PLACEHOLDER"
+WIDGET_CSP = "sandbox allow-scripts; frame-ancestors 'self'"
+WIDGET_LIMIT = 2 * 1024 * 1024
 
 
 def _is_link(path: Path) -> bool:
@@ -44,6 +48,22 @@ def register_frontend(app: web.Application, config: HostedWorkConfig) -> None:
     entry = root / "hosted-work.html"
     if not entry.is_file() or _is_link(entry):
         raise ValueError("invalid static Work release")
+    widget_path = root / "widget-frame.html"
+    if _is_link(widget_path):
+        raise ValueError("invalid static Work release")
+    widget_template = None
+    if widget_path.exists():
+        if (not widget_path.is_file() or not stat.S_ISREG(widget_path.stat().st_mode)
+                or not widget_path.resolve(strict=True).is_relative_to(root)):
+            raise ValueError("invalid static Work release")
+        with widget_path.open("rb") as source:
+            data = source.read(WIDGET_LIMIT + 1)
+        try:
+            widget_template = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid static Work release") from exc
+        if len(data) > WIDGET_LIMIT or widget_template.count(WIDGET_CHANNEL) != 1:
+            raise ValueError("invalid static Work release")
     static_directories = []
     for name in PUBLIC_STATIC_DIRS:
         directory = root / name
@@ -66,10 +86,21 @@ def register_frontend(app: web.Application, config: HostedWorkConfig) -> None:
     async def favicon(request):
         return web.Response(status=204, headers={"Cache-Control": "public, max-age=86400"})
 
+    async def widget_frame(request):
+        headers = {"Cache-Control": "no-store", "Content-Security-Policy": WIDGET_CSP,
+                   "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+        channels = request.query.getall("channel", [])
+        if len(request.query) != 1 or len(channels) != 1 or not re.fullmatch(r"[0-9a-f]{48}", channels[0]):
+            return web.Response(status=400, headers=headers)
+        return web.Response(text=widget_template.replace(WIDGET_CHANNEL, channels[0]),
+                            content_type="text/html", headers=headers)
+
     app.router.add_get("/", home)
     app.router.add_get("/favicon.ico", favicon)
     app.router.add_get("/work", index)
     app.router.add_get("/work/", index)
     app.router.add_get("/work/hosted-work.html", index)
+    if widget_template is not None:
+        app.router.add_get("/work/widget-frame.html", widget_frame)
     for name, directory in static_directories:
         app.router.add_static(f"/work/{name}/", directory, show_index=False, follow_symlinks=False)

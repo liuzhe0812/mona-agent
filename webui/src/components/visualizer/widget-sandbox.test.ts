@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { InlineWidget } from "./InlineWidget";
 import {
   createStandaloneWidgetHtml,
   createWidgetSrcDoc,
@@ -7,6 +10,9 @@ import {
   sanitizeForIframe,
   sanitizeForStreaming,
 } from "./widget-sandbox";
+
+const platform = vi.hoisted(() => ({ hosted: false }));
+vi.mock("@/lib/hosted-platform", () => ({ getHostedPlatform: () => platform.hosted ? {} : null }));
 
 describe("visualizer iframe sandbox", () => {
   it("accepts only exact HTTPS CDN hosts without credentials or nonstandard ports", () => {
@@ -92,5 +98,27 @@ describe("visualizer iframe sandbox", () => {
     expect(isTrustedVisualizerMessage({ source: otherWindow, data: { channel: "secret" } }, frame, "secret")).toBe(false);
     expect(isTrustedVisualizerMessage({ source: sourceWindow, data: { channel: "wrong" } }, frame, "secret")).toBe(false);
     expect(isTrustedVisualizerMessage({ source: sourceWindow, data: null }, frame, "secret")).toBe(false);
+  });
+
+  it("uses the hosted frame URL only for web and retains desktop srcDoc", () => {
+    const render = () => renderToStaticMarkup(createElement(InlineWidget, {
+      id: "fixture", code: "<svg><circle /></svg>", title: "fixture",
+    })).match(/<iframe\b[^>]*>/i)?.[0] ?? "";
+    platform.hosted = false;
+    const desktop = render();
+    expect(desktop).not.toMatch(/\ssrc=/);
+    expect(desktop.toLowerCase()).toContain("srcdoc=");
+    expect(desktop).toContain("widget-root");
+    expect(desktop).toContain('sandbox="allow-scripts"');
+    platform.hosted = true;
+    try {
+      const web = render();
+      expect(web).toMatch(/\ssrc="\/work\/widget-frame\.html\?channel=[0-9a-f]{48}"/);
+      expect(web.toLowerCase()).not.toContain("srcdoc=");
+      expect(web).toContain('sandbox="allow-scripts"');
+      expect(web).not.toContain("circle");
+    } finally {
+      platform.hosted = false;
+    }
   });
 });

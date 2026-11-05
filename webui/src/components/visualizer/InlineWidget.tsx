@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { downloadTextFile } from "@/components/notes/mindmap/mindmap-export";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { downloadMediaUrl } from "@/lib/tauri";
 import {
   createWidgetSrcDoc,
@@ -118,7 +119,8 @@ export function InlineWidget({
   const channelRef = useRef<string>("");
   if (!channelRef.current) channelRef.current = createChannelToken();
   const channel = channelRef.current;
-  const srcDoc = useMemo(() => createWidgetSrcDoc(channel), [channel]);
+  const hosted = !!getHostedPlatform();
+  const srcDoc = useMemo(() => hosted ? undefined : createWidgetSrcDoc(channel), [channel, hosted]);
   const latestRef = useRef({ code, title, streaming, error, onSendPrompt, onOpenLink });
   latestRef.current = { code, title, streaming, error, onSendPrompt, onOpenLink };
   const [frameReady, setFrameReady] = useState(false);
@@ -360,6 +362,7 @@ export function InlineWidget({
       <iframe
         ref={iframeRef}
         title={displayTitle}
+        src={hosted ? `/work/widget-frame.html?channel=${channel}` : undefined}
         srcDoc={srcDoc}
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"

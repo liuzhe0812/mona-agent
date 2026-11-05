@@ -459,7 +459,7 @@ class DesktopWire:
             await self._on_run_event(owner, run, kind, data)
 
     async def _on_run_event(self, owner: str, run: dict, kind: str, data: dict):
-        if kind not in {"delta", "progress", "desktop"}:
+        if kind not in {"delta", "progress", "desktop", "widget"}:
             return
         sid, rid = run["session_id"], run["id"]
         self.state.session(owner, sid)
@@ -487,6 +487,25 @@ class DesktopWire:
             self._stream_text[key].append(text)
             record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), "task_id": task_id}
             active = True
+        elif kind == "widget":
+            from mona.agent.tools.visualizer import _validate_widget
+
+            widget = {key: data.get(key) for key in ("id", "title", "code", "loadingMessages", "status")}
+            if (not isinstance(widget["id"], str) or not 1 <= len(widget["id"]) <= 256
+                    or not isinstance(widget["title"], str) or not isinstance(widget["code"], str)
+                    or len(widget["code"]) > 128000 or not isinstance(widget["status"], str)
+                    or widget["status"] not in {"complete", "error"}
+                    or not isinstance(widget["loadingMessages"], list) or len(widget["loadingMessages"]) > 4
+                    or any(not isinstance(message, str) or len(message) > 1000 for message in widget["loadingMessages"])):
+                raise WorkError("protocol_error", "图形事件格式无效。", 503)
+            if widget["status"] == "complete" and _validate_widget(widget["code"])[0]:
+                raise WorkError("protocol_error", "图形内容未通过校验。", 503)
+            widget["title"] = widget["title"][:512]
+            if widget["status"] == "error":
+                widget["code"] = ""
+                widget["error"] = "图形暂时无法展示，请让 Mona 调整后重试。"
+            record = {"event": "widget", "widget": widget, "author_id": "mona", "task_id": task_id,
+                      "turn_id": rid, "input_id": metadata.get("frame", {}).get("input_id")}
         elif kind == "desktop":
             ui = data.get("agent_ui")
             if data.get("event") == "deliver_files":

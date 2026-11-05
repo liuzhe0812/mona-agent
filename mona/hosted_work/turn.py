@@ -69,6 +69,11 @@ class WorkHook(AgentHook):
 
     async def after_iteration(self, context):
         await self.flush()
+        from mona.utils.widget_events import widget_event
+
+        for call, result in zip(context.tool_calls, context.tool_results):
+            if call.name == "show_widget":
+                await self.emit("widget", widget_event(call, result, status="complete"))
         if not context.tool_calls or len(context.tool_results) == len(context.tool_calls):
             await self.emit("history", {"messages": [m for m in context.messages if m.get("role") != "system"]})
 
@@ -76,12 +81,14 @@ class WorkHook(AgentHook):
 async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, emit, authorize=None, editor_tools=()) -> dict:
     """External dependencies are supplied; production uses the real runner unchanged."""
     selection = config.models[payload["model_id"]]
-    tools = HostedTools(sandbox, emit, editor_tools)
-    hook = WorkHook(emit, authorize)
     history = payload["history"]
     if not isinstance(history, list) or len(json.dumps(history).encode()) > config.max_history_bytes:
         raise WorkError("history_limit", "会话内容超出本轮限制。")
-    messages = [{"role": "system", "content": SYSTEM + (EDITOR_RULES if editor_tools else "")}, *history]
+    tools = HostedTools(sandbox, emit, editor_tools,
+                        session_id=payload.get("session_id") if payload.get("desktop_ui") else None,
+                        history=history, config=config)
+    hook = WorkHook(emit, authorize)
+    messages = [{"role": "system", "content": SYSTEM + (EDITOR_RULES if editor_tools else "") + tools.skills.summary()}, *history]
     for attachment in payload.get("attachments", []):
         current = await sandbox.file({"action": "stat", "path": attachment["path"]})
         if current["sha256"] != attachment["sha256"] or current["size"] != attachment["size"]:

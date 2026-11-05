@@ -1,4 +1,4 @@
-"""Build an immutable Work release without desktop UI, Auth code, credentials or live user state."""
+"""Build an immutable Work release without Auth code, credentials or live user state."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,14 @@ def main() -> None:
         raise SystemExit("Build the independent Work frontend first.")
     files = set((root / "mona").rglob("*.py"))
     files.update((root / "mona/templates").rglob("*.md"))
+    skills = root / "mona/skills"
+    for path in skills.rglob("*"):
+        if path.is_symlink() or not path.resolve().is_relative_to(skills):
+            raise SystemExit("Builtin skills must not contain linked or outside resources.")
+        if ("__pycache__" not in path.parts and path.suffix != ".pyc"
+                and not any(part.startswith(".env") or part in {"node_modules", ".git", ".venv"}
+                            for part in path.relative_to(skills).parts)):
+            files.add(path)
     files.update((root / "tests/hosted_work").glob("*.py"))
     files.update(frontend.rglob("*"))
     for subtree in ("mona/development/sandbox_node", "deploy/hosted-work"):
@@ -29,7 +37,7 @@ def main() -> None:
         if not template.is_file():
             raise SystemExit("Office blank templates must be present in the release sources.")
         files.add(template)
-    selected = sorted(path for path in files if path.is_file() and "__pycache__" not in path.parts)
+    selected = sorted(path for path in files if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc")
     manifest = {}
     for path in selected:
         relative = path.relative_to(root)

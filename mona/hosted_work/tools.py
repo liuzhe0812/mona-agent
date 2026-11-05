@@ -8,6 +8,7 @@ from typing import Any
 
 from mona.agent.tools.base import Tool
 from mona.agent.tools.registry import ToolRegistry
+from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.public_web import fetch_public_text
 from mona.hosted_work.sandbox import DockerSandbox, SandboxError
@@ -40,8 +41,10 @@ class HostedTool(Tool):
 
 
 class HostedTools:
-    def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]], editor_tools=()):
+    def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]], editor_tools=(),
+                 *, session_id: str | None = None, history=(), config: HostedWorkConfig | None = None):
         self.sandbox, self.emit = sandbox, emit
+        self.config = config or getattr(sandbox, "config", HostedWorkConfig())
         self.fault: str | None = None
         self.registry = ToolRegistry()
         text = {"type": "string", "minLength": 1, "maxLength": 1024}
@@ -65,7 +68,20 @@ class HostedTools:
             self.registry.register(HostedTool(name, description, properties, required, callback))
         for tool in editor_tools:
             self.registry.register(tool)
-        self.registry.set_allowed_tool_names({item[0] for item in definitions} | {tool.name for tool in editor_tools})
+        allowed = {item[0] for item in definitions} | {tool.name for tool in editor_tools}
+        if session_id:
+            from mona.agent.tools.context import RequestContext
+            from mona.agent.tools.visualizer import ShowWidgetTool
+
+            widget = ShowWidgetTool()
+            widget.set_context(RequestContext(channel="websocket", chat_id=session_id,
+                                              session_key="websocket:" + session_id))
+            self.registry.register(widget)
+            allowed.add(widget.name)
+        from mona.hosted_work.skills import HostedSkills
+
+        self.skills = HostedSkills(self, allowed, history=history)
+        self.skills.register()
 
     async def _file(self, action: str, **kwargs):
         try:
