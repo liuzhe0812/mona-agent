@@ -806,7 +806,8 @@ class HostedWorkModel(Base):
     api_key_env: str = Field(default="", pattern=r"^(?:MONA_WORK_MODEL_[A-Z0-9_]+)?$")
     model: str = Field(min_length=1, max_length=200)
     native_config_path: str = ""
-    context_window_tokens: int = Field(default=32768, ge=4096, le=2_000_000)
+    # Optional operator input cap; model capacity is resolved from the shared catalog.
+    context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     reasoning_effort: str | None = None
 

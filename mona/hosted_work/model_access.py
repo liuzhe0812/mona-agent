@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import httpx
@@ -10,6 +11,20 @@ from mona.config.schema import HostedWorkConfig, HostedWorkModel
 from mona.hosted_work.contracts import WorkError
 from mona.providers.openai_compat_provider import OpenAICompatProvider
 from mona.providers.registry import ProviderSpec
+
+
+def model_context_window(selection: HostedWorkModel):
+    """Use desktop model metadata without loading desktop credentials or IPC."""
+    from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS
+    from mona.providers.context_window import resolve_model_context_window_details
+
+    entry = next((item for item in CINDY_CHAT_PROVIDERS
+                  if item.api_base.rstrip("/") == selection.api_base.rstrip("/")), None)
+    return resolve_model_context_window_details(
+        SimpleNamespace(get_provider=lambda *_args, **_kwargs: None),
+        SimpleNamespace(model=selection.model), provider_name=entry.id if entry else "hosted_work_api",
+        managed_catalog={"models": []},
+    )
 
 
 def model_endpoint(config: HostedWorkConfig, selection: HostedWorkModel) -> str:

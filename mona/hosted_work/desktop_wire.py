@@ -72,6 +72,7 @@ class DesktopWire:
         self._locks: dict[str, asyncio.Lock] = {}
         self._streams: dict[tuple[str, str], tuple[int, bool]] = {}
         self._stream_text: dict[tuple[str, str], list[str]] = {}
+        self._reasoning_open: set[tuple[str, str]] = set()
         self._announced: set[tuple[str, str]] = set()
         self._platform: dict[tuple[str, str, str], asyncio.Future] = {}
         self._platform_done: dict[tuple[str, str], tuple[str, str]] = {}
@@ -477,6 +478,7 @@ class DesktopWire:
             return
         key = owner, rid
         index, active = self._streams.get(key, (0, False))
+        identity = {"task_id": task_id, "turn_id": rid, "input_id": metadata.get("input_id")}
         if kind == "delta":
             if not active:
                 index += 1
@@ -485,7 +487,7 @@ class DesktopWire:
             if not isinstance(text, str):
                 raise WorkError("protocol_error", "模型输出格式无效。", 503)
             self._stream_text[key].append(text)
-            record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), "task_id": task_id}
+            record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), **identity}
             active = True
         elif kind == "widget":
             from mona.agent.tools.visualizer import _validate_widget
@@ -519,14 +521,45 @@ class DesktopWire:
                 session = self._office_state(ui["data"].get("session"))
                 record = {"event": "message", "kind": "progress", "text": data["text"], "task_id": task_id,
                           "agent_ui": {"kind": "office_session", "data": {"session": session}}}
+        elif data.get("kind") in {"reasoning_delta", "reasoning_end"}:
+            if data["kind"] == "reasoning_delta":
+                text = data.get("text")
+                if not isinstance(text, str) or not text:
+                    self.state.set(owner, "wire_seq:" + rid, row["seq"])
+                    return
+                self._reasoning_open.add(key)
+                record = {"event": "reasoning_delta", "text": text, **identity}
+            else:
+                self._reasoning_open.discard(key)
+                record = {"event": "reasoning_end", **identity}
         else:
             if active:
-                ending = {"event": "stream_end", "stream_id": rid + ":" + str(index)}
+                ending = {"event": "stream_end", "stream_id": rid + ":" + str(index), **identity}
                 self.state.append(owner, sid, ending, f"run:{rid}:event:{row['seq']}:stream_end")
                 await self.emit_to_chat(owner, sid, ending)
             active = False
-            record = {"event": "message", "kind": "progress", "text": str(data.get("message") or "正在处理任务"), "task_id": task_id}
-            if isinstance(data.get("tools"), list):
+            events = data.get("tool_events")
+            message = data.get("message")
+            text = message if isinstance(message, str) else ("" if isinstance(events, list) else "正在处理任务")
+            record = {"event": "message", "kind": "tool_hint" if data.get("kind") == "tool_hint" else "progress",
+                      "text": text, **identity}
+            if isinstance(events, list):
+                from mona.agent.tool_privacy import redact_tool_arguments
+
+                tools = []
+                for event in events:
+                    if not isinstance(event, dict) or event.get("phase") not in {"start", "end", "error"}:
+                        continue
+                    name, call_id, arguments = event.get("name"), event.get("call_id"), event.get("arguments")
+                    if not isinstance(name, str) or not name or not isinstance(call_id, str) or not isinstance(arguments, dict):
+                        continue
+                    tool = {"version": 1, "phase": event["phase"], "call_id": call_id, "name": name,
+                            "arguments": redact_tool_arguments(name, arguments)}
+                    if event["phase"] == "error":
+                        tool["error"] = "操作未能完成，请核对后继续。"
+                    tools.append(tool)
+                record["tool_events"] = tools
+            elif isinstance(data.get("tools"), list):
                 record["tool_events"] = [{"version": 1, "phase": "start", "name": name,
                                            "call_id": f"{rid}:{row['seq']}:{i}"}
                                           for i, name in enumerate(data["tools"]) if isinstance(name, str)]
@@ -563,16 +596,23 @@ class DesktopWire:
                     "files": await self._delivery_files(owner, sid, verified, read_contents=False)} if verified else None
         index, active = self._streams.pop((owner, rid), (0, False))
         if active:
-            end = {"event": "stream_end", "stream_id": rid + ":" + str(index)}
+            end = {"event": "stream_end", "stream_id": rid + ":" + str(index), "task_id": task_id,
+                   "turn_id": rid, "input_id": metadata.get("input_id")}
             self.state.append(owner, sid, end, "run:" + rid + ":stream_end")
+            await self.emit_to_chat(owner, sid, end)
+        if (owner, rid) in self._reasoning_open:
+            self._reasoning_open.discard((owner, rid))
+            end = {"event": "reasoning_end", "task_id": task_id, "turn_id": rid,
+                   "input_id": metadata.get("input_id")}
+            self.state.append(owner, sid, end, "run:" + rid + ":reasoning_end")
             await self.emit_to_chat(owner, sid, end)
         text = stored["result"].get("content", "")
         streamed = "".join(self._stream_text.pop((owner, rid), []))
-        record = {"event": "message", "text": text, "task_id": task_id, "token_usage": stored["result"].get("usage", {})}
-        if index:
+        record = {"event": "message", "text": text, "task_id": task_id, "turn_id": rid,
+                  "input_id": metadata.get("input_id"), "token_usage": stored["result"].get("usage", {})}
+        if index and status == "completed":
             record["stream_id"] = rid + ":" + str(index)
         if not text or status != "completed":
-            record["kind"] = "progress"
             record["text"] = stored["result"].get("message") or ("本轮已完成。" if status == "completed" else "本轮未完成，已有结果已保留。")
         already_streamed = status == "completed" and bool(text) and index > 0 and text == streamed
         if not already_streamed:
@@ -658,6 +698,7 @@ class DesktopWire:
 
     async def close(self):
         self._tickets.clear()
+        self._reasoning_open.clear()
         for future in self._platform.values():
             if not future.done():
                 future.set_exception(WorkError("editor_unavailable", "编辑连接已关闭。", 503))

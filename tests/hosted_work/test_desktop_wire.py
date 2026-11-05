@@ -160,6 +160,86 @@ async def new_chat(socket, rid="chat-request"):
     return (await receive(socket, "attached"))["chat_id"]
 
 
+async def test_structured_stream_matches_desktop_and_failure_keeps_partial_output(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+    start = {"version": 1, "phase": "start", "call_id": "tool-call-1", "name": "browser_type",
+             "arguments": {"selector": "#query", "text": "synthetic-private-text"}}
+    finish = {**start, "phase": "end", "result": "synthetic-unneeded-result"}
+
+    async def scripted(payload, emit):
+        executor.calls.append(payload)
+        owner, rid = payload["owner"], payload["run_id"]
+        for data in ({"kind": "reasoning_delta", "text": "先核对材料。"},
+                     {"kind": "reasoning_end"},
+                     {"kind": "tool_hint", "message": "正在搜索", "tool_events": [start]},
+                     {"kind": "progress", "message": "", "tool_events": [finish]}):
+            await emit("progress", data)
+            await wire.on_run_event(owner, wire.service.store.run(owner, rid), "progress", data)
+        await emit("delta", {"text": "已完成的一部分。"})
+        await wire.on_run_event(owner, wire.service.store.run(owner, rid), "delta", {"text": "已完成的一部分。"})
+        return {"status": "failed", "content": "synthetic-internal-error",
+                "message": "本轮内容已达到上限，已有输出已保留。", "workspace_saved": True}
+
+    executor.execute = scripted
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "stream-input",
+                                "task_id": "stream-task", "content": "fixture request"})
+        await receive(socket, "message_accepted")
+        running = await receive(socket, "goal_status", lambda frame: frame.get("status") == "running")
+        rid = running["turn_id"]
+        thought = await receive(socket, "reasoning_delta")
+        assert (thought["text"], thought["turn_id"], thought["input_id"], thought["task_id"]) == (
+            "先核对材料。", rid, "stream-input", "stream-task")
+        await receive(socket, "reasoning_end")
+        begun = await receive(socket, "message", lambda frame: frame.get("kind") == "tool_hint")
+        ended = await receive(socket, "message", lambda frame: frame.get("tool_events", [{}])[0].get("phase") == "end")
+        assert begun["tool_events"][0]["call_id"] == ended["tool_events"][0]["call_id"] == "tool-call-1"
+        assert begun["tool_events"][0]["arguments"] == {"selector": "#query", "text": "<redacted>"}
+        assert "result" not in ended["tool_events"][0] and ended["text"] == ""
+        await receive(socket, "delta")
+        await receive(socket, "stream_end")
+        notice = await receive(socket, "message", lambda frame: frame.get("text", "").startswith("本轮内容"))
+        assert "kind" not in notice and "stream_id" not in notice
+        await receive(socket, "turn_end")
+        await wire.on_run_finish(ALICE, wire.service.store.run(ALICE, rid), {})
+        records = [record for record, _ in state.records(ALICE, sid)]
+        assert [event["phase"] for record in records for event in record.get("tool_events", [])] == ["start", "end"]
+        assert "synthetic-private-text" not in encoded(records)
+        assert "synthetic-unneeded-result" not in encoded(records)
+        assert "synthetic-internal-error" not in encoded(records)
+        history = state.history(ALICE, sid)["messages"]
+        assert sum(message.get("content") == "已完成的一部分。" for message in history) == 1
+        assert sum(message.get("content") == "本轮内容已达到上限，已有输出已保留。" for message in history) == 1
+        assert len(executor.calls) == 1
+
+
+async def test_failed_turn_closes_unfinished_reasoning_without_fabricating_progress(tmp_path):
+    client, wire, executor, state = await make_client(tmp_path)
+
+    async def scripted(payload, emit):
+        owner, rid = payload["owner"], payload["run_id"]
+        data = {"kind": "reasoning_delta", "text": "正在整理已有材料。"}
+        await emit("progress", data)
+        await wire.on_run_event(owner, wire.service.store.run(owner, rid), "progress", data)
+        return {"status": "failed", "message": "本轮未完成，已有结果已保留。", "workspace_saved": True}
+
+    executor.execute = scripted
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "reasoning-failure", "content": "fixture"})
+        await receive(socket, "reasoning_delta")
+        await receive(socket, "reasoning_end")
+        notice = await receive(socket, "message", lambda frame: frame.get("text") == "本轮未完成，已有结果已保留。")
+        assert "kind" not in notice
+        await receive(socket, "turn_end")
+        records = [record for record, _ in state.records(ALICE, sid)]
+        assert sum(record.get("event") == "reasoning_end" for record in records) == 1
+        assert not any(record.get("kind") == "progress" for record in records)
+
+
 async def test_messages_use_real_service_and_are_idempotent_across_reconnection(tmp_path):
     client, wire, executor, state = await make_client(tmp_path)
     async with client:

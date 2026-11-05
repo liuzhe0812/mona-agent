@@ -13,12 +13,13 @@ from pathlib import Path
 
 from filelock import FileLock
 
-from mona.agent.hook import AgentHook
+from mona.agent.progress_hook import AgentProgressHook
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.auth_client import AuthClient
 from mona.hosted_work.contracts import WorkError, identifier, private_directory
 from mona.hosted_work.editor_tools import build_editor_tools
+from mona.hosted_work.model_access import model_context_window
 from mona.hosted_work.providers import create_provider
 from mona.hosted_work.sandbox import DockerSandbox
 from mona.hosted_work.tools import HostedTools
@@ -35,52 +36,80 @@ Office 文档和画布使用 office、canvas 实时工具，在用户当前侧�
 """
 
 
-class WorkHook(AgentHook):
+class WorkHook(AgentProgressHook):
     def __init__(self, emit, authorize=None):
-        super().__init__(reraise=True)
         self.emit, self.authorize = emit, authorize
-        self.buffer = ""
+        self.iteration = -1
+        self.last_response = None
+        self.max_context_tokens = 0
+        super().__init__(on_progress=self.progress, on_stream=self.delta, channel="websocket")
 
-    def wants_streaming(self):
-        return True
+    async def delta(self, text):
+        await self.emit("delta", {"text": text})
 
-    async def on_stream(self, context, delta: str):
-        self.buffer += delta
-        if len(self.buffer) >= 256:
-            await self.flush()
+    async def progress(self, content, *, tool_hint=False, tool_events=None, reasoning=False, reasoning_end=False,
+                       widget_events=None):
+        if widget_events:
+            for event in widget_events:
+                if event.get("status") in {"complete", "error"}:
+                    await self.emit("widget", event)
+            return
+        if reasoning or reasoning_end:
+            await self.emit("progress", {"kind": "reasoning_end" if reasoning_end else "reasoning_delta", "text": content or ""})
+            return
+        # The desktop hook owns lifecycle, think extraction, names and call IDs.
+        # Results remain in execution history, not duplicated in the display log.
+        events = []
+        for event in tool_events or []:
+            value = {key: event[key] for key in ("version", "phase", "call_id", "name", "arguments") if key in event}
+            if len(json.dumps(value, ensure_ascii=False).encode()) > 8192:
+                value["arguments"] = {key: str(item)[:160] for key, item in event.get("arguments", {}).items()
+                                      if key in {"action", "path", "name", "skill", "document_type", "display_name"}}
+            value.update(result=None, error="操作未完成，请核对已有结果。" if event.get("phase") == "error" else None,
+                         files=[], embeds=[])
+            events.append(value)
+        await self.emit("progress", {"kind": "tool_hint" if tool_hint else "progress",
+                                    "message": "" if events else content or "", "tool_events": events})
 
     async def flush(self):
-        if self.buffer:
-            await self.emit("delta", {"text": self.buffer})
-            self.buffer = ""
-
-    async def on_stream_end(self, context, *, resuming: bool):
-        await self.flush()
+        await self.emit_reasoning_end()
 
     async def before_iteration(self, context):
         if self.authorize is not None:
             await self.authorize()
-        await self.emit("progress", {"iteration": context.iteration, "message": "正在处理任务"})
+        self.iteration = context.iteration
+        await super().before_iteration(context)
 
     async def before_execute_tools(self, context):
         if self.authorize is not None:
             await self.authorize()
-        await self.emit("progress", {"message": "正在执行工作区操作", "tools": [call.name for call in context.tool_calls]})
+        await super().before_execute_tools(context)
 
     async def after_iteration(self, context):
         await self.flush()
-        from mona.utils.widget_events import widget_event
-
-        for call, result in zip(context.tool_calls, context.tool_results):
-            if call.name == "show_widget":
-                await self.emit("widget", widget_event(call, result, status="complete"))
+        self.last_response = context.response
+        current = context.usage.get("context_tokens", context.usage.get("prompt_tokens", 0))
+        if isinstance(current, int) and not isinstance(current, bool):
+            self.max_context_tokens = max(self.max_context_tokens, current)
+        await super().after_iteration(context)
         if not context.tool_calls or len(context.tool_results) == len(context.tool_calls):
             await self.emit("history", {"messages": [m for m in context.messages if m.get("role") != "system"]})
+
+
+def failure_message(reason: str) -> str:
+    return {
+        "context_limit": "本轮内容已达到模型上下文上限，已保留编辑进度和已有文件。请分步继续任务。",
+        "max_iterations": "本轮已达到执行步数上限，已保留进度。请检查已有结果后继续。",
+        "loop_detected": "本轮操作出现重复，已停止继续尝试并保留进度。请检查已有结果后调整要求。",
+        "empty_final_response": "模型未返回完整的结束答复，已有编辑进度已保留。请检查已有结果后继续。",
+        "tool_error": "本轮有操作未能完成，已有编辑进度已保留。请检查已有结果后继续。",
+    }.get(reason, "模型调用未能完成，已有编辑进度已保留。请稍后继续或联系管理员。")
 
 
 async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, emit, authorize=None, editor_tools=()) -> dict:
     """External dependencies are supplied; production uses the real runner unchanged."""
     selection = config.models[payload["model_id"]]
+    window = model_context_window(selection)
     history = payload["history"]
     if not isinstance(history, list) or len(json.dumps(history).encode()) > config.max_history_bytes:
         raise WorkError("history_limit", "会话内容超出本轮限制。")
@@ -107,8 +136,8 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
             max_iterations=config.max_iterations, max_tool_result_chars=100000,
             max_tokens=selection.max_output_tokens, reasoning_effort=selection.reasoning_effort,
             hook=hook, checkpoint_callback=checkpoint,
-            context_window_tokens=selection.context_window_tokens,
-            context_window_verified=False, provider_retry_mode="standard",
+            context_window_tokens=window.tokens, context_window_verified=window.source != "default",
+            context_block_limit=selection.context_window_tokens, provider_retry_mode="standard",
             concurrent_tools=False, fail_on_tool_error=False,
             llm_timeout_s=config.run_timeout_seconds, enforce_llm_timeout_for_streaming=True,
             session_key="hosted:" + payload["run_id"],
@@ -116,9 +145,13 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         await hook.flush()
         await emit("history", {"messages": [m for m in result.messages if m.get("role") != "system"]})
         status = "completed" if result.stop_reason == "completed" and not result.error else "failed"
-        return {"status": status, "content": result.final_content or "",
-                "message": "" if status == "completed" else "本轮未正常完成，请核对已有输出后继续。",
-                "usage": result.usage}
+        return {"status": status, "content": (result.final_content or "") if status == "completed" else "",
+                "message": "" if status == "completed" else failure_message(result.stop_reason),
+                "usage": result.usage,
+                "diagnostic": {"stop_reason": result.stop_reason, "iterations": hook.iteration + 1,
+                               "context_window_tokens": window.tokens, "context_window_source": window.source,
+                               "max_context_tokens": hook.max_context_tokens,
+                               "provider_status": getattr(hook.last_response, "error_status_code", None)}}
     except asyncio.CancelledError:
         await hook.flush()
         return {"status": "failed" if tools.fault else "cancelled", "content": "",
@@ -150,6 +183,7 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
         if kind == "artifact":
             offered.append(value)
         await emit(kind, value)
+    stage = "sandbox_start"
     try:
         await sandbox.start()
         if payload["action"] == "turn":
@@ -161,9 +195,11 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
             async def authorize():
                 if await auth.identity(payload["account_token"]) != owner:
                     raise WorkError("account_changed", "账号身份已变化，已停止本轮。", 401)
+            stage = "authorization"
             await authorize()
             provider = create_provider(config, selection, empty_cwd)
             editor_tools = build_editor_tools(config, payload, track_event) if payload.get("desktop_ui") else ()
+            stage = "model_run"
             async with asyncio.timeout(config.run_timeout_seconds):
                 if editor_tools:
                     result = await run_turn(config, payload, sandbox, provider, track_event, authorize, editor_tools)
@@ -178,6 +214,8 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
         result.update(status="cancelled", message="本轮已停止，已有输出保留。")
     except Exception as exc:
         result.update(status="failed", message=exc.message if isinstance(exc, WorkError) else "在线任务未能完成，请核对已有结果。")
+        result["diagnostic"] = {"stop_reason": "execution_error", "stage": stage,
+                                "exception_type": type(exc).__name__}
         if isinstance(exc, WorkError):
             result["error"] = {"code": exc.code, "status": exc.status}
             if exc.code == "file_operation_unknown":
@@ -191,8 +229,9 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
                         closing = closer()
                         if inspect.isawaitable(closing):
                             await closing
-                except Exception:
+                except Exception as exc:
                     result.update(status="unknown", message="模型执行状态待核对，本轮不会自动重新执行。")
+                    result["diagnostic"] = {"stop_reason": "execution_unknown", "stage": "provider_close", "exception_type": type(exc).__name__}
         if sandbox.started:
             try:
                 await sandbox.save()
@@ -204,13 +243,15 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
                         raise WorkError("artifact_changed", "交付后文件发生变化，请重新确认并交付。", 409)
                     verified.append(current)
                 result["artifacts"] = verified
-            except Exception:
+            except Exception as exc:
                 result.update(status="unknown" if result.get("status") == "unknown" else "failed", workspace_saved=False,
                               message="本轮工作区或交付文件未通过保存校验；请勿将本轮文件视为已交付。")
+                result["diagnostic"] = {"stop_reason": "workspace_save_failed", "stage": "workspace_save", "exception_type": type(exc).__name__}
         try:
             await sandbox.close()
-        except Exception:
+        except Exception as exc:
             result.update(status="unknown", message="隔离任务尚未确认结束，已阻止后续执行。")
+            result["diagnostic"] = {"stop_reason": "execution_unknown", "stage": "sandbox_close", "exception_type": type(exc).__name__}
         if result.get("status") == "completed" and not result.get("workspace_saved"):
             result.update(status="failed", message="工作区未保存，本轮不能报告成功。")
         await emit("result", result)

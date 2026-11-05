@@ -128,7 +128,9 @@ class DesktopAPI:
         selected = self.state.model(owner)
         selection = models.get(selected)
         max_tokens = selection.max_output_tokens if selection else 4096
-        context = selection.context_window_tokens if selection else 32768
+        from mona.hosted_work.model_access import model_context_window
+        window = model_context_window(selection) if selection else None
+        context = window.tokens if window else 1_000_000
         effort = selection.reasoning_effort if selection else None
         configured = bool(models)
         rows = [{"id": key, "name": item.label, "type": "chat", "enabled": True,
@@ -136,7 +138,7 @@ class DesktopAPI:
                 for index, (key, item) in enumerate(models.items())]
         agent = {"model": selected, "provider": "mona_managed", "resolved_provider": "mona_managed",
                  "executor": "mona", "model_preset": None, "has_api_key": configured,
-                 "max_tokens": max_tokens, "context_window_tokens": context, "context_window_source": "default",
+                 "max_tokens": max_tokens, "context_window_tokens": context, "context_window_source": window.source if window else "default",
                  "auto_compact_token_limit": None, "temperature": 0.7, "reasoning_effort": effort,
                  "timezone": "UTC", "tool_hint_max_length": 120}
         preset = {"name": "default", "label": "默认模型", "active": True, "is_default": True,

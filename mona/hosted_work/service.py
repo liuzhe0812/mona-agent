@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import web
+from loguru import logger
 from pydantic import ValidationError
 
 from mona.config.schema import HostedWorkConfig
@@ -131,12 +132,20 @@ class WorkService:
                                 "mime": mimetypes.guess_type(info["name"])[0] or "application/octet-stream"}})
                         self.desktop.state.set(owner, "artifact_index:" + sid, index)
             # Internal file paths and diagnostic details do not become default UI output.
-            public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage") if key in result}
+            public = {key: result[key] for key in ("content", "message", "workspace_saved", "usage", "diagnostic") if key in result}
+            if result["status"] != "completed":
+                diagnostic = result.get("diagnostic") or {}
+                logger.warning("Hosted Work run={} status={} reason={} iterations={} provider_status={} stage={} exception_type={}",
+                    run_id, result["status"], diagnostic.get("stop_reason", "execution_failure"),
+                    diagnostic.get("iterations"), diagnostic.get("provider_status"), diagnostic.get("stage"),
+                    diagnostic.get("exception_type"))
             self.store.finish(owner, run_id, result["status"], public)
-        except BaseException:
+        except BaseException as exc:
+            logger.warning("Hosted Work run={} result_unconfirmed exception_type={}", run_id, type(exc).__name__)
             try:
                 self.store.finish(owner, run_id, "unknown", {
-                    "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False})
+                    "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False,
+                    "diagnostic": {"stop_reason": "execution_unknown", "stage": "child_transport", "exception_type": type(exc).__name__}})
             except WorkError as exc:
                 if exc.status != 404:
                     raise
