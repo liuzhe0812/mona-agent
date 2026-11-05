@@ -72,6 +72,10 @@ class ToolRegistry:
         """Clear cached stable tool schemas; request availability is always fresh."""
         self._cached_definitions = None
 
+    def get_allowed_tool_names(self) -> set[str] | None:
+        """Return a copy of the source authorization, independent of deferred visibility."""
+        return None if self._allowed_tool_names is None else set(self._allowed_tool_names)
+
     def _is_allowed(self, tool: Tool | None) -> bool:
         if tool is None:
             return False

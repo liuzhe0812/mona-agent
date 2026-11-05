@@ -185,13 +185,18 @@ class SubagentManager:
         session_manager: Any | None = None,
         agent_runtime_resolver: Callable[[AgentDefinition], tuple[LLMProvider, str, Any, ProviderSnapshot | None]]
         | None = None,
+        run_spec_factory: Callable[
+            [str, str, dict[str, str], AgentHook, Callable[[dict], Awaitable[None]]],
+            Awaitable[AgentRunSpec],
+        ] | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
         self.model = model or provider.get_default_model()
-        self.tools_config = tools_config or ToolsConfig()
+        # An injected run spec must not bootstrap desktop tool dependencies.
+        self.tools_config = tools_config or (ToolsConfig() if run_spec_factory is None else None)
         self.services_port = services_port
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
         self._video_generation_provider_configs = dict(video_generation_provider_configs or {})
@@ -204,6 +209,7 @@ class SubagentManager:
         self.max_concurrent_subagents = defaults.max_concurrent_subagents
         self.runner = AgentRunner(provider)
         self._agent_runtime_resolver = agent_runtime_resolver
+        self._run_spec_factory = run_spec_factory
         self._llm_wall_timeout_for_session = llm_wall_timeout_for_session
         # Optional SessionManager used to post agent-authored room messages.
         self._sessions = session_manager
@@ -1874,27 +1880,29 @@ class SubagentManager:
             status.iteration = payload.get("iteration", status.iteration)
 
         try:
-            tools = self._build_tools()
-            system_prompt = self._build_subagent_prompt()
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
-            ]
-
-            sess_key = origin.get("session_key")
-            llm_timeout = (
-                self._llm_wall_timeout_for_session(sess_key)
-                if self._llm_wall_timeout_for_session
-                else None
-            )
-            result = await self.runner.run(
-                AgentRunSpec(
+            hook = _SubagentHook(task_id, status)
+            if self._run_spec_factory is not None:
+                spec = await self._run_spec_factory(task_id, task, dict(origin), hook, _on_checkpoint)
+            else:
+                tools = self._build_tools()
+                system_prompt = self._build_subagent_prompt()
+                messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": task},
+                ]
+                sess_key = origin.get("session_key")
+                llm_timeout = (
+                    self._llm_wall_timeout_for_session(sess_key)
+                    if self._llm_wall_timeout_for_session
+                    else None
+                )
+                spec = AgentRunSpec(
                     initial_messages=messages,
                     tools=tools,
                     model=self.model,
                     max_iterations=self.max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
-                    hook=_SubagentHook(task_id, status),
+                    hook=hook,
                     max_iterations_message="Task completed but no final response was generated.",
                     error_message=None,
                     # Same recovery semantics as the named-agent path above:
@@ -1905,7 +1913,7 @@ class SubagentManager:
                     llm_timeout_s=llm_timeout,
                     repeat_guard_enabled=True,
                 )
-            )
+            result = await self.runner.run(spec)
             status.phase = "done"
             status.stop_reason = result.stop_reason
 
@@ -1923,12 +1931,12 @@ class SubagentManager:
                     "error",
                     origin_message_id,
                 )
-            elif result.stop_reason == "error":
+            elif result.stop_reason != "completed" or result.error:
                 await self._announce_result(
                     task_id,
                     label,
                     task,
-                    result.error or "Error: subagent execution failed.",
+                    self._format_partial_progress(result),
                     origin,
                     "error",
                     origin_message_id,
@@ -2020,7 +2028,7 @@ class SubagentManager:
         elif result.error:
             lines.append("Failure:")
             lines.append(f"- {result.error}")
-        if result.stop_reason == "loop_detected" and result.final_content:
+        if isinstance(result.final_content, str) and result.final_content:
             if lines:
                 lines.append("")
             lines.append(result.final_content)

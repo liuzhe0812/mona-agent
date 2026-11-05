@@ -207,8 +207,9 @@ class MemorySearchTool(Tool):
     _DEFAULT_LIMIT = 50
     _MAX_LIMIT = 500
 
-    def __init__(self, agent_id: str) -> None:
+    def __init__(self, agent_id: str, *, history_path: Path | None = None) -> None:
         self._agent_id = agent_id
+        self._history_file = history_path
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -255,7 +256,7 @@ class MemorySearchTool(Tool):
         return f"event:{digest}"
 
     def _history_entries(self) -> Iterator[dict[str, Any]]:
-        path = _history_path(self._agent_id)
+        path = self._history_file if self._history_file is not None else _history_path(self._agent_id)
         try:
             with path.open("r", encoding="utf-8") as stream:
                 for line_number, line in enumerate(stream, 1):
@@ -338,7 +339,7 @@ class MemorySearchTool(Tool):
         if not query:
             return "Error: query parameter is required."
         limit = max(1, min(limit, self._MAX_LIMIT))
-        history_path = _history_path(self._agent_id)
+        history_path = self._history_file if self._history_file is not None else _history_path(self._agent_id)
         if not history_path.exists():
             return "No history found (history.jsonl does not exist yet)."
 

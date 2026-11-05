@@ -21,6 +21,7 @@ _LEGACY_BOOTSTRAP_HASHES = {
         "3e387c14b39025abf580fcff0041a5826bc10838341b28f12730c9d1ca4c57c6",  # f1aadcb9
     },
     "SOUL.md": {
+        "004c9f7137051f07117467e42fd428d225b93a40e7451fa2ffebb719197176a7",  # shared default before character alignment
         "c728da6bbbbaa33ba29ccc0e827b88d5c45241456efbcf4152c4a7d6b747fcce",  # dcfd9691
         "5c0c3fc04187a946d9ec0fe5fb0c5195fbf9f75543e91d45b496b94c6daca10d",  # 9eef6e8f
     },

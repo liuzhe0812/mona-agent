@@ -72,6 +72,8 @@ class ContextBuilder:
         *,
         agent_id: str = MONA_AGENT_ID,
         agent_registry: AgentRegistry | None = None,
+        memory_store: MemoryStore | None = None,
+        skills_loader: SkillsLoader | None = None,
     ):
         self.workspace = workspace
         self.timezone = timezone
@@ -80,8 +82,8 @@ class ContextBuilder:
         # agent keeps the legacy platform behavior.
         self.agent_id = normalize_agent_id(agent_id)
         self._agent_registry = agent_registry
-        self.memory = MemoryStore(workspace, agent_id=self.agent_id)
-        self.skills = SkillsLoader(
+        self.memory = memory_store if memory_store is not None else MemoryStore(workspace, agent_id=self.agent_id)
+        self.skills = skills_loader if skills_loader is not None else SkillsLoader(
             workspace,
             disabled_skills=set(disabled_skills) if disabled_skills else None,
             agent_id=self.agent_id,

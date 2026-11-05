@@ -186,6 +186,7 @@ class AgentRunSpec:
     max_injection_cycles: int = _MAX_INJECTION_CYCLES
     llm_timeout_s: float | None = None
     enforce_llm_timeout_for_streaming: bool = False
+    preserve_injection_identity: bool = False
 
 
 @dataclass(slots=True)
@@ -304,7 +305,9 @@ class AgentRunner:
     ) -> None:
         """Keep the default Work merge; explicit context owners can retain IDs."""
         for injection in injections:
-            identified = preserve_identity and injection.get("id")
+            identified = preserve_identity and (
+                injection.get("id") or (messages and messages[-1].get("id"))
+            )
             if messages and not identified and injection.get("role") == "user" and messages[-1].get("role") == "user":
                 merged = dict(messages[-1])
                 merged["content"] = cls._merge_message_content(
@@ -358,7 +361,10 @@ class AgentRunner:
                         "pending_tool_calls": [],
                     },
                 )
-        self._append_injected_messages(messages, injections, preserve_identity=spec.model_context_callback is not None)
+        self._append_injected_messages(
+            messages, injections,
+            preserve_identity=spec.preserve_injection_identity or spec.model_context_callback is not None,
+        )
         logger.debug(
             "Injected {} follow-up message(s) {} ({}/{})",
             len(injections),
@@ -504,7 +510,8 @@ class AgentRunner:
             nonlocal had_injections
             while injections := await self._drain_injections(spec, phase=phase):
                 self._append_injected_messages(
-                    messages, injections, preserve_identity=spec.model_context_callback is not None,
+                    messages, injections,
+                    preserve_identity=spec.preserve_injection_identity or spec.model_context_callback is not None,
                 )
                 had_injections = True
 
