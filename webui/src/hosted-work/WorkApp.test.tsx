@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonaClient } from "@/lib/mona-client";
 import type { ChatSummary } from "@/lib/types";
@@ -66,6 +66,7 @@ describe("hosted desktop conversation composition", () => {
     expect(screen.getByTestId("shared-chat-list")).toHaveTextContent("A的会话");
     expect(fixtures.thread.mock.lastCall?.[0].client).toBeInstanceOf(MonaClient);
     expect(getHostedPlatform()?.token).toBe("synthetic-A");
+    expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();
     view.unmount();
     expect(fixtures.clients[0].close).toHaveBeenCalledOnce();
     expect(getHostedPlatform()).toBeNull();
@@ -112,29 +113,7 @@ describe("hosted desktop conversation composition", () => {
     expect(fixtures.thread.mock.lastCall?.[0].session?.chatId).toBe("synthetic-B");
   });
 
-  it("keeps a login after an unconfirmed logout and clears private mirrors only after success", async () => {
-    let rejected = true;
-    vi.stubGlobal("fetch", vi.fn(async () => response(rejected ? { message: "退出未确认" } : { message: "已退出" }, rejected ? 503 : 200)));
-    saveAccount("synthetic-A"); render(<WorkApp />);
-    await screen.findByTestId("shared-thread-shell");
-    sessionStorage.setItem("mona.office.sessions.v1:websocket:old", "private-office-filename");
-    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
-    await screen.findByRole("dialog");
-    expect(getHostedPlatform()?.token).toBe("synthetic-A");
-    expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    rejected = false;
-    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
-    await screen.findByRole("button", { name: "登录并开始" });
-    expect(sessionStorage.getItem("mona-hosted-work-v1")).toBeNull();
-    expect(sessionStorage.getItem("mona-website-session-v1")).toBeNull();
-    expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).toBeNull();
-    expect(getHostedPlatform()).toBeNull();
-  });
-
-  it("does not let an old pending logout clear a newly selected account", async () => {
-    let finishLogout!: (value: Response) => void;
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finishLogout = resolve; })));
+  it("clears private mirrors when the website switches accounts", async () => {
     saveAccount("synthetic-A"); render(<WorkApp />);
     await screen.findByTestId("shared-thread-shell");
     sessionStorage.setItem("mona.office.sessions.v1:websocket:old", "private-office-filename");
@@ -143,7 +122,6 @@ describe("hosted desktop conversation composition", () => {
       size: 1, size_human: "1 B", mime: "text/plain",
     } });
     useOfficeSessionStore.setState({ sessions: { old: { displayName: "A私有文档" } as never } });
-    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
     await act(async () => {
       saveAccount("synthetic-B"); window.dispatchEvent(new Event("mona-account-changed"));
     });
@@ -153,7 +131,6 @@ describe("hosted desktop conversation composition", () => {
     expect(useFilePreviewStore.getState().file).toBeNull();
     expect(useOfficeSessionStore.getState().sessions).toEqual({});
     expect(sessionStorage.getItem("mona.office.sessions.v1:websocket:old")).toBeNull();
-    await act(async () => { finishLogout(response({ message: "已退出" })); });
     expect(getHostedPlatform()?.token).toBe("synthetic-B");
     expect(JSON.parse(sessionStorage.getItem("mona-hosted-work-v1")!).token).toBe("synthetic-B");
   });

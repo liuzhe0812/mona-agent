@@ -9,6 +9,7 @@ import {
 import type { ScheduleItem } from "@/components/schedule/types";
 import type { ChatSummary } from "@/lib/types";
 import { deriveTitle } from "@/lib/format";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { cn } from "@/lib/utils";
 
 interface NewChatDashboardProps {
@@ -78,6 +79,8 @@ export function NewChatDashboard({
   onConnectDatabase,
   onCreateNote,
 }: NewChatDashboardProps) {
+  if (getHostedPlatform()) return null;
+
   const focusItems = selectTodayFocus(scheduleItems, now);
   const nextItem = focusItems.find((item) => !item.done && item.startAtMs >= now.getTime())
     ?? focusItems.find((item) => !item.done)

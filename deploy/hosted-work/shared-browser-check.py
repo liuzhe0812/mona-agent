@@ -388,7 +388,10 @@ async def main():
                     account_headers={**headers, "X-Mona-Session-Key": "websocket:" + await sid()})
             report["two_account_isolation"] = True
             closing[0] = True
-            await page.get_by_role("button", name="退出登录", exact=True).click()
+            assert not await page.get_by_role("button", name="退出登录", exact=True).count()
+            await api("/api/work/auth/logout", method="post", data={})
+            await page.reload()
+            await page.get_by_role("button", name="知道了", exact=True).click()
             await page.get_by_role("button", name="登录并开始", exact=True).wait_for()
             assert await page.locator("iframe,me-tpc").count() == 0
             denied = await context.request.get(ORIGIN + "/api/work/sessions", headers=headers)

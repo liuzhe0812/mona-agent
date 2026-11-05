@@ -195,7 +195,11 @@ async def test_shared_editor_save_restore_download_and_account_isolation():
                 await other.close()
                 report["other_account_isolated"] = True
                 logging_out[0] = True
-                await page.get_by_role("button", name="退出登录", exact=True).click()
+                assert not await page.get_by_role("button", name="退出登录", exact=True).count()
+                revoked = await page.request.post(origin + "/api/work/auth/logout", headers={"Authorization": "Bearer local-ui-a"}, data={})
+                assert revoked.status == 200
+                await page.reload()
+                await page.get_by_role("button", name="知道了", exact=True).click()
                 await page.get_by_role("button", name="登录并开始", exact=True).wait_for()
                 await playwright_api.expect(page.get_by_role("dialog")).not_to_be_visible()
                 assert await page.locator("iframe,me-tpc").count() == 0

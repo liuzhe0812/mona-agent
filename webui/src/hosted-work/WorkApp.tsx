@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, ArrowLeft, LoaderCircle, LogOut, Plus } from "lucide-react";
+import { Archive, ArrowLeft, LoaderCircle, Plus } from "lucide-react";
 
 import { ChatList } from "@/components/ChatList";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
@@ -19,7 +19,7 @@ import type { MonaClient } from "@/lib/mona-client";
 import type { ConnectionStatus } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { ClientProvider, useClient, type RuntimeStatus } from "@/providers/ClientProvider";
-import { login, WorkApiError, WorkClient, type PendingTurn } from "./client";
+import { login, WorkApiError, type PendingTurn } from "./client";
 import { clearHostedClientIdentity, createHostedClient } from "./runtime";
 
 const SESSION_KEY = "mona-hosted-work-v1";
@@ -82,11 +82,6 @@ export function WorkApp() {
     clearAccount(token);
     setError("登录已失效，请重新登录 Mona 账号。");
   }, [clearAccount]);
-  const signOut = useCallback(async (token: string) => {
-    await new WorkClient(token).logout();
-    clearAccount(token);
-  }, [clearAccount]);
-
   useEffect(() => {
     const refresh = () => {
       const next = loadSaved();
@@ -107,7 +102,7 @@ export function WorkApp() {
   return <div className="h-dvh min-h-0 bg-background text-foreground">
     {saved.token
       ? <HostedRuntime key={saved.token} saved={saved} updateSaved={updateSaved} report={report}
-          signOut={signOut} unauthorized={unauthorized} />
+          unauthorized={unauthorized} />
       : <Login onLogin={token => updateSaved({ token, selected: undefined, pending: null, creating: null })} report={report} />}
     <Dialog open={Boolean(error)} onOpenChange={open => !open && setError("")}>
       <DialogContent><DialogHeader><DialogTitle>操作未完成</DialogTitle><DialogDescription>{error}</DialogDescription></DialogHeader>
@@ -141,7 +136,6 @@ interface WorkspaceProps {
   saved: Saved;
   updateSaved: (patch: Partial<Saved>) => void;
   report: (error: unknown) => void;
-  signOut: (token: string) => Promise<void>;
   unauthorized: (token: string) => void;
 }
 
@@ -197,7 +191,7 @@ function HostedRuntime(props: WorkspaceProps) {
   </ClientProvider>;
 }
 
-function Conversations({ saved, updateSaved, report, signOut, onModelNameChange }: WorkspaceProps & {
+function Conversations({ saved, updateSaved, report, onModelNameChange }: WorkspaceProps & {
   onModelNameChange: (value: string | null) => void;
 }) {
   const { runtimeStatus: status } = useClient();
@@ -205,7 +199,6 @@ function Conversations({ saved, updateSaved, report, signOut, onModelNameChange 
   const { state: sidebar, update: updateSidebar } = useSidebarState(sessions, loaded);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [pendingRename, setPendingRename] = useState<{ key: string; label: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ keys: string[]; label: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -299,9 +292,6 @@ function Conversations({ saved, updateSaved, report, signOut, onModelNameChange 
             throw new HostedPlatformError("会话显示设置尚未保存，请刷新后核对。");
           }
         })}><Archive className="mr-2 h-4 w-4" aria-hidden />{sidebar.view.show_archived ? "返回会话" : "已归档"}</Button>
-        <Button variant="ghost" className="justify-start" disabled={loggingOut} onClick={() => void run(async () => {
-          setLoggingOut(true); try { await signOut(saved.token); } finally { setLoggingOut(false); }
-        })}><LogOut className="mr-2 h-4 w-4" aria-hidden />{loggingOut ? "正在退出…" : "退出登录"}</Button>
       </footer>
     </aside>}
     <main className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">

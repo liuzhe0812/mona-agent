@@ -60,6 +60,7 @@ import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { MessageQuote, RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { MonaComposerPeek } from "@/components/thread/MonaComposerPeek";
 import {
   getDesktopSettings,
@@ -1423,7 +1424,7 @@ export function ThreadComposer({
           </div>
         </div>
       ) : null}
-      {isHero && showHeroPromptChips ? (
+      {isHero && showHeroPromptChips && !getHostedPlatform() ? (
         <div
           data-testid="hero-composer-prelude"
           className="pointer-events-none absolute bottom-full left-1/2 z-20 flex w-full max-w-[58rem] -translate-x-1/2 justify-end"
