@@ -1,0 +1,64 @@
+{
+  "release": "experience-entry-20261105-v6",
+  "source_patch": "deploy/website-suggestions/experience-entry.patch",
+  "source_changes": {
+    "source_files": 93,
+    "baseline_source_archive_sha256": "c5531f8cd21be80a22ad0e26c70d448fdb8b041069a4864f0531d70f34df84bb",
+    "changed_files": {
+      "official-site/app/account/AccountNav.tsx": {
+        "before_sha256": "62bf34beeb4a4edb2bac0c9be12c951ebdbe4931bfff756198dedfd9d55b0b87",
+        "after_sha256": "dc7face571cd67ca9511467d3634f7ee96c219c70ed2f055f4ba02303e86725f"
+      },
+      "official-site/tests/account-browser.test.mjs": {
+        "before_sha256": "99b81fabcaa90f6cc36c16955983e3b01d607cb6a7077b11a358e43bad2f3c3f",
+        "after_sha256": "be1b8572c68ab0dcfdcbdfc7176d3b2123f3a494f0110fad18849b73d38967c6"
+      }
+    }
+  },
+  "isolated_build": {
+    "typecheck": "passed",
+    "build": "passed",
+    "deployed": false,
+    "reason": "Production index already referenced an amended bundle. Preserve that live bundle and change exactly one menu label."
+  },
+  "production": {
+    "release_root": "/var/www/mona/site-releases/experience-entry-20261105-v6/content",
+    "files_verified": 64,
+    "source_live_js": "/var/www/mona/site-releases/workspace-nav-20261103-v5/content/assets/static-index-Bpaa2Bc9.js",
+    "source_live_js_sha256": "230dc3fe04b1e25c0c7e02065e85d21ef211936b0e2b03ab687353ae40e03ffd",
+    "new_js": "assets/static-index-experience-8acfa362fe6e.js",
+    "new_js_sha256": "8acfa362fe6e4f06d082e3341f3dff3f40e1b47cfbf797c027625bfabe45de04",
+    "html_sha256": "a6e27d246b357fb7bfe7c01f271637babb3f86acdfade2364da651af035301d0",
+    "exactly_one_label_changed": true,
+    "preserved_live_changelog_sha256": "63a8b5f0343857d02488bf467a4f3f16a1bb8c2b9cdbc5cc797fdd4b4dd3497e",
+    "backup": "/var/www/mona/backups/experience-entry-20261105-v6",
+    "nginx_master_pid": "420299",
+    "only_website_static_root_changed": true,
+    "manifest_sha256": "e2242fc4d730f43f13fab3aadbcd7ee2496f555a304f0338e7d40f0cb761c79d"
+  },
+  "artifact_change": {
+    "needle": "href:\"/work/\",children:\"线上工作台\"",
+    "replacement": "href:\"/work/\",children:\"立即体验\"",
+    "count": 1,
+    "roundtrip_to_source_verified": true
+  },
+  "acceptance": {
+    "passed": true,
+    "model_task_sent": false,
+    "website_entry_label": "立即体验",
+    "claude_and_workbuddy_hidden": true,
+    "return_website_link_works": true,
+    "workspace_loaded": true,
+    "qwen_visible": true,
+    "page_errors": [],
+    "failed_assets": [],
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  }
+}

@@ -1,0 +1,22 @@
+--- a/official-site/app/account/AccountNav.tsx
++++ b/official-site/app/account/AccountNav.tsx
+@@ -58,7 +58,7 @@
+       <div className="account-menu-panel" aria-label="账户菜单">
+         <a href="/account">账户设置</a>
+         <a href="/suggestions">建议</a>
+-        {workReady ? <a href="/work/">线上工作台</a>
++        {workReady ? <a href="/work/">立即体验</a>
+           : <span className="account-menu-unavailable">{workReady === null ? "正在检查线上工作台…" : "线上工作台暂未开放"}</span>}
+         <button disabled={busy || disabled} onClick={async () => {
+           if (busy || disabled) return;
+--- a/official-site/tests/account-browser.test.mjs
++++ b/official-site/tests/account-browser.test.mjs
+@@ -223,7 +223,7 @@
+       assert.equal(calls.filter(call=>call.name==='work-models').at(-1)?.authorized,true);
+       await closeMenuWithEscape();workModels=[{id:'fixture-model',label:'测试模型',source:'mona'}];
+       await openMenu();await cdp.wait("document.querySelector('.account-menu-panel a[href=\"/work/\"]')!==null");
+-      assert.equal(await cdp.eval("document.querySelector('.account-menu-panel a[href=\"/work/\"]').textContent.trim()"),'线上工作台');
++      assert.equal(await cdp.eval("document.querySelector('.account-menu-panel a[href=\"/work/\"]').textContent.trim()"),'立即体验');
+       await closeMenuWithEscape();workModels=[];passed.push('account_menu_and_work_availability');
+     });
+     await t.test('signed-in account navigation fits desktop and mobile',async()=>{
