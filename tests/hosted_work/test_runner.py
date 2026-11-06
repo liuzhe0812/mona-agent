@@ -110,6 +110,23 @@ async def test_unknown_command_aborts_without_model_retry():
 
 
 @pytest.mark.asyncio
+async def test_normal_iteration_limit_keeps_history_and_clears_only_the_recovery_checkpoint():
+    from mona.config.schema import AgentDefaults
+
+    assert HostedWorkConfig().max_iterations == AgentDefaults().max_tool_iterations
+    config = HostedWorkConfig(max_iterations=2, models={"official": {"label": "Mona", "model": "fixture-model"}})
+    events = []
+    async def emit(kind, value):
+        events.append((kind, value))
+    result = await run_turn(config, {"model_id": "official", "run_id": "f" * 32,
+        "history": [{"role": "user", "content": "创建文件"}]}, SandboxBoundary(), ModelBoundary(), emit)
+    assert result["status"] == "failed" and result["diagnostic"]["stop_reason"] == "max_iterations"
+    assert [value for kind, value in events if kind == "checkpoint"][-1] == {}
+    history = [value["messages"] for kind, value in events if kind == "history"][-1]
+    assert sum(message.get("tool_call_id") == "call1" for message in history) == 1
+
+
+@pytest.mark.asyncio
 async def test_initial_image_uses_verified_bytes_and_keeps_empty_original_text():
     import base64
     import hashlib

@@ -252,6 +252,9 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
 
             await update_title(runtime, payload, provider, emit)
             await runtime.persist_state()
+        # The full execution history is now durable, matching ordinary Work's
+        # SAVE boundary. Recovery must not append the last completed call again.
+        await emit("checkpoint", {})
         await flush_deliveries()
         if result.final_usage:
             await hook.progress("", token_usage=result.final_usage)

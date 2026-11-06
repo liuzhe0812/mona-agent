@@ -852,7 +852,7 @@ class HostedWorkConfig(Base):
     run_timeout_seconds: int = Field(default=900, ge=30, le=3600)
     question_timeout_seconds: int = Field(default=600, ge=30, le=3600)
     tool_timeout_seconds: int = Field(default=120, ge=1, le=600)
-    max_iterations: int = Field(default=30, ge=1, le=100)
+    max_iterations: int = Field(default=AgentDefaults().max_tool_iterations, ge=1, le=100)
     sandbox_memory_mb: int = Field(default=768, ge=256, le=8192)
     sandbox_cpus: float = Field(default=1.0, ge=0.25, le=8)
     workspace_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024, le=512 * 1024 * 1024)
