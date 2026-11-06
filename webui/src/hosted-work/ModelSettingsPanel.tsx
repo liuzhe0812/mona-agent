@@ -1,41 +1,58 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AdminRequestError, isValidPriceAmount, requestCodexStatus, requestModelSettings,
-  type ApiModelConfiguration, type BillingMode, type CodexConfiguration, type CodexStatus, type ManagedModel,
+import { AdminRequestError, isValidPriceAmount, requestCodexStatus, requestModelDiscovery, requestModelSettings,
+  type ApiModelConfiguration, type BillingMode, type CodexStatus, type DiscoveredModel, type ManagedModel,
   type ModelPrice, type ModelSettings } from "./model-admin-api";
 
 type Provider = "custom" | "codex";
+type Connection = { apiBase: string; apiKeyEnv: string };
 type Draft = {
-  id: string; label: string; model: string; api_base: string; api_key_env: string; cli_path: string;
-  auth_mode: "chatgpt" | "api_key"; billing_mode: BillingMode;
-  context_window_tokens: string; max_output_tokens: string; reasoning_effort: string;
-  input_price: string; cached_input_price: string; output_price: string;
+  enabled: boolean; displayName: string; billingMode: BillingMode; inputPrice: string; cachedPrice: string; outputPrice: string;
+  maxOutput: string; inputBudget: string;
 };
-type FieldErrors = Partial<Record<keyof Draft, string>>;
+type Field = keyof Draft;
+type Edit = { fields: Partial<Draft>; originalId: string | null; baseline: Draft };
+type Catalog = { state: "idle" | "loading" | "ready" | "error"; models: DiscoveredModel[]; message?: string };
 type Problem = { title: string; description: string; login?: boolean; refresh?: boolean };
+type ModelRow = { key: string; id: string; label: string; suggestedId?: string; discovered: boolean; existing?: ManagedModel };
 
-const blank = (): Draft => ({ id: "", label: "", model: "", api_base: "", api_key_env: "", cli_path: "",
-  auth_mode: "chatgpt", billing_mode: "wallet", context_window_tokens: "",
-  max_output_tokens: "4096", reasoning_effort: "", input_price: "", cached_input_price: "", output_price: "" });
-function commonDraft(config: ApiModelConfiguration | CodexConfiguration): Draft {
-  return { ...blank(), label: config.label, model: config.model, billing_mode: config.billing_mode,
-    context_window_tokens: config.context_window_tokens == null ? "" : String(config.context_window_tokens),
-    max_output_tokens: String(config.max_output_tokens), reasoning_effort: config.reasoning_effort ?? "",
-    input_price: config.price?.input_amount_per_million ?? "", cached_input_price: config.price?.cached_input_amount_per_million ?? "",
-    output_price: config.price?.output_amount_per_million ?? "" };
+const normalizeBase = (value: string) => value.trim().replace(/\/+$/, "");
+const connectionId = (connection: Connection) => JSON.stringify([normalizeBase(connection.apiBase), connection.apiKeyEnv.trim()]);
+const rowKey = (provider: Provider, connection: Connection | null, model: string) =>
+  JSON.stringify([provider, provider === "custom" && connection ? connectionId(connection) : "", model]);
+const sameConnection = (configuration: ApiModelConfiguration, connection: Connection) =>
+  normalizeBase(configuration.api_base) === normalizeBase(connection.apiBase) && configuration.api_key_env === connection.apiKeyEnv.trim();
+const sameDraftValue = (left: Draft, right: Draft) => JSON.stringify(left) === JSON.stringify(right);
+
+function draftFor(row: ModelRow, provider: Provider, codex: CodexStatus | null): Draft {
+  const config = row.existing?.configuration;
+  const legacy = provider === "codex" && codex?.configuration.model === row.id ? codex.configuration : null;
+  const price = config ? config.price : legacy?.price;
+  const budget = config ? config.context_window_tokens : legacy?.context_window_tokens;
+  return { enabled: config?.enabled ?? false, displayName: config?.label ?? legacy?.label ?? row.label,
+    billingMode: config?.billing_mode ?? legacy?.billing_mode ?? "wallet",
+    inputPrice: price?.input_amount_per_million ?? "", cachedPrice: price?.cached_input_amount_per_million ?? "",
+    outputPrice: price?.output_amount_per_million ?? "", maxOutput: String(config?.max_output_tokens ?? legacy?.max_output_tokens ?? 4096),
+    inputBudget: budget == null ? "" : String(budget) };
 }
-function modelDraft(item: ManagedModel): Draft {
-  return { ...commonDraft(item.configuration), id: item.id, api_base: item.configuration.api_base, api_key_env: item.configuration.api_key_env };
+
+function canDiscover(connection: Connection | null): connection is Connection {
+  if (!connection || !/^MONA_WORK_MODEL_[A-Z0-9_]+$/.test(connection.apiKeyEnv.trim())) return false;
+  try {
+    const url = new URL(connection.apiBase.trim());
+    const local = url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname);
+    return (url.protocol === "https:" || local) && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
 }
-function codexDraft(config: CodexConfiguration): Draft {
-  return { ...commonDraft(config), cli_path: config.cli_path, auth_mode: config.auth_mode };
-}
-function withPrice(target: Draft, source: Draft): Draft {
-  return { ...target, input_price: source.input_price, cached_input_price: source.cached_input_price, output_price: source.output_price };
+
+async function codexModelId(model: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`codex\0${model}`));
+  return "codex-" + Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("").slice(0, 24);
 }
 
 export function ModelSettingsPanel({ token }: { token: string }) {
@@ -43,19 +60,20 @@ export function ModelSettingsPanel({ token }: { token: string }) {
   const [codex, setCodex] = useState<CodexStatus | null>(null);
   const [revision, setRevision] = useState("");
   const [provider, setProvider] = useState<Provider>("custom");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [modelsDraft, setModelsDraft] = useState<Record<string, Draft>>({});
-  const [codexForm, setCodexForm] = useState<Draft | null>(null);
-  const previousModels = useRef<ModelSettings | null>(null);
-  const previousCodex = useRef<CodexStatus | null>(null);
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [catalog, setCatalog] = useState<Catalog>({ state: "idle", models: [] });
+  const [edits, setEdits] = useState<Record<string, Edit>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, Partial<Record<Field, string>>>>({});
+  const [cliPath, setCliPath] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<"chatgpt" | "api_key">("chatgpt");
   const cliPathEdited = useRef(false);
-  const autoDetectedPath = useRef<string | null>(null);
-  const editedPrices = useRef(new Set<string>());
+  const authModeEdited = useRef(false);
+  const pendingRef = useRef(false);
   const [pending, setPending] = useState<"load" | "save" | "probe" | null>("load");
   const [reload, setReload] = useState(0);
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [notice, setNotice] = useState("");
+  const [catalogReload, setCatalogReload] = useState(0);
   const [problem, setProblem] = useState<Problem | null>(null);
+  const [notice, setNotice] = useState("");
 
   function failed(error: unknown) {
     if (error instanceof AdminRequestError) {
@@ -64,32 +82,17 @@ export function ModelSettingsPanel({ token }: { token: string }) {
           description: "请前往管理后台登录有权限的管理员账号。草稿已保留。", login: true });
         return;
       }
-      if (error.code === "invalid_endpoint") {
-        setErrors(previous => ({ ...previous, api_base: "请输入公网 HTTPS API 地址，不要包含账号、密码或密钥。" }));
-        return;
-      }
-      if (error.code === "credential_not_ready") {
-        setErrors(previous => ({ ...previous, api_key_env: "当前服务尚未加载此环境变量，请先在服务器受限配置中配置并加载。" }));
+      if (error.code === "configuration_changed") {
+        setRevision("");
+        setProblem({ title: "配置已变化", description: "其他配置操作已更新版本，请刷新状态并核对后再保存。草稿已保留。", refresh: true });
         return;
       }
       if (error.code === "work_busy") {
         setProblem({ title: "工作台正在处理任务", description: "请在当前任务结束后保存。草稿已保留。" });
         return;
       }
-      if (error.code === "configuration_changed") {
-        setRevision("");
-        setProblem({ title: "配置已变化", description: "其他配置操作已更新版本，请刷新状态并核对后再保存。草稿已保留。", refresh: true });
-        return;
-      }
-      const field = ({ model_id: "id", input_amount_per_million: "input_price", cached_input_amount_per_million: "cached_input_price",
-        output_amount_per_million: "output_price", price: "input_price" } as Record<string, string>)[error.field ?? ""] ?? error.field;
-      if (field && ["id", "label", "model", "api_key_env", "cli_path", "max_output_tokens", "context_window_tokens",
-        "reasoning_effort", "input_price", "cached_input_price", "output_price"].includes(field)) {
-        setErrors(previous => ({ ...previous, [field]: "该字段未通过服务器校验，请检查后重试。" }));
-        return;
-      }
     }
-    setProblem({ title: "操作未完成", description: "无法完成模型配置操作，请检查连接后重试。草稿已保留。" });
+    setProblem({ title: "操作未完成", description: "配置未保存，请检查连接后重试。草稿已保留。" });
   }
 
   useEffect(() => {
@@ -98,41 +101,17 @@ export function ModelSettingsPanel({ token }: { token: string }) {
     Promise.all([requestModelSettings(token, undefined, controller.signal), requestCodexStatus(token, "GET", undefined, controller.signal)])
       .then(([models, status]) => {
         if (controller.signal.aborted) return;
-        const oldModels = previousModels.current;
-        const oldCodex = previousCodex.current;
         setSettings(models);
         setCodex(status);
-        setModelsDraft(previous => {
-          const result = { ...previous };
-          if (!result[""]) result[""] = blank();
-          for (const item of models.models) {
-            const old = oldModels?.models.find(model => model.id === item.id);
-            if (!result[item.id] || old && JSON.stringify(result[item.id]) === JSON.stringify(modelDraft(old))) {
-              result[item.id] = modelDraft(item);
-            } else if (!editedPrices.current.has(`custom:${item.id}`)) {
-              result[item.id] = withPrice(result[item.id], modelDraft(item));
-            }
-          }
-          return result;
+        setConnection(previous => previous ?? (() => {
+          const first = models.models.find(item => item.configuration.source === "mona");
+          return first ? { apiBase: first.configuration.api_base, apiKeyEnv: first.configuration.api_key_env } : { apiBase: "", apiKeyEnv: "" };
+        })());
+        setCliPath(previous => {
+          if (cliPathEdited.current) return previous ?? "";
+          return status.configuration.cli_path || (status.discovery.state === "found" ? status.discovery.path : previous ?? "");
         });
-        setSelected(previous => previous === null ? models.models.find(item => item.configuration.source === "mona")?.id ?? "" : previous);
-        setCodexForm(previous => {
-          let next = !previous || oldCodex && JSON.stringify(previous) === JSON.stringify(codexDraft(oldCodex.configuration))
-            ? codexDraft(status.configuration) : previous;
-          if (!editedPrices.current.has("codex")) next = withPrice(next, codexDraft(status.configuration));
-          if (status.configuration.cli_path && !cliPathEdited.current && autoDetectedPath.current &&
-            next.cli_path === autoDetectedPath.current) {
-            next = { ...next, cli_path: status.configuration.cli_path };
-            autoDetectedPath.current = null;
-          }
-          if (!status.configuration.cli_path && !cliPathEdited.current && !next.cli_path && status.discovery.state === "found") {
-            autoDetectedPath.current = status.discovery.path;
-            next = { ...next, cli_path: status.discovery.path! };
-          }
-          return next;
-        });
-        previousModels.current = models;
-        previousCodex.current = status;
+        if (!authModeEdited.current) setAuthMode(status.configuration.auth_mode);
         if (models.revision !== status.revision) {
           setRevision("");
           setProblem({ title: "配置已变化", description: "配置在读取时发生变化，请刷新状态并核对后再保存。草稿已保留。", refresh: true });
@@ -143,7 +122,37 @@ export function ModelSettingsPanel({ token }: { token: string }) {
   }, [token, reload]);
 
   useEffect(() => {
-    if (provider !== "codex" || !codex || codex.configuration.cli_path || !revision || pending) return;
+    if (provider !== "custom" || !canDiscover(connection)) {
+      setCatalog({ state: "idle", models: [] });
+      return;
+    }
+    const controller = new AbortController();
+    setCatalog({ state: "loading", models: [] });
+    const timer = window.setTimeout(() => {
+      requestModelDiscovery(token, normalizeBase(connection.apiBase), connection.apiKeyEnv.trim(), controller.signal)
+        .then(models => { if (!controller.signal.aborted) setCatalog({ state: "ready", models }); })
+        .catch(error => {
+          if (controller.signal.aborted) return;
+          if (error instanceof AdminRequestError && [401, 403].includes(error.status)) {
+            setCatalog({ state: "error", models: [], message: "" });
+            failed(error);
+            return;
+          }
+          const message = error instanceof AdminRequestError && error.code === "model_credentials_unavailable"
+            ? "模型凭据尚未载入或无法读取列表，请检查服务器凭据后重试。"
+            : error instanceof AdminRequestError && error.code === "invalid_model_endpoint"
+              ? "模型地址无效或不允许访问，请检查 API Base URL。"
+              : error instanceof AdminRequestError && error.code === "model_catalog_unavailable"
+                ? "供应商未提供可读取的完整模型列表，请检查接口支持情况后重试。"
+                : "无法获取模型列表，请检查地址与网络后重试。";
+          setCatalog({ state: "error", models: [], message });
+        });
+    }, 300);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [provider, connection?.apiBase, connection?.apiKeyEnv, token, catalogReload]);
+
+  useEffect(() => {
+    if (provider !== "codex" || !codex || !revision || pending) return;
     const controller = new AbortController();
     let checking = false;
     const check = () => {
@@ -156,12 +165,10 @@ export function ModelSettingsPanel({ token }: { token: string }) {
           setProblem({ title: "配置已变化", description: "其他配置操作已更新版本，请刷新状态并核对后再保存。草稿已保留。", refresh: true });
           return;
         }
-        setCodex(previous => previous ? { ...previous, revision, discovery: status.discovery } : previous);
-        setCodexForm(previous => {
-          if (!previous || status.configuration.cli_path || cliPathEdited.current || previous.cli_path || status.discovery.state !== "found") return previous;
-          autoDetectedPath.current = status.discovery.path;
-          return { ...previous, cli_path: status.discovery.path! };
-        });
+        setCodex(previous => previous ? { ...previous, discovery: status.discovery, connection: status.connection } : previous);
+        if (!cliPathEdited.current && !status.configuration.cli_path && status.discovery.state === "found") {
+          setCliPath(previous => previous || status.discovery.path);
+        }
       }).catch(error => {
         if (!controller.signal.aborted && error instanceof AdminRequestError && [401, 403].includes(error.status)) {
           setRevision("");
@@ -174,117 +181,167 @@ export function ModelSettingsPanel({ token }: { token: string }) {
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [provider, codex?.configuration.cli_path, token, revision, pending]);
 
-  const draft = provider === "custom" ? selected === null ? null : modelsDraft[selected] ?? null : codexForm;
-  const models = settings?.models.filter(item => item.configuration.source === "mona") ?? [];
-  const current = selected === null ? undefined : models.find(item => item.id === selected);
-  const dirtyCodex = !!codexForm && !!codex && JSON.stringify(codexForm) !== JSON.stringify(codexDraft(codex.configuration));
+  const connections = useMemo(() => {
+    const result = new Map<string, Connection>();
+    for (const model of settings?.models ?? []) if (model.configuration.source === "mona") {
+      const item = { apiBase: model.configuration.api_base, apiKeyEnv: model.configuration.api_key_env };
+      result.set(connectionId(item), item);
+    }
+    return [...result.values()];
+  }, [settings]);
 
-  function change(field: keyof Draft, value: string) {
-    if (provider === "codex" && field === "cli_path") {
-      cliPathEdited.current = true;
-      autoDetectedPath.current = null;
+  const rows = useMemo(() => {
+    if (!settings) return { listed: [] as ModelRow[], missing: [] as ModelRow[] };
+    const saved = settings.models.filter(item => provider === "custom"
+      ? item.configuration.source === "mona" && !!connection && sameConnection(item.configuration, connection)
+      : item.configuration.source === "codex");
+    const found = provider === "custom" ? catalog.models : (codex?.connection.models ?? []);
+    const seen = new Set<string>();
+    const listed: ModelRow[] = [];
+    for (const item of found) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      const matches = saved.filter(model => model.configuration.model === item.id);
+      if (!matches.length) {
+        listed.push({ key: rowKey(provider, connection, item.id), id: item.id, label: item.label.slice(0, 80), discovered: true,
+          suggestedId: "suggested_id" in item && typeof item.suggested_id === "string" ? item.suggested_id : undefined });
+      } else for (const [index, existing] of matches.entries()) {
+        listed.push({ key: rowKey(provider, connection, index === 0 ? item.id : `${item.id}\0${existing.id}`), id: item.id,
+          label: existing.configuration.label, discovered: true, existing,
+          suggestedId: "suggested_id" in item && typeof item.suggested_id === "string" ? item.suggested_id : undefined });
+      }
     }
-    if (["input_price", "cached_input_price", "output_price"].includes(field)) {
-      editedPrices.current.add(provider === "codex" ? "codex" : `custom:${selected ?? ""}`);
-    }
-    if (provider === "custom" && selected !== null) {
-      setModelsDraft(previous => previous[selected] ? { ...previous, [selected]: { ...previous[selected], [field]: value } } : previous);
-    } else if (provider === "codex") setCodexForm(previous => previous ? { ...previous, [field]: value } : previous);
-    setErrors(previous => ({ ...previous, [field]: undefined }));
+    const missingCounts = new Map<string, number>();
+    const missing = saved.filter(item => !seen.has(item.configuration.model)).map(item => {
+      const model = item.configuration.model;
+      const count = missingCounts.get(model) ?? 0;
+      missingCounts.set(model, count + 1);
+      return { key: rowKey(provider, connection, count === 0 ? model : `${model}\0${item.id}`),
+        id: model, label: item.configuration.label, discovered: false, existing: item };
+    });
+    return { listed, missing };
+  }, [settings, provider, connection, catalog.models, codex?.connection.models]);
+
+  function edit(row: ModelRow, field: Field, value: string | boolean) {
+    const base = draftFor(row, provider, codex);
+    setEdits(previous => {
+      const old = previous[row.key];
+      const fields = { ...old?.fields };
+      if (value === base[field]) delete fields[field];
+      else Object.assign(fields, { [field]: value });
+      const result = { ...previous };
+      if (!Object.keys(fields).length) delete result[row.key];
+      else result[row.key] = { originalId: old ? old.originalId : row.existing?.id ?? null,
+        fields, baseline: { ...(old?.baseline ?? base), [field]: base[field] } };
+      return result;
+    });
+    setRowErrors(previous => ({ ...previous, [row.key]: { ...previous[row.key], [field]: undefined } }));
     setNotice("");
   }
 
-  function selectProvider(next: Provider) {
-    setProvider(next);
-    setErrors({});
-    setNotice("");
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (!draft || !settings || !codex || !revision || pending) return;
-    const next = Object.fromEntries(Object.entries(draft).map(([key, value]) => [key, value.trim()])) as Draft;
-    const invalid: FieldErrors = {};
-    if (provider === "custom" && !/^[a-z0-9_-]{1,64}$/.test(next.id)) invalid.id = "使用 1–64 位小写字母、数字、下划线或短横线。";
-    else if (provider === "custom" && models.some(item => item.id === next.id && item.id !== selected)) {
-      invalid.id = "此模型标识已存在，请先选择该模型。";
+  async function saveModel(row: ModelRow) {
+    const editState = edits[row.key];
+    if (!settings || !codex || !revision || !editState || pendingRef.current || pending) return;
+    const base = draftFor(row, provider, codex);
+    const draft = { ...base, ...editState.fields };
+    const errors: Partial<Record<Field, string>> = {};
+    const priceFields = ["inputPrice", "cachedPrice", "outputPrice"] as const;
+    const prices = priceFields.map(field => draft[field].trim());
+    const needsPrice = draft.enabled && !row.existing?.configuration.enabled;
+    const deferPrice = editState.fields.enabled === false && prices.some(Boolean)
+      && prices.some(value => !value || !isValidPriceAmount(value));
+    if (!deferPrice && (needsPrice || prices.some(Boolean))) priceFields.forEach((field, index) => {
+      if (!prices[index]) errors[field] = "请填写三项价格，或关闭模型。";
+      else if (!isValidPriceAmount(prices[index])) errors[field] = "请输入不超过 1000000000 的非负金额，最多六位小数。";
+    });
+    if (!draft.displayName.trim() || draft.displayName.trim().length > 80 || /[\x00-\x1f\x7f]/.test(draft.displayName)) {
+      errors.displayName = "请输入不超过 80 个字符的名称。";
     }
-    if (!next.label || next.label.length > 80 || /[\x00-\x1f\x7f]/.test(next.label)) invalid.label = "请输入不超过 80 个字符的名称。";
-    if ((provider === "custom" && !next.model) || next.model.length > 200 || /[\x00-\x1f\x7f]/.test(next.model)) invalid.model = "请输入有效的模型 ID。";
-    const priceKeys = ["input_price", "cached_input_price", "output_price"] as const;
-    if (priceKeys.some(key => next[key])) for (const key of priceKeys) {
-      if (!next[key]) invalid[key] = "请填写三项价格，或全部留空。";
-      else if (!isValidPriceAmount(next[key])) invalid[key] = "请输入不超过 1000000000 的非负金额，最多 6 位小数。";
+    if (!/^\d+$/.test(draft.maxOutput) || +draft.maxOutput < 256 || +draft.maxOutput > 32768) errors.maxOutput = "输出上限应为 256–32768。";
+    if (draft.inputBudget && (!/^\d+$/.test(draft.inputBudget) || +draft.inputBudget < 4096 || +draft.inputBudget > 2_000_000)) {
+      errors.inputBudget = "输入预算上限应为 4096–2000000，或留空。";
     }
-    if (!/^\d+$/.test(next.max_output_tokens) || +next.max_output_tokens < 256 || +next.max_output_tokens > 32768) invalid.max_output_tokens = "输出上限应为 256–32768。";
-    if (next.context_window_tokens && (!/^\d+$/.test(next.context_window_tokens) || +next.context_window_tokens < 4096 || +next.context_window_tokens > 2000000)) invalid.context_window_tokens = "输入预算上限应为 4096–2000000，或留空。";
-    if (next.reasoning_effort.length > 64 || /[\x00-\x1f\x7f]/.test(next.reasoning_effort)) invalid.reasoning_effort = "请输入有效的推理强度，或留空。";
-    if (provider === "custom") {
-      if (!/^MONA_WORK_MODEL_[A-Z0-9_]+$/.test(next.api_key_env)) invalid.api_key_env = "请输入 MONA_WORK_MODEL_ 开头的大写环境变量名称，不能填写密钥。";
-      try {
-        const url = new URL(next.api_base);
-        const saved = settings.models.find(item => item.id === next.id)?.configuration.api_base;
-        const retainedLocal = url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname)
-          && !!saved && new URL(saved).origin === url.origin;
-        if ((url.protocol !== "https:" && !retainedLocal) || url.username || url.password || url.search || url.hash) throw new Error();
-      } catch { invalid.api_base = "请输入公网 HTTPS API 地址，不要包含账号、密码或密钥。"; }
-    } else if (next.cli_path && (!next.cli_path.startsWith("/") || next.cli_path.includes("\\") ||
-      /[\x00-\x1f\x7f]/.test(next.cli_path) || next.cli_path.split("/").some(part => part === "." || part === ".."))) {
-      invalid.cli_path = "请输入 Ubuntu 上的绝对程序路径。";
+    if (!row.discovered && draft.enabled && !row.existing?.configuration.enabled) errors.enabled = "当前目录未提供此模型，暂不能开放。";
+    setRowErrors(previous => ({ ...previous, [row.key]: errors }));
+    if (Object.keys(errors).length) return;
+    if ((row.existing?.id ?? null) !== editState.originalId || Object.keys(editState.fields).some(field => {
+      const key = field as Field;
+      return editState.baseline[key] !== base[key] && editState.fields[key] !== base[key];
+    })) {
+      setProblem({ title: "配置已变化", description: "原模型配置已变化，请刷新并核对草稿。", refresh: true });
+      return;
     }
-    setErrors(invalid);
-    if (Object.keys(invalid).length) return;
-
-    const price: ModelPrice | null = priceKeys.some(key => next[key]) ? {
-      input_amount_per_million: next.input_price, cached_input_amount_per_million: next.cached_input_price,
-      output_amount_per_million: next.output_price,
-    } : null;
-    const editedPriceKey = provider === "codex" ? "codex" : `custom:${selected ?? ""}`;
-    const copiedPrice = provider === "custom" && !models.some(item => item.id === next.id) && price !== null;
-    const common = { label: next.label, model: next.model, billing_mode: next.billing_mode,
-      ...(editedPrices.current.has(editedPriceKey) || copiedPrice ? { price } : {}),
-      context_window_tokens: next.context_window_tokens ? +next.context_window_tokens : null,
-      max_output_tokens: +next.max_output_tokens, reasoning_effort: next.reasoning_effort || null };
+    pendingRef.current = true;
     setPending("save");
     setNotice("");
     try {
-      if (provider === "custom") {
-        const configuration = { ...common, source: "mona" as const, api_base: next.api_base, api_key_env: next.api_key_env };
-        const saved = await requestModelSettings(token, { expected_revision: revision, model_id: next.id, configuration });
-        const model = saved.models.find(item => item.id === next.id);
-        if (!model) throw new AdminRequestError(0, "invalid_response");
-        setSettings(saved);
-        editedPrices.current.delete(editedPriceKey);
-        previousModels.current = saved;
-        setModelsDraft(previous => {
-          const result = { ...previous, [next.id]: modelDraft(model) };
-          if (selected === "") result[""] = blank();
-          else if (selected !== null && selected !== next.id) {
-            const original = saved.models.find(item => item.id === selected);
-            if (original) result[selected] = modelDraft(original);
-            else delete result[selected];
-          }
-          return result;
-        });
-        setSelected(next.id);
-        setRevision(saved.revision);
-      } else {
-        const configuration = { ...common, cli_path: next.cli_path, auth_mode: next.auth_mode };
-        const saved = await requestCodexStatus(token, "PUT", { expected_revision: revision, configuration });
-        editedPrices.current.delete(editedPriceKey);
-        autoDetectedPath.current = null;
-        setCodex(saved);
-        previousCodex.current = saved;
-        setCodexForm(codexDraft(saved.configuration));
-        setRevision(saved.revision);
+      const modelId = row.existing?.id ?? row.suggestedId ?? await codexModelId(row.id);
+      if (!row.existing && settings.models.some(item => item.id === modelId)) {
+        throw new AdminRequestError(409, "model_id_conflict");
       }
-      setNotice("模型配置已保存。实际可用状态以服务信息为准。");
+      const price: ModelPrice | null = prices.some(Boolean) ? {
+        input_amount_per_million: prices[0], cached_input_amount_per_million: prices[1], output_amount_per_million: prices[2],
+      } : null;
+      const priceEdited = priceFields.some(field => field in editState.fields);
+      const config = { label: draft.displayName.trim(), source: provider === "custom" ? "mona" as const : "codex" as const,
+        model: row.id, api_base: provider === "custom" ? row.existing?.configuration.api_base ?? normalizeBase(connection?.apiBase ?? "") : "",
+        api_key_env: provider === "custom" ? row.existing?.configuration.api_key_env ?? (connection?.apiKeyEnv ?? "").trim() : "",
+        enabled: draft.enabled, billing_mode: draft.billingMode, max_output_tokens: +draft.maxOutput,
+        context_window_tokens: draft.inputBudget ? +draft.inputBudget : null,
+        ...(!deferPrice && (priceEdited || !row.existing && price) ? { price } : {}),
+      };
+      const saved = await requestModelSettings(token, { expected_revision: revision, model_id: modelId, configuration: config });
+      setSettings(saved);
+      setRevision(saved.revision);
+      setEdits(previous => {
+        const next = { ...previous };
+        if (deferPrice) {
+          const retained = Object.fromEntries(Object.entries(editState.fields).filter(([field]) => priceFields.includes(field as typeof priceFields[number])));
+          if (Object.keys(retained).length) next[row.key] = { ...editState, fields: retained };
+          else delete next[row.key];
+        } else delete next[row.key];
+        return next;
+      });
+      setNotice(`${row.label} 已保存。${deferPrice ? "价格草稿尚未保存。" : ""}`);
+    } catch (error) {
+      if (error instanceof AdminRequestError && error.code === "model_id_conflict") {
+        setProblem({ title: "模型标识冲突", description: "模型配置未保存，请刷新列表后重试。", refresh: true });
+      } else failed(error);
+    } finally {
+      pendingRef.current = false;
+      setPending(null);
+    }
+  }
+
+  async function saveConnection() {
+    if (!codex || !revision || pendingRef.current || pending) return;
+    const path = (cliPath ?? "").trim();
+    if (path && (!path.startsWith("/") || path.includes("\\") || /[\x00-\x1f\x7f]/.test(path)
+      || path.split("/").some(part => part === "." || part === ".."))) {
+      setProblem({ title: "程序路径无效", description: "请输入 Ubuntu 上的绝对程序路径。" });
+      return;
+    }
+    pendingRef.current = true;
+    setPending("save");
+    setNotice("");
+    try {
+      const saved = await requestCodexStatus(token, "PUT", { expected_revision: revision,
+        configuration: { cli_path: path, auth_mode: authMode, billing_mode: codex.configuration.billing_mode } });
+      setCodex(saved);
+      setRevision(saved.revision);
+      cliPathEdited.current = false;
+      authModeEdited.current = false;
+      setCliPath(saved.configuration.cli_path);
+      setAuthMode(saved.configuration.auth_mode);
+      setNotice("Codex 连接配置已保存。");
     } catch (error) { failed(error); }
-    finally { setPending(null); }
+    finally { pendingRef.current = false; setPending(null); }
   }
 
   async function probe() {
-    if (!codex || !revision || pending || dirtyCodex) return;
+    if (!codex || !revision || pendingRef.current || pending || !codex.configuration.cli_path
+      || cliPath !== codex.configuration.cli_path || authMode !== codex.configuration.auth_mode) return;
+    pendingRef.current = true;
     setPending("probe");
     setNotice("");
     try {
@@ -295,106 +352,147 @@ export function ModelSettingsPanel({ token }: { token: string }) {
         return;
       }
       setCodex(result);
-      previousCodex.current = result;
-      setCodexForm(codexDraft(result.configuration));
-      setRevision(result.revision);
-      setNotice("检测已完成，请查看连接状态。");
+      setNotice("检测已完成，请查看连接状态和模型列表。");
     } catch (error) { failed(error); }
-    finally { setPending(null); }
+    finally { pendingRef.current = false; setPending(null); }
   }
 
-  const field = (key: keyof Draft, label: string, help?: string, numeric = false, decimal = false) => <div className="space-y-2">
-    <label className="text-ui font-medium" htmlFor={`model-${key}`}>{label}</label>
-    <Input id={`model-${key}`} type={numeric ? "number" : "text"} value={draft?.[key] ?? ""}
-      inputMode={decimal ? "decimal" : undefined}
-      list={provider === "codex" && key === "model" ? "codex-models" : undefined}
-      onChange={event => change(key, event.target.value)} disabled={!!pending}
-      aria-invalid={!!errors[key]} aria-describedby={errors[key] ? `model-${key}-error` : help ? `model-${key}-help` : undefined} />
-    {provider === "codex" && key === "model" && <datalist id="codex-models">{codex?.connection.models.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</datalist>}
-    {errors[key] ? <p id={`model-${key}-error`} className="text-caption text-destructive">{errors[key]}</p>
-      : help && <p id={`model-${key}-help`} className="text-caption text-muted-foreground">{help}</p>}
-  </div>;
+  function renderRow(row: ModelRow, index: number) {
+    const base = draftFor(row, provider, codex);
+    const fields = edits[row.key]?.fields ?? {};
+    const draft = { ...base, ...fields };
+    const dirty = !!edits[row.key] && !sameDraftValue(base, draft);
+    const errors = rowErrors[row.key] ?? {};
+    const prefix = `model-${provider}-${index}`;
+    const priceField = (field: "inputPrice" | "cachedPrice" | "outputPrice", label: string) => <div className="space-y-2">
+      <label className="text-ui font-medium" htmlFor={`${prefix}-${field}`}>{label}</label>
+      <Input id={`${prefix}-${field}`} type="text" inputMode="decimal" value={draft[field]} disabled={!!pending}
+        onChange={event => edit(row, field, event.target.value)} aria-invalid={!!errors[field]}
+        aria-describedby={errors[field] ? `${prefix}-${field}-error` : undefined} />
+      {errors[field] && <p id={`${prefix}-${field}-error`} className="text-caption text-destructive">{errors[field]}</p>}
+    </div>;
+    return <fieldset key={row.key} aria-label={`模型 ${row.label}`} className="space-y-4 rounded-lg border border-border p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><p className="text-ui font-medium">{row.label}</p><p className="mt-1 break-all text-caption text-muted-foreground">{row.id}</p>
+          {!row.discovered && <p className="mt-1 text-caption text-muted-foreground">{provider === "custom" && catalog.state === "loading"
+            ? "正在更新供应商目录。" : "当前目录未返回此模型，可关闭或调整已有配置。"}</p>}
+          {row.existing?.configuration.enabled && <p className="mt-1 text-caption text-muted-foreground">当前已保存状态：{row.existing.availability.message}</p>}
+        </div>
+        <div className="flex items-center gap-2"><Checkbox id={`${prefix}-enabled`} aria-label={`开放 ${row.label}`}
+          checked={draft.enabled} disabled={!!pending || (!row.discovered && !row.existing?.configuration.enabled)}
+          onCheckedChange={checked => edit(row, "enabled", checked === true)} />
+          <label htmlFor={`${prefix}-enabled`} className="text-ui">开放</label></div>
+      </div>
+      {errors.enabled && <p className="text-caption text-destructive">{errors.enabled}</p>}
+      {(draft.enabled || row.existing) && <>
+        <div className="space-y-2"><label htmlFor={`${prefix}-displayName`} className="text-ui font-medium">显示名称</label>
+          <Input id={`${prefix}-displayName`} value={draft.displayName} disabled={!!pending}
+            onChange={event => edit(row, "displayName", event.target.value)} aria-invalid={!!errors.displayName}
+            aria-describedby={errors.displayName ? `${prefix}-displayName-error` : undefined} />
+          {errors.displayName && <p id={`${prefix}-displayName-error`} className="text-caption text-destructive">{errors.displayName}</p>}</div>
+        <div className="space-y-2"><span className="text-ui font-medium">计费方式</span>
+          <Select aria-label={`计费方式 ${row.label}`} value={draft.billingMode} disabled={!!pending}
+            onValueChange={value => edit(row, "billingMode", value)} options={[
+              { value: "free", label: "免费" }, { value: "wallet", label: "共用余额" },
+            ]} /></div>
+        {draft.billingMode === "wallet" && !settings?.billing.ready && <p className="text-caption text-muted-foreground">余额计费尚未接通，当前不能调用。</p>}
+        <div className="space-y-2"><p className="text-ui font-medium">工作台模型价格</p><p className="text-caption text-muted-foreground">人民币 / 百万 token；三项全空表示尚未配置。</p>
+          <div className="grid gap-4 md:grid-cols-3">{priceField("inputPrice", "输入价格")}{priceField("cachedPrice", "缓存输入价格")}{priceField("outputPrice", "输出价格")}</div></div>
+        <details className="border-t border-border pt-3 text-ui"><summary className="cursor-pointer font-medium">模型参数</summary>
+          <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="space-y-2"><label htmlFor={`${prefix}-maxOutput`}>最大输出 token</label>
+              <Input id={`${prefix}-maxOutput`} type="number" value={draft.maxOutput} disabled={!!pending}
+                onChange={event => edit(row, "maxOutput", event.target.value)} aria-invalid={!!errors.maxOutput} />
+              {errors.maxOutput && <p className="text-caption text-destructive">{errors.maxOutput}</p>}</div>
+            <div className="space-y-2"><label htmlFor={`${prefix}-inputBudget`}>输入预算上限（可选）</label>
+              <Input id={`${prefix}-inputBudget`} type="number" value={draft.inputBudget} disabled={!!pending}
+                onChange={event => edit(row, "inputBudget", event.target.value)} aria-invalid={!!errors.inputBudget} />
+              {errors.inputBudget && <p className="text-caption text-destructive">{errors.inputBudget}</p>}</div>
+          </div>
+        </details>
+      </>}
+      <div className="flex flex-wrap items-center gap-3"><Button type="button" aria-label={`保存 ${row.label}`} disabled={!!pending || !revision || settings?.synchronized === false || !dirty}
+        onClick={() => void saveModel(row)}>保存此模型</Button>
+        {dirty && <><span className="text-caption text-muted-foreground">此模型有未保存的更改。</span>
+          <Button type="button" variant="ghost" disabled={!!pending} onClick={() => setEdits(previous => {
+            const next = { ...previous }; delete next[row.key]; return next;
+          })}>放弃此模型草稿</Button></>}</div>
+    </fieldset>;
+  }
 
+  const availableConnection = connection && connections.some(item => connectionId(item) === connectionId(connection));
+  const cliDirty = !!codex && (cliPath !== codex.configuration.cli_path || authMode !== codex.configuration.auth_mode);
   return <>
     <section className="space-y-4 rounded-lg border border-border bg-card p-6" aria-label="模型配置">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-title-sm font-semibold">模型配置</h2>
-        <Button type="button" variant="outline" disabled={!!pending} onClick={() => setReload(value => value + 1)}>刷新模型状态</Button></div>
+        <Button type="button" variant="outline" disabled={!!pending} onClick={() => setReload(value => value + 1)}>刷新配置</Button></div>
       <div role="group" aria-label="模型提供者" className="flex flex-wrap gap-2">
         <Button type="button" variant={provider === "custom" ? "secondary" : "ghost"} aria-pressed={provider === "custom"} disabled={!!pending}
-          onClick={() => selectProvider("custom")}>自定义 API</Button>
+          onClick={() => { setProvider("custom"); setNotice(""); }}>自定义 API</Button>
         <Button type="button" variant={provider === "codex" ? "secondary" : "ghost"} aria-pressed={provider === "codex"} disabled={!!pending}
-          onClick={() => selectProvider("codex")}>Codex CLI</Button>
+          onClick={() => { setProvider("codex"); setNotice(""); }}>Codex CLI</Button>
       </div>
-      {!draft || !settings || !codex ? <p className="text-ui text-muted-foreground">{pending === "load" ? "正在加载模型配置…" : "模型配置未加载。"}</p>
-        : <form className="space-y-4 border-t border-border pt-4" onSubmit={save} noValidate>
-          {provider === "custom" && <div className="flex flex-wrap items-center gap-3"><div className="min-w-48 flex-1">
-            <Select aria-label="选择模型" value={models.some(item => item.id === selected) ? selected ?? undefined : undefined}
-              disabled={!!pending} placeholder="新增模型" options={models.map(item => ({ value: item.id, label: `${item.configuration.label} (${item.id})` }))}
-              onValueChange={id => { setSelected(id); setErrors({}); setNotice(""); }} /></div>
-            <Button type="button" variant="outline" disabled={!!pending} onClick={() => { setSelected(""); setErrors({}); setNotice(""); }}>新增模型</Button>
-          </div>}
-          {provider === "custom" && current && <div className="space-y-1 text-ui text-muted-foreground">
-            <p>凭据：{current.credentials.configured ? "已加载" : "尚未加载"}。</p>
-            <p>当前已保存状态：{current.availability.message}</p>
-            {settings.synchronized === false && <p>配置尚未同步至服务。</p>}
-          </div>}
-          {provider === "codex" && <div className="space-y-1 text-ui text-muted-foreground">
-            <p>{codex.execution.message}</p><p>当前已保存计费状态：{codex.billing.message}</p>
-          </div>}
-          <div className="grid gap-4 md:grid-cols-2">
-            {provider === "custom" && field("id", "平台模型标识")}
-            {field("label", "显示名称")}{field("model", "模型 ID")}
-            {provider === "custom" ? field("api_base", "API Base URL") : field("cli_path", "CLI 程序路径", "填写 Ubuntu 上 Codex 程序的绝对路径。")}
-          </div>
-          {provider === "codex" && <div className="space-y-2 text-ui text-muted-foreground">
-            <p role="status">{codex.discovery.state === "found" ? `已检测到 Codex CLI：${codex.discovery.path}`
-              : codex.configuration.cli_path ? "未发现其他安装位置，可检查已保存的程序路径。" : "尚未检测到 Codex CLI，安装后会自动重新检测。"}</p>
-            {codex.discovery.state === "found" && <Button type="button" variant="outline" disabled={!!pending}
-              onClick={() => change("cli_path", codex.discovery.path!)}>使用检测到的路径</Button>}
-            {codex.discovery.state === "found" && !codex.configuration.cli_path && draft.cli_path === codex.discovery.path &&
-              <p>路径已填入，请保存配置后检查连接。</p>}
-          </div>}
-          {provider === "custom" ? field("api_key_env", "API Key 环境变量名称", "只填写变量名称。密钥由运维写入服务器受限配置并加载，本页面不接收或显示密钥。")
-            : <div className="space-y-2"><span className="text-ui font-medium">认证方式</span>
-              <Select aria-label="认证方式" value={draft.auth_mode} disabled={!!pending} onValueChange={value => change("auth_mode", value)} options={[
-                { value: "chatgpt", label: "ChatGPT 账号" }, { value: "api_key", label: "API Key" },
-              ]} /></div>}
-          <div className="grid gap-4 md:grid-cols-2">{field("max_output_tokens", "最大输出 token", undefined, true)}
-            {field("context_window_tokens", "输入预算上限（可选）", "留空沿用模型目录；此预算不改变模型的真实上下文窗口。", true)}</div>
-          {field("reasoning_effort", "推理强度（可选）", "按供应商支持填写，例如 low、medium、high；不使用时留空。")}
-          <div className="space-y-2"><span className="text-ui font-medium">计费方式</span>
-            <Select aria-label="计费方式" value={draft.billing_mode} disabled={!!pending} onValueChange={value => change("billing_mode", value)} options={[
-              { value: "free", label: "免费" }, { value: "wallet", label: "共用余额" },
-            ]} />
-          </div>
-          <fieldset className="space-y-3 border-t border-border pt-4" aria-label="工作台模型价格">
-            <legend className="text-ui font-medium">模型价格</legend>
-            <p className="text-caption text-muted-foreground">人民币 / 百万 token。三项可全部留空，0 表示价格为零。</p>
-            <div className="grid gap-4 md:grid-cols-3">
-              {field("input_price", "输入价格", undefined, false, true)}
-              {field("cached_input_price", "缓存输入价格", undefined, false, true)}
-              {field("output_price", "输出价格", undefined, false, true)}
-            </div>
-            {draft.billing_mode === "free" && <p className="text-caption text-muted-foreground">当前选择免费，不按模型价格扣费。</p>}
-            {draft.billing_mode === "wallet" && !settings.billing.ready &&
-              (provider === "custom" ? !current || current.configuration.billing_mode !== "wallet" : codex.configuration.billing_mode !== "wallet") &&
-              <p className="text-caption text-muted-foreground">余额计费尚未接通，选择共用余额的模型暂不可调用。</p>}
-          </fieldset>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={!!pending || !revision}>{pending === "save" ? "保存中…" : "保存配置"}</Button>
-            {provider === "codex" && <Button type="button" variant="outline" onClick={probe} disabled={!!pending || !revision || dirtyCodex || !codex.configuration.cli_path}>
-              {pending === "probe" ? "检测中…" : "检测连接"}</Button>}
-            {provider === "codex" && dirtyCodex && <span className="text-caption text-muted-foreground">请先保存更改，再检测服务器上的配置。</span>}
-          </div>
-          {notice && <p role="status" className="text-ui text-muted-foreground">{notice}</p>}
-          {provider === "codex" && <>
-            <div className="space-y-2 border-t border-border pt-4"><h3 className="text-ui font-medium">连接状态</h3><p className="text-ui text-muted-foreground">{codex.connection.message || "尚未检测。"}</p></div>
-            <details className="border-t border-border pt-4 text-ui"><summary className="cursor-pointer font-medium">Ubuntu 登录说明</summary>
-              <p className="mt-3 text-muted-foreground">凭据保存在服务器上，请在 Ubuntu 终端完成登录，不要在此页面填写凭据。</p>
-              {codex.login_commands.length ? <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">{codex.login_commands.join("\n")}</pre> : <p className="mt-3 text-muted-foreground">配置程序后显示登录说明。</p>}
-            </details>
-          </>}
-        </form>}
+      {!settings || !codex ? <p className="text-ui text-muted-foreground">{pending === "load" ? "正在加载配置…" : "配置未加载。"}</p> : <>
+        {provider === "custom" ? <div className="space-y-4 border-t border-border pt-4">
+          {!!connections.length && <div className="flex flex-wrap items-center gap-3"><div className="min-w-48 flex-1">
+            <Select aria-label="供应商连接" value={availableConnection ? connectionId(connection!) : undefined} disabled={!!pending}
+              placeholder="新供应商连接" options={connections.map(item => ({ value: connectionId(item), label: `${normalizeBase(item.apiBase)} · ${item.apiKeyEnv}` }))}
+              onValueChange={value => setConnection(connections.find(item => connectionId(item) === value) ?? null)} />
+          </div><Button type="button" variant="outline" disabled={!!pending}
+            onClick={() => setConnection({ apiBase: "", apiKeyEnv: "" })}>新增连接</Button></div>}
+          <div className="space-y-2"><label htmlFor="provider-base" className="text-ui font-medium">API Base URL</label>
+            <Input id="provider-base" value={connection?.apiBase ?? ""} disabled={!!pending}
+              onChange={event => setConnection(previous => ({ apiBase: event.target.value, apiKeyEnv: previous?.apiKeyEnv ?? "" }))} /></div>
+          <div className="space-y-2"><label htmlFor="provider-key" className="text-ui font-medium">API Key 环境变量名称</label>
+            <Input id="provider-key" value={connection?.apiKeyEnv ?? ""} disabled={!!pending}
+              onChange={event => setConnection(previous => ({ apiBase: previous?.apiBase ?? "", apiKeyEnv: event.target.value }))} />
+            <p className="text-caption text-muted-foreground">只填写环境变量名称，密钥保存在服务器受限配置中。</p></div>
+          <div className="flex flex-wrap items-center gap-3"><Button type="button" variant="outline" disabled={!canDiscover(connection) || !!pending || catalog.state === "loading"}
+            onClick={() => setCatalogReload(value => value + 1)}>刷新模型列表</Button>
+            <span className="text-caption text-muted-foreground">{catalog.state === "loading" ? "正在获取供应商模型…"
+              : catalog.state === "error" ? catalog.message
+                : catalog.state === "idle" ? "填写供应商地址与凭据引用后自动获取。" : `已获取 ${catalog.models.length} 个模型。`}</span></div>
+        </div> : <div className="space-y-4 border-t border-border pt-4">
+          <p className="text-ui text-muted-foreground">{codex.execution.message}</p>
+          <div className="space-y-2"><label htmlFor="codex-path" className="text-ui font-medium">CLI 程序路径</label>
+            <Input id="codex-path" value={cliPath ?? ""} disabled={!!pending} onChange={event => {
+              cliPathEdited.current = true; setCliPath(event.target.value); setNotice("");
+            }} /></div>
+          <p role="status" className="text-caption text-muted-foreground">{codex.discovery.state === "found"
+            ? `已检测到 Codex CLI：${codex.discovery.path}`
+            : codex.configuration.cli_path ? "未发现其他安装位置，可检查已保存的程序路径。" : "尚未检测到 Codex CLI，安装后会自动重新检测。"}</p>
+          {codex.discovery.state === "found" && <Button type="button" variant="outline" disabled={!!pending} onClick={() => {
+            cliPathEdited.current = true; setCliPath(codex.discovery.path); setNotice("");
+          }}>使用检测到的路径</Button>}
+          {codex.discovery.state === "found" && !codex.configuration.cli_path && cliPath === codex.discovery.path &&
+            <p className="text-caption text-muted-foreground">路径已填入，请保存配置后检查连接。</p>}
+          <div className="space-y-2"><span className="text-ui font-medium">认证方式</span>
+            <Select aria-label="认证方式" value={authMode} disabled={!!pending} onValueChange={value => {
+              authModeEdited.current = true; setAuthMode(value as "chatgpt" | "api_key"); setNotice("");
+            }} options={[{ value: "chatgpt", label: "ChatGPT 账号" }, { value: "api_key", label: "API Key" }]} /></div>
+          <div className="flex flex-wrap items-center gap-3"><Button type="button" disabled={!!pending || !revision || !cliDirty} onClick={() => void saveConnection()}>保存连接</Button>
+            <Button type="button" variant="outline" disabled={!!pending || !revision || cliDirty || !codex.configuration.cli_path}
+              onClick={() => void probe()}>{pending === "probe" ? "检测中…" : "检测连接"}</Button></div>
+          <p className="text-ui text-muted-foreground">{codex.connection.message || "尚未检测连接。"}</p>
+          <details className="border-t border-border pt-4 text-ui"><summary className="cursor-pointer font-medium">Ubuntu 登录说明</summary>
+            <p className="mt-3 text-muted-foreground">请在 Ubuntu 终端完成专用账户登录。</p>
+            {codex.login_commands.length > 0 && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">{codex.login_commands.join("\n")}</pre>}
+          </details>
+        </div>}
+        {notice && <p role="status" className="text-ui text-muted-foreground">{notice}</p>}
+        <div className="space-y-4 border-t border-border pt-4">
+          <h3 className="text-title-sm font-semibold">模型列表</h3>
+          <p className="text-caption text-muted-foreground">供应商返回列表，实际调用权限未验证。每个模型的开放状态和价格分别保存。</p>
+          {settings.synchronized === false && <p className="text-ui text-muted-foreground">配置尚未同步至服务，暂不能保存模型更改。</p>}
+          {provider === "codex" && ["not_checked", "not_configured"].includes(codex.connection.state) && rows.listed.length > 0 &&
+            <p className="text-caption text-muted-foreground">显示上次缓存，实际权限未验证。</p>}
+          {provider === "codex" && rows.listed.length === 0 && <p className="text-ui text-muted-foreground">尚未取得 Codex 模型；请完成终端登录并检测连接。</p>}
+          {provider === "custom" && catalog.state === "ready" && rows.listed.length === 0 && <p className="text-ui text-muted-foreground">供应商未返回模型。</p>}
+          {rows.listed.map((row, index) => renderRow(row, index))}
+          {rows.missing.length > 0 && <div className="space-y-4"><h4 className="text-ui font-medium">已配置但当前目录未返回</h4>
+            {rows.missing.map((row, index) => renderRow(row, rows.listed.length + index))}</div>}
+        </div>
+      </>}
     </section>
     <Dialog open={!!problem} onOpenChange={open => { if (!open) setProblem(null); }}><DialogContent><DialogHeader>
       <DialogTitle>{problem?.title}</DialogTitle><DialogDescription>{problem?.description}</DialogDescription>

@@ -1,505 +1,411 @@
+import { createHash, webcrypto } from "node:crypto";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelSettingsPanel } from "./ModelSettingsPanel";
-import { isValidPriceAmount } from "./model-admin-api";
+import { isValidPriceAmount, requestModelDiscovery } from "./model-admin-api";
 
-const apiConfiguration = { label: "Qwen", source: "mona", api_base: "https://model.example/v1",
-  api_key_env: "MONA_WORK_MODEL_CUSTOM", model: "actual-provider-model", context_window_tokens: null,
-  max_output_tokens: 4096, reasoning_effort: null, billing_mode: "free", billing_model: "" };
-const codexConfiguration = { label: "Codex", cli_path: "/usr/local/bin/codex", model: "codex-model",
-  auth_mode: "chatgpt", context_window_tokens: null, max_output_tokens: 4096, reasoning_effort: null,
-  billing_mode: "wallet", billing_model: "paid-model" };
-const modelRow = { id: "qwen", configuration: apiConfiguration, credentials: { configured: true },
+const firstBase = "https://model.example/v1/";
+const keyName = "MONA_WORK_MODEL_CUSTOM";
+const initialConfiguration = { label: "Qwen3.7 Plus", source: "mona", api_base: firstBase,
+  api_key_env: keyName, model: "qwen3.7-plus", context_window_tokens: null, max_output_tokens: 4096,
+  reasoning_effort: "medium", billing_mode: "free", billing_model: "old-reference", price: null, enabled: true };
+const initialModel = { id: "qwen", configuration: initialConfiguration, credentials: { configured: true },
   availability: { ready: true, message: "模型可用。" } };
-const modelStatus = { revision: "rev-1", synchronized: true, models: [modelRow], billing: { mode: "shared_wallet", ready: false } };
-const codexStatus = { revision: "rev-1", configuration: codexConfiguration,
-  connection: { state: "configured", message: "尚未检测。", models: [] },
-  billing: { mode: "wallet", ready: false, message: "余额计费尚未接通。" },
-  execution: { ready: false, message: "Codex CLI 执行接入尚未完成，暂不可调用。" },
-  public_enabled: false, login_commands: ["codex login"], discovery: { state: "not_found", path: null } };
+const initialCodex = { label: "Codex", cli_path: "/usr/local/bin/codex", model: "", auth_mode: "chatgpt",
+  context_window_tokens: null, max_output_tokens: 4096, reasoning_effort: null, billing_mode: "wallet",
+  billing_model: "", price: null };
+const price = { input_amount_per_million: "1.25", cached_input_amount_per_million: "0", output_amount_per_million: "2.75" };
+const catalog = ["kimi-k2.5", "qwen3.5-plus", "glm-5", "MiniMax-M2.5", "qwen3.6-plus", "qwen3.7-plus"]
+  .map((id, index) => ({ id, label: id, suggested_id: `api-${String(index + 1).repeat(24)}` }));
+const secondCatalog = [{ id: "qwen3.7-plus", label: "qwen3.7-plus", suggested_id: `api-${"a".repeat(24)}` }];
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { "Content-Type": "application/json" },
 });
 
-function setup() {
+type Options = { models?: any[]; codex?: any; codexModels?: Array<{ id: string; label: string }>;
+  discoveryStatus?: number; discoveryError?: string; conflictOnce?: boolean; discoveredPath?: string | null };
+
+function setup(options: Options = {}) {
   let revision = "rev-1";
-  let models = [modelRow];
-  let configuration = codexConfiguration;
-  vi.mocked(fetch).mockImplementation(async (url, init) => {
+  let models = structuredClone(options.models ?? [initialModel]);
+  let codex = structuredClone(options.codex ?? initialCodex);
+  let conflict = options.conflictOnce ?? false;
+  let path = options.discoveredPath ?? null;
+  let sourceModels = options.codexModels ?? [];
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/work/admin/models/discover") {
+      if (options.discoveryStatus) return response({ error: options.discoveryError ?? "model_catalog_unavailable" }, options.discoveryStatus);
+      const body = JSON.parse(init?.body as string);
+      return response({ models: body.api_base.includes("second") ? secondCatalog : catalog });
+    }
     if (url === "/api/work/admin/models") {
       if (init?.method === "PUT") {
         const body = JSON.parse(init.body as string);
-        if (body.expected_revision !== revision) return response({ error: "configuration_changed" }, 409);
-        revision = revision === "rev-1" ? "rev-2" : "rev-3";
-        const row = { ...modelRow, id: body.model_id, configuration: { ...modelRow.configuration, ...body.configuration },
-          availability: { ready: body.configuration.billing_mode === "free", message: "实际状态" } };
-        models = [...models.filter(item => item.id !== body.model_id), row];
+        if (conflict || body.expected_revision !== revision) {
+          conflict = false;
+          return response({ error: "configuration_changed" }, 409);
+        }
+        revision = `rev-${Number(revision.slice(4)) + 1}`;
+        const old = models.find((item: any) => item.id === body.model_id);
+        const configuration = { ...initialConfiguration, ...(old?.configuration ?? {}), ...body.configuration };
+        const model = { id: body.model_id, configuration, credentials: { configured: configuration.source === "mona" },
+          availability: { ready: configuration.enabled && configuration.source === "mona" && configuration.billing_mode === "free",
+            message: configuration.source === "codex" ? "Codex CLI 执行接入尚未完成。" : "当前状态。" } };
+        models = [...models.filter((item: any) => item.id !== body.model_id), model];
       }
-      return response({ ...modelStatus, revision, models });
+      return response({ revision, synchronized: true, models, billing: { mode: "shared_wallet", ready: false } });
     }
     if (url === "/api/work/admin/codex" || url === "/api/work/admin/codex/probe") {
       if (init?.method === "PUT") {
         const body = JSON.parse(init.body as string);
         if (body.expected_revision !== revision) return response({ error: "configuration_changed" }, 409);
-        configuration = { ...configuration, ...body.configuration };
-        revision = revision === "rev-1" ? "rev-2" : "rev-3";
+        codex = { ...codex, ...body.configuration };
+        revision = `rev-${Number(revision.slice(4)) + 1}`;
       }
-      return response({ ...codexStatus, revision, configuration, billing: { ...codexStatus.billing, mode: configuration.billing_mode },
-        connection: { ...codexStatus.connection, message: init?.method === "POST" ? "连接检测完成。" : "尚未检测。" } });
+      return response({ revision, configuration: codex,
+        connection: { state: "not_checked", message: "尚未检测。", models: sourceModels },
+        billing: { mode: codex.billing_mode, ready: false, message: "余额计费尚未接通。" },
+        execution: { ready: false, message: "Codex CLI 执行接入尚未完成，暂不可调用。" },
+        public_enabled: false, login_commands: ["codex login"],
+        discovery: path ? { state: "found", path } : { state: "not_found", path: null } });
     }
-    throw new Error("Unexpected request");
+    throw new Error(`Unexpected request ${url}`);
   });
+  return { models: () => models, codex: () => codex, setModels: (value: any[]) => { models = value; },
+    setRevision: (value: string) => { revision = value; }, setDiscoveredPath: (value: string | null) => { path = value; },
+    setCodexModels: (value: Array<{ id: string; label: string }>) => { sourceModels = value; } };
 }
 
-async function selectOption(label: string, option: string) {
-  const trigger = screen.getByRole("button", { name: label });
+async function card(name: string) {
+  return await screen.findByRole("group", { name: `模型 ${name}` }, { timeout: 4000 });
+}
+function enterPrice(container: HTMLElement, input = "1.25", cached = "0", output = "2.75") {
+  fireEvent.change(within(container).getByLabelText("输入价格"), { target: { value: input } });
+  fireEvent.change(within(container).getByLabelText("缓存输入价格"), { target: { value: cached } });
+  fireEvent.change(within(container).getByLabelText("输出价格"), { target: { value: output } });
+}
+async function selectOption(container: HTMLElement, label: string, option: string) {
+  const trigger = within(container).getByRole("button", { name: label });
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole("menuitem", { name: option }));
 }
+function puts(url = "/api/work/admin/models") {
+  return vi.mocked(fetch).mock.calls.filter(([path, init]) => String(path) === url && init?.method === "PUT");
+}
 
 beforeEach(() => {
-  sessionStorage.clear();
-  sessionStorage.setItem("admin_token", "price-admin-token");
   vi.stubGlobal("fetch", vi.fn());
+  vi.stubGlobal("crypto", webcrypto);
   setup();
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-describe("work model and independent pricing settings", () => {
-  it("shows both providers with the stored billing choice and actual availability", async () => {
+describe("automatically discovered work models", () => {
+  it("loads the supplier catalog automatically and associates the old Qwen platform ID", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    const providers = screen.getByRole("group", { name: "模型提供者" });
-    expect(within(providers).getAllByRole("button").map(button => button.textContent)).toEqual(["自定义 API", "Codex CLI"]);
-    expect(screen.getByRole("button", { name: "计费方式" })).toHaveTextContent("免费");
-    expect(screen.getByText("当前已保存状态：模型可用。")).toBeInTheDocument();
-    expect(screen.queryByText(/所有账号免费|不扣用户余额|免费 API/)).not.toBeInTheDocument();
-    fireEvent.click(within(providers).getByRole("button", { name: "Codex CLI" }));
-    expect(screen.getByRole("button", { name: "计费方式" })).toHaveTextContent("共用余额");
-    expect(screen.getByText("Codex CLI 执行接入尚未完成，暂不可调用。")).toBeInTheDocument();
-    expect(screen.getByText("当前已保存计费状态：余额计费尚未接通。")).toBeInTheDocument();
-    expect(document.querySelector('input[type="password"]')).toBeNull();
-  });
-
-  it("saves exact independent prices without reading or writing the app price table", async () => {
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    const prices = screen.getByRole("group", { name: "工作台模型价格" });
-    expect(within(prices).getByText(/人民币 \/ 百万 token/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "0" } });
-    fireEvent.change(screen.getByLabelText("缓存输入价格"), { target: { value: "0.250001" } });
-    fireEvent.change(screen.getByLabelText("输出价格"), { target: { value: "12.50" } });
-    await selectOption("计费方式", "共用余额");
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    const request = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")!;
-    const { billing_model: _legacy, ...expected } = apiConfiguration;
-    expect(JSON.parse(request[1]!.body as string)).toEqual({ expected_revision: "rev-1", model_id: "qwen",
-      configuration: { ...expected, billing_mode: "wallet", price: { input_amount_per_million: "0",
-        cached_input_amount_per_million: "0.250001", output_amount_per_million: "12.50" } } });
-    expect(screen.queryByLabelText("账务模型 ID")).not.toBeInTheDocument();
+    await card("Qwen3.7 Plus");
+    for (const model of ["kimi-k2.5", "qwen3.5-plus", "glm-5", "MiniMax-M2.5", "qwen3.6-plus"]) await card(model);
+    expect(screen.getByText("已获取 6 个模型。")).toBeInTheDocument();
+    expect(screen.getByText(/供应商返回列表，实际调用权限未验证/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("推理强度（可选）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("平台模型标识")).not.toBeInTheDocument();
+    expect(within(await card("Qwen3.7 Plus")).getByRole("checkbox", { name: "开放 Qwen3.7 Plus" })).toBeChecked();
+    const discovery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/work/admin/models/discover")!;
+    expect(JSON.parse(discovery[1]!.body as string)).toEqual({ api_base: "https://model.example/v1", api_key_env: keyName });
+    expect(discovery[1]!.headers).toMatchObject({ Authorization: "Bearer work-admin-token" });
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith("/admin/credits/model-prices"))).toBe(false);
   });
 
-  it("lets the administrator select free for Codex while still reporting the unavailable execution adapter", async () => {
+  it("keeps multiple model drafts without a PUT and saves only the chosen row", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
+    let kimi = await card("kimi-k2.5");
+    let glm = await card("glm-5");
+    fireEvent.click(within(kimi).getByRole("checkbox", { name: "开放 kimi-k2.5" }));
+    enterPrice(kimi, "1", "0", "2");
+    fireEvent.click(within(glm).getByRole("checkbox", { name: "开放 glm-5" }));
+    enterPrice(glm, "3", "0.2", "4");
+    expect(puts()).toHaveLength(0);
+    expect(within(kimi).getByText(/未保存/)).toBeInTheDocument();
+    expect(within(glm).getByText(/未保存/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    await selectOption("计费方式", "免费");
-    fireEvent.change(screen.getByLabelText("最大输出 token"), { target: { value: "8192" } });
-    fireEvent.change(screen.getByLabelText("输入预算上限（可选）"), { target: { value: "64000" } });
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "2" } });
-    fireEvent.change(screen.getByLabelText("缓存输入价格"), { target: { value: "0" } });
-    fireEvent.change(screen.getByLabelText("输出价格"), { target: { value: "4.500000" } });
-    expect(screen.getByRole("button", { name: "检测连接" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    const request = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/work/admin/codex" && init?.method === "PUT")!;
-    const { billing_model: _legacy, ...expected } = codexConfiguration;
-    expect(JSON.parse(request[1]!.body as string)).toEqual({ expected_revision: "rev-1", configuration: {
-      ...expected, billing_mode: "free", max_output_tokens: 8192, context_window_tokens: 64000,
-      price: { input_amount_per_million: "2", cached_input_amount_per_million: "0", output_amount_per_million: "4.500000" },
-    } });
-    expect(screen.getByText("Codex CLI 执行接入尚未完成，暂不可调用。")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "检测连接" }));
-    expect(await screen.findByText("连接检测完成。")).toBeInTheDocument();
-  });
-
-  it("validates price precision and range using decimal strings", () => {
-    for (const value of ["0", "0.000001", "1.00", "999999999.999999", "1000000000.000000"]) {
-      expect(isValidPriceAmount(value), value).toBe(true);
-    }
-    for (const value of ["", "-1", "+1", "01", "1e3", "1.0000001", "1000000000.000001", "1000000001", "NaN"]) {
-      expect(isValidPriceAmount(value), value).toBe(false);
-    }
-  });
-
-  it("requires all three prices together and lets the administrator explicitly clear them", async () => {
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    const input = screen.getByLabelText("输入价格");
-    const cached = screen.getByLabelText("缓存输入价格");
-    const output = screen.getByLabelText("输出价格");
-    fireEvent.change(input, { target: { value: "1e3" } });
-    fireEvent.change(cached, { target: { value: "0" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    expect(input).toHaveAttribute("aria-invalid", "true");
-    expect(output).toHaveAttribute("aria-invalid", "true");
-    expect(vi.mocked(fetch).mock.calls.some(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")).toBe(false);
-    fireEvent.change(input, { target: { value: "0" } });
-    fireEvent.change(output, { target: { value: "0" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    fireEvent.change(input, { target: { value: "" } });
-    fireEvent.change(cached, { target: { value: "" } });
-    fireEvent.change(output, { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")).toHaveLength(2));
-    const saves = vi.mocked(fetch).mock.calls.filter(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT");
-    expect(JSON.parse(saves[0][1]!.body as string).configuration.price).toEqual({ input_amount_per_million: "0",
-      cached_input_amount_per_million: "0", output_amount_per_million: "0" });
-    expect(JSON.parse(saves[1][1]!.body as string).configuration.price).toBeNull();
-  });
-
-  it("preserves existing prices and legacy mappings when editing unrelated settings", async () => {
-    const savedPrice = { input_amount_per_million: "1.25", cached_input_amount_per_million: "0", output_amount_per_million: "3" };
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      if (url === "/api/work/admin/models") {
-        const changes = init?.method === "PUT" ? JSON.parse(init.body as string).configuration : {};
-        return response({ ...modelStatus, revision: init?.method === "PUT" ? "rev-2" : "rev-1",
-          models: [{ ...modelRow, configuration: { ...apiConfiguration, billing_model: "legacy-unchanged", price: savedPrice, ...changes } }] });
-      }
-      return original(url, init);
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("1.25");
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "新名称" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    const save = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")!;
-    expect(JSON.parse(save[1]!.body as string).configuration).not.toHaveProperty("price");
-    expect(JSON.parse(save[1]!.body as string).configuration).not.toHaveProperty("billing_model");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("1.25");
-  });
-
-  it("copies the visible price when changing a model ID to a new model", async () => {
-    const savedPrice = { input_amount_per_million: "1.25", cached_input_amount_per_million: "0", output_amount_per_million: "3" };
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/models" && init?.method === "GET") return response({ ...modelStatus,
-        models: [{ ...modelRow, configuration: { ...apiConfiguration, price: savedPrice } }] });
-      return result;
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("1.25");
-    fireEvent.change(screen.getByLabelText("平台模型标识"), { target: { value: "copy" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    const save = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")!;
-    expect(JSON.parse(save[1]!.body as string).configuration.price).toEqual(savedPrice);
-  });
-
-  it("detects an installation after the page opens and preserves both providers' drafts", async () => {
-    let installed = false;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/codex" && init?.method === "GET") {
-        return response({ ...await result.json(), configuration: { ...codexConfiguration, cli_path: "" },
-          discovery: installed ? { state: "found", path: "/home/mona/.local/bin/codex" } : { state: "not_found", path: null } });
-      }
-      return result;
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(screen.getByLabelText("输出价格"), { target: { value: "3.25" } });
-    vi.useFakeTimers();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Codex CLI" })); });
-    expect(screen.getByText("尚未检测到 Codex CLI，安装后会自动重新检测。")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "unsaved-codex" } });
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "2.50" } });
-    installed = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(screen.getByLabelText("CLI 程序路径")).toHaveValue("/home/mona/.local/bin/codex");
-    expect(screen.getByLabelText("模型 ID")).toHaveValue("unsaved-codex");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("2.50");
-    expect(screen.getByText("路径已填入，请保存配置后检查连接。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "自定义 API" }));
-    expect(screen.getByLabelText("输出价格")).toHaveValue("3.25");
-    expect(vi.mocked(fetch).mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    kimi = await card("kimi-k2.5");
+    glm = await card("glm-5");
+    expect(within(kimi).getByLabelText("输入价格")).toHaveValue("1");
+    expect(within(glm).getByLabelText("输入价格")).toHaveValue("3");
+    expect(puts()).toHaveLength(0);
+    fireEvent.click(within(glm).getByRole("button", { name: "保存 glm-5" }));
+    await screen.findByText("glm-5 已保存。");
+    expect(puts()).toHaveLength(1);
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    expect(body.model_id).toBe(`api-${"3".repeat(24)}`);
+    expect(body.configuration).toMatchObject({ source: "mona", model: "glm-5", enabled: true, billing_mode: "wallet",
+      price: { input_amount_per_million: "3", cached_input_amount_per_million: "0.2", output_amount_per_million: "4" } });
+    expect(body.configuration).not.toHaveProperty("reasoning_effort");
+    expect(body.configuration).not.toHaveProperty("billing_model");
+    expect(within(await card("kimi-k2.5")).getByLabelText("输入价格")).toHaveValue("1");
+    expect(within(await card("kimi-k2.5")).getByText(/未保存/)).toBeInTheDocument();
   });
 
-  it("never overwrites a manually entered or cleared CLI path without an explicit click", async () => {
-    let installed = false;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/codex" && init?.method === "GET") return response({ ...await result.json(),
-        configuration: { ...codexConfiguration, cli_path: "" },
-        discovery: installed ? { state: "found", path: "/home/mona/.local/bin/codex" } : { state: "not_found", path: null } });
-      return result;
-    });
+  it("updates the legacy Qwen price using its existing ID and preserves hidden settings", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    vi.useFakeTimers();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Codex CLI" })); });
-    const path = screen.getByLabelText("CLI 程序路径");
-    fireEvent.change(path, { target: { value: "/manual/codex" } });
-    installed = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(path).toHaveValue("/manual/codex");
-    fireEvent.change(path, { target: { value: "" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(path).toHaveValue("");
-    fireEvent.click(screen.getByRole("button", { name: "使用检测到的路径" }));
-    expect(path).toHaveValue("/home/mona/.local/bin/codex");
-    expect(vi.mocked(fetch).mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    const qwen = await card("Qwen3.7 Plus");
+    enterPrice(qwen);
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
+    await screen.findByText("Qwen3.7 Plus 已保存。");
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    expect(body.model_id).toBe("qwen");
+    expect(body.configuration.price).toEqual(price);
+    expect(body.configuration).not.toHaveProperty("reasoning_effort");
+    expect(body.configuration).not.toHaveProperty("billing_model");
   });
 
-  it("keeps an already configured CLI path until the administrator chooses to replace it", async () => {
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/codex" && init?.method === "GET") return response({ ...await result.json(),
-        discovery: { state: "found", path: "/home/mona/.local/bin/codex" } });
-      return result;
-    });
+  it("preserves an edited display name across provider switches and saves it on the original model", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
+    let qwen = await card("Qwen3.7 Plus");
+    fireEvent.change(within(qwen).getByLabelText("显示名称"), { target: { value: "我的 Qwen" } });
     fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    const path = screen.getByLabelText("CLI 程序路径");
-    expect(path).toHaveValue("/usr/local/bin/codex");
-    fireEvent.click(screen.getByRole("button", { name: "使用检测到的路径" }));
-    expect(path).toHaveValue("/home/mona/.local/bin/codex");
-  });
-
-  it("blocks saving on a discovery revision conflict without losing price drafts", async () => {
-    let changed = false;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/codex" && init?.method === "GET") return response({ ...await result.json(),
-        revision: changed ? "rev-external" : "rev-1", configuration: { ...codexConfiguration, cli_path: "" } });
-      return result;
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "6" } });
-    vi.useFakeTimers();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Codex CLI" })); });
-    fireEvent.change(screen.getByLabelText("输出价格"), { target: { value: "8" } });
-    changed = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(screen.getByText("配置已变化")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(screen.getByLabelText("输出价格")).toHaveValue("8");
-    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "自定义 API" }));
-    expect(screen.getByLabelText("输入价格")).toHaveValue("6");
-    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
+    qwen = await card("Qwen3.7 Plus");
+    expect(within(qwen).getByLabelText("显示名称")).toHaveValue("我的 Qwen");
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
+    await screen.findByText("Qwen3.7 Plus 已保存。");
+    expect((await card("我的 Qwen"))).toBeInTheDocument();
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    expect(body.model_id).toBe("qwen");
+    expect(body.configuration.label).toBe("我的 Qwen");
+    expect(body.configuration).not.toHaveProperty("price");
   });
 
-  it("adopts another administrator's saved CLI path after refresh without losing other drafts", async () => {
-    let changed = false;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/models" && init?.method === "GET") return response({ ...await result.json(),
-        revision: changed ? "rev-external" : "rev-1" });
-      if (url === "/api/work/admin/codex" && init?.method === "GET") return response({ ...await result.json(),
-        revision: changed ? "rev-external" : "rev-1",
-        configuration: { ...codexConfiguration, cli_path: changed ? "/other-admin/codex" : "" },
-        discovery: { state: "found", path: "/detected/codex" } });
-      return result;
-    });
+  it("requires an explicit complete price before opening a new model", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    vi.useFakeTimers();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Codex CLI" })); });
-    expect(screen.getByLabelText("CLI 程序路径")).toHaveValue("/detected/codex");
-    fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "unsaved-codex" } });
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "4.5" } });
-    changed = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(screen.getByText("配置已变化")).toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "刷新配置状态" })); });
-    expect(screen.getByLabelText("CLI 程序路径")).toHaveValue("/other-admin/codex");
-    expect(screen.getByLabelText("模型 ID")).toHaveValue("unsaved-codex");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("4.5");
+    const kimi = await card("kimi-k2.5");
+    fireEvent.click(within(kimi).getByRole("checkbox", { name: "开放 kimi-k2.5" }));
+    fireEvent.click(within(kimi).getByRole("button", { name: "保存 kimi-k2.5" }));
+    expect(within(kimi).getAllByText("请填写三项价格，或关闭模型。")).toHaveLength(3);
+    expect(puts()).toHaveLength(0);
+    enterPrice(kimi, "0", "0", "0");
+    fireEvent.click(within(kimi).getByRole("button", { name: "保存 kimi-k2.5" }));
+    await screen.findByText("kimi-k2.5 已保存。");
+    expect(JSON.parse(puts()[0][1]!.body as string).configuration.price.input_amount_per_million).toBe("0");
   });
 
-  it("preserves each provider's draft and uses the latest revision after saving the other one", async () => {
+  it("keeps a configured model visible and closable when its directory cannot be read", async () => {
+    setup({ discoveryStatus: 404 });
     render(<ModelSettingsPanel token="work-admin-token" />);
-    const label = await screen.findByLabelText("显示名称");
-    fireEvent.change(label, { target: { value: "未保存的自定义名称" } });
-    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "新的 Codex 名称" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    fireEvent.click(screen.getByRole("button", { name: "自定义 API" }));
-    expect(screen.getByLabelText("显示名称")).toHaveValue("未保存的自定义名称");
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")).toBe(true));
-    const request = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")!;
-    expect(JSON.parse(request[1]!.body as string).expected_revision).toBe("rev-2");
-    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    expect(screen.getByLabelText("显示名称")).toHaveValue("新的 Codex 名称");
+    await screen.findByText("供应商未提供可读取的完整模型列表，请检查接口支持情况后重试。", {}, { timeout: 4000 });
+    expect(screen.getByText("已配置但当前目录未返回")).toBeInTheDocument();
+    expect(screen.queryByText("glm-5")).not.toBeInTheDocument();
+    const qwen = await card("Qwen3.7 Plus");
+    fireEvent.click(within(qwen).getByRole("checkbox", { name: "开放 Qwen3.7 Plus" }));
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
+    await screen.findByText("Qwen3.7 Plus 已保存。");
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    expect(body.configuration.enabled).toBe(false);
+    expect(body.configuration).not.toHaveProperty("price");
+    expect(body.configuration.api_base).toBe(firstBase);
   });
 
-  it("keeps the original model intact when saving a changed ID and refuses collisions", async () => {
+  it("can close a model without discarding an incomplete price draft", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(screen.getByLabelText("平台模型标识"), { target: { value: "copy" } });
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "复制模型" } });
-    for (const [label, value] of [["输入价格", "1"], ["缓存输入价格", "0"], ["输出价格", "2"]]) {
-      fireEvent.change(screen.getByLabelText(label), { target: { value } });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    await selectOption("选择模型", "Qwen (qwen)");
-    expect(screen.getByLabelText("平台模型标识")).toHaveValue("qwen");
-    expect(screen.getByLabelText("显示名称")).toHaveValue("Qwen");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("");
-    fireEvent.change(screen.getByLabelText("平台模型标识"), { target: { value: "copy" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    expect(screen.getByText("此模型标识已存在，请先选择该模型。")).toBeInTheDocument();
-    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) => url === "/api/work/admin/models" && init?.method === "PUT")).toHaveLength(1);
+    const qwen = await card("Qwen3.7 Plus");
+    fireEvent.change(within(qwen).getByLabelText("输入价格"), { target: { value: "5" } });
+    fireEvent.click(within(qwen).getByRole("checkbox", { name: "开放 Qwen3.7 Plus" }));
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
+    await screen.findByText("Qwen3.7 Plus 已保存。价格草稿尚未保存。");
+    expect(JSON.parse(puts()[0][1]!.body as string).configuration).not.toHaveProperty("price");
+    expect(within(await card("Qwen3.7 Plus")).getByLabelText("输入价格")).toHaveValue("5");
+    expect(within(await card("Qwen3.7 Plus")).getByText(/未保存/)).toBeInTheDocument();
   });
 
-  it("starts new models as unpriced wallet drafts instead of assuming they are free", async () => {
+  it.each([
+    [422, "model_credentials_unavailable", "模型凭据尚未载入或无法读取列表，请检查服务器凭据后重试。"],
+    [400, "invalid_model_endpoint", "模型地址无效或不允许访问，请检查 API Base URL。"],
+    [503, "model_catalog_unavailable", "供应商未提供可读取的完整模型列表，请检查接口支持情况后重试。"],
+  ])("explains a catalog failure %s without exposing raw upstream errors", async (status, code, message) => {
+    setup({ discoveryStatus: status, discoveryError: code });
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.click(screen.getByRole("button", { name: "新增模型" }));
-    expect(screen.getByRole("button", { name: "计费方式" })).toHaveTextContent("共用余额");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("");
-    expect(screen.getByText("余额计费尚未接通，选择共用余额的模型暂不可调用。")).toBeInTheDocument();
+    expect(await screen.findByText(message, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("clears the new-model form after a successful creation", async () => {
+  it("uses the existing login dialog when model discovery loses admin authorization", async () => {
+    setup({ discoveryStatus: 403 });
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.click(screen.getByRole("button", { name: "新增模型" }));
-    for (const [label, value] of [["平台模型标识", "second"], ["显示名称", "第二个"], ["模型 ID", "provider-second"],
-      ["API Base URL", "https://model.example/v1"], ["API Key 环境变量名称", "MONA_WORK_MODEL_CUSTOM"],
-      ["输入价格", "3"], ["缓存输入价格", "0"], ["输出价格", "4"]]) {
-      fireEvent.change(screen.getByLabelText(label), { target: { value } });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
-    await screen.findByText(/模型配置已保存/);
-    fireEvent.click(screen.getByRole("button", { name: "新增模型" }));
-    expect(screen.getByLabelText("平台模型标识")).toHaveValue("");
-    expect(screen.getByLabelText("输入价格")).toHaveValue("");
-    expect(screen.getByLabelText("缓存输入价格")).toHaveValue("");
-    expect(screen.getByLabelText("输出价格")).toHaveValue("");
+    expect(within(await screen.findByRole("dialog", {}, { timeout: 4000 })).getByText("没有管理权限")).toBeInTheDocument();
+    expect(screen.queryByText(/供应商未提供可读取的完整模型列表/)).not.toBeInTheDocument();
   });
 
-  it("keeps the draft on a conflict and refreshes the shared version before retry", async () => {
-    let conflict = true;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      if (url === "/api/work/admin/models" && init?.method === "PUT" && conflict) {
-        conflict = false;
-        return response({ error: "configuration_changed" }, 409);
-      }
-      const result = await original(url, init);
-      if (!conflict && init?.method === "GET" && (url === "/api/work/admin/models" || url === "/api/work/admin/codex")) {
-        return response({ ...await result.json(), revision: "rev-3" });
-      }
-      return result;
-    });
+  it("preserves an edited price across a revision conflict without overwriting a changed value", async () => {
+    const originalPrice = { input_amount_per_million: "1", cached_input_amount_per_million: "0", output_amount_per_million: "2" };
+    const controls = setup({ conflictOnce: true, models: [{ ...initialModel, configuration: { ...initialConfiguration, price: originalPrice } }] });
     render(<ModelSettingsPanel token="work-admin-token" />);
-    const model = await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(model, { target: { value: "draft-provider-model" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    let qwen = await card("Qwen3.7 Plus");
+    fireEvent.change(within(qwen).getByLabelText("输入价格"), { target: { value: "5" } });
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
     await screen.findByText("配置已变化");
-    expect(model).toHaveValue("draft-provider-model");
-    expect(document.querySelector('button[type="submit"]')).toBeDisabled();
+    controls.setRevision("rev-2");
+    controls.setModels([{ ...initialModel, configuration: { ...initialConfiguration,
+      price: { ...originalPrice, input_amount_per_million: "7" } } }]);
     fireEvent.click(screen.getByRole("button", { name: "刷新配置状态" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "保存配置" })).toBeEnabled());
-    expect(model).toHaveValue("draft-provider-model");
-  });
-
-  it("refreshes unchanged fields from another administrator while retaining edited drafts", async () => {
-    let externalUpdate = false;
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (externalUpdate && init?.method === "GET" && url === "/api/work/admin/models") {
-        return response({ ...modelStatus, revision: "rev-external", models: [{ ...modelRow,
-          configuration: { ...apiConfiguration, label: "其他管理员更新" } }] });
-      }
-      if (externalUpdate && init?.method === "GET" && url === "/api/work/admin/codex") {
-        return response({ ...codexStatus, revision: "rev-external" });
-      }
-      return result;
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "未保存的 Codex" } });
-    fireEvent.click(screen.getByRole("button", { name: "自定义 API" }));
-    externalUpdate = true;
-    fireEvent.click(screen.getByRole("button", { name: "刷新模型状态" }));
-    await waitFor(() => expect(screen.getByLabelText("显示名称")).toHaveValue("其他管理员更新"));
-    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    expect(screen.getByLabelText("显示名称")).toHaveValue("未保存的 Codex");
-  });
-
-  it("refreshes untouched prices while preserving explicit local price edits", async () => {
-    let revision = "rev-1";
-    let inputPrice = "1";
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => {
-      const result = await original(url, init);
-      if (url === "/api/work/admin/models" && init?.method === "GET") return response({ ...modelStatus, revision,
-        models: [{ ...modelRow, configuration: { ...apiConfiguration, price: { input_amount_per_million: inputPrice,
-          cached_input_amount_per_million: "0", output_amount_per_million: "2" } } }] });
-      if (url === "/api/work/admin/codex" && init?.method === "GET") return response({ ...codexStatus, revision });
-      return result;
-    });
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "未保存的名称" } });
-    revision = "rev-2"; inputPrice = "8.5";
-    fireEvent.click(screen.getByRole("button", { name: "刷新模型状态" }));
-    await waitFor(() => expect(screen.getByLabelText("输入价格")).toHaveValue("8.5"));
-    expect(screen.getByLabelText("显示名称")).toHaveValue("未保存的名称");
-    fireEvent.change(screen.getByLabelText("输入价格"), { target: { value: "9.5" } });
-    revision = "rev-3"; inputPrice = "11";
-    fireEvent.click(screen.getByRole("button", { name: "刷新模型状态" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "保存配置" })).toBeEnabled());
-    expect(screen.getByLabelText("输入价格")).toHaveValue("9.5");
-  });
-
-  it("does not adopt a newer revision from a connection probe over a stale model snapshot", async () => {
-    const original = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url, init) => url === "/api/work/admin/codex/probe"
-      ? response({ ...codexStatus, revision: "rev-external" }) : original(url, init));
-    render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "未保存的自定义名称" } });
-    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
-    fireEvent.click(screen.getByRole("button", { name: "检测连接" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    qwen = await card("Qwen3.7 Plus");
+    expect(within(qwen).getByLabelText("输入价格")).toHaveValue("5");
+    await waitFor(() => expect(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" })).toBeEnabled());
+    fireEvent.click(within(qwen).getByRole("button", { name: "保存 Qwen3.7 Plus" }));
     await screen.findByText("配置已变化");
-    expect(document.querySelector('button[type="submit"]')).toBeDisabled();
+    expect(puts()).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    fireEvent.click(screen.getByRole("button", { name: "自定义 API" }));
-    expect(screen.getByLabelText("显示名称")).toHaveValue("未保存的自定义名称");
-    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
+    fireEvent.click(within(qwen).getByRole("button", { name: "放弃此模型草稿" }));
+    expect(within(qwen).getByLabelText("输入价格")).toHaveValue("7");
   });
 
-  it("supports a website administrator session without accessing application model prices", async () => {
-    sessionStorage.removeItem("admin_token");
+  it("keeps models with the same supplier ID separate across different connections", async () => {
+    const controls = setup({ models: [{ ...initialModel, configuration: { ...initialConfiguration, price } }] });
     render(<ModelSettingsPanel token="work-admin-token" />);
-    await screen.findByDisplayValue("actual-provider-model");
-    expect(fetch).toHaveBeenCalledWith("/api/work/admin/models", expect.objectContaining({
-      headers: expect.objectContaining({ Authorization: "Bearer work-admin-token" }) }));
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith("/admin/credits/model-prices"))).toBe(false);
+    let qwen = await card("Qwen3.7 Plus");
+    expect(within(qwen).getByLabelText("输入价格")).toHaveValue("1.25");
+    fireEvent.change(screen.getByLabelText("API Base URL"), { target: { value: "https://second.example/v1" } });
+    const second = await card("qwen3.7-plus");
+    fireEvent.click(within(second).getByRole("checkbox", { name: "开放 qwen3.7-plus" }));
+    enterPrice(second, "9", "1", "11");
+    fireEvent.click(within(second).getByRole("button", { name: "保存 qwen3.7-plus" }));
+    await screen.findByText("qwen3.7-plus 已保存。");
+    expect(controls.models().find((item: any) => item.id === "qwen").configuration.price).toEqual(price);
+    fireEvent.change(screen.getByLabelText("API Base URL"), { target: { value: firstBase } });
+    qwen = await card("Qwen3.7 Plus");
+    expect(within(qwen).getByLabelText("输入价格")).toHaveValue("1.25");
+  });
+
+  it("retains an unsaved draft when switching supplier connections", async () => {
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    let kimi = await card("kimi-k2.5");
+    fireEvent.click(within(kimi).getByRole("checkbox", { name: "开放 kimi-k2.5" }));
+    enterPrice(kimi, "8", "0", "9");
+    fireEvent.change(screen.getByLabelText("API Base URL"), { target: { value: "https://second.example/v1" } });
+    await card("qwen3.7-plus");
+    fireEvent.change(screen.getByLabelText("API Base URL"), { target: { value: firstBase } });
+    kimi = await card("kimi-k2.5");
+    expect(within(kimi).getByLabelText("输入价格")).toHaveValue("8");
+    expect(within(kimi).getByText(/未保存/)).toBeInTheDocument();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("ignores a superseded supplier discovery response", async () => {
+    let finishFirst: ((value: Response) => void) | undefined;
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url) === "/api/work/admin/models/discover" && JSON.parse(init?.body as string).api_base.includes("model.example")) {
+        return await new Promise<Response>(resolve => { finishFirst = resolve; });
+      }
+      return await original(url, init);
+    });
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await waitFor(() => expect(finishFirst).toBeTypeOf("function"), { timeout: 4000 });
+    fireEvent.change(screen.getByLabelText("API Base URL"), { target: { value: "https://second.example/v1" } });
+    await card("qwen3.7-plus");
+    await act(async () => { finishFirst!(response({ models: catalog })); });
+    expect(screen.queryByRole("group", { name: "模型 kimi-k2.5" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "模型 qwen3.7-plus" })).toBeInTheDocument();
+  });
+
+  it("shows no fabricated Codex models and never starts authentication on page load", async () => {
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await card("Qwen3.7 Plus");
+    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
+    expect(await screen.findByText("尚未取得 Codex 模型；请完成终端登录并检测连接。")).toBeInTheDocument();
+    expect(screen.getByText("Codex CLI 执行接入尚未完成，暂不可调用。")).toBeInTheDocument();
+    expect(screen.getByText("Ubuntu 登录说明")).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/work/admin/codex/probe")).toHaveLength(0);
+    expect(puts("/api/work/admin/codex")).toHaveLength(0);
+  });
+
+  it("lets the administrator price separate CLI models without altering the connection draft", async () => {
+    const codex = { ...initialCodex, model: "gpt-5-codex", price };
+    const controls = setup({ codex, codexModels: [{ id: "gpt-5-codex", label: "GPT-5 Codex" },
+      { id: "gpt-5-mini", label: "GPT-5 Mini" }] });
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await card("Qwen3.7 Plus");
+    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
+    const first = await card("GPT-5 Codex");
+    const second = await card("GPT-5 Mini");
+    expect(screen.getByText("显示上次缓存，实际权限未验证。")).toBeInTheDocument();
+    fireEvent.click(within(first).getByRole("checkbox", { name: "开放 GPT-5 Codex" }));
+    expect(within(first).getByLabelText("输入价格")).toHaveValue("1.25");
+    fireEvent.click(within(second).getByRole("checkbox", { name: "开放 GPT-5 Mini" }));
+    enterPrice(second, "3", "0", "5");
+    await selectOption(second, "计费方式 GPT-5 Mini", "免费");
+    fireEvent.click(within(first).getByRole("button", { name: "保存 GPT-5 Codex" }));
+    await screen.findByText("GPT-5 Codex 已保存。");
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    const suffix = createHash("sha256").update("codex\0gpt-5-codex").digest("hex").slice(0, 24);
+    expect(body.model_id).toBe(`codex-${suffix}`);
+    expect(body.configuration).toMatchObject({ source: "codex", model: "gpt-5-codex", enabled: true, price });
+    expect(body.configuration).not.toHaveProperty("reasoning_effort");
+    expect(within(await card("GPT-5 Mini")).getByLabelText("输入价格")).toHaveValue("3");
+    expect(within(await card("GPT-5 Mini")).getByText(/未保存/)).toBeInTheDocument();
+    fireEvent.click(within(await card("GPT-5 Mini")).getByRole("button", { name: "保存 GPT-5 Mini" }));
+    await screen.findByText("GPT-5 Mini 已保存。");
+    expect(puts()).toHaveLength(2);
+    expect(JSON.parse(puts()[1][1]!.body as string).configuration).toMatchObject({ source: "codex", model: "gpt-5-mini",
+      enabled: true, billing_mode: "free", price: { input_amount_per_million: "3", cached_input_amount_per_million: "0", output_amount_per_million: "5" } });
+    expect(controls.codex()).toEqual(codex);
+    expect(puts("/api/work/admin/codex")).toHaveLength(0);
+  });
+
+  it("does not revive a cleared CLI model price or budget from the legacy connection draft", async () => {
+    const codex = { ...initialCodex, model: "gpt-5-codex", price, context_window_tokens: 64000 };
+    const existing = { id: "codex-existing", configuration: { ...initialConfiguration, source: "codex", label: "Codex Existing",
+      model: "gpt-5-codex", api_base: "", api_key_env: "", enabled: false, price: null, context_window_tokens: null },
+      credentials: { configured: false }, availability: { ready: false, message: "暂未开放。" } };
+    setup({ codex, models: [initialModel, existing], codexModels: [{ id: "gpt-5-codex", label: "GPT-5 Codex" }] });
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await card("Qwen3.7 Plus");
+    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
+    const existingCard = await card("Codex Existing");
+    expect(within(existingCard).getByLabelText("输入价格")).toHaveValue("");
+    expect(within(existingCard).getByLabelText("输入预算上限（可选）")).toHaveValue(null);
+    fireEvent.change(within(existingCard).getByLabelText("显示名称"), { target: { value: "新名称" } });
+    fireEvent.click(within(existingCard).getByRole("button", { name: "保存 Codex Existing" }));
+    await screen.findByText("Codex Existing 已保存。");
+    const body = JSON.parse(puts()[0][1]!.body as string);
+    expect(body.configuration).not.toHaveProperty("price");
+    expect(body.configuration.context_window_tokens).toBeNull();
+    expect(body.model_id).toBe("codex-existing");
+  });
+
+  it("prefills a discovered CLI path but never overwrites a manually edited one", async () => {
+    const controls = setup({ codex: { ...initialCodex, cli_path: "" }, discoveredPath: "/opt/codex-a" });
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await card("Qwen3.7 Plus");
+    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
+    const path = screen.getByLabelText("CLI 程序路径");
+    await waitFor(() => expect(path).toHaveValue("/opt/codex-a"));
+    fireEvent.change(path, { target: { value: "/opt/manual-codex" } });
+    controls.setDiscoveredPath("/opt/codex-b");
+    fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
+    await screen.findByText("已检测到 Codex CLI：/opt/codex-b");
+    expect(path).toHaveValue("/opt/manual-codex");
+    expect(puts("/api/work/admin/codex")).toHaveLength(0);
+  });
+
+  it("accepts only bounded exact decimal prices", () => {
+    for (const value of ["0", "0.000001", "1", "1000000000", "1000000000.000000"]) expect(isValidPriceAmount(value)).toBe(true);
+    for (const value of ["", "01", "-1", "+1", "1e3", "1.0000001", "1000000000.000001", "1000000001"]) {
+      expect(isValidPriceAmount(value)).toBe(false);
+    }
+  });
+
+  it("accepts the backend catalog limit of 2048 models", async () => {
+    const many = Array.from({ length: 2048 }, (_, index) => ({ id: `model-${index}`, label: `model-${index}`,
+      suggested_id: `api-${index.toString(16).padStart(24, "0")}` }));
+    vi.mocked(fetch).mockResolvedValue(response({ models: many }));
+    expect(await requestModelDiscovery("admin", "https://model.example/v1", keyName)).toHaveLength(2048);
+    vi.mocked(fetch).mockResolvedValue(response({ models: [...many, { id: "more", label: "more", suggested_id: `api-${"f".repeat(24)}` }] }));
+    await expect(requestModelDiscovery("admin", "https://model.example/v1", keyName)).rejects.toMatchObject({ code: "invalid_response" });
   });
 });

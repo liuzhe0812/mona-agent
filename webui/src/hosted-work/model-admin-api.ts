@@ -22,7 +22,7 @@ function isModelPrice(value: unknown): value is ModelPrice | null | undefined {
 
 export type ApiModelConfiguration = {
   label: string;
-  source: "mona";
+  source: "mona" | "codex";
   api_base: string;
   api_key_env: string;
   model: string;
@@ -32,6 +32,7 @@ export type ApiModelConfiguration = {
   billing_mode: BillingMode;
   billing_model: string;
   price: ModelPrice | null;
+  enabled: boolean;
 };
 
 export type ManagedModel = {
@@ -102,12 +103,12 @@ export function parseModelSettings(value: unknown): ModelSettings {
   if (!settings || typeof settings.revision !== "string" || !settings.revision || !Array.isArray(settings.models)
     || !settings.models.every(item => {
       const c = item?.configuration;
-      return typeof item?.id === "string" && c && typeof c.label === "string" && typeof c.source === "string"
+      return typeof item?.id === "string" && c && typeof c.label === "string" && (c.source === "mona" || c.source === "codex")
         && typeof c.api_base === "string" && typeof c.api_key_env === "string" && typeof c.model === "string"
         && (c.context_window_tokens == null || Number.isInteger(c.context_window_tokens))
         && Number.isInteger(c.max_output_tokens) && (c.reasoning_effort == null || typeof c.reasoning_effort === "string")
         && (c.billing_mode === "free" || c.billing_mode === "wallet") && typeof c.billing_model === "string"
-        && isModelPrice(c.price)
+        && isModelPrice(c.price) && typeof c.enabled === "boolean"
         && typeof item.credentials?.configured === "boolean" && typeof item.availability?.ready === "boolean"
         && typeof item.availability?.message === "string";
     }) || (settings.synchronized !== undefined && typeof settings.synchronized !== "boolean")
@@ -152,7 +153,24 @@ export async function requestCodexStatus(token: string, method: "GET" | "PUT" | 
 
 export async function requestModelSettings(token: string, body?: {
   expected_revision: string; model_id: string;
-  configuration: Omit<ApiModelConfiguration, "billing_model" | "price"> & { price?: ModelPrice | null };
+  configuration: Omit<ApiModelConfiguration, "billing_model" | "price" | "reasoning_effort"> & { price?: ModelPrice | null };
 }, signal?: AbortSignal): Promise<ModelSettings> {
   return parseModelSettings(await requestAdminJson(token, body ? "PUT" : "GET", "/api/work/admin/models", body, signal));
+}
+
+export type DiscoveredModel = { id: string; label: string; suggested_id: string };
+
+export async function requestModelDiscovery(token: string, apiBase: string, apiKeyEnv: string,
+  signal?: AbortSignal): Promise<DiscoveredModel[]> {
+  const value = await requestAdminJson(token, "POST", "/api/work/admin/models/discover",
+    { api_base: apiBase, api_key_env: apiKeyEnv }, signal) as { models?: unknown };
+  if (!Array.isArray(value.models) || value.models.length > 2048 || !value.models.every(item =>
+    item && typeof item.id === "string" && /^[A-Za-z0-9._:/@+\-]{1,200}$/.test(item.id) &&
+    typeof item.label === "string" && item.label.length > 0 && item.label.length <= 80 &&
+    typeof item.suggested_id === "string" && /^api-[a-f0-9]{24}$/.test(item.suggested_id))) {
+    throw new AdminRequestError(0, "invalid_response");
+  }
+  const ids = new Set(value.models.map(item => item.id));
+  if (ids.size !== value.models.length) throw new AdminRequestError(0, "invalid_response");
+  return value.models as DiscoveredModel[];
 }
