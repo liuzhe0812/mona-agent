@@ -1,0 +1,287 @@
+{
+  "release": "20261106-work-pricing-v27c-ui-v28",
+  "deployed": true,
+  "entry": "https://mona-ai.cn/work/admin/",
+  "providers": [
+    "custom_api",
+    "codex_cli"
+  ],
+  "model_prices": {
+    "scope": "work_only",
+    "currency": "CNY",
+    "unit": "per_million_tokens",
+    "fields": [
+      "input",
+      "cached_input",
+      "output"
+    ],
+    "legacy_shared_price_table_used": false
+  },
+  "shared_account_balance_preserved": true,
+  "wallet_bridge_ready": false,
+  "codex_execution_ready": false,
+  "packages": [
+    {
+      "release": "20261106-work-pricing-v27",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-pricing-20261106\\work-pricing-v27.delta.tar.gz",
+      "bytes": 617613,
+      "sha256": "4168261972d9c266dbeb4bd4b24ac9256e26593891e190a5df21fcbaa841266c",
+      "release_manifest_sha256": "8a37b770d9262d99c48e024c3dd9aab9583926217b55b3bd5f518d35ca82cc8a",
+      "changed_files": 7,
+      "release_files": 5643,
+      "scope": [
+        "mona/config/schema.py",
+        "mona/hosted_work/model_admin.py",
+        "mona/hosted_work/admin.py",
+        "mona/hosted_work/codex_discovery.py",
+        "tests/hosted_work/test_model_admin.py",
+        "tests/hosted_work/test_admin.py",
+        "tests/hosted_work/test_codex_discovery.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-work-pricing-v27b",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-pricing-20261106\\work-pricing-v27b.delta.tar.gz",
+      "bytes": 589609,
+      "sha256": "9d834ab9641ce9feaf5521eddef83a817ed600cbd74b6667db73dcd65f32cd12",
+      "release_manifest_sha256": "69c4e3e3c9e0f793b3f56ae849b17177c7a367c62808b5d5c07d4e942760b43d",
+      "changed_files": 2,
+      "release_files": 5643,
+      "scope": [
+        "mona/hosted_work/codex_discovery.py",
+        "tests/hosted_work/test_codex_discovery.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-work-pricing-v27c",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-pricing-20261106\\work-pricing-v27c.delta.tar.gz",
+      "bytes": 591278,
+      "sha256": "18d13e3bdf3cc3356c246e29bfe0aa1c1cd26da856696d590293c7fe6ae45c7a",
+      "release_manifest_sha256": "e186ecc73b0ec76e77e2504be0740cb13be14ee6d5ef9125c58b26ae46fcd5c7",
+      "changed_files": 2,
+      "release_files": 5644,
+      "scope": [
+        "mona/development/executors/discovery.py",
+        "tests/development/test_executable_resolution.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-work-pricing-ui-v28",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-pricing-20261106\\work-pricing-ui-v28.delta.tar.gz",
+      "bytes": 551818,
+      "sha256": "9edaf5dbdcf3d050dac8fc00fa9b2e3c24b5a85ec39da5ab06e8f5b09bb61d46",
+      "changed_files": 2,
+      "static_files": 5172,
+      "office_unchanged": 465,
+      "backend_changed": false
+    }
+  ],
+  "production": {
+    "passed": true,
+    "ubuntu": {
+      "unit": {
+        "MainPID": "709912",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-work-pricing-v27c/content",
+        "ActiveState": "active"
+      },
+      "files_verified": 5644,
+      "manifest_sha256": "e186ecc73b0ec76e77e2504be0740cb13be14ee6d5ef9125c58b26ae46fcd5c7",
+      "config_mode": "0o600",
+      "counts": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "run_statuses": {
+        "cancelled": 4,
+        "completed": 21,
+        "failed": 5,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "public_model_ids": [
+        "qwen"
+      ],
+      "qwen_source": "mona",
+      "max_iterations": 100,
+      "docker_pid": "78383",
+      "tunnel_pid": "423172",
+      "original_containers_unchanged": true,
+      "cloud_sync_enabled": false
+    },
+    "vps": {
+      "static_root": "/var/www/mona/work-releases/20261106-work-pricing-ui-v28/content",
+      "files_verified": 5172,
+      "office_files": 465,
+      "manifest_sha256": "8ff18f708503b9f736d31e7024b176ffd39a6b0c13663b89deec8d03a01ba50d",
+      "include": "/opt/mona-work-proxy-releases/20261106-work-pricing-ui-v28/work-locations.conf",
+      "include_sha256": "1d15366b463811755c8fae4f619e2803d20291a43bc1f59176fb1200eb949674",
+      "units": {
+        "nginx": "420299",
+        "mariadb": "420210",
+        "mona-work-visitor": "367299"
+      },
+      "auth_pid": "389486",
+      "oneapi_pid": "310825",
+      "admin_html_sha256": "bfcf182b03ad632945a325cdbbad8afcc27b45c44ee9b0957a747f5d693f7039",
+      "original_website_root_preserved": true
+    }
+  },
+  "acceptance": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "synthetic_auth": false,
+    "browser_passed": true,
+    "browser": {
+      "production": true,
+      "mocked_responses": false,
+      "passed": true,
+      "phase": "complete",
+      "checks": {
+        "actual_admin_configuration_loaded": true,
+        "models_synchronized": true,
+        "anonymous_denied_both_routes": true,
+        "normal_denied_both_routes": true,
+        "custom_price_saved_and_survives_reload": true,
+        "custom_original_price_restored": true,
+        "detected_path_prefilled_without_saving": true,
+        "codex_price_saved_and_survives_reload": true,
+        "codex_original_price_restored": true,
+        "two_providers": true,
+        "price_entries_independent": true,
+        "codex_discovery_response": true
+      },
+      "safe": {
+        "codex_detected": true,
+        "guarded_write_counts": {
+          "anonymous/api/work/admin/models": 1,
+          "normal/api/work/admin/models": 1,
+          "anonymous/api/work/admin/codex": 1,
+          "normal/api/work/admin/codex": 1,
+          "custom_price_save": 1,
+          "custom_price_restore": 1,
+          "codex_price_save": 1,
+          "codex_price_restore": 1
+        },
+        "forbidden_shared_price_requests": 0,
+        "blocked_writes": 0,
+        "blocked_external_requests": 0
+      }
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "candidate_tests": {
+    "exit_code": 0,
+    "tests": "........................................................................ [ 55%]\n.........................................................                [100%]\n129 passed, 1 warning in 2.00s\n",
+    "stderr": "/home/liuzhe/mona-hosted-work/venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the \"fixture\" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to \"function\" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n",
+    "actual_codex_detected": true,
+    "detected_path": "/home/liuzhe/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "program_executed": false,
+    "credentials_read": false
+  },
+  "validation": {
+    "windows_backend_passed": 119,
+    "windows_platform_skipped": 10,
+    "frontend_tests_passed": 23,
+    "isolated_typecheck": true,
+    "isolated_build": true
+  },
+  "backend_activation": {
+    "activated": true,
+    "unit": {
+      "MainPID": "709912",
+      "NRestarts": "0",
+      "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-work-pricing-v27c/content",
+      "ActiveState": "active"
+    },
+    "health": {
+      "service": "mona-hosted-work",
+      "status": "alive",
+      "models_configured": true
+    },
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261106-work-pricing-v27c",
+    "counts_before": {
+      "sessions": 25,
+      "runs": 31,
+      "files": 6
+    },
+    "counts_after": {
+      "sessions": 25,
+      "runs": 31,
+      "files": 6
+    },
+    "existing_rows_preserved": true,
+    "config_mode": "0o600",
+    "only_config_change": "frontend_dir",
+    "docker_pid": "78383",
+    "original_containers_unchanged": true,
+    "tunnel_unchanged": true,
+    "wallet_or_auth_code_modified": false
+  },
+  "frontend_publication": {
+    "published": true,
+    "static_root": "/var/www/mona/work-releases/20261106-work-pricing-ui-v28/content",
+    "static_files_verified": 5172,
+    "manifest_sha256": "8ff18f708503b9f736d31e7024b176ffd39a6b0c13663b89deec8d03a01ba50d",
+    "include": "/opt/mona-work-proxy-releases/20261106-work-pricing-ui-v28/work-locations.conf",
+    "include_sha256": "1d15366b463811755c8fae4f619e2803d20291a43bc1f59176fb1200eb949674",
+    "backup": "/var/www/mona/backups/work-pricing-20261106-v28",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "only_work_include_changed": true,
+    "ubuntu_modified": false,
+    "docker_or_other_services_restarted": false
+  },
+  "isolated_ui_source": {
+    "scope": [
+      "webui/src/hosted-work/AdminApp.tsx",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx",
+      "webui/src/hosted-work/model-admin-api.ts"
+    ],
+    "before": {
+      "webui/src/hosted-work/AdminApp.tsx": "938ae4931f88629040d900338187bcbda2573ff91d5c81593aca0e7938b37c20",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "6c127877da9b7bb2efba3d9c0a7352154ce256f1c99da030efbe24291733a057",
+      "webui/src/hosted-work/model-admin-api.ts": "90b89506978a3e168e8fe45227085025b15793aac968a7beb8e4001f956b1416"
+    },
+    "after": {
+      "webui/src/hosted-work/AdminApp.tsx": "86f4a0ab7ffce5c84752db1ed7e9ecbc76350a5fc74ae8824dd07619971eaaa2",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "ef55749e2790de7eddbdf39e1fc71404ee02866778be33ec39026a48e514a623",
+      "webui/src/hosted-work/model-admin-api.ts": "610d88e9be28dd2b64c2983e55e18ee0f06c6bd4226633ae527a9e37c8e36531"
+    },
+    "only_owned_ui_files_copied": true,
+    "office_and_other_dirty_work_excluded": true,
+    "final_build": "main-build2"
+  },
+  "commits": [
+    "312238b6b",
+    "1ac152ae1"
+  ],
+  "pushed": false,
+  "shared_price_table_written": false,
+  "model_or_cli_task_executed": false,
+  "wallet_payment_subscription_device_logic_changed": false,
+  "docker_restarted": false,
+  "paused_workers_resumed": false,
+  "cloud_sync_enabled": false,
+  "unrelated_dirty_work_excluded": true
+}

@@ -1,8 +1,8 @@
 # Ubuntu Work：自定义 API 与 Codex CLI
 
-适用：Ubuntu 的独立 Work 服务，以 `liuzhe` 用户操作；实际 release 以根目录生产记录和 `systemctl --user show mona-hosted-work -p WorkingDirectory` 为准。提供者只有自定义 API 和 Codex CLI，两者共用模型参数与计费配置。免费或共用余额由管理员选择，具体价格沿用网站与应用共用价表，不按提供者强制决定，不另建 Work 钱包或价表。
+适用：Ubuntu 的独立 Work 服务，以 `liuzhe` 用户操作；实际 release 以根目录生产记录和 `systemctl --user show mona-hosted-work -p WorkingDirectory` 为准。提供者只有自定义 API 和 Codex CLI，两者使用同一模型参数与计费表单。免费或共用余额由管理员选择，工作台模型单价独立配置，账号余额继续共用，不读取或修改应用侧模型价表。
 
-2026-11-06：统一配置后端 v25b、前端 v26 已发布。页面有独立滚动区域，原 v23/v24 的免费 API 分类已撤销，配置能力不再按来源固定免费或收费。生产验收结果以根目录与本轮交付记录为准。
+2026-11-06：独立价格与 Codex 自动发现后端 v27c、前端 v28 已发布。管理员可在页面直接填写输入、缓存输入及输出单价；Ubuntu 实际安装的 Codex 已被只读发现并自动预填，尚需保存配置和单独确认连接。
 
 官网入口的 `hosted_work.public_origin` 必须为 `https://mona-ai.cn`，不加 Ubuntu 的 17175 端口。该端口只用于内部连接；写成 `https://mona-ai.cn:17175` 会导致官网 Host/Origin 校验失败。监听地址与端口仍保留原值。
 
@@ -22,11 +22,11 @@
   "api_key_env": "MONA_WORK_MODEL_QWEN_KEY",
   "model": "qwen3.7-plus",
   "billing_mode": "free",
-  "billing_model": ""
+  "price": null
 }
 ```
 
-`source=mona` 是自定义 API 的内部适配器值，不代表免费。当前 Qwen 的 `billing_mode=free` 保留用户此前指定的状态，管理员可以修改；收费选 `wallet` 并填写 `billing_model`。新增配置缺省为 wallet，管理 API 要求明确传入计费方式。这里不把原账号服务 `/v1` 网关当上游模型接口。
+`source=mona` 是自定义 API 的内部适配器值，不代表免费。当前 Qwen 的 `billing_mode=free` 保留用户此前指定的状态，管理员可以修改；收费选 `wallet` 并自行填写独立 `price`。新增配置缺省为 wallet，管理 API 要求明确传入计费方式。这里不把原账号服务 `/v1` 网关当上游模型接口。
 
 上下文容量由应用共用模型目录解析，不再给所有网页模型套用 32K 默认值。无需为当前 Qwen 手填窗口；若保留旧 `context_window_tokens`，它会作为额外输入预算 cap，而不是供应商容量声明。运行与设置页共用同一解析结果，来源和真实单次占用峰值记录在任务诊断中。
 
@@ -58,7 +58,7 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 
 ### 同一表单选择提供者
 
-点击“自定义 API”或“Codex CLI”。两种提供者共用显示名称、模型 ID、输入/输出预算、推理强度、计费方式和账务模型 ID。自定义 API 选择已有线路或点“新增模型”，填写接口及环境变量引用；Codex CLI 填写程序路径与认证方式。最后点“保存配置”。切换提供者保留未保存草稿。
+点击“自定义 API”或“Codex CLI”。两种提供者共用显示名称、模型 ID、输入/输出预算、推理强度、计费方式和独立价格。自定义 API 选择已有线路或点“新增模型”，填写接口及环境变量引用；Codex CLI 识别程序路径后填写认证方式。最后点“保存配置”。切换提供者保留未保存草稿。
 
 | 页面字段 | 含义 |
 | --- | --- |
@@ -71,28 +71,26 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 | 最大输出 token | `max_output_tokens`，单次输出上限 |
 | 推理强度（可选） | `reasoning_effort`，按供应商支持填写，不使用时留空 |
 | 计费方式 | `billing_mode`，管理员选择 free（免费）或 wallet（共用余额） |
-| 账务模型 ID | `billing_model`，对应原后台模型价表；空值是尚未配置，不当作免费 |
+| 输入、缓存输入、输出价格 | `price`，人民币/百万 token；三项全填或全空，零为明确价格，最多六位小数 |
 
 自定义线路仍只写 `source=mona`，不能覆盖其他来源。页面分别显示已保存的凭据、可用状态和当前编辑的计费选择；尚未保存的选择不改变运行状态。缺凭据时请运维先在受限环境预载，再刷新状态重试；任务忙碌时等任务结束再保存；版本变化时刷新并核对。两种提供者使用同一配置版本，失败保留草稿。
 
 ### Codex 连接草稿
 
-1. 填写 Ubuntu 上**已经安装**的 Codex 程序绝对路径、显示名称和认证方式，保存配置。
+1. Ubuntu 安装后，页面会自动检查常见系统、npm、nvm 和固定运营目录；无已保存路径且未手动编辑时自动预填。确认发现的路径、显示名称和认证方式，保存配置；不在常见目录时可手动填写绝对路径。检测文件不执行程序、不自动登录。
 2. 展开“Ubuntu 登录说明”，在 Ubuntu 的真实终端以 `liuzhe` 执行页面生成的命令。ChatGPT 使用设备授权；API Key 方式仅在本机通过 CLI 标准输入提供 Key。不要发送到聊天或放入命令参数。
 3. 返回页面检查连接，从实际原生缓存模型列表选择模型并保存，再次检查。仅探测成功不代表真实模型任务或扣费验收已通过。
-4. 填写“账务模型 ID”，对应现有管理后台的模型价格标识；这里只保存映射草稿。连接验证和计费就绪分开，当前仍显示未开放。
+4. 在同一表单填写输入、缓存输入和输出单价。该价格独立保存；连接验证、执行和计费就绪分开，当前 Codex 仍显示未开放。
 
-连接草稿保存在 `operator-accounts-v2.json` 的 `hosted_work.codex`，包括 `cli_path`、`auth_mode` 及与自定义 API 相同的模型参数、`billing_mode` 和 `billing_model`。保存不重启服务，按版本校验防止覆盖其他管理员的新修改，仅更新该字段；备份和新配置权限均为 600。它不是公开 `models` 的一项；当前执行适配未完成，不因免费设置或连接成功加入公开列表。
+连接草稿保存在 `operator-accounts-v2.json` 的 `hosted_work.codex`，包括 `cli_path`、`auth_mode` 及与自定义 API 相同的模型参数、`billing_mode` 和独立 `price`。保存不重启服务，按版本校验防止覆盖其他管理员的新修改，仅更新该字段；备份和新配置权限均为 600。旧 `billing_model` 仅作兼容保留，不作为价格来源。草稿不是公开 `models` 的一项；当前执行适配未完成，不因免费设置或连接成功加入公开列表。
 
 CLI 使用固定的 Work 专用 `CODEX_HOME=/home/liuzhe/mona-hosted-work/config/development/native/codex` 和独立空登录目录；不读取个人桌面配置。程序未配置、未认证、认证方式不符、协议或隔离校验不通过、所选模型不在原生缓存及账户模型列表中，均不能显示连接已验证。检查连接不创建模型任务，不调用余额和支付接口。
 
 Qwen 与 Codex 的计费选择分别保存，不互相覆盖；不新增个人白名单或限流设置。现有平台安全与隔离配置保留。
 
-### 共用余额与模型价格
+### 共用余额与独立模型价格
 
-价格卡直接读取现有 `/admin/credits/model-prices`，按填写的账务模型 ID 选择已启用、按 token 计费的最高价格版本，展示输入、缓存输入和输出的人民币/百万 token 单价及版本。未匹配到价格时会明确提示。
-
-点“前往管理后台设置模型价格”进入原 `/admin`，在“模型服务 → 模型计价”编辑。网站与应用共用钱包、共用价表，改价会同时影响两端；此页不另建价格表。免费选择由管理员显式保存；选择共用余额时按账务模型映射读价格。价格已配置、Codex 已登录或连接检测通过，都不代表执行或扣费桥已接通。
+价格直接在工作台模型表单填写，三项按人民币/百万 token 保存为非负十进制字符串；三项留空表示未配置，`0` 表示明确设为零。工作台不访问应用侧模型价表，修改工作台价格不改变应用侧价格；账户余额仍为同一钱包。价格已配置、Codex 已登录或连接检测通过，都不代表执行或扣费桥已接通。
 
 ## 3. 历史命令行准备方式（旧脚本，不用于新管理入口）
 
@@ -136,13 +134,13 @@ CLI 登录及缓存检查成功后，记录选定的真实模型 ID。下面是�
 }
 ```
 
-当前 schema 不支持在连接项里随意添加 `price`、`free` 或 `allowed_account_ids`。计费应由服务端完成：运行前校验并预扣共用余额，按真实输入/缓存输入/输出 Token 结算；取消与失败按已确认用量处理，未知结果不得自动退款。连接标签本身不能实现收费。
+当前连接草稿可保存 `price` 与 `billing_mode`；`allowed_account_ids` 不是该配置的一部分。后续计费须由服务端完成：运行前冻结独立价格并预扣共用余额，按真实输入/缓存输入/输出 Token 结算；取消与失败按已确认用量处理，未知结果不得自动退款。连接标签和价格草稿本身不能实现收费。
 
 Codex 的程序化使用方式和账号授权范围以官方说明为准；本连接适配未新增公共环境使用授权。[OpenAI 鉴权与自动化说明](https://learn.chatgpt.com/docs/auth#sign-in-with-an-api-key)
 
 ## 5. 新凭据加载与联调
 
-管理页保存免费 API 配置会在空闲时同步服务，不需要每次手动重启。只有新增环境变量或手工变更配置需要重新加载时，确认没有运行中、取消中或待核对任务，再由运维只重启本 Work 服务：
+管理页保存自定义 API 配置会在空闲时同步服务，不需要每次手动重启。只有新增环境变量或手工变更配置需要重新加载时，确认没有运行中、取消中或待核对任务，再由运维只重启本 Work 服务：
 
 ```bash
 systemctl --user daemon-reload
@@ -155,7 +153,7 @@ curl -fsS -H 'Host: mona-ai.cn' -H 'Origin: https://mona-ai.cn' http://172.31.3.
 
 ## 6. 以后更换或增加 API 模型
 
-模型连接不写死在代码或官网中。优先在“免费 API 模型”选择原线路并保存，或新增独立标识；对应 `operator-accounts-v2.json` 的 `hosted_work.models`：
+模型连接不写死在代码或官网中。优先在“自定义 API”选择原线路并保存，或新增独立标识；对应 `operator-accounts-v2.json` 的 `hosted_work.models`：
 
 - `api_base`：供应商提供的 OpenAI Chat Completions 兼容 Base URL，例如该供应商要求的 `/v1` 地址；这不是完整的 `/chat/completions` URL。
 - `model`：该供应商实际支持的模型 ID。

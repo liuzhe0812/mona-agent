@@ -78,7 +78,7 @@ v20 已接入共享提问工具、回答/重连快照、安全样张、上下文
 
 认证：在线服务的 `/api/work/auth/login` 和 `/api/work/auth/logout` 分别代理 `/auth/web/login` 和 `/auth/web/logout`，不创建第二套账号。每次受保护请求调用 `/auth/identity` 验证真实用户及撤销；该接口只返回 account_id，不返回余额/订阅/设备信息。收费适配不得扩大通用身份接口、绕过旧桌面设备鉴权或向网页开放结算权限。当前发布包只有上述认证能力，计费接口尚未发布。
 
-自定义 API：平台在独立配置中填写 api_base，并通过名称以 `MONA_WORK_MODEL_` 开头的环境变量提供运营 API Key。凭据缺失直接拒绝，不读取桌面 API Key 或旧 model-token。不得把账号服务旧 `/v1` 网关重新配置为在线模型入口。自定义 API 和 Codex CLI 均由管理员配置 `billing_mode` 与 `billing_model`，来源不决定是否免费；新配置缺省 wallet，管理 API 要求明确计费方式。既有 Qwen 用户指定的免费状态在迁移时显式保留。
+自定义 API：平台在独立配置中填写 api_base，并通过名称以 `MONA_WORK_MODEL_` 开头的环境变量提供运营 API Key。凭据缺失直接拒绝，不读取桌面 API Key 或旧 model-token。不得把账号服务旧 `/v1` 网关重新配置为在线模型入口。自定义 API 和 Codex CLI 均由管理员配置 `billing_mode` 与独立 `price`，来源不决定是否免费；新配置缺省 wallet，管理 API 要求明确计费方式。既有 Qwen 用户指定的免费状态显式保留。
 
 此前撤销的 `/internal/hosted-work/model-token`、节点密钥与模型鉴权例外没有恢复。新增收费边界必须基于真实生产源码独立审阅，不能因用户同意共享钱包而恢复旧例外或发布其他任务的 Auth 修改。
 
@@ -86,7 +86,7 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 
 原生 SDK/CLI、Ubuntu 登录方式、工具封锁、实际用量和授权条款仍需单独核验。当前没有完成真实收费引擎调用或共享钱包结算验收。2026-11-03 已配置并连通免费 Qwen API 线路；Codex 尚未加入公开模型表。接入适配不等于已证明账号的公共使用授权。Ubuntu 具体配置及专用登录步骤见 [两条模型线路配置](../guides/hosted-work-two-providers.md)。
 
-收费必须复用 Auth 的人民币钱包、价格版本、预扣、结算与流水；不新增充值或第二套余额。官方美元单价需要明确对应模型、计费档位及换算口径，不能直接当人民币写入现有价格表。只按上游确认的真实输入、缓存输入和输出 Token 结算；缺失、重复、迟到回执，取消和进程退出必须保留可核对状态，不能把缺失用量当零、重复扣费或自动退款。当前原生用量聚合与任务终态不足以证明上述条件，计费适配及真实验收是 Codex 上线前置。
+收费仍应复用 Auth 人民币钱包、预扣、结算与流水；不新增充值或第二套余额。工作台模型价格独立于应用价表，须在派发时冻结本次价格快照并留存版本，未来计费桥不能回查应用模型价表或信任浏览器上报金额。官方美元单价需明确模型、计费档位和换算口径，不能直接当人民币使用。只按上游确认的真实输入、缓存输入和输出 Token 结算；缺失、重复、迟到回执，取消和进程退出必须保留可核对状态，不能把缺失用量当零、重复扣费或自动退款。当前用量聚合与任务终态不足以证明上述条件，计费适配及真实验收是收费上线前置。
 
 每次模型迭代和工具执行前重新核对账号身份；撤销后拒绝新的操作，已开始的外部模型调用不能被宣称已经撤销。
 
@@ -112,13 +112,13 @@ VPS 提供无账号数据的 `/work/`、`/work/hosted-work.html` 和公开资源
 
 Office 导出已沿用应用的交付协议。对同轮再次 `deliver_file`，适配器只命中当前 scope 中已登记的逻辑路径/大小/SHA，重新核对后复用 `DeliverFileTool`，由同一 bus 去重；临时 workspace context 必须恢复，核对间变化仍拒绝。同名未登记文件不得借账号文档根旁路交付，继续原 gVisor 生命周期；不同会话或新轮次不继承该登记。核心 Office 与全部编辑器产物保持共用。
 
-Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 只存连接与计价模型映射草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
+Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 保存连接与独立价格草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
 
 v25b/v26 管理页只提供“自定义 API”“Codex CLI”，共用模型参数与计费表单，独立 `h-full overflow-y-auto` 滚动区域不修改桌面全局样式。`/api/work/admin/models` 管理 `HostedWorkModel` 已定义的 `source=mona` 线路；只接收密钥环境变量引用，拒绝未载入凭据、其他来源覆盖、旧版本及活动/未知任务期间保存。与 Codex 草稿共用版本和文件锁，原子写入后在无 await 的空闲临界区更新共享运行配置；恢复页面焦点时刷新公开模型设置，不覆盖已派发任务参数。供应商 URL 全量校验 DNS 公网地址并固定实际连接 IP，保留原 Host/TLS SNI，拒绝重定向与跨 origin；只允许保留已有受控字面回环 origin，不开放新内网地址。
 
-价格只读取 Auth 现有 `/admin/credits/model-prices` 的启用 token 价格版本，修改继续通过原“模型服务 → 模型计价”；不另建钱包或价表。共用余额桥未完成时任何 wallet 模型都拒绝派发，不能按来源回退免费；Codex free 也因执行接入未完成保持关闭。`model_policy` 同时约束公开列表、设置与已保存选择恢复、父进程准入和 provider 构造。已接受请求先观察原结果，不因后续策略变化重派。Codex 连接、执行和计费分别报告，free 的计费无需钱包桥不代表执行已就绪。
+价格由管理员直接保存到工作台 `HostedWorkPrice`，每个模型独立存输入、缓存输入、输出的人民币/百万 token 精确十进制字符串；空值表示未配置，零是明确价格。模型设置不读取或修改 Auth 的模型价表，旧 `billing_model` 仅为兼容保留，不作为此价格来源；旧客户端省略 `price` 时不能擦除已保存值。账号余额仍按既有用户要求共用，但共用余额桥未完成时任何 wallet 模型都拒绝派发，不能按来源回退免费；Codex free 也因执行接入未完成保持关闭。`model_policy` 同时约束公开列表、设置与已保存选择恢复、父进程准入和 provider 构造。已接受请求先观察原结果，不因后续策略变化重派。Codex 连接、执行和计费分别报告，free 的计费无需钱包桥不代表执行已就绪。
 
-当前共享钱包的原生 Work 计费桥尚未实现，管理页 `billing.ready=false`、`public_enabled=false`。公开模型列表过滤 Codex，任务准入也明确拒绝 Codex，防止手动加入运行模型后免费执行；Qwen 继续对所有已登录账号免费。管理员连接探测使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把订阅登录或连接成功当作收费已上线。
+当前共享钱包的 Work 计费桥尚未实现，选择 wallet 时 `billing.ready=false`；Codex `public_enabled=false` 且执行未就绪。公开列表与派发门禁按管理员选择及执行能力处理，当前 Qwen 保留此前选择的 free。Codex 管理页每 10 秒只读检查可信系统、npm、nvm 和固定运营目录；发现程序后可预填未保存路径，不执行程序、不读认证文件、不覆盖已配置或手动编辑路径。npm 旧 `vendor/<triple>/codex/codex` 和新版 `vendor/<triple>/bin/codex` 沿用共享解析器及包名、路径和执行权限校验。发现文件不代表登录、协议或任务执行已验证；管理员连接探测仍使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把登录或连接成功当作收费已上线。
 
 - `mona/hosted_work/`：在线 API、会话状态、可信执行宿主、模型/工具适配、沙箱、人工核对。
 - `mona/config/schema.py`：唯一显式配置定义。
