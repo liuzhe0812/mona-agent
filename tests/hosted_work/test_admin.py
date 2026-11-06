@@ -324,12 +324,12 @@ def test_fixed_native_paths_reject_symlink_escape(tmp_path, target):
     ({"auth_mode": "api_key"}, {"models": [{"slug": MODEL}]}, "auth_mode_mismatch"),
     ({"protocol_verified": False}, {"models": [{"slug": MODEL}]}, "unavailable"),
     ({"isolation_verified": False}, {"models": [{"slug": MODEL}]}, "unavailable"),
-    ({}, None, "model_required"),
-    ({}, {"models": [{"slug": "other-fixture"}]}, "model_required"),
-    ({}, {"data": [{"model": MODEL}]}, "model_required"),
-    ({"model_details": []}, {"models": [{"slug": MODEL}]}, "model_unavailable"),
+    ({}, None, "ready"),
+    ({}, {"models": [{"slug": "other-fixture"}]}, "ready"),
+    ({}, {"data": [{"model": MODEL}]}, "ready"),
+    ({"model_details": []}, {"models": [{"slug": MODEL}]}, "models_unavailable"),
 ])
-async def test_probe_requires_auth_protocol_isolation_cache_and_account_model(tmp_path, monkeypatch, change, cache, expected):
+async def test_probe_requires_auth_protocol_isolation_and_live_model_list(tmp_path, monkeypatch, change, cache, expected):
     path, _ = operator_file(tmp_path)
     admin = CodexAdmin(path)
     await admin.save(SaveCodex(expected_revision=admin.snapshot()["revision"], configuration=configuration(tmp_path)))
@@ -359,8 +359,16 @@ async def test_probe_requires_auth_protocol_isolation_cache_and_account_model(tm
     monkeypatch.setattr("mona.development.executors.codex.CodexExecutor", IsolatedExecutor)
     snapshot = await admin.probe()
     assert snapshot["connection"]["state"] == expected
+    assert snapshot["connection"]["models"] == ([{"id": MODEL, "label": MODEL}] if expected == "ready" else [])
     assert snapshot["public_enabled"] is False and snapshot["billing"]["ready"] is False
     assert operations == ["probe", "shutdown"]
+
+
+def test_live_model_list_is_deduplicated_and_hides_unusable_metadata():
+    details = [ExecutorModel(id="first", label="First model"), ExecutorModel(id="first", label="Duplicate"),
+               ExecutorModel(id="second", label="Long " + "x" * 100), ExecutorModel(id="bad\nid", label="Invalid")]
+    assert CodexAdmin._live_models(details) == [{"id": "first", "label": "First model"},
+                                                {"id": "second", "label": "second"}]
 
 
 @pytest.mark.asyncio

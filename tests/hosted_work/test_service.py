@@ -122,18 +122,39 @@ async def test_billing_choice_cannot_bypass_admission_or_provider_factory(online
 
 
 @pytest.mark.asyncio
-async def test_observing_accepted_request_after_price_change_never_replays(online):
+@pytest.mark.parametrize("field,value", [("billing_mode", "wallet"), ("enabled", False)])
+async def test_observing_accepted_request_after_policy_change_never_replays(online, field, value):
     client, service, executor = online
     await create(client)
     body = {"request_id": RID, "model_id": "official", "text": "Accepted before pricing update"}
     assert (await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(), json=body)).status == 202
     await asyncio.sleep(0)
-    service.config.models["official"].billing_mode = "wallet"
+    setattr(service.config.models["official"], field, value)
     assert (await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(), json=body)).status == 202
     assert len(executor.calls) == 1
     executor.release.set()
     await asyncio.gather(*list(service.tasks.values()))
     assert "user-one" not in service.store.db.execute("SELECT payload FROM runs").fetchone()[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,mode", [("mona", "free"), ("mona", "wallet"), ("codex", "free"), ("codex", "wallet")])
+async def test_closed_models_never_appear_or_dispatch(online, tmp_path, source, mode):
+    from mona.hosted_work.providers import create_provider
+    client, service, executor = online
+    selection = HostedWorkModel(label="Closed", model="fixture", source=source, billing_mode=mode, enabled=False)
+    service.config.models["closed"] = selection
+    assert (await create(client)).status == 201
+    public = await (await client.get("/api/work/models", headers=headers())).json()
+    assert "closed" not in [row["id"] for row in public["models"]]
+    response = await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(),
+                                 json={"request_id": RID, "model_id": "closed", "text": "No dispatch"})
+    assert response.status == 400 and (await response.json())["error"] == "model_disabled"
+    assert service.store.db.execute("SELECT count(*) FROM runs").fetchone()[0] == 0
+    assert not executor.calls and not service.active_users and not service.active_engines
+    with pytest.raises(WorkError) as error:
+        create_provider(service.config, selection, tmp_path)
+    assert error.value.code == "model_disabled"
 
 
 @pytest.mark.asyncio

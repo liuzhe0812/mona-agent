@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import web
 from filelock import FileLock, Timeout
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
 from pydantic.alias_generators import to_camel
 
 from mona.config.schema import HostedWorkConfig, HostedWorkModel, HostedWorkPrice
@@ -16,7 +16,7 @@ from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.model_access import model_endpoint, model_secret
 
 _FIELDS = frozenset({"label", "source", "api_base", "api_key_env", "model",
-                     "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model", "price"})
+                     "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model", "price", "enabled"})
 _PRICE_FIELDS = frozenset({"input_amount_per_million", "cached_input_amount_per_million", "output_amount_per_million"})
 EndpointValidator = Callable[..., Awaitable[str]]
 
@@ -30,10 +30,11 @@ class ModelAdminError(WorkError):
 class ModelConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     label: str = Field(min_length=1, max_length=80)
-    source: Literal["mona"] = "mona"
-    api_base: str = Field(min_length=1, max_length=4096)
-    api_key_env: str = Field(pattern=r"^MONA_WORK_MODEL_[A-Z0-9_]+$")
+    source: Literal["mona", "codex"] = "mona"
+    api_base: str = Field(default="", max_length=4096, validate_default=True)
+    api_key_env: str = Field(default="", pattern=r"^(?:MONA_WORK_MODEL_[A-Z0-9_]+)?$", validate_default=True)
     model: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
     billing_mode: Literal["free", "wallet"]
     billing_model: str = Field(default="", max_length=200)
     price: HostedWorkPrice | None = None
@@ -46,6 +47,14 @@ class ModelConfiguration(BaseModel):
     def _plain(cls, value: str | None) -> str | None:
         if value is not None and (value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
             raise ValueError("invalid field")
+        return value
+
+    @field_validator("api_base", "api_key_env")
+    @classmethod
+    def _source_connection(cls, value: str, info: ValidationInfo) -> str:
+        source = info.data.get("source")
+        if (source == "mona" and not value) or (source == "codex" and value):
+            raise ValueError("invalid provider connection")
         return value
 
 
@@ -62,6 +71,25 @@ def _ready(model: HostedWorkModel) -> bool:
     except WorkError:
         return False
     return True
+
+
+def _model_snapshot(identifier: str, model: HostedWorkModel) -> dict:
+    configuration = model.model_dump(include=_FIELDS)
+    configured = _ready(model) if model.source == "mona" else False
+    if model.source == "codex":
+        # These legacy values are unrelated to the dedicated CLI connection.
+        configuration.update(api_base="", api_key_env="")
+    if not model.enabled:
+        message = "此模型暂未开放。"
+    elif model.source == "codex":
+        message = "Codex CLI 执行接入尚未完成，暂不可调用。"
+    elif model.billing_mode == "wallet":
+        message = "共用余额计费尚未接通，暂不可调用。"
+    else:
+        message = "当前服务已加载凭据。" if configured else "当前服务尚未加载凭据。"
+    return {"id": identifier, "configuration": configuration, "credentials": {"configured": configured},
+            "availability": {"ready": model.enabled and model.source == "mona"
+                                      and model.billing_mode == "free" and configured, "message": message}}
 
 
 def _origin(value: str) -> tuple[str, str, int] | None:
@@ -95,12 +123,8 @@ class ModelAdmin:
 
     def snapshot(self) -> dict:
         _, _, revision, saved = self._read()
-        models = [{"id": identifier, "configuration": model.model_dump(include=_FIELDS),
-                   "credentials": {"configured": _ready(model)},
-                   "availability": {"ready": _ready(model) and model.billing_mode == "free",
-                                    "message": "共用余额计费尚未接通，暂不可调用。" if model.billing_mode == "wallet"
-                                               else "当前服务已加载凭据。" if _ready(model) else "当前服务尚未加载凭据。"}}
-                  for identifier, model in self.service.config.models.items() if model.source == "mona"]
+        models = [_model_snapshot(identifier, model) for identifier, model in self.service.config.models.items()
+                  if model.source in {"mona", "codex"}]
         return {"revision": revision, "models": models,
                 "synchronized": saved.models == self.service.config.models,
                 "billing": {"mode": "shared_wallet", "ready": False}}
@@ -144,10 +168,19 @@ class ModelAdmin:
         if revision != request.expected_revision or saved.models != self.service.config.models:
             raise WorkError("configuration_changed", "配置已变化，请重新加载后检查。", 409)
         old = self.service.config.models.get(request.model_id)
-        if old is not None and old.source != "mona":
+        if old is not None and old.source != request.configuration.source:
             raise WorkError("model_source_conflict", "此模型标识已用于其他来源，不能覆盖。", 409)
         allow_loopback = _existing_loopback(old, request.configuration.api_base)
-        endpoint = await self._validate_endpoint(request.configuration.api_base, allow_loopback=allow_loopback)
+        enabled = request.configuration.enabled if "enabled" in request.configuration.model_fields_set else old.enabled if old else False
+        endpoint = None
+        if request.configuration.source == "mona":
+            # Closing an existing model must remain possible during an upstream
+            # DNS outage. Any new or changed URL still passes the normal guard.
+            if (old is not None and not enabled and old.api_base == request.configuration.api_base
+                    and old.api_key_env == request.configuration.api_key_env):
+                endpoint = old.api_base
+            else:
+                endpoint = await self._validate_endpoint(request.configuration.api_base, allow_loopback=allow_loopback)
         async with self.admin.lock:
             try:
                 with FileLock(str(self.admin._scoped(self.admin.path.name + ".admin.lock")), timeout=0):
@@ -155,31 +188,47 @@ class ModelAdmin:
                     if revision != request.expected_revision or saved.models != self.service.config.models:
                         raise WorkError("configuration_changed", "配置已变化，请重新加载后检查。", 409)
                     old = self.service.config.models.get(request.model_id)
-                    if old is not None and old.source != "mona":
+                    if old is not None and old.source != request.configuration.source:
                         raise WorkError("model_source_conflict", "此模型标识已用于其他来源，不能覆盖。", 409)
-                    if _origin(endpoint) is not None and not allow_loopback:
-                        raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base")
-                    if allow_loopback and not _existing_loopback(old, endpoint):
-                        raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base")
+                    if endpoint is not None:
+                        if _origin(endpoint) is not None and not allow_loopback:
+                            raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base")
+                        if allow_loopback and not _existing_loopback(old, endpoint):
+                            raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base")
                     self._idle()
-                    values = old.model_dump() if old is not None else {}
-                    values.update(request.configuration.model_dump(exclude_unset=True))
-                    values["api_base"] = endpoint
+                    values = old.model_dump() if old is not None else {"enabled": False}
+                    changes = request.configuration.model_dump(exclude_unset=True)
+                    if request.configuration.source == "codex":
+                        # Preserve any legacy backend-only connection fields;
+                        # a website request cannot set or clear them.
+                        changes.pop("api_base", None)
+                        changes.pop("api_key_env", None)
+                    values.update(changes)
+                    if endpoint is not None:
+                        values["api_base"] = endpoint
                     model = HostedWorkModel.model_validate(values)
-                    try:
-                        model_endpoint(self.service.config, model)
-                    except WorkError:
-                        raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base") from None
-                    if not _ready(model):
-                        raise ModelAdminError("credential_not_ready", "模型凭据尚未载入服务，请先完成服务器配置。", 422,
-                                              field="api_key_env")
+                    if model.enabled and not (old and old.enabled) and model.price is None:
+                        raise ModelAdminError("price_required", "请先配置此模型的价格。", 400, field="price")
+                    if model.source == "mona":
+                        try:
+                            model_endpoint(self.service.config, model)
+                        except WorkError:
+                            raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base") from None
+                        if not _ready(model) and (model.enabled or old is None or old.api_key_env != model.api_key_env):
+                            raise ModelAdminError("credential_not_ready", "模型凭据尚未载入服务，请先完成服务器配置。", 422,
+                                                  field="api_key_env")
                     data[key].setdefault("models", {})[request.model_id] = model.model_dump()
                     candidate = HostedWorkConfig.model_validate(data[key])
+                    checked = self.admin.checked
                     self.admin._write_locked(data, key, revision, backup_kind="models")
                     # The service, store and executor share this config object.
                     # No await occurs between the idle check and this swap.
                     self.service.config.models = candidate.models
-                    self.admin.checked = None
+                    if checked and checked[0] == revision:
+                        _, _, checked_revision, codex = self.admin._read()
+                        self.admin.checked = (checked_revision, checked[1]) if codex == saved.codex else None
+                    else:
+                        self.admin.checked = None
             except Timeout as exc:
                 raise WorkError("configuration_busy", "配置正在保存，请稍后重试。", 409) from exc
         return self.snapshot()

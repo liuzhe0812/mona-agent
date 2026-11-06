@@ -824,6 +824,7 @@ class HostedWorkModel(Base):
     api_base: str = ""
     api_key_env: str = Field(default="", pattern=r"^(?:MONA_WORK_MODEL_[A-Z0-9_]+)?$")
     model: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
     billing_mode: Literal["free", "wallet"] = "wallet"
     billing_model: str = Field(default="", max_length=200)
     price: HostedWorkPrice | None = None

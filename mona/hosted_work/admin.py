@@ -66,6 +66,21 @@ class CodexAdmin:
         except (OSError, ValueError, AttributeError):
             return []
 
+    @staticmethod
+    def _live_models(details) -> list[dict]:
+        result, seen = [], set()
+        for item in details:
+            identifier = item.id
+            if (not isinstance(identifier, str) or not 0 < len(identifier) <= 200
+                    or any(ord(char) < 33 or ord(char) == 127 for char in identifier) or identifier in seen):
+                continue
+            label = item.label.strip() if isinstance(item.label, str) else ""
+            if not label or len(label) > 80 or any(ord(char) < 32 or ord(char) == 127 for char in label):
+                label = identifier[:80]
+            seen.add(identifier)
+            result.append({"id": identifier, "label": label})
+        return result
+
     def _write_locked(self, data: dict, key: str, revision: str, *, backup_kind: str) -> None:
         """Commit a validated, revision-checked edit while holding both locks."""
         HostedWorkConfig.model_validate(data[key])
@@ -160,19 +175,20 @@ class CodexAdmin:
                 host = CodexExecutor(self.profile(settings), request_timeout=15)
                 async with asyncio.timeout(40):
                     result = await host.probe()
-                connection["models"] = models = self._models()
                 if not result.protocol_verified or not result.isolation_verified:
                     connection["message"] = "Codex 程序未通过连接检查，请核对程序及版本。"
                 elif result.authentication != "ready":
                     connection.update(state="login_required", message="请在 Ubuntu 终端登录专用 Codex 账户，然后再次检查。")
                 elif result.auth_mode != settings.auth_mode:
                     connection.update(state="auth_mode_mismatch", message="实际认证方式与配置不一致，请核对专用账户。")
-                elif not settings.model or settings.model not in {item["id"] for item in models}:
-                    connection.update(state="model_required", message="账户连接已验证，请从原生模型列表选择模型并保存。")
-                elif settings.model not in {item.id for item in result.model_details}:
-                    connection.update(state="model_unavailable", message="所选模型当前不可用，请重新选择并保存。")
                 else:
-                    connection.update(state="ready", message="专用账户和所选模型连接已验证。")
+                    connection["models"] = models = self._live_models(result.model_details)
+                    if not models:
+                        connection.update(state="models_unavailable", message="连接已验证，但未取得模型列表。")
+                    elif settings.model and settings.model not in {item["id"] for item in models}:
+                        connection.update(state="model_unavailable", message="先前配置的模型不在返回列表中，请重新选择。")
+                    else:
+                        connection.update(state="ready", message="账户连接已验证，请从返回列表选择模型。")
             except WorkError:
                 raise
             except (OSError, ValueError, TimeoutError):

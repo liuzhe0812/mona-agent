@@ -108,9 +108,12 @@ async def test_admin_boundary_snapshot_never_exposes_secrets_or_native_sources(o
     response = await online.client.get(URL, headers=headers())
     data = await response.json()
     assert response.status == 200 and response.headers["Cache-Control"] == "no-store"
-    assert [model["id"] for model in data["models"]] == ["qwen"]
+    assert [model["id"] for model in data["models"]] == ["qwen", "codex"]
     assert data["models"][0]["credentials"] == {"configured": True}
     assert data["models"][0]["configuration"]["api_key_env"] == "MONA_WORK_MODEL_QWEN_KEY"
+    assert data["models"][0]["configuration"]["enabled"] is True
+    assert data["models"][1]["configuration"]["source"] == "codex"
+    assert data["models"][1]["availability"]["ready"] is False
     assert data["synchronized"] is True and data["billing"] == {"mode": "shared_wallet", "ready": False}
     assert SECRET not in json.dumps(data, ensure_ascii=False) and "/private/" not in json.dumps(data)
     assert online.validator.await_count == 0
@@ -175,6 +178,134 @@ async def test_missing_or_invalid_billing_choice_never_silently_enables_free_acc
 
 
 @pytest.mark.asyncio
+async def test_closing_model_does_not_depend_on_upstream_dns_or_available_credentials(online, monkeypatch):
+    initial = online.admin.snapshot()
+    qwen = dict(initial["models"][0]["configuration"])
+    assert qwen["enabled"] is True and qwen["price"] is None
+    monkeypatch.delenv("MONA_WORK_MODEL_QWEN_KEY")
+    online.validator.side_effect = WorkError("model_endpoint_unavailable", "offline", 503)
+    response = await put(online, initial["revision"], config={**qwen, "enabled": False})
+    assert response.status == 200 and online.validator.await_count == 0
+    disabled = (await response.json())["models"][0]
+    assert disabled["configuration"]["enabled"] is False and disabled["availability"]["ready"] is False
+    assert not (await (await online.client.get("/api/work/models", headers=headers("ordinary"))).json())["models"]
+    with pytest.raises(WorkError) as error:
+        online.service._acquire(OWNER, "qwen")
+    assert error.value.code == "model_disabled" and not online.service.active_users
+
+    revision = online.admin.snapshot()["revision"]
+    enable = {**qwen, "enabled": True}
+    response = await put(online, revision, config=enable)
+    assert response.status == 503 and online.validator.await_count == 1
+    online.validator.side_effect = lambda value, *, allow_loopback: value.rstrip("/")
+    response = await put(online, revision, config=enable)
+    assert response.status == 400 and (await response.json())["error"] == "price_required"
+    response = await put(online, revision, config={**enable, "price": PRICE})
+    assert response.status == 422 and (await response.json())["error"] == "credential_not_ready"
+    monkeypatch.setenv("MONA_WORK_MODEL_QWEN_KEY", SECRET)
+    response = await put(online, revision, config={**enable, "price": PRICE})
+    assert response.status == 200
+    assert (await response.json())["models"][0]["configuration"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_models_default_closed_and_enabling_requires_explicit_price(online):
+    revision = online.admin.snapshot()["revision"]
+    response = await put(online, revision, model_id="new-model", config=configuration(label="New"))
+    assert response.status == 200
+    saved = await response.json()
+    row = next(row for row in saved["models"] if row["id"] == "new-model")
+    assert row["configuration"]["enabled"] is False and row["configuration"]["price"] is None
+    assert row["availability"]["ready"] is False
+    response = await put(online, saved["revision"], model_id="new-model",
+                         config=configuration(label="New", enabled=True))
+    assert response.status == 400
+    assert (await response.json())["field"] == "price"
+    zero = {"input_amount_per_million": "0", "cached_input_amount_per_million": "0", "output_amount_per_million": "0"}
+    response = await put(online, saved["revision"], model_id="new-model",
+                         config=configuration(label="New", enabled=True, price=zero))
+    assert response.status == 200
+    assert next(row for row in (await response.json())["models"] if row["id"] == "new-model")["availability"]["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_codex_models_are_individually_configurable_but_not_callable(online):
+    revision = online.admin.snapshot()["revision"]
+    config = {"source": "codex", "model": "gpt-example", "label": "Codex example",
+              "billing_mode": "free", "price": PRICE, "enabled": True}
+    response = await put(online, revision, model_id="codex-example", config=config)
+    assert response.status == 200 and online.validator.await_count == 0
+    data = await response.json()
+    item = next(row for row in data["models"] if row["id"] == "codex-example")
+    assert item["configuration"]["enabled"] is True and item["configuration"]["price"] == PRICE
+    assert item["configuration"]["api_base"] == item["configuration"]["api_key_env"] == ""
+    assert item["availability"]["ready"] is False and "执行接入" in item["availability"]["message"]
+    assert "native_config_path" not in json.dumps(data)
+    with pytest.raises(WorkError) as error:
+        online.service._acquire(OWNER, "codex-example")
+    assert error.value.code == "provider_unavailable" and not online.service.active_users
+    public = await (await online.client.get("/api/work/models", headers=headers("ordinary"))).json()
+    assert "codex-example" not in [row["id"] for row in public["models"]]
+
+    original = online.path.read_bytes()
+    for changes in ({"native_config_path": "/tmp/escape"}, {"api_base": "https://other.example/v1"},
+                    {"api_key_env": "MONA_WORK_MODEL_QWEN_KEY"}):
+        rejected = await put(online, data["revision"], model_id="codex-example", config={**config, **changes})
+        assert rejected.status == 400 and online.path.read_bytes() == original
+    conflict = await put(online, data["revision"], model_id="qwen", config=config)
+    assert conflict.status == 409 and (await conflict.json())["error"] == "model_source_conflict"
+    assert online.path.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_old_editor_preserves_closed_state_and_hidden_reasoning_effort(online):
+    initial = online.admin.snapshot()
+    response = await put(online, initial["revision"], config=configuration(enabled=False, reasoning_effort="high", price=PRICE))
+    assert response.status == 200
+    saved = await response.json()
+    legacy = configuration(label="Legacy update")
+    del legacy["reasoning_effort"]
+    response = await put(online, saved["revision"], config=legacy)
+    assert response.status == 200
+    config = (await response.json())["models"][0]["configuration"]
+    assert config["enabled"] is False and config["reasoning_effort"] == "high" and config["price"] == PRICE
+
+
+@pytest.mark.asyncio
+async def test_model_save_preserves_current_verified_codex_connection(online):
+    initial = online.admin.snapshot()
+    connection = {"state": "ready", "message": "已验证", "models": [{"id": "gpt-example", "label": "GPT"}]}
+    online.codex.checked = (initial["revision"], connection)
+    response = await put(online, initial["revision"], config=configuration(price=PRICE))
+    assert response.status == 200
+    current = await response.json()
+    assert current["revision"] != initial["revision"]
+    assert online.codex.checked == (current["revision"], connection)
+    assert online.codex.snapshot()["connection"] == connection
+
+
+@pytest.mark.asyncio
+async def test_model_save_discards_stale_or_changed_codex_connection(online, monkeypatch):
+    initial = online.admin.snapshot()
+    connection = {"state": "ready", "message": "旧连接", "models": [{"id": "old", "label": "Old"}]}
+    online.codex.checked = ("0" * 64, connection)
+    response = await put(online, initial["revision"], config=configuration(price=PRICE))
+    assert response.status == 200 and online.codex.checked is None
+
+    revision = (await response.json())["revision"]
+    online.codex.checked = (revision, connection)
+    write = online.codex._write_locked
+    def simulate_out_of_band_codex_change(data, key, revision, *, backup_kind):
+        write(data, key, revision, backup_kind=backup_kind)
+        changed = json.loads(online.path.read_text(encoding="utf-8"))
+        changed["hosted_work"]["codex"] = {"label": "External change"}
+        online.path.write_text(json.dumps(changed), encoding="utf-8")
+    monkeypatch.setattr(online.codex, "_write_locked", simulate_out_of_band_codex_change)
+    response = await put(online, revision, config=configuration(label="Updated again"))
+    assert response.status == 200 and online.codex.checked is None
+
+
+@pytest.mark.asyncio
 async def test_independent_model_prices_are_saved_per_model_and_hidden_from_public(online):
     initial = online.admin.snapshot()
     assert initial["models"][0]["configuration"]["price"] is None
@@ -187,11 +318,11 @@ async def test_independent_model_prices_are_saved_per_model_and_hidden_from_publ
     second_price = {"input_amount_per_million": "0", "cached_input_amount_per_million": "0.000000",
                     "output_amount_per_million": "1.00"}
     response = await put(online, saved["revision"], model_id="second",
-                         config=configuration(label="Second", price=second_price, billing_mode="free"))
+                         config=configuration(label="Second", price=second_price, billing_mode="free", enabled=True))
     assert response.status == 200
     data = await response.json()
     by_id = {row["id"]: row["configuration"]["price"] for row in data["models"]}
-    assert by_id == {"qwen": PRICE, "second": second_price}
+    assert by_id == {"qwen": PRICE, "codex": None, "second": second_price}
     persisted = json.loads(online.path.read_text(encoding="utf-8"))["hosted_work"]["models"]
     assert persisted["qwen"]["price"] == PRICE and persisted["second"]["price"] == second_price
     public = await (await online.client.get("/api/work/models", headers=headers("ordinary"))).json()

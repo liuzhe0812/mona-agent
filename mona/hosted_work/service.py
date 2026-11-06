@@ -416,10 +416,12 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
     if operator_config_path is not None:
         from mona.hosted_work.admin import CodexAdmin
         from mona.hosted_work.model_admin import ModelAdmin
+        from mona.hosted_work.model_discovery import register_model_discovery
 
         admin = CodexAdmin(operator_config_path)
         admin.register(app)
         ModelAdmin(admin, service).register(app)
+        register_model_discovery(app, service.config)
     async def desktop_request(request):
         return await get_desktop().handle(request)
     app.router.add_route("*", "/api/work/desktop/{path:.*}", desktop_request)
