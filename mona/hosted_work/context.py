@@ -20,7 +20,7 @@ from mona.config.loader import get_config_path
 from mona.config.paths import get_agent_memory_dir, get_user_profile_dir
 from mona.hosted_work.contracts import WorkError, identifier, private_directory
 from mona.hosted_work.frontend import _is_link
-from mona.hosted_work.model_access import model_context_window
+from mona.hosted_work.model_access import context_provider, model_context_window
 from mona.providers.context_window import ResolvedContextWindow
 from mona.session.manager import Session
 from mona.utils.prompt_templates import render_template
@@ -165,7 +165,7 @@ class HostedTurnContext:
         if self.owner is not None:
             identifier(self.session_id)
         self.selection = config.models[payload["model_id"]]
-        self.window = model_context_window(self.selection)
+        self.window = model_context_window(self.selection, config)
         self._route = history_fingerprint([{"source": self.selection.source, "model": self.selection.model,
                                             "api_base": self.selection.api_base}])
         state = self._validate_state(payload.get("context_state") or {})
@@ -277,7 +277,7 @@ class HostedTurnContext:
         await self.persist_state()
         if estimate is not None:
             usage = {"context_tokens": estimate, "context_model": self.payload["model_id"],
-                     "context_provider": "mona_managed"}
+                     "context_provider": context_provider(self.selection)}
             if self.window.source != "default":
                 usage["context_window_tokens"] = self.window.tokens
             await self.emit("progress", {"kind": "context_usage", "token_usage": usage})

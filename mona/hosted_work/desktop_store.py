@@ -176,10 +176,52 @@ class DesktopStore:
         models = {key: item for key, item in self.service.config.models.items() if model_available(item, self.service.config)}
         return value if value in models else next(iter(models), "")
 
-    def set_model(self, owner: str, value: str):
+    def model_effort(self, owner: str, value: str, catalog=None) -> str | None:
+        model = self.service.config.models.get(value)
+        if model is None:
+            return None
+        if model.source != "codex":
+            return model.reasoning_effort
+        if catalog is None:
+            from mona.hosted_work.codex_catalog import codex_catalog
+
+            catalog = codex_catalog(self.service.config)
+        metadata = catalog.get(model.model)
+        if metadata is None:
+            return None
+        preferences = self.get(owner, "model_efforts", {})
+        saved = preferences.get(value) if isinstance(preferences, dict) else None
+        if (isinstance(saved, dict) and saved.get("source") == model.source and saved.get("model") == model.model
+                and saved.get("effort") in metadata.efforts):
+            return saved["effort"]
+        return metadata.default_effort
+
+    def set_model(self, owner: str, value: str, effort: str | None = None):
         if value not in self.service.config.models or not model_available(self.service.config.models[value], self.service.config):
             raise WorkError("invalid_model", "此模型未开放。")
-        self.set(owner, "model_id", value)
+        model = self.service.config.models[value]
+        if model.source == "codex" and effort is not None:
+            from mona.hosted_work.codex_catalog import codex_catalog
+
+            metadata = codex_catalog(self.service.config).get(model.model)
+            if metadata is None or effort not in metadata.efforts:
+                raise WorkError("unsupported_reasoning_effort", "当前模型不支持该思考强度，请刷新后重试。", 422)
+        elif effort is not None and effort != model.reasoning_effort:
+            raise WorkError("invalid_model", "此模型未开放所选思考强度。")
+        db = self.db(owner)
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            self.set(owner, "model_id", value)
+            if model.source == "codex" and effort is not None:
+                preferences = self.get(owner, "model_efforts", {})
+                if not isinstance(preferences, dict):
+                    preferences = {}
+                preferences[value] = {"source": model.source, "model": model.model, "effort": effort}
+                self.set(owner, "model_efforts", preferences)
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
 
     def summaries(self, owner: str):
         result = []
@@ -199,19 +241,39 @@ class DesktopStore:
     def delete(self, owner: str, sid: str):
         sid = chat_id(sid)
         self.session(owner, sid)
-        pending = self.service.store.db.execute(
-            "SELECT 1 FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown')",
-            (owner, sid)).fetchone()
-        file_pending = self.service.store.db.execute(
-            "SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone()
-        if pending or file_pending:
-            raise WorkError("user_busy", "此会话还有任务在进行或结果待核对，请先停止并确认结果后再删除。", 409)
-        self.db(owner).execute("INSERT OR IGNORE INTO deleted_chats VALUES(?)", (sid,))
-        with self.service.store.transaction():
-            for table in ("events", "runs", "files", "conversation_context"):
-                if table == "events":
-                    self.service.store.db.execute("DELETE FROM events WHERE owner=? AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))
-                else:
-                    self.service.store.db.execute(f"DELETE FROM {table} WHERE owner=? AND session_id=?", (owner, sid))
-            self.service.store.db.execute("DELETE FROM sessions WHERE owner=? AND id=?", (owner, sid))
-        self.db(owner).execute("DELETE FROM transcript WHERE chat_id=?", (sid,))
+        desktop = self.db(owner)
+        desktop_path = next((row["file"] for row in desktop.execute("PRAGMA database_list") if row["name"] == "main"), "")
+        if not desktop_path:
+            raise WorkError("invalid_state", "会话存储不可用。", 503)
+        db = self.service.store.db
+        db.execute("ATTACH DATABASE ? AS hosted_delete_desktop", (desktop_path,))
+        try:
+            # Both local stores participate in one transaction so a failed delete
+            # cannot leave a visible session marked as already deleted.
+            with self.service.store.transaction():
+                self.service.store.session(owner, sid)
+                pending = db.execute(
+                    "SELECT 1 FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown')",
+                    (owner, sid)).fetchone()
+                file_pending = db.execute(
+                    "SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone()
+                if pending or file_pending:
+                    raise WorkError("user_busy", "此会话还有任务在进行或结果待核对，请先停止并确认结果后再删除。", 409)
+                billing_pending = db.execute(
+                    "SELECT 1 FROM billing_journal WHERE owner=? AND stage NOT IN ('settled','released','rejected') "
+                    "AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid)).fetchone()
+                if billing_pending:
+                    raise WorkError("billing_pending", "此会话的计费状态尚未确认，请核对后再删除。", 409)
+                # The authoritative charge and idempotency record remain in Auth.
+                db.execute("DELETE FROM billing_journal WHERE owner=? AND run_id IN "
+                           "(SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))
+                for table in ("events", "runs", "files", "conversation_context"):
+                    if table == "events":
+                        db.execute("DELETE FROM events WHERE owner=? AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))
+                    else:
+                        db.execute(f"DELETE FROM {table} WHERE owner=? AND session_id=?", (owner, sid))
+                db.execute("DELETE FROM sessions WHERE owner=? AND id=?", (owner, sid))
+                db.execute("INSERT OR IGNORE INTO hosted_delete_desktop.deleted_chats VALUES(?)", (sid,))
+                db.execute("DELETE FROM hosted_delete_desktop.transcript WHERE chat_id=?", (sid,))
+        finally:
+            db.execute("DETACH DATABASE hosted_delete_desktop")

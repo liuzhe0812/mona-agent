@@ -23,6 +23,7 @@ from mona.config.schema import AgentDefaults, HostedWorkConfig
 from mona.hosted_work.auth_client import AuthClient
 from mona.hosted_work.contracts import WorkError, identifier, private_directory
 from mona.hosted_work.editor_tools import build_editor_tools
+from mona.hosted_work.model_access import context_provider
 from mona.hosted_work.providers import create_provider
 from mona.hosted_work.sandbox import DockerSandbox
 from mona.hosted_work.tools import HostedTools
@@ -56,7 +57,9 @@ class WorkHook(AgentProgressHook):
         if token_usage:
             usage = {**token_usage}
             if self.payload.get("model_id"):
-                usage.update(context_model=self.payload["model_id"], context_provider="mona_managed")
+                selection = getattr(self.runtime, "selection", None)
+                usage.update(context_model=self.payload["model_id"],
+                             context_provider=context_provider(selection) if selection is not None else "mona_managed")
             await self.emit("progress", {"kind": "context_usage", "token_usage": usage})
             return
         if context_compacting is not None:
@@ -228,7 +231,7 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
             progress_callback=hook.progress,
             retry_wait_callback=hook.retry_wait, injection_callback=injection, strict_injections=True,
             preserve_injection_identity=True,
-            context_provider="mona_managed", request_snapshot_callback=runtime.request_snapshot_callback,
+            context_provider=context_provider(selection), request_snapshot_callback=runtime.request_snapshot_callback,
             context_limit_callback=runtime.context_limit_callback,
             context_window_tokens=window.tokens, context_window_verified=window.source != "default",
             context_block_limit=selection.context_window_tokens, provider_retry_mode="standard",
@@ -267,7 +270,8 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         return {"status": status, "content": (result.final_content or "") if status == "completed" else "",
                 "message": "" if status == "completed" else fault or failure_message(result.stop_reason),
                 "usage": result.usage,
-                "final_usage": {**result.final_usage, "context_model": payload["model_id"], "context_provider": "mona_managed"},
+                "final_usage": {**result.final_usage, "context_model": payload["model_id"],
+                                "context_provider": context_provider(selection)},
                 "diagnostic": {"stop_reason": result.stop_reason, "iterations": hook.iteration + 1,
                                "context_window_tokens": window.tokens, "context_window_source": window.source,
                                "max_context_tokens": hook.max_context_tokens,
@@ -315,6 +319,12 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
             selection = config.models.get(payload["model_id"])
             if selection is None:
                 raise WorkError("invalid_model", "所选模型未开放。")
+            if selection.source == "codex":
+                effort = payload.get("effective_reasoning_effort")
+                if effort is not None and (not isinstance(effort, str) or len(effort) > 32):
+                    raise WorkError("invalid_model", "所选思考强度无效。")
+                selection = selection.model_copy(update={"reasoning_effort": effort})
+                config.models = {**config.models, payload["model_id"]: selection}
             empty_cwd = private_directory(root / "engine-cwd" / owner / run_id)
             auth = AuthClient(config)
             async def authorize():

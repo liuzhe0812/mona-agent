@@ -168,6 +168,30 @@ async def test_insufficient_balance_rejects_without_dispatch(environment):
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_reserve_balance_error_remains_unknown_without_dispatch(environment, monkeypatch):
+    service, executor, billing, events = environment
+
+    async def ambiguous_reserve(run_id, token, model):
+        events.append(("reserve", run_id, token, model.model))
+        raise BillingError("insufficient_balance", "账号余额不足。", 402, rejected=False)
+
+    monkeypatch.setattr(billing, "reserve", ambiguous_reserve)
+    with pytest.raises(WorkError) as caught:
+        await service.submit(OWNER, TOKEN, SID, request())
+
+    assert caught.value.code == "billing_unknown" and caught.value.status == 503
+    run = service.store.run(OWNER, RID)
+    assert run["status"] == "unknown" and run["result"]["diagnostic"]["stop_reason"] == "billing_unknown"
+    assert service.store.billing_pending() == [{"owner": OWNER, "run_id": RID, "charge_id": CHARGE_ID,
+                                                "stage": "reserving", "usage": None, "expected_units": None}]
+    assert events == [("reserve", CHARGE_ID, TOKEN, "test-codex")]
+    assert not executor.entered.is_set() and (OWNER, RID) not in service.tasks
+    assert billing.balance == 100 and billing.settlements == 0
+    assert (await service.submit(OWNER, TOKEN, SID, request()))["status"] == "unknown"
+    assert events == [("reserve", CHARGE_ID, TOKEN, "test-codex")]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("receipt", [
     None,
     {"complete": False, "prompt_tokens": 2, "cached_tokens": 1, "completion_tokens": 1},

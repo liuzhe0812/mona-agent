@@ -14,10 +14,24 @@ from mona.providers.openai_compat_provider import OpenAICompatProvider
 from mona.providers.registry import ProviderSpec
 
 
-def model_context_window(selection: HostedWorkModel):
+def context_provider(selection: HostedWorkModel) -> str:
+    return "openai" if selection.source == "codex" else "mona_managed"
+
+
+def model_context_window(selection: HostedWorkModel, config: HostedWorkConfig | None = None, *, catalog=None):
     """Use desktop model metadata without loading desktop credentials or IPC."""
     from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS
-    from mona.providers.context_window import resolve_model_context_window_details
+    from mona.providers.context_window import (
+        ResolvedContextWindow,
+        resolve_model_context_window_details,
+    )
+
+    if selection.source == "codex" and config is not None:
+        from mona.hosted_work.codex_catalog import codex_catalog
+
+        metadata = (codex_catalog(config) if catalog is None else catalog).get(selection.model)
+        if metadata is not None and metadata.context_window is not None:
+            return ResolvedContextWindow(metadata.context_window, "discovered")
 
     entry = next((item for item in CINDY_CHAT_PROVIDERS
                   if item.api_base.rstrip("/") == selection.api_base.rstrip("/")), None)

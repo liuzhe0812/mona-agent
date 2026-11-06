@@ -98,7 +98,8 @@ class WorkService:
             if exc.status != 404:
                 raise
         else:
-            if NewTurn.model_validate(existing["input"]).model_dump() != request.model_dump() or existing["session_id"] != session_id:
+            if (NewTurn.model_validate(existing["input"]).model_dump(exclude={"effective_reasoning_effort"})
+                    != request.model_dump(exclude={"effective_reasoning_effort"}) or existing["session_id"] != session_id):
                 raise WorkError("request_conflict", "发送请求的内容已变化，未重复执行。", 409)
             return existing
         engine = self._acquire(owner, request.model_id)
@@ -113,6 +114,16 @@ class WorkService:
         try:
             if model.source == "codex" and model.billing_mode == "wallet":
                 billing = HostedBilling(self.config)
+            if model.source == "codex":
+                state = getattr(self.desktop, "state", None)
+                if state is not None and callable(getattr(state, "model_effort", None)):
+                    effort = state.model_effort(owner, request.model_id)
+                else:
+                    from mona.hosted_work.codex_catalog import codex_catalog
+
+                    metadata = codex_catalog(self.config).get(model.model)
+                    effort = metadata.default_effort if metadata is not None else None
+                request = request.model_copy(update={"effective_reasoning_effort": effort})
             run, created = self.store.create_run(owner, session_id, request)
             if not created:
                 self._release(owner, engine)
@@ -138,22 +149,26 @@ class WorkService:
             task.add_done_callback(lambda _: self.tasks.pop((owner, run["id"]), None))
             return run
         except BaseException as exc:
-            if run is not None and created:
-                rejected = isinstance(exc, BillingError) and exc.rejected and not reserved
-                if journal_started and rejected:
-                    self.store.billing_update(owner, run["id"], "rejected")
-                elif journal_started and dispatch_started:
-                    self.store.billing_update(owner, run["id"], "uncertain")
-                    try:
-                        await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
-                    except Exception:
-                        pass
-                self.store.finish(owner, run["id"], "failed" if rejected else "unknown", {
-                    "message": exc.message if rejected else "计费状态待核对，本次任务不会自动重新执行。",
-                    "workspace_saved": False,
-                    "diagnostic": {"stop_reason": "billing_rejected" if rejected else "billing_unknown"},
-                })
-            self._release(owner, engine)
+            rejected = isinstance(exc, BillingError) and exc.rejected and not reserved
+            try:
+                if run is not None and created:
+                    if journal_started and rejected:
+                        self.store.billing_update(owner, run["id"], "rejected")
+                    elif journal_started and dispatch_started:
+                        self.store.billing_update(owner, run["id"], "uncertain")
+                        try:
+                            await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
+                        except Exception:
+                            pass
+                    self.store.finish(owner, run["id"], "failed" if rejected else "unknown", {
+                        "message": exc.message if rejected else "计费状态待核对，本次任务不会自动重新执行。",
+                        "workspace_saved": False,
+                        "diagnostic": {"stop_reason": "billing_rejected" if rejected else "billing_unknown"},
+                    })
+            finally:
+                self._release(owner, engine)
+            if isinstance(exc, BillingError) and not rejected:
+                raise WorkError("billing_unknown", "计费状态待核对，请勿重复发送。", 503) from None
             raise
 
     async def _drive(self, owner: str, token: str, run: dict, engine: str | None, *,
@@ -198,6 +213,8 @@ class WorkService:
                        "input_id": desktop_run.get("input_id"),
                        "title_user_edited": self._title_user_edited(owner, sid),
                        "attachments": [self.store.file(owner, sid, fid) for fid in run["input"]["attachment_ids"]]}
+            if model is not None and model.source == "codex":
+                payload["effective_reasoning_effort"] = run["input"].get("effective_reasoning_effort")
             if billing is not None:
                 payload["billing_authorized"] = True
             result = await self.executor.execute(payload, event)
@@ -596,8 +613,14 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
         return web.json_response(service.store.session_detail(request["owner"], request.match_info["sid"]))
 
     async def submit(request):
-        result = await service.submit(request["owner"], request["account_token"], request.match_info["sid"],
-                                      NewTurn.model_validate(await request.json()))
+        body = await request.json()
+        if isinstance(body, dict) and "effective_reasoning_effort" in body:
+            raise WorkError("invalid_request", "请求内容无效。")
+        turn = NewTurn.model_validate(body)
+        selection = service.config.models.get(turn.model_id)
+        if selection is not None and selection.source == "codex":
+            get_desktop()
+        result = await service.submit(request["owner"], request["account_token"], request.match_info["sid"], turn)
         return web.json_response(result, status=202)
 
     async def events(request):

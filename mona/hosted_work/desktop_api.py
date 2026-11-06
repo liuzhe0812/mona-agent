@@ -144,10 +144,13 @@ class DesktopAPI:
         selected = self.state.model(owner)
         selection = models.get(selected)
         max_tokens = selection.max_output_tokens if selection else 4096
+        from mona.hosted_work.codex_catalog import codex_catalog
         from mona.hosted_work.model_access import model_context_window
-        window = model_context_window(selection) if selection else None
+
+        catalog = codex_catalog(self.service.config)
+        window = model_context_window(selection, self.service.config, catalog=catalog) if selection else None
         context = window.tokens if window else 1_000_000
-        effort = selection.reasoning_effort if selection else None
+        effort = self.state.model_effort(owner, selected, catalog) if selection else None
         configured = bool(models)
         selected_provider = "openai" if selection and selection.source == "codex" else "mona_managed"
         groups = []
@@ -156,8 +159,13 @@ class DesktopAPI:
             for key, item in models.items():
                 if item.source != source:
                     continue
+                model_window = model_context_window(item, self.service.config, catalog=catalog)
                 row = {"id": key, "name": item.label, "type": "chat", "enabled": True,
-                       "recommended": not rows, "context_window": None, "billing_type": "token"}
+                       "recommended": not rows, "context_window": model_window.tokens if model_window.source != "default" else None,
+                       "billing_type": "token"}
+                if item.source == "codex" and (metadata := catalog.get(item.model)) is not None:
+                    row.update(reasoning_efforts=list(metadata.efforts), default_reasoning_effort=metadata.default_effort,
+                               reasoning_effort=self.state.model_effort(owner, key, catalog))
                 if item.billing_mode == "wallet" and item.price is not None:
                     row.update(item.price.model_dump())
                 rows.append(row)
@@ -437,9 +445,9 @@ class DesktopAPI:
             if body.get("provider") is not None and body["provider"] != expected:
                 raise WorkError("invalid_model", "请选择已开放的平台模型。")
             effort = body.get("effort")
-            if effort is not None and (not isinstance(effort, str) or effort != self.service.config.models[model].reasoning_effort):
+            if effort is not None and not isinstance(effort, str):
                 raise WorkError("invalid_model", "此模型未开放所选思考强度。")
-            self.state.set_model(owner, model)
+            self.state.set_model(owner, model, effort)
             return web.json_response(self.settings(owner))
         if path == "/api/sessions" and method == "GET":
             return web.json_response({"sessions": self.state.summaries(owner)})

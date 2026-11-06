@@ -75,6 +75,8 @@ class NewTurn(BaseModel):
     text: str = Field(max_length=50000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
     metadata: dict = Field(default_factory=dict)
+    # Filled by the service at admission, never accepted from a website request.
+    effective_reasoning_effort: str | None = Field(default=None, max_length=32)
 
     _id = field_validator("request_id")(identifier)
 

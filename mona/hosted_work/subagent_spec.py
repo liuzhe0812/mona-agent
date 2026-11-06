@@ -9,6 +9,7 @@ from mona.agent.runner import AgentRunSpec
 from mona.config.schema import AgentDefaults
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.editor_tools import _HostedOfficeTool, build_editor_tools
+from mona.hosted_work.model_access import context_provider
 from mona.hosted_work.tools import HostedTools
 from mona.utils.prompt_templates import render_template
 
@@ -109,7 +110,7 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
             max_tokens=selection.max_output_tokens, reasoning_effort=selection.reasoning_effort,
             hook=CompositeHook([_AuthorizationHook(authorize), hook]), checkpoint_callback=checkpoint,
             progress_callback=progress_callback,
-            context_provider="mona_managed", context_window_tokens=window.tokens,
+            context_provider=context_provider(selection), context_window_tokens=window.tokens,
             context_window_verified=window.source != "default", context_block_limit=selection.context_window_tokens,
             provider_retry_mode="standard", concurrent_tools=True, max_parallel_tool_calls=AgentDefaults().max_parallel_tool_calls,
             fail_on_tool_error=False, llm_timeout_s=ctx.config.run_timeout_seconds,
