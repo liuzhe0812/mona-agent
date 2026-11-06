@@ -13,7 +13,7 @@ import tarfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from mona.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
-from mona.agent.tools.skill_tools import SkillReadTool, SkillReferenceReadTool
+from mona.agent.tools.skill_tools import SkillAssetCopyTool, SkillReadTool, SkillReferenceReadTool
 from mona.hosted_work.sandbox import SandboxError
 from mona.hosted_work.sandbox_files import relative_path
 from mona.utils.prompt_templates import render_template
@@ -32,6 +32,16 @@ _LIMITS = {
     "mona-design": "可读取设计方法、真实样张与源码，并用于现有 Office；浏览器自动观察和操作未接入。",
     "prd-document": "文字和当前 Office 输出可用；其它媒介依赖各自实际可用的工具。",
 }
+
+
+class _AssetCopy(SkillAssetCopyTool):
+    """Keep the desktop schema while copying bytes through the owned sandbox."""
+    def __init__(self, hosted):
+        super().__init__(track_usage=False)
+        self.hosted = hosted
+
+    async def execute(self, skill=None, asset=None, dest=None, **kwargs):
+        return await self.hosted.asset(skill, asset, dest)
 
 
 def _relative(value: str) -> PurePosixPath:
@@ -187,14 +197,14 @@ class HostedSkills:
     async def asset(self, skill: str, asset: str, dest: str):
         try:
             _relative(asset)
-            source = self.file(skill, "assets/" + asset)
+            source = self.file(skill, "assets/" + asset.removeprefix("assets/"))
             destination = relative_path(dest)
             raw = source.read_bytes()
             result = await self.tools._file("upload", path=destination, data=base64.b64encode(raw).decode("ascii"))
             return json.dumps({"ok": True, "path": "/workspace/" + destination,
                                "sha256": result.get("sha256")}, ensure_ascii=False)
         except (OSError, ValueError, TypeError):
-            return "Error: 技能素材复制失败，请核对包内素材和当前工作区目标路径。"
+            return "Error: 未找到该内置素材或目标路径不可用；请读取素材目录并使用实际文件名，asset 路径相对 assets/。"
 
     async def script(self, skill: str, script: str, args: str = "", timeout_seconds: int = 120):
         try:
@@ -262,7 +272,7 @@ class HostedSkills:
         self.initial_names = self.allowed_names | {"skill_read", "skill_list"}
         self.resource_names = {item[0] for item in definitions[2:]}
         for entry in definitions:
-            self.tools.registry.register(HostedTool(*entry))
+            self.tools.registry.register(_AssetCopy(self) if entry[0] == "skill_asset_copy" else HostedTool(*entry))
         self._allow_resources()
 
     def _allow_resources(self):

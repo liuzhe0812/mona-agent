@@ -170,7 +170,8 @@ async def test_pptx_can_follow_the_actual_design_reference_without_loading_a_sec
 
 
 @pytest.mark.asyncio
-async def test_reference_paging_and_asset_copy_use_the_sandbox(hosted, monkeypatch):
+@pytest.mark.parametrize("asset", ["logo.bin", "assets/logo.bin"])
+async def test_reference_paging_and_asset_copy_use_the_sandbox(hosted, monkeypatch, asset):
     monkeypatch.setattr("shutil.copy2", lambda *_args, **_kwargs: pytest.fail("must not copy to a host path"))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(side_effect=AssertionError("host execution")))
     await hosted.skills.read("alpha")
@@ -179,7 +180,10 @@ async def test_reference_paging_and_asset_copy_use_the_sandbox(hosted, monkeypat
     assert page["content"] == "defgh" and page["nextOffset"] == 8
     page = json.loads(await hosted.skills.reference("mona-design", "guide.md", offset=8, limit=5))
     assert page["content"] == "ijk" and page["nextOffset"] is None
-    result = json.loads(await hosted.skills.asset("alpha", "logo.bin", "images/logo.bin"))
+    from mona.agent.tools.skill_tools import SkillAssetCopyTool
+
+    assert hosted.tools.registry.get("skill_asset_copy").parameters == SkillAssetCopyTool(track_usage=False).parameters
+    result = json.loads(await hosted.skills.asset("alpha", asset, "images/logo.bin"))
     assert result == {"ok": True, "path": "/workspace/images/logo.bin",
                       "sha256": hashlib.sha256(b"trusted asset").hexdigest()}
     hosted.tools._file.assert_awaited_once_with(
