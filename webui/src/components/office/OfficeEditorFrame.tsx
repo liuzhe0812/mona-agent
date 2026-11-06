@@ -30,7 +30,18 @@ export const OfficeEditorFrame = forwardRef<HTMLIFrameElement, OfficeEditorFrame
         src={getHostedPlatform() ? `/work${ENTRY_PATHS[documentType]}` : ENTRY_PATHS[documentType]}
         title={`${DOCUMENT_LABELS[documentType]}编辑器`}
         sandbox="allow-same-origin allow-scripts"
-        onLoad={onLoad}
+        onLoad={(event) => {
+          if (getHostedPlatform() && documentType === "slides") {
+            const document = event.currentTarget.contentDocument;
+            if (document && !document.getElementById("mona-hosted-slides-controls")) {
+              const style = document.createElement("style");
+              style.id = "mona-hosted-slides-controls";
+              style.textContent = ".mona-slides-editor .mona-stage-ai-menu { display: none !important; }";
+              document.head.appendChild(style);
+            }
+          }
+          onLoad();
+        }}
         className="h-full w-full border-0 bg-[hsl(var(--editor-surface))]"
       />
     );
