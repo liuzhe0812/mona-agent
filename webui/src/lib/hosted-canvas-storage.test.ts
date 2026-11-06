@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureHostedPlatform } from "./hosted-platform";
-import { moveToTrash, openWorkspaceCanvasFile } from "./tauri";
+import { listWorkspaceCanvases, moveToTrash, openWorkspaceCanvasFile, writeWorkspaceCanvasFile } from "./tauri";
 
 const path = "/workspace/canvases/observed.mona-canvas";
 const observed = "a".repeat(64);
@@ -49,5 +49,61 @@ describe("hosted recoverable file deletion", () => {
     configure("synthetic-account-B");
     await expect(moveToTrash(path)).rejects.toThrow("刷新文件列表");
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("hosted canvas save revisions", () => {
+  it("finishes an already queued save before opening the canvas again", async () => {
+    let finishWrite!: (response: Response) => void;
+    let onServer = saved;
+    const fetcher = vi.fn(async (_url, init) => JSON.parse(init.body).command === "workspace_canvas_write_file"
+      ? new Promise<Response>(resolve => { finishWrite = resolve; }) : reply(onServer));
+    vi.stubGlobal("fetch", fetcher);
+    const opened = await openWorkspaceCanvasFile(path);
+    const saving = writeWorkspaceCanvasFile(path, opened.canvas);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    const reopening = openWorkspaceCanvasFile(path);
+    await Promise.resolve();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    onServer = { ...saved, sha256: latest };
+    finishWrite(reply(onServer));
+    await saving;
+    await expect(reopening).resolves.toMatchObject({ sha256: latest });
+  });
+
+  it("does not let an old list response roll back the version of a completed save", async () => {
+    let finishList!: (response: Response) => void;
+    const fetcher = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.command === "workspace_canvas_list") return new Promise<Response>(resolve => { finishList = resolve; });
+      return reply(body.command === "workspace_canvas_write_file" ? { ...saved, sha256: latest } : saved);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const opened = await openWorkspaceCanvasFile(path);
+    const stale = listWorkspaceCanvases("/workspace");
+    const rejected = expect(stale).rejects.toMatchObject({ status: 409, code: "canvas_changed" });
+    await writeWorkspaceCanvasFile(path, opened.canvas);
+    finishList(reply([saved]));
+    await rejected;
+    await writeWorkspaceCanvasFile(path, opened.canvas);
+    const writes = fetcher.mock.calls.map(call => JSON.parse(call[1].body))
+      .filter(body => body.command === "workspace_canvas_write_file");
+    expect(writes.map(body => body.args.expectedSha256)).toEqual([observed, latest]);
+  });
+
+  it("discards a canvas body if the account changes during JSON decoding", async () => {
+    const response = reply(saved);
+    let finishBody!: (value: unknown) => void;
+    const decode = vi.spyOn(response, "json").mockImplementation(() => new Promise(resolve => { finishBody = resolve; }));
+    const fetcher = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", fetcher);
+    const opening = openWorkspaceCanvasFile(path);
+    const rejected = expect(opening).rejects.toThrow("账号已变化");
+    await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+    configure("synthetic-account-B");
+    finishBody(saved);
+    await rejected;
+    await expect(moveToTrash(path)).rejects.toThrow("刷新文件列表");
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 });

@@ -1,6 +1,7 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { configureHostedPlatform } from "@/lib/hosted-platform";
 import type { SavedWorkspaceCanvas, WorkspaceCanvasDocument } from "@/lib/tauri";
 import type { UIMessage } from "@/lib/types";
 
@@ -61,6 +62,13 @@ function hookOptions(overrides: Partial<Parameters<typeof useConversationCanvase
 }
 
 describe("useConversationCanvases workspace persistence", () => {
+  let releaseAccount: (() => void) | undefined;
+  afterEach(() => {
+    cleanup();
+    releaseAccount?.();
+    releaseAccount = undefined;
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     mocks.isTauri.mockReturnValue(true);
     mocks.migrateLegacyCanvases.mockReset().mockResolvedValue(0);
@@ -172,5 +180,70 @@ describe("useConversationCanvases workspace persistence", () => {
     await waitFor(() => expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledWith(
       WORKSPACE_ROOT, expect.objectContaining({ id, kind: "mindmap", contentMarkdown: markdown, originChatId: CHAT_ID }),
     ));
+  });
+
+  it("flushes the last pending edit to its original workspace when switching chats", async () => {
+    releaseAccount = configureHostedPlatform({ apiBase: "/api/work/desktop", token: "account-a" });
+    mocks.listWorkspaceCanvases.mockImplementation(async (_root, chatId) => chatId === CHAT_ID ? [savedCanvas()] : []);
+    const { result, rerender } = renderHook(({ chatId, workspaceRoot }) =>
+      useConversationCanvases(hookOptions({ chatId, workspaceRoot })),
+    { initialProps: { chatId: CHAT_ID, workspaceRoot: WORKSPACE_ROOT } });
+    await waitFor(() => expect(result.current.activeCanvas).not.toBeNull());
+    vi.useFakeTimers();
+    act(() => result.current.updateCanvasContent("canvas-1", { contentMarkdown: "# 最后一笔" }));
+    rerender({ chatId: "chat-2", workspaceRoot: "D:\\other-workspace" });
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledTimes(1);
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledWith(WORKSPACE_ROOT,
+      expect.objectContaining({ id: "canvas-1", contentMarkdown: "# 最后一笔", originChatId: CHAT_ID }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledTimes(1);
+    expect(result.current.tabs).toEqual([]);
+  });
+
+  it.each([0, 450])("does not duplicate a save on unmount after %i ms", async (elapsed) => {
+    mocks.listWorkspaceCanvases.mockResolvedValue([savedCanvas()]);
+    const { result, unmount } = renderHook(() => useConversationCanvases(hookOptions()));
+    await waitFor(() => expect(result.current.activeCanvas).not.toBeNull());
+    mocks.saveWorkspaceCanvas.mockImplementation(() => new Promise(() => undefined));
+    vi.useFakeTimers();
+    act(() => result.current.updateCanvasContent("canvas-1", { contentMarkdown: "# 离开前编辑" }));
+    act(() => vi.advanceTimersByTime(elapsed));
+    unmount();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledTimes(1);
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledWith(WORKSPACE_ROOT,
+      expect.objectContaining({ contentMarkdown: "# 离开前编辑" }));
+  });
+
+  it("discards unsent edits when the hosted account snapshot changes", async () => {
+    const releaseOld = configureHostedPlatform({ apiBase: "/api/work/desktop", token: "account-a" });
+    mocks.listWorkspaceCanvases.mockResolvedValue([savedCanvas()]);
+    const { result, unmount } = renderHook(() => useConversationCanvases(hookOptions()));
+    await waitFor(() => expect(result.current.activeCanvas).not.toBeNull());
+    vi.useFakeTimers();
+    act(() => result.current.updateCanvasContent("canvas-1", { contentMarkdown: "# 旧账号内容" }));
+    releaseAccount = configureHostedPlatform({ apiBase: "/api/work/desktop", token: "account-b" });
+    unmount();
+    releaseOld();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(mocks.saveWorkspaceCanvas).not.toHaveBeenCalled();
+  });
+
+  it("does not report an old pending write failure in the next chat", async () => {
+    mocks.listWorkspaceCanvases.mockResolvedValue([savedCanvas()]);
+    const { result, rerender } = renderHook(({ chatId }) => useConversationCanvases(hookOptions({ chatId })),
+      { initialProps: { chatId: CHAT_ID } });
+    await waitFor(() => expect(result.current.activeCanvas).not.toBeNull());
+    let fail!: (error: Error) => void;
+    mocks.saveWorkspaceCanvas.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+    vi.useFakeTimers();
+    act(() => result.current.updateCanvasContent("canvas-1", { contentMarkdown: "# 新内容" }));
+    rerender({ chatId: "chat-2" });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeCanvas?.saveStatus).toBe("saved");
+    await act(async () => { fail(new Error("旧文件写入结果未知")); });
+    expect(result.current.activeCanvas?.saveStatus).toBe("saved");
+    expect(result.current.activeCanvas?.error).toBeUndefined();
+    expect(mocks.saveWorkspaceCanvas).toHaveBeenCalledTimes(1);
   });
 });

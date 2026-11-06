@@ -754,22 +754,34 @@ async function mediaUrlToBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(buf);
 }
 
+/** Release a temporary download URL after the browser has started reading it. */
+function revokeObjectURLLater(url: string): void {
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 /**
- * Save a media URL (data: or http(s):) to a local file via a native save
+ * Save a media URL (data:, blob:, or http(s):) to a local file via a native save
  * dialog. Returns the saved path, or ``null`` if the user cancelled. In
  * browser mode falls back to a synthetic ``<a download>`` click.
  */
 export async function downloadMediaUrl(url: string, filename: string): Promise<string | null> {
   if (!isTauri()) {
-    const blob = await (await fetch(url)).blob();
-    const blobUrl = URL.createObjectURL(blob);
+    let temporaryUrl: string | null = null;
+    if (!/^(?:data|blob):/i.test(url)) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("文件暂时无法下载，请刷新后重试。");
+      temporaryUrl = URL.createObjectURL(await response.blob());
+    }
     const link = document.createElement("a");
-    link.href = blobUrl;
+    link.href = temporaryUrl ?? url;
     link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(blobUrl);
+    try {
+      document.body.appendChild(link);
+      link.click();
+    } finally {
+      link.remove();
+      if (temporaryUrl) revokeObjectURLLater(temporaryUrl);
+    }
     return null;
   }
   const { save } = await import("@tauri-apps/plugin-dialog");
@@ -779,6 +791,16 @@ export async function downloadMediaUrl(url: string, filename: string): Promise<s
   const bytes = await mediaUrlToBytes(url);
   await writeFile(filePath, bytes);
   return filePath;
+}
+
+/** Download a generated blob without releasing it before the browser reads it. */
+export async function downloadMediaBlob(blob: Blob, filename: string): Promise<string | null> {
+  const url = URL.createObjectURL(blob);
+  try {
+    return await downloadMediaUrl(url, filename);
+  } finally {
+    revokeObjectURLLater(url);
+  }
 }
 
 // ---------------------------------------------------------------------------

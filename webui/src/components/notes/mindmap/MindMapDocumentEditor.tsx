@@ -67,7 +67,7 @@ import { NodePropertyDialog, type NodePropertyData } from "./NodePropertyDialog"
 import { useMindMapSelection } from "./MindMapSelectionContext";
 import { useMindMapBridge } from "./MindMapBridge";
 import { useMindMapCanvasAgent } from "./useMindMapCanvasAgent";
-import { downloadMediaUrl } from "@/lib/tauri";
+import { downloadMediaBlob } from "@/lib/tauri";
 import {
   readDecorations,
   writeDecorations,
@@ -2079,13 +2079,8 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
         setExportError("导出失败：编辑器未返回图像数据");
         return;
       }
-      const blobUrl = URL.createObjectURL(blob);
       const safeTitle = (note.title || "mindmap").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
-      try {
-        await downloadMediaUrl(blobUrl, `${safeTitle}.png`);
-      } finally {
-        URL.revokeObjectURL(blobUrl);
-      }
+      await downloadMediaBlob(blob, `${safeTitle}.png`);
     } catch (err) {
       setExportError(err instanceof Error ? `导出失败：${err.message}` : "导出失败");
     } finally {

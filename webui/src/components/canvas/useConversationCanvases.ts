@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OperationNote } from "@/components/notes/notes-data";
 import { nowTimestamp } from "@/components/notes/notes-data";
 import type { UIMessage } from "@/lib/types";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import {
   isTauri,
   hasWorkspaceStorage,
@@ -68,17 +69,43 @@ export function useConversationCanvases({
   const tabsRef = useRef(tabs);
   const pendingRequestRef = useRef<ConversationCanvasRequest | null>(null);
   const processedMessageIdsRef = useRef<Set<string>>(new Set());
-  const saveTimersRef = useRef<Map<string, number>>(new Map());
+  const platform = getHostedPlatform();
+  const view = useMemo(() => ({ chatId, workspaceRoot, platform }), [chatId, workspaceRoot, platform]);
+  const viewRef = useRef(view);
+  const mountedRef = useRef(true);
+  const saveTimersRef = useRef(new Map<string, {
+    timer: number;
+    view: typeof view;
+    save: () => Promise<unknown>;
+  }>());
   tabsRef.current = tabs;
+  viewRef.current = view;
+
+  const flushPendingSave = useCallback((noteId: string) => {
+    const pending = saveTimersRef.current.get(noteId);
+    if (!pending) return;
+    saveTimersRef.current.delete(noteId);
+    window.clearTimeout(pending.timer);
+    if (getHostedPlatform() === pending.view.platform) void pending.save().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => () => {
+    for (const [noteId, pending] of saveTimersRef.current) {
+      if (pending.view === view) flushPendingSave(noteId);
+    }
+  }, [flushPendingSave, view]);
 
   useEffect(() => {
     pendingRequestRef.current = null;
     processedMessageIdsRef.current = new Set();
-    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer);
-    saveTimersRef.current.clear();
     setTabs([]);
     setActiveCanvasId(null);
-  }, [chatId]);
+  }, [chatId, workspaceRoot, platform]);
 
   useEffect(() => {
     if (!chatId || !workspaceRoot || !migrateLegacy || !isTauri()) return;
@@ -89,7 +116,7 @@ export function useConversationCanvases({
     if (!chatId || !workspaceRoot || !hasWorkspaceStorage()) return;
     let cancelled = false;
     void listWorkspaceCanvases(workspaceRoot, chatId).then((saved) => {
-      if (cancelled || saved.length === 0) return;
+      if (cancelled || getHostedPlatform() !== platform || saved.length === 0) return;
       const restored = saved.map(savedCanvasToTab);
       const hadCurrentCanvas = tabsRef.current.length > 0;
       setTabs((current) => mergeCanvasTabs(restored, current));
@@ -102,23 +129,25 @@ export function useConversationCanvases({
     return () => {
       cancelled = true;
     };
-  }, [chatId, onOpenCanvas, workspaceRoot]);
+  }, [chatId, onOpenCanvas, platform, workspaceRoot]);
 
   const persist = useCallback(async (note: OperationNote) => {
-    setTabState(setTabs, note.id, { saveStatus: "saving", error: undefined });
+    const currentView = () => mountedRef.current && viewRef.current === view && getHostedPlatform() === view.platform;
+    if (getHostedPlatform() !== view.platform) return undefined;
+    if (currentView()) setTabState(setTabs, note.id, { saveStatus: "saving", error: undefined });
     if (!hasWorkspaceStorage()) {
-      setTabState(setTabs, note.id, { saveStatus: "saved" });
+      if (currentView()) setTabState(setTabs, note.id, { saveStatus: "saved" });
       return undefined;
     }
     if (!workspaceRoot) {
       const error = new Error("当前工作区尚未就绪");
-      setTabState(setTabs, note.id, { saveStatus: "error", error: `自动保存失败：${error.message}` });
+      if (currentView()) setTabState(setTabs, note.id, { saveStatus: "error", error: `自动保存失败：${error.message}` });
       throw error;
     }
     try {
       const saved = await saveWorkspaceCanvas(workspaceRoot, editorNoteToCanvas(note));
       const savedNote = workspaceCanvasToEditorNote(saved.canvas);
-      setTabs((current) => current.map((tab) => (
+      if (currentView()) setTabs((current) => current.map((tab) => (
         tab.note.id === note.id
           ? tab.note.contentMarkdown === note.contentMarkdown
             ? { ...tab, note: savedNote, workspacePath: saved.path, saveStatus: "saved", error: undefined }
@@ -128,21 +157,22 @@ export function useConversationCanvases({
       return saved.path;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setTabState(setTabs, note.id, { saveStatus: "error", error: `自动保存失败：${message}` });
+      if (currentView()) setTabState(setTabs, note.id, { saveStatus: "error", error: `自动保存失败：${message}` });
+      else if (getHostedPlatform() === view.platform) window.alert(`画布“${note.title}”保存未能确认：${message}\n请重新打开原画布核对。`);
       throw error;
     }
-  }, [workspaceRoot]);
+  }, [view, workspaceRoot]);
 
   const schedulePersist = useCallback((note: OperationNote) => {
     const previous = saveTimersRef.current.get(note.id);
-    if (previous !== undefined) window.clearTimeout(previous);
+    if (previous) window.clearTimeout(previous.timer);
     setTabState(setTabs, note.id, { saveStatus: "saving", error: undefined });
-    const timer = window.setTimeout(() => {
-      saveTimersRef.current.delete(note.id);
-      void persist(note).catch(() => undefined);
+    const pending = { timer: 0, view, save: () => persist(note) };
+    pending.timer = window.setTimeout(() => {
+      if (saveTimersRef.current.get(note.id) === pending) flushPendingSave(note.id);
     }, AUTOSAVE_DELAY_MS);
-    saveTimersRef.current.set(note.id, timer);
-  }, [persist]);
+    saveTimersRef.current.set(note.id, pending);
+  }, [flushPendingSave, persist, view]);
 
   const createBlankCanvas = useCallback((kind: "flowchart" | "mindmap") => {
     if (!chatId) return null;
@@ -289,6 +319,7 @@ export function useConversationCanvases({
     noteId: string,
     next: { contentMarkdown: string; plainText?: string },
   ) => {
+    if (!mountedRef.current || viewRef.current !== view || getHostedPlatform() !== view.platform) return;
     const current = tabsRef.current.find((tab) => tab.note.id === noteId);
     if (!current || current.note.contentMarkdown === next.contentMarkdown) return;
     const note: OperationNote = {
@@ -303,7 +334,7 @@ export function useConversationCanvases({
         : tab
     )));
     schedulePersist(note);
-  }, [schedulePersist]);
+  }, [schedulePersist, view]);
 
   const selectCanvas = useCallback((id: string | null) => {
     setActiveCanvasId(id);
@@ -312,20 +343,23 @@ export function useConversationCanvases({
   const openWorkspaceCanvas = useCallback(async (path: string) => {
     if (!workspaceRoot || !path) return null;
     const saved = await readWorkspaceCanvas(workspaceRoot, path);
+    if (!mountedRef.current || viewRef.current !== view || getHostedPlatform() !== view.platform) return null;
     const tab = savedCanvasToTab(saved);
     setTabs((current) => mergeCanvasTabs(current, [tab]));
     setActiveCanvasId(tab.id);
     onOpenCanvas?.(tab.id, false);
     return tab.id;
-  }, [onOpenCanvas, workspaceRoot]);
+  }, [onOpenCanvas, view, workspaceRoot]);
 
   const closeCanvas = useCallback((id: string) => {
+    const tab = tabsRef.current.find((item) => item.id === id);
+    if (tab) flushPendingSave(tab.note.id);
     setTabs((current) => {
       const next = current.filter((tab) => tab.id !== id);
       setActiveCanvasId((active) => active === id ? (next[next.length - 1]?.id ?? null) : active);
       return next;
     });
-  }, []);
+  }, [flushPendingSave]);
 
   const activeCanvas = useMemo(
     () => tabs.find((tab) => tab.id === activeCanvasId) ?? null,

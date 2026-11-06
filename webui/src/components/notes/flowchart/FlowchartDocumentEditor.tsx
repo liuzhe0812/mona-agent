@@ -327,7 +327,7 @@ function downloadSvgString(svg: string, filename: string): void {
  * 以全图 SVG 作为打印内容，适配横向/纵向页面，不打印围栏 JSON。
  * 用户在打印对话框中选择"保存为 PDF"。
  */
-function printFlowchartPdf(svgDataUrl: string, title: string): void {
+async function printFlowchartPdf(svgDataUrl: string, title: string): Promise<void> {
   const printWindow = window.open("", "_blank", "width=900,height=700");
   if (!printWindow) {
     throw new Error("无法打开打印窗口，请检查浏览器弹窗拦截设置");
@@ -336,7 +336,7 @@ function printFlowchartPdf(svgDataUrl: string, title: string): void {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>${title}</title>
+<title></title>
 <style>
   @page { margin: 12mm; }
   html, body { margin: 0; padding: 0; height: 100%; }
@@ -366,19 +366,25 @@ function printFlowchartPdf(svgDataUrl: string, title: string): void {
 </head>
 <body>
   <div class="flowchart-print-container">
-    <img src="${svgDataUrl}" alt="${title}" />
+    <img />
   </div>
-  <script>
-    window.onload = function() {
-      setTimeout(function() {
-        window.focus();
-        window.print();
-      }, 300);
-    };
-  </script>
 </body>
 </html>`);
   printWindow.document.close();
+  printWindow.document.title = title;
+  const image = printWindow.document.querySelector("img")!;
+  image.alt = title;
+  image.src = svgDataUrl;
+  try {
+    await image.decode();
+    if (!printWindow.closed) {
+      printWindow.focus();
+      printWindow.print();
+    }
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
 }
 
 /** 字体选项 */
@@ -2272,7 +2278,7 @@ export function FlowchartDocumentEditor({
           // PDF 导出（设计文档 §7.13）：以 SVG 为内容，通过打印窗口生成 PDF
           const opts: FlowchartExportOptions = { background: "theme" };
           const dataUrl = await canvasRef.current.exportToSvg(opts);
-          printFlowchartPdf(dataUrl, baseName);
+          await printFlowchartPdf(dataUrl, baseName);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "导出失败";
