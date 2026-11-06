@@ -17,6 +17,13 @@ from pydantic import ValidationError
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import check_request_host, is_public_resource, website_origin
 from mona.hosted_work.auth_client import AuthClient
+from mona.hosted_work.billing import (
+    BillingError,
+    HostedBilling,
+    actual_units,
+    charge_id,
+    settlement_usage,
+)
 from mona.hosted_work.contracts import (
     AccountLogin,
     NewSession,
@@ -38,6 +45,7 @@ class WorkService:
         self.active_engines: set[str] = set()
         self.tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.desktop = None
+        self._billing_recovery: asyncio.Task | None = None
 
     def _acquire(self, owner: str, model_id: str | None = None) -> str | None:
         if owner in self.active_users:
@@ -49,16 +57,29 @@ class WorkService:
             model = self.config.models.get(model_id)
             if model is None:
                 raise WorkError("invalid_model", "所选模型未开放。")
-            require_model_available(model)
+            require_model_available(model, self.config)
             if model.source != "mona":
-                engine = str(Path(model.native_config_path).resolve()) + ":" + model.source
+                admin = None
+                if model.source == "codex":
+                    from mona.hosted_work.providers import codex_native_home, codex_operator
+
+                    admin = codex_operator(self.config)
+                    engine = str(codex_native_home(admin)) + ":codex"
+                else:
+                    engine = str(Path(model.native_config_path).resolve()) + ":" + model.source
                 for uncertain_id in self.store.unknown_models():
                     uncertain = self.config.models.get(uncertain_id)
-                    if uncertain is None or (uncertain.source == model.source and
+                    if (uncertain is None or model.source == "codex" and uncertain.source == "codex"
+                            or model.source != "codex" and uncertain.source == model.source and
                             Path(uncertain.native_config_path).resolve() == Path(model.native_config_path).resolve()):
                         raise WorkError("model_pending", "此模型来源有待核对的执行，暂不接收新任务。", 409)
                 if engine in self.active_engines:
                     raise WorkError("model_busy", "此模型来源正在处理任务，请稍后重试。", 429)
+                if admin is not None:
+                    try:
+                        self.config.codex = admin._read()[3]
+                    except (OSError, ValueError) as exc:
+                        raise WorkError("native_unavailable", "平台尚未配置该模型来源。", 503) from exc
         self.active_users.add(owner)
         if engine:
             self.active_engines.add(engine)
@@ -81,21 +102,64 @@ class WorkService:
                 raise WorkError("request_conflict", "发送请求的内容已变化，未重复执行。", 409)
             return existing
         engine = self._acquire(owner, request.model_id)
+        billing = None
+        model = self.config.models[request.model_id].model_copy(deep=True)
+        run = None
+        created = False
+        reserved = False
+        dispatch_started = False
+        journal_started = False
+        billing_id = None
         try:
+            if model.source == "codex" and model.billing_mode == "wallet":
+                billing = HostedBilling(self.config)
             run, created = self.store.create_run(owner, session_id, request)
             if not created:
                 self._release(owner, engine)
                 return run
-            task = asyncio.create_task(self._drive(owner, token, run, engine))
+            if billing is not None:
+                billing_id = charge_id(owner, run["id"])
+                self.store.billing_begin(owner, run["id"], billing_id)
+                journal_started = True
+                reservation = await billing.reserve(billing_id, token, model)
+                if reservation["status"] != "reserved":
+                    raise BillingError("billing_unknown", "计费状态尚未确认，请核对后继续。", 503)
+                reserved = True
+                self.store.billing_update(owner, run["id"], "reserved")
+                self.store.billing_update(owner, run["id"], "dispatching")
+                dispatch_started = True
+                dispatched = await billing.dispatch(billing_id)
+                if dispatched["status"] != "running":
+                    raise BillingError("billing_unknown", "计费状态尚未确认，请核对后继续。", 503)
+                self.store.billing_update(owner, run["id"], "running")
+            task = asyncio.create_task(self._drive(owner, token, run, engine, billing=billing,
+                                                   model=model, billing_id=billing_id))
             self.tasks[(owner, run["id"])] = task
             task.add_done_callback(lambda _: self.tasks.pop((owner, run["id"]), None))
             return run
-        except BaseException:
+        except BaseException as exc:
+            if run is not None and created:
+                rejected = isinstance(exc, BillingError) and exc.rejected and not reserved
+                if journal_started and rejected:
+                    self.store.billing_update(owner, run["id"], "rejected")
+                elif journal_started and dispatch_started:
+                    self.store.billing_update(owner, run["id"], "uncertain")
+                    try:
+                        await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
+                    except Exception:
+                        pass
+                self.store.finish(owner, run["id"], "failed" if rejected else "unknown", {
+                    "message": exc.message if rejected else "计费状态待核对，本次任务不会自动重新执行。",
+                    "workspace_saved": False,
+                    "diagnostic": {"stop_reason": "billing_rejected" if rejected else "billing_unknown"},
+                })
             self._release(owner, engine)
             raise
 
-    async def _drive(self, owner: str, token: str, run: dict, engine: str | None):
+    async def _drive(self, owner: str, token: str, run: dict, engine: str | None, *,
+                     billing=None, model=None, billing_id=None):
         run_id, sid = run["id"], run["session_id"]
+        billing_finished = False
         title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
             if kind == "history":
@@ -134,7 +198,29 @@ class WorkService:
                        "input_id": desktop_run.get("input_id"),
                        "title_user_edited": self._title_user_edited(owner, sid),
                        "attachments": [self.store.file(owner, sid, fid) for fid in run["input"]["attachment_ids"]]}
+            if billing is not None:
+                payload["billing_authorized"] = True
             result = await self.executor.execute(payload, event)
+            if billing is not None:
+                try:
+                    usage = settlement_usage(result.get("billing_usage"))
+                    if usage is None:
+                        self.store.billing_update(owner, run_id, "uncertain")
+                        await billing.uncertain(billing_id, "usage_unavailable")
+                        raise BillingError("billing_unknown", "用量待核对。", 503)
+                    expected = actual_units(model, usage)
+                    self.store.billing_update(owner, run_id, "usage_ready", usage=usage, expected_units=expected)
+                    settlement = await billing.settle(billing_id, usage)
+                    if settlement["status"] == "uncertain":
+                        self.store.billing_update(owner, run_id, "uncertain")
+                    if settlement["status"] != "settled" or settlement["actual_units"] != expected:
+                        raise BillingError("billing_unknown", "结算结果待核对。", 503)
+                    self.store.billing_update(owner, run_id, "settled")
+                    billing_finished = True
+                except BillingError:
+                    result.update(status="unknown", message="本轮已执行，计费状态待核对；请勿重复发送。")
+                    result["diagnostic"] = {"stop_reason": "billing_unknown",
+                                            "billing_reasons": result.get("billing_issue_codes", [])}
             if result.get("workspace_saved"):
                 for artifact in result.get("artifacts", []):
                     info = self._file_info(artifact)
@@ -161,6 +247,11 @@ class WorkService:
             self.store.finish(owner, run_id, result["status"], public)
         except BaseException as exc:
             logger.warning("Hosted Work run={} result_unconfirmed exception_type={}", run_id, type(exc).__name__)
+            if billing is not None and not billing_finished:
+                try:
+                    await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
+                except Exception:
+                    pass
             try:
                 self.store.finish(owner, run_id, "unknown", {
                     "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False,
@@ -328,7 +419,45 @@ class WorkService:
     async def _no_event(kind, value):
         raise WorkError("protocol_error", "文件操作返回了意外执行事件。", 503)
 
+    async def _recover_billing_once(self):
+        if not self.store.billing_pending():
+            return
+        try:
+            billing = HostedBilling(self.config)
+        except BillingError:
+            return
+        for record in self.store.billing_pending():
+            owner, run_id, billing_id, stage = (record[key] for key in ("owner", "run_id", "charge_id", "stage"))
+            if owner in self.active_users or (owner, run_id) in self.tasks:
+                continue
+            try:
+                if record["usage"] is not None and stage in {"usage_ready", "uncertain"}:
+                    result = await billing.settle(billing_id, record["usage"])
+                    if result["status"] == "settled" and result["actual_units"] == record["expected_units"]:
+                        self.store.billing_update(owner, run_id, "settled")
+                elif stage in {"reserving", "reserved"}:
+                    result = await billing.get(billing_id)
+                    if result["status"] == "reserved":
+                        result = await billing.release(billing_id)
+                    if result["status"] == "released":
+                        self.store.billing_update(owner, run_id, "released")
+                elif stage in {"dispatching", "running"}:
+                    result = await billing.uncertain(billing_id, "provider_outcome_unknown")
+                    if result["status"] == "uncertain":
+                        self.store.billing_update(owner, run_id, "uncertain")
+            except (BillingError, WorkError):
+                # A missing or ambiguous remote record is not proof it is safe to release.
+                continue
+
+    async def _billing_recovery_loop(self):
+        while True:
+            await self._recover_billing_once()
+            await asyncio.sleep(30)
+
     async def close(self):
+        if self._billing_recovery is not None:
+            self._billing_recovery.cancel()
+            await asyncio.gather(self._billing_recovery, return_exceptions=True)
         for owner, run_id in list(self.tasks):
             self.executor.cancel(owner, run_id)
         pending = list(self.tasks.values())
@@ -413,12 +542,15 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
 
     app = web.Application(middlewares=[boundary], client_max_size=max(service.config.max_file_bytes + 65536,
                                                                   service.config.max_history_bytes * 4 // 3 + 65536))
+    async def recover_billing(_app):
+        service._billing_recovery = asyncio.create_task(service._billing_recovery_loop())
+    app.on_startup.append(recover_billing)
     if operator_config_path is not None:
         from mona.hosted_work.admin import CodexAdmin
         from mona.hosted_work.model_admin import ModelAdmin
         from mona.hosted_work.model_discovery import register_model_discovery
 
-        admin = CodexAdmin(operator_config_path)
+        admin = CodexAdmin(operator_config_path, service.config)
         admin.register(app)
         ModelAdmin(admin, service).register(app)
         register_model_discovery(app, service.config)
@@ -452,7 +584,7 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
 
     async def models(request):
         return web.json_response({"models": [{"id": key, "label": model.label, "source": model.source}
-                                            for key, model in service.config.models.items() if model_available(model)],
+                                            for key, model in service.config.models.items() if model_available(model, service.config)],
                                   "max_file_bytes": service.config.max_file_bytes})
 
     async def sessions(request):

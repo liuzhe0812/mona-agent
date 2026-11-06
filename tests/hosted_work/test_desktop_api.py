@@ -125,6 +125,61 @@ async def test_settings_use_real_open_models_and_selection_is_per_account(enviro
     assert denied.status == 400
 
 
+async def test_qwen_and_priced_codex_groups_and_selection(environment, tmp_path, monkeypatch):
+    e = environment
+    operator = tmp_path / "operator.json"
+    operator.write_text("{}", encoding="utf-8")
+    key_name = "MONA_WORK_BILLING_DESKTOP_TEST_KEY"
+    key = "test-only-billing-key-" + "x" * 32
+    monkeypatch.setenv(key_name, key)
+    config = e.service.config
+    config.operator_config_path = str(operator)
+    config.billing_key_env = key_name
+    price = {"input_amount_per_million": "1.2", "cached_input_amount_per_million": "0.3",
+             "output_amount_per_million": "4.5"}
+    config.models = {
+        "qwen": HostedWorkModel(label="Qwen", model="private-qwen-id", source="mona", billing_mode="free"),
+        "codex": HostedWorkModel(label="Codex", model="private-codex-id", source="codex",
+                                 billing_mode="wallet", price=price),
+    }
+
+    response = await e.client.get(PREFIX + "/api/settings", headers=headers())
+    assert response.status == 200
+    settings = await response.json()
+    groups = settings["chat_providers"]
+    assert [(group["name"], group["label"]) for group in groups] == [
+        ("mona_managed", "Mona AI"), ("openai", "OpenAI")
+    ]
+    assert [row["id"] for row in groups[0]["models"]] == ["qwen"]
+    assert [row["id"] for row in groups[1]["models"]] == ["codex"]
+    assert all(groups[1]["models"][0][field] == value for field, value in price.items())
+    assert all(field not in groups[0]["models"][0] for field in price)
+    assert settings["agent"]["model"] == "qwen" and settings["agent"]["provider"] == "mona_managed"
+    assert key not in await response.text() and "private-codex-id" not in await response.text()
+
+    route = PREFIX + "/api/development/work-model-source"
+    response = await e.client.put(route, headers=headers(),
+        json={"executor": "mona", "provider": "openai", "model": "codex"})
+    assert response.status == 200
+    settings = await response.json()
+    assert settings["agent"]["model"] == "codex"
+    assert settings["agent"]["provider"] == settings["agent"]["resolved_provider"] == "openai"
+    assert settings["model_presets"][0]["provider"] == "openai"
+
+    for provider, model in (("mona_managed", "codex"), ("openai", "qwen"), ("openai", "missing")):
+        rejected = await e.client.put(route, headers=headers(),
+            json={"executor": "mona", "provider": provider, "model": model})
+        assert rejected.status == 400
+    current = await (await e.client.get(PREFIX + "/api/settings", headers=headers())).json()
+    assert current["agent"]["model"] == "codex" and current["agent"]["provider"] == "openai"
+
+    response = await e.client.put(route, headers=headers(),
+        json={"executor": "mona", "provider": "mona_managed", "model": "qwen"})
+    assert response.status == 200
+    settings = await response.json()
+    assert settings["agent"]["model"] == "qwen" and settings["agent"]["provider"] == "mona_managed"
+
+
 async def test_history_sidebar_and_files_reject_other_accounts(environment):
     e = environment
     e.api.state.append(A, SID_A, {"event": "user", "text": "A私密正文"}, "first-input")

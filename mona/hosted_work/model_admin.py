@@ -14,6 +14,7 @@ from mona.config.schema import HostedWorkConfig, HostedWorkModel, HostedWorkPric
 from mona.hosted_work.admin import CodexAdmin
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.model_access import model_endpoint, model_secret
+from mona.hosted_work.model_policy import billing_ready, model_available
 
 _FIELDS = frozenset({"label", "source", "api_base", "api_key_env", "model",
                      "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model", "price", "enabled"})
@@ -73,23 +74,23 @@ def _ready(model: HostedWorkModel) -> bool:
     return True
 
 
-def _model_snapshot(identifier: str, model: HostedWorkModel) -> dict:
+def _model_snapshot(identifier: str, model: HostedWorkModel, config: HostedWorkConfig) -> dict:
     configuration = model.model_dump(include=_FIELDS)
-    configured = _ready(model) if model.source == "mona" else False
+    configured = _ready(model) if model.source == "mona" else bool(config.operator_config_path and config.codex.cli_path)
     if model.source == "codex":
         # These legacy values are unrelated to the dedicated CLI connection.
         configuration.update(api_base="", api_key_env="")
     if not model.enabled:
         message = "此模型暂未开放。"
     elif model.source == "codex":
-        message = "Codex CLI 执行接入尚未完成，暂不可调用。"
+        message = ("当前模型已开放。" if model_available(model, config) and configured
+                   else "模型连接或余额计费尚未就绪，暂不可调用。")
     elif model.billing_mode == "wallet":
         message = "共用余额计费尚未接通，暂不可调用。"
     else:
         message = "当前服务已加载凭据。" if configured else "当前服务尚未加载凭据。"
     return {"id": identifier, "configuration": configuration, "credentials": {"configured": configured},
-            "availability": {"ready": model.enabled and model.source == "mona"
-                                      and model.billing_mode == "free" and configured, "message": message}}
+            "availability": {"ready": model_available(model, config) and configured, "message": message}}
 
 
 def _origin(value: str) -> tuple[str, str, int] | None:
@@ -123,11 +124,11 @@ class ModelAdmin:
 
     def snapshot(self) -> dict:
         _, _, revision, saved = self._read()
-        models = [_model_snapshot(identifier, model) for identifier, model in self.service.config.models.items()
+        models = [_model_snapshot(identifier, model, self.service.config) for identifier, model in self.service.config.models.items()
                   if model.source in {"mona", "codex"}]
         return {"revision": revision, "models": models,
                 "synchronized": saved.models == self.service.config.models,
-                "billing": {"mode": "shared_wallet", "ready": False}}
+                "billing": {"mode": "shared_wallet", "ready": billing_ready(self.service.config)}}
 
     def _idle(self) -> None:
         service = self.service

@@ -183,5 +183,5 @@ def test_closed_native_provider_does_not_change_global_data_root(tmp_path, monke
     from mona.hosted_work.contracts import WorkError
     with pytest.raises(WorkError) as error:
         create_provider(config, config.models["native"], tmp_path / "empty")
-    assert error.value.code == "billing_unavailable"
+    assert error.value.code == "provider_unavailable"
     assert loader.get_config_path() == private_config

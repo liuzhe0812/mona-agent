@@ -40,6 +40,19 @@ class WorkStore:
                 FOREIGN KEY(owner,session_id) REFERENCES sessions(owner,id)
             );
             CREATE INDEX IF NOT EXISTS runs_active ON runs(status,owner);
+            CREATE TABLE IF NOT EXISTS billing_journal (
+                owner TEXT NOT NULL, run_id TEXT NOT NULL, charge_id TEXT NOT NULL UNIQUE,
+                stage TEXT NOT NULL CHECK(stage IN (
+                    'reserving','reserved','dispatching','running','usage_ready',
+                    'settled','released','uncertain','rejected'
+                )),
+                usage TEXT, expected_units INTEGER CHECK(expected_units IS NULL OR expected_units >= 0),
+                created REAL NOT NULL, updated REAL NOT NULL,
+                PRIMARY KEY(owner,run_id),
+                FOREIGN KEY(owner,run_id) REFERENCES runs(owner,id),
+                CHECK((usage IS NULL) = (expected_units IS NULL))
+            );
+            CREATE INDEX IF NOT EXISTS billing_journal_pending ON billing_journal(stage,updated);
             CREATE TABLE IF NOT EXISTS conversation_context (
                 owner TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL,
                 PRIMARY KEY(owner,session_id),
@@ -79,6 +92,93 @@ class WorkStore:
         except BaseException:
             self.db.execute("ROLLBACK")
             raise
+
+    @staticmethod
+    def _billing_info(row) -> dict:
+        return {"owner": row["owner"], "run_id": row["run_id"], "charge_id": row["charge_id"],
+                "stage": row["stage"], "usage": json.loads(row["usage"]) if row["usage"] is not None else None,
+                "expected_units": row["expected_units"]}
+
+    def billing_begin(self, owner: str, run_id: str, charge_id: str) -> dict:
+        """Persist the remote charge identity before the first reserve request."""
+        identifier(run_id)
+        identifier(charge_id)
+        with self.transaction():
+            row = self.db.execute("SELECT * FROM billing_journal WHERE owner=? AND run_id=?",
+                                  (owner, run_id)).fetchone()
+            if row:
+                if row["charge_id"] != charge_id:
+                    raise WorkError("billing_conflict", "计费记录不一致，请核对后继续。", 409)
+                return self._billing_info(row)
+            if not self.db.execute("SELECT 1 FROM runs WHERE owner=? AND id=?", (owner, run_id)).fetchone():
+                raise WorkError("not_found", "未找到该任务。", 404)
+            if self.db.execute("SELECT 1 FROM billing_journal WHERE charge_id=?", (charge_id,)).fetchone():
+                raise WorkError("billing_conflict", "计费记录不一致，请核对后继续。", 409)
+            now = time.time()
+            self.db.execute("INSERT INTO billing_journal(owner,run_id,charge_id,stage,created,updated) "
+                            "VALUES(?,?,?,'reserving',?,?)", (owner, run_id, charge_id, now, now))
+            row = self.db.execute("SELECT * FROM billing_journal WHERE owner=? AND run_id=?",
+                                  (owner, run_id)).fetchone()
+            return self._billing_info(row)
+
+    def billing_update(self, owner: str, run_id: str, stage: str, *,
+                       usage: dict | None = None, expected_units: int | None = None) -> dict:
+        transitions = {
+            "reserving": {"reserved", "released", "rejected", "uncertain"},
+            "reserved": {"dispatching", "released", "uncertain"},
+            "dispatching": {"running", "uncertain"},
+            "running": {"usage_ready", "uncertain"},
+            "usage_ready": {"settled", "uncertain"},
+            "uncertain": {"settled"},
+            "settled": set(), "released": set(), "rejected": set(),
+        }
+        identifier(run_id)
+        if not isinstance(stage, str) or stage not in transitions:
+            raise WorkError("billing_conflict", "计费记录状态无效。", 409)
+        if (usage is None) != (expected_units is None):
+            raise WorkError("billing_conflict", "计费用量记录不完整。", 409)
+        if usage is not None:
+            keys = ("input_tokens", "cached_input_tokens", "output_tokens")
+            if (not isinstance(usage, dict) or set(usage) != set(keys)
+                    or any(type(usage[key]) is not int or not 0 <= usage[key] <= 1_000_000_000 for key in keys)
+                    or usage["cached_input_tokens"] > usage["input_tokens"]
+                    or type(expected_units) is not int or not 0 <= expected_units <= 9_223_372_036_854_775_807):
+                raise WorkError("billing_conflict", "计费用量记录无效。", 409)
+            usage = {key: usage[key] for key in keys}
+        with self.transaction():
+            row = self.db.execute("SELECT * FROM billing_journal WHERE owner=? AND run_id=?",
+                                  (owner, run_id)).fetchone()
+            if row is None:
+                raise WorkError("not_found", "未找到该计费记录。", 404)
+            previous = row["stage"]
+            if stage != previous and stage not in transitions[previous]:
+                raise WorkError("billing_conflict", "计费记录状态不一致，请核对后继续。", 409)
+            previous_usage = json.loads(row["usage"]) if row["usage"] is not None else None
+            if (previous_usage is None) != (row["expected_units"] is None):
+                raise WorkError("billing_conflict", "计费用量记录不完整。", 409)
+            if usage is not None:
+                if stage not in {"usage_ready", "uncertain", "settled"}:
+                    raise WorkError("billing_conflict", "当前状态不能保存计费用量。", 409)
+                if previous_usage is not None and (previous_usage != usage or row["expected_units"] != expected_units):
+                    raise WorkError("billing_conflict", "已保存的计费用量不能更改。", 409)
+            saved_usage = previous_usage if previous_usage is not None else usage
+            saved_units = row["expected_units"] if previous_usage is not None else expected_units
+            if stage in {"usage_ready", "settled"} and saved_usage is None:
+                raise WorkError("billing_conflict", "缺少完整计费用量，不能结算。", 409)
+            if stage == "settled" and previous_usage is None:
+                raise WorkError("billing_conflict", "结算前必须先保存计费用量。", 409)
+            self.db.execute("UPDATE billing_journal SET stage=?,usage=?,expected_units=?,updated=? "
+                            "WHERE owner=? AND run_id=?", (stage, encoded(saved_usage) if saved_usage is not None else None,
+                                                             saved_units, time.time(), owner, run_id))
+            row = self.db.execute("SELECT * FROM billing_journal WHERE owner=? AND run_id=?",
+                                  (owner, run_id)).fetchone()
+            return self._billing_info(row)
+
+    def billing_pending(self) -> list[dict]:
+        """Return incomplete charges for recovery without storing account tokens."""
+        return [self._billing_info(row) for row in self.db.execute(
+            "SELECT * FROM billing_journal WHERE stage NOT IN ('settled','released','rejected') "
+            "ORDER BY created,owner,run_id")]
 
     def recover(self) -> int:
         # A lost process is not proof of failure. Never requeue an accepted write.

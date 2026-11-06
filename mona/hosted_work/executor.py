@@ -20,6 +20,9 @@ def child_environment(config: HostedWorkConfig, payload: dict) -> dict[str, str]
         if selected is not None and selected.source == "mona" and selected.api_key_env:
             allowed.add(selected.api_key_env)
     environment = {key: value for key, value in os.environ.items() if key in allowed}
+    if (payload.get("action") == "turn" and selected is not None and selected.source == "codex"
+            and config.codex.local_proxy_url):
+        environment.update({key: config.codex.local_proxy_url for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")})
     environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", PYTHONNOUSERSITE="1")
     return environment
 
@@ -53,7 +56,12 @@ class ProcessExecutor:
             raise WorkError("duplicate_execution", "此任务已在执行，未重复派发。", 409)
         if key in self.cancelled:
             self.cancelled.discard(key)
-            return {"status": "cancelled", "message": "任务在派发前已停止。", "workspace_saved": True}
+            result = {"status": "cancelled", "message": "任务在派发前已停止。", "workspace_saved": True}
+            selected = self.config.models.get(payload.get("model_id", ""))
+            if selected is not None and selected.source == "codex":
+                result["billing_usage"] = {"prompt_tokens": 0, "cached_tokens": 0,
+                                           "completion_tokens": 0, "complete": True}
+            return result
         frame_limit = max(self.config.max_history_bytes * 2, self.config.max_file_bytes * 2 + 65536)
         environment = child_environment(self.config, payload)
         process = await asyncio.create_subprocess_exec(

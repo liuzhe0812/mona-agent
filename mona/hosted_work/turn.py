@@ -248,9 +248,10 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         await emit("history", {"messages": runtime.history_for_storage(result.messages)})
         await runtime.persist_state(result.messages)
         if result.stop_reason == "completed" and not result.error and not any(item.fault for item in [tools, *child_tools]):
-            from mona.hosted_work.titles import update_title
+            if selection.source != "codex":
+                from mona.hosted_work.titles import update_title
 
-            await update_title(runtime, payload, provider, emit)
+                await update_title(runtime, payload, provider, emit)
             await runtime.persist_state()
         # The full execution history is now durable, matching ordinary Work's
         # SAVE boundary. Recovery must not append the last completed call again.
@@ -299,6 +300,7 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
     from mona.config.loader import set_config_path
     set_config_path(private_directory(home / "runtime") / "config.json")
     sandbox = DockerSandbox(config, owner, run_id, home / "workspace.zip")
+    selected = config.models.get(payload.get("model_id", "")) if payload.get("action") == "turn" else None
     result = {"status": "failed", "content": "", "message": "在线任务未能完成，请核对已有结果。", "workspace_saved": False}
     provider = None
     offered: list[dict] = []
@@ -320,7 +322,11 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
                     raise WorkError("account_changed", "账号身份已变化，已停止本轮。", 401)
             stage = "authorization"
             await authorize()
-            provider = create_provider(config, selection, empty_cwd)
+            if selection.source == "codex" and selection.billing_mode == "wallet":
+                provider = create_provider(config, selection, empty_cwd,
+                                           billing_authorized=payload.get("billing_authorized") is True)
+            else:
+                provider = create_provider(config, selection, empty_cwd)
             editor_tools = build_editor_tools(config, payload, track_event) if payload.get("desktop_ui") else ()
             stage = "model_run"
             async with asyncio.timeout(config.run_timeout_seconds):
@@ -355,6 +361,13 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
                 except Exception as exc:
                     result.update(status="unknown", message="模型执行状态待核对，本轮不会自动重新执行。")
                     result["diagnostic"] = {"stop_reason": "execution_unknown", "stage": "provider_close", "exception_type": type(exc).__name__}
+        if selected is not None and selected.source == "codex":
+            usage = getattr(provider, "billing_usage", None)
+            result["billing_usage"] = usage.snapshot() if usage is not None else {
+                "prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "complete": provider is None,
+            }
+            if usage is not None:
+                result["billing_issue_codes"] = usage.diagnostics()
         if sandbox.started:
             try:
                 await sandbox.save()

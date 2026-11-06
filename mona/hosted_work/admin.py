@@ -29,10 +29,11 @@ class SaveCodex(BaseModel):
 
 
 class CodexAdmin:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, runtime_config: HostedWorkConfig | None = None):
         # Only the process entry point supplies this path, never a website request.
         self.path = config_path.resolve(strict=True)
         self.root = self.path.parent
+        self.runtime_config = runtime_config
         self.lock = asyncio.Lock()
         self.checked: tuple[str, dict] | None = None
 
@@ -110,6 +111,8 @@ class CodexAdmin:
             Path(temporary).unlink(missing_ok=True)
 
     def snapshot(self) -> dict:
+        from mona.hosted_work.model_policy import billing_ready, model_available
+
         _, _, revision, settings = self._read()
         detected = discover_codex(work_root=self.root.parent)
         connection = {"state": "not_configured" if not settings.cli_path else "not_checked",
@@ -119,13 +122,20 @@ class CodexAdmin:
         if self.checked and self.checked[0] == revision:
             connection = self.checked[1]
         command = [sys.executable, "-m", "mona.hosted_work.admin", "--config", str(self.path)]
+        execution_ready = bool(self.runtime_config and self.runtime_config.operator_config_path and settings.cli_path)
+        wallet_ready = billing_ready(self.runtime_config)
+        public_enabled = bool(self.runtime_config and any(
+            model.source == "codex" and model_available(model, self.runtime_config)
+            for model in self.runtime_config.models.values()))
         return {"revision": revision, "configuration": settings.model_dump(), "connection": connection,
                 "discovery": {"state": "found" if detected else "not_found", "path": str(detected) if detected else None},
-                "billing": {"mode": settings.billing_mode, "ready": settings.billing_mode == "free",
+                "billing": {"mode": settings.billing_mode, "ready": settings.billing_mode == "free" or wallet_ready,
                             "message": "管理员已设置为免费，不扣用户余额。" if settings.billing_mode == "free"
+                                       else "使用网站与应用共用的 Mona 余额。" if wallet_ready
                                        else "使用网站与应用共用的 Mona 余额；余额计费尚未接通。"},
-                "execution": {"ready": False, "message": "Codex CLI 执行接入尚未完成，暂不可调用。"},
-                "public_enabled": False,
+                "execution": {"ready": execution_ready, "message": "模型连接已配置。" if execution_ready
+                                                                        else "模型执行尚未配置。"},
+                "public_enabled": public_enabled,
                 "login_commands": ["cd " + shlex.quote(str(Path(__file__).resolve().parents[2])),
                                    shlex.join([*command, "login", "--device-auth" if settings.auth_mode == "chatgpt" else "--with-api-key"]),
                                    shlex.join([*command, "login", "status"])]}

@@ -414,7 +414,7 @@ async def test_manual_codex_public_configuration_cannot_run_unbilled_but_explici
     assert [model["id"] for model in (await response.json())["models"]] == ["qwen"]
     with pytest.raises(WorkError) as caught:
         service._acquire(owner_key("2"), "manual-codex")
-    assert caught.value.code == "billing_unavailable" and caught.value.status == 503
+    assert caught.value.code == "provider_unavailable" and caught.value.status == 503
     assert not service.active_users and not service.active_engines
     for account in ("2", "3"):
         owner = owner_key(account)

@@ -20,6 +20,14 @@ from mona.hosted_work.service import WorkService, create_app
 from mona.hosted_work.store import WorkStore
 
 
+def _load_config(path: Path) -> HostedWorkConfig:
+    path = path.resolve(strict=True)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    config = HostedWorkConfig.model_validate(data.get("hosted_work", data.get("hostedWork", {})))
+    config.operator_config_path = str(path)
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description="Mona online Work host (independent of desktop startup)")
     parser.add_argument("--config", type=Path, required=True)
@@ -27,8 +35,7 @@ def main():
     if sys.platform != "linux":
         raise SystemExit("Hosted Work requires Ubuntu/Linux; desktop behavior is unchanged.")
     path = args.config.resolve(strict=True)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    config = HostedWorkConfig.model_validate(data.get("hosted_work", data.get("hostedWork", {})))
+    config = _load_config(path)
     if not config.enabled or not Path(config.state_dir).is_absolute():
         raise SystemExit("Hosted Work needs explicit enablement and an absolute private state directory.")
     website_origin(config)

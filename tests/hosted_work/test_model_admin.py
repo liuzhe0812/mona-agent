@@ -239,7 +239,7 @@ async def test_codex_models_are_individually_configurable_but_not_callable(onlin
     item = next(row for row in data["models"] if row["id"] == "codex-example")
     assert item["configuration"]["enabled"] is True and item["configuration"]["price"] == PRICE
     assert item["configuration"]["api_base"] == item["configuration"]["api_key_env"] == ""
-    assert item["availability"]["ready"] is False and "执行接入" in item["availability"]["message"]
+    assert item["availability"]["ready"] is False and "尚未就绪" in item["availability"]["message"]
     assert "native_config_path" not in json.dumps(data)
     with pytest.raises(WorkError) as error:
         online.service._acquire(OWNER, "codex-example")

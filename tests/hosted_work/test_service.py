@@ -102,7 +102,7 @@ async def test_submit_and_refresh_never_repeat_execution(online):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source,mode,error", [("mona", "wallet", "billing_unavailable"),
-    ("codex", "wallet", "billing_unavailable"), ("codex", "free", "provider_unavailable")])
+    ("codex", "wallet", "provider_unavailable"), ("codex", "free", "provider_unavailable")])
 async def test_billing_choice_cannot_bypass_admission_or_provider_factory(online, tmp_path, source, mode, error):
     from mona.hosted_work.providers import create_provider
     client, service, executor = online

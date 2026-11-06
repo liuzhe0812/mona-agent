@@ -885,11 +885,14 @@ class HostedWorkConfig(Base):
     auth_origin: str = ""
     public_origin: str = ""
     frontend_dir: str = ""
+    # Bound by the service entry point, then sent only to its trusted turn process.
+    operator_config_path: str = Field(default="", max_length=4096)
     bind_host: str = "127.0.0.1"
     allow_insecure_lan_http: bool = False
     port: int = Field(default=17175, ge=1024, le=65535)
     models: dict[str, HostedWorkModel] = Field(default_factory=dict)
     codex: HostedCodexSettings = Field(default_factory=HostedCodexSettings)
+    billing_key_env: str = Field(default="MONA_WORK_BILLING_SERVICE_KEY", pattern=r"^(?:MONA_WORK_BILLING_[A-Z0-9_]+)?$")
     sandbox_image: str = ""
     sandbox_runtime: Literal["runsc"] = "runsc"
     max_concurrent_runs: int = Field(default=2, ge=1, le=16)

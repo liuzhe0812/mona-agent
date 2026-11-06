@@ -140,7 +140,7 @@ class DesktopAPI:
         return value
 
     def settings(self, owner: str) -> dict:
-        models = {key: model for key, model in self.service.config.models.items() if model_available(model)}
+        models = {key: model for key, model in self.service.config.models.items() if model_available(model, self.service.config)}
         selected = self.state.model(owner)
         selection = models.get(selected)
         max_tokens = selection.max_output_tokens if selection else 4096
@@ -149,26 +149,37 @@ class DesktopAPI:
         context = window.tokens if window else 1_000_000
         effort = selection.reasoning_effort if selection else None
         configured = bool(models)
-        rows = [{"id": key, "name": item.label, "type": "chat", "enabled": True,
-                 "recommended": index == 0, "context_window": None, "billing_type": "token"}
-                for index, (key, item) in enumerate(models.items())]
-        agent = {"model": selected, "provider": "mona_managed", "resolved_provider": "mona_managed",
+        selected_provider = "openai" if selection and selection.source == "codex" else "mona_managed"
+        groups = []
+        for source, name, label in (("mona", "mona_managed", "Mona AI"), ("codex", "openai", "OpenAI")):
+            rows = []
+            for key, item in models.items():
+                if item.source != source:
+                    continue
+                row = {"id": key, "name": item.label, "type": "chat", "enabled": True,
+                       "recommended": not rows, "context_window": None, "billing_type": "token"}
+                if item.billing_mode == "wallet" and item.price is not None:
+                    row.update(item.price.model_dump())
+                rows.append(row)
+            if rows:
+                groups.append({"name": name, "label": label, "source_group": source,
+                    "configured": True, "is_builtin": source == "mona", "api_key_required": False,
+                    "api_base": "", "default_api_base": "", "api_base_editable": False,
+                    "models_url": None, "model": selected if selected_provider == name else "", "models": rows})
+        agent = {"model": selected, "provider": selected_provider, "resolved_provider": selected_provider,
                  "executor": "mona", "model_preset": None, "has_api_key": configured,
                  "max_tokens": max_tokens, "context_window_tokens": context, "context_window_source": window.source if window else "default",
                  "auto_compact_token_limit": None, "temperature": 0.7, "reasoning_effort": effort,
                  "timezone": "UTC", "tool_hint_max_length": 120}
         preset = {"name": "default", "label": "默认模型", "active": True, "is_default": True,
-                  "model": selected, "provider": "mona_managed", "max_tokens": max_tokens,
+                  "model": selected, "provider": selected_provider, "max_tokens": max_tokens,
                   "context_window_tokens": context, "auto_compact_token_limit": None, "temperature": 0.7,
                   "reasoning_effort": effort, "capabilities": {"supports_vision": False,
                     "supports_tool_calling": True, "supports_streaming": True, "supports_json_mode": None}}
         return {"agent": agent, "model_presets": [preset],
-                "providers": [{"name": "mona_managed", "label": "Mona AI", "configured": configured,
-                               "api_key_required": False, "model": selected}],
-                "chat_providers": [{"name": "mona_managed", "label": "Mona AI", "source_group": "mona",
-                    "configured": configured, "is_builtin": True, "api_key_required": False,
-                    "api_base": "", "default_api_base": "", "api_base_editable": False,
-                    "models_url": None, "model": selected, "models": rows}],
+                "providers": [{"name": item["name"], "label": item["label"], "configured": True,
+                               "api_key_required": False, "model": item["model"]} for item in groups],
+                "chat_providers": groups,
                 "web_search": {"provider": "", "providers": [], "max_results": 0, "timeout": 0},
                 "web": {"enable": True, "search": {"max_results": 0, "timeout": 0}},
                 "jev": {"configured": False, "api_base": "", "model": "", "timeout_seconds": 0},
@@ -417,11 +428,14 @@ class DesktopAPI:
             return web.json_response({"executors": []})
         if path == "/api/development/work-model-source" and method == "PUT":
             body = self._body(await request.json(), {"executor", "provider", "model", "effort"})
-            if body.get("executor") != "mona" or body.get("provider") is not None and body["provider"] != "mona_managed":
+            if body.get("executor") != "mona":
                 raise WorkError("invalid_model", "请选择已开放的平台模型。")
             model = body.get("model")
             if not isinstance(model, str) or model not in self.service.config.models:
                 raise WorkError("invalid_model", "此模型未开放。")
+            expected = "openai" if self.service.config.models[model].source == "codex" else "mona_managed"
+            if body.get("provider") is not None and body["provider"] != expected:
+                raise WorkError("invalid_model", "请选择已开放的平台模型。")
             effort = body.get("effort")
             if effort is not None and (not isinstance(effort, str) or effort != self.service.config.models[model].reasoning_effort):
                 raise WorkError("invalid_model", "此模型未开放所选思考强度。")
