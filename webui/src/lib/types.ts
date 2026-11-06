@@ -934,6 +934,7 @@ export interface SettingsPayload {
       price_tier?: string | null;
       reasoning_efforts?: string[];
       default_reasoning_effort?: string | null;
+      reasoning_effort?: string | null;
       supports_adaptive_thinking?: boolean;
       input_amount_per_million?: string | null;
       cached_input_amount_per_million?: string | null;

@@ -4,7 +4,7 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
-import type { MessageAdmission, StreamError } from "@/lib/mona-client";
+import type { MessageAdmission, MessageAdmissionReason, StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
   AgentModelBinding,
@@ -47,6 +47,14 @@ interface PendingMessage {
   previousTaskId: string | null;
   previousTaskPlan?: TaskPlanWsPayload;
   awaitingAdmission: boolean;
+}
+
+interface MessageRejection {
+  runActive: boolean;
+  uncertain?: boolean;
+  inputId?: string;
+  stopOutcome?: "unknown" | "unsupported";
+  reason?: MessageAdmissionReason;
 }
 
 interface ActiveAssistantCursor {
@@ -615,7 +623,7 @@ export function useMonaStream(
   /** Clear the current ``streamError`` (e.g. after the user dismisses the
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
-  messageRejection: { runActive: boolean; uncertain?: boolean; inputId?: string; stopOutcome?: "unknown" | "unsupported" } | null;
+  messageRejection: MessageRejection | null;
   dismissMessageRejection: () => void;
 } {
   const { client } = useClientOptional();
@@ -638,7 +646,7 @@ export function useMonaStream(
   const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
-  const [messageRejection, setMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string; stopOutcome?: "unknown" | "unsupported" } | null>(null);
+  const [messageRejection, setMessageRejection] = useState<MessageRejection | null>(null);
   const activeChatRef = useRef(chatId);
   activeChatRef.current = chatId;
   const mountedRef = useRef(true);
@@ -1048,6 +1056,13 @@ export function useMonaStream(
         if (ev.input_id) return;
         const pending = pendingMessageRef.current;
         if (ev.message_rejected !== true || ev.chat_id !== chatId || !pending || ev.task_id !== pending.taskId) return;
+        if (ev.code === "billing_unknown") {
+          if (!client.markBillingUnknown(chatId, pending.messageId)) {
+            setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: true,
+              inputId: pending.messageId, reason: "billing_unknown" });
+          }
+          return;
+        }
         pendingMessageRef.current = null;
         setMessages((previous) => previous.map((message) => message.id === pending.messageId
           ? { ...message, sendState: "rejected" }
@@ -1067,7 +1082,8 @@ export function useMonaStream(
           setStopping(false);
           suppressStreamUntilTurnEndRef.current = false;
         }
-        setMessageRejection({ runActive: activeRunStartedAt !== null });
+        setMessageRejection({ runActive: activeRunStartedAt !== null,
+          ...(ev.code === "insufficient_balance" ? { reason: "insufficient_balance" as const } : {}) });
         return;
       }
       if (ev.event === "context_usage") {
@@ -1773,13 +1789,17 @@ export function useMonaStream(
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       let acceptedReported = false;
-      const onAdmission = (state: MessageAdmission) => {
+      let unknownReported = false;
+      const onAdmission = (state: MessageAdmission, reason?: MessageAdmissionReason) => {
         if (client.isChatDeleted(chatId)) return;
         if (state === "accepted" || state === "consumed") {
           if (!acceptedReported) options?.onAdmission?.("accepted");
           acceptedReported = true;
           if (state === "consumed" && options?.awaitConsumption) options.onAdmission?.("consumed");
-        } else if (!acceptedReported || options?.awaitConsumption) options?.onAdmission?.(state);
+        } else if ((!acceptedReported || options?.awaitConsumption) && (state !== "unknown" || !unknownReported)) {
+          options?.onAdmission?.(state);
+        }
+        unknownReported = state === "unknown";
         if (!mountedRef.current || activeChatRef.current !== chatId) return;
         const pending = pendingMessageRef.current;
         if (!pending || pending.messageId !== messageId) return;
@@ -1790,7 +1810,8 @@ export function useMonaStream(
           return;
         }
         if (state === "unknown") {
-          setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: true, inputId: messageId });
+          setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: true, inputId: messageId,
+            ...(reason === "billing_unknown" ? { reason } : {}) });
           return;
         }
         pendingMessageRef.current = null;
@@ -1804,7 +1825,8 @@ export function useMonaStream(
           setCurrentTaskId(currentTaskIdRef.current);
           setTaskPlan(client.getTaskPlan?.(chatId) ?? pending.previousTaskPlan);
         }
-        if (state !== "cancelled" && state !== "paused") setMessageRejection({ runActive: started !== null, inputId: messageId });
+        if (state !== "cancelled" && state !== "paused") setMessageRejection({ runActive: started !== null, inputId: messageId,
+          ...(state === "rejected" && reason === "insufficient_balance" ? { reason } : {}) });
       };
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
@@ -1891,18 +1913,22 @@ export function useMonaStream(
         },
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      let lastAdmission: MessageAdmission | undefined;
       client.sendMessage(chatId, content, wireMedia, {
         ...options, taskId, inputId, targetTurnId,
-        onAdmission: (state) => {
+        onAdmission: (state, reason) => {
           if (client.isChatDeleted(chatId)) return;
-          options?.onAdmission?.(state);
+          if (state !== lastAdmission) options?.onAdmission?.(state);
+          lastAdmission = state;
           if (!mountedRef.current || activeChatRef.current !== chatId) return;
           setMessages((previous) => previous.map((message) => message.id === inputId ? {
             ...message, sendState: state === "consumed" ? undefined
               : state === "rejected" || state === "paused" || state === "cancelled" ? "rejected" : "pending",
             isInjected: state === "consumed",
           } : message));
-          if (state === "unknown" || state === "rejected") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId });
+          if (state === "unknown" || state === "rejected") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId,
+            ...((state === "rejected" && reason === "insufficient_balance")
+              || (state === "unknown" && reason === "billing_unknown") ? { reason } : {}) });
           else setMessageRejection((current) => current?.inputId === inputId ? null : current);
         },
       });

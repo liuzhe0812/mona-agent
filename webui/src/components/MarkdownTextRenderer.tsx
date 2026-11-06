@@ -1,4 +1,4 @@
-import { Children, isValidElement, useMemo } from "react";
+import { Children, isValidElement, useContext, useMemo } from "react";
 import type { Components, ExtraProps } from "react-markdown";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -11,6 +11,7 @@ import remarkMath from "remark-math";
 import { ChatChart } from "@/components/ChatChart";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
+import { ConversationFileContext } from "@/components/deliver/ConversationFileContext";
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/common/mermaid-diagram";
 import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
@@ -81,6 +82,7 @@ export default function MarkdownTextRenderer({
   streaming = false,
 }: MarkdownTextRendererProps) {
   const context = useMarkdownContext();
+  const conversationFiles = useContext(ConversationFileContext);
   const conversation = context !== null;
   const source = useMemo(() => conversation ? normalizeConversationMarkdown(children, streaming) : children, [children, streaming, conversation]);
   const plugins = useMemo(() => conversation ? [...remarkPlugins, remarkProjectAssets] : remarkPlugins, [conversation]);
@@ -190,6 +192,10 @@ export default function MarkdownTextRenderer({
         if (conversation && href && (href.startsWith("mona-project:") || isProjectReference(href))) {
           return <ProjectFileLink path={decodeSource(href)}>{markdownChildren}</ProjectFileLink>;
         }
+        if (conversationFiles && href && isConversationFileLink(href)) {
+          return <button type="button" className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
+            onClick={() => void conversationFiles.download(href).catch(conversationFiles.onError)}>{markdownChildren}</button>;
+        }
         if (href && isLikelyFilePath(href)) {
           return (
             <FileLink href={href}>{markdownChildren}</FileLink>
@@ -229,7 +235,7 @@ export default function MarkdownTextRenderer({
         );
       },
     }),
-    [highlightCode, conversation],
+    [highlightCode, conversation, conversationFiles],
   );
 
   const rendered = (
@@ -267,6 +273,12 @@ export default function MarkdownTextRenderer({
     </div>
   );
   return conversation ? <MarkdownGallery>{rendered}</MarkdownGallery> : rendered;
+}
+
+function isConversationFileLink(href: string): boolean {
+  const value = href.trim();
+  if (!value || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value)) return false;
+  return isLikelyFilePath(value) || /\.pptx?(?:[?#].*)?$/i.test(value);
 }
 
 function FileLink({ href, children }: { href: string; children: React.ReactNode }) {

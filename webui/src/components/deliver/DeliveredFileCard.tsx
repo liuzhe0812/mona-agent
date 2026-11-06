@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
+import { ConversationFileContext } from "./ConversationFileContext";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile } from "@/lib/types";
 
@@ -29,10 +30,13 @@ export function DeliveredFileCard({
   className,
 }: DeliveredFileCardProps) {
   const openPreview = useFilePreviewStore((s) => s.open);
+  const conversationFiles = useContext(ConversationFileContext);
+  const activeSessionKey = sessionKey ?? conversationFiles?.sessionKey ?? null;
+  const activeScope = sessionKey === null && conversationFiles ? conversationFiles.scope : scope;
 
   const handleClick = useCallback(() => {
-    openPreview(file, scope, sessionKey);
-  }, [file, scope, sessionKey, openPreview]);
+    openPreview(file, activeScope, activeSessionKey);
+  }, [file, activeScope, activeSessionKey, openPreview]);
 
   const handleOpenWithSystem = useCallback(() => {
     if (isTauri()) void openPathWithSystemApp(file.absolute_path);

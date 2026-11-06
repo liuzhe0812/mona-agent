@@ -58,8 +58,8 @@ export function buildComposerProviderOptions(
           defaultReasoningEffort: model.default_reasoning_effort,
           reasoningEffort:
             provider.name === settings.agent.provider && model.id === settings.agent.model
-              ? settings.agent.reasoning_effort ?? model.default_reasoning_effort
-              : model.default_reasoning_effort,
+              ? settings.agent.reasoning_effort ?? model.reasoning_effort ?? model.default_reasoning_effort
+              : model.reasoning_effort ?? model.default_reasoning_effort,
           inputAmountPerMillion: managedPrice?.input_amount_per_million ?? model.input_amount_per_million,
           cachedInputAmountPerMillion: managedPrice?.cached_input_amount_per_million ?? model.cached_input_amount_per_million,
           outputAmountPerMillion: managedPrice?.output_amount_per_million ?? model.output_amount_per_million,

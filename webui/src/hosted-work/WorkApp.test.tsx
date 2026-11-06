@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonaClient } from "@/lib/mona-client";
 import type { ChatSummary } from "@/lib/types";
 import { getHostedPlatform } from "@/lib/hosted-platform";
+import * as hostedPlatform from "@/lib/hosted-platform";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { useOfficeSessionStore } from "@/components/office/office-session-store";
 import { WorkApp } from "./WorkApp";
@@ -12,10 +13,13 @@ const fixtures = vi.hoisted(() => ({ clients: [] as MonaClient[], thread: vi.fn(
 vi.mock("./runtime", async original => ({ ...await original<typeof import("./runtime")>(),
   createHostedClient: fixtures.createHostedClient }));
 vi.mock("@/components/thread/ThreadShell", async () => {
+  const { useContext } = await import("react");
   const { useClient } = await import("@/providers/ClientProvider");
+  const { ConversationFileContext } = await import("@/components/deliver/ConversationFileContext");
   return { ThreadShell: (props: { title: string; session: unknown }) => {
     const { client } = useClient();
-    fixtures.thread({ ...props, client });
+    const fileAccess = useContext(ConversationFileContext);
+    fixtures.thread({ ...props, client, fileAccess });
     return <section data-testid="shared-thread-shell">{props.title}</section>;
   } };
 });
@@ -59,6 +63,25 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("hosted desktop conversation composition", () => {
+  it("downloads workspace links with the current account and session", async () => {
+    const download = vi.spyOn(hostedPlatform, "downloadHostedFile").mockResolvedValue(undefined);
+    saveAccount("synthetic-A"); render(<WorkApp />);
+    await screen.findByTestId("shared-thread-shell");
+    const access = fixtures.thread.mock.lastCall?.[0].fileAccess;
+    expect(access.sessionKey).toBe("websocket:synthetic-A");
+    await access.download("deck.pptx");
+    await access.download("/workspace/slides/deck.pptx");
+    expect(download).toHaveBeenNthCalledWith(1, { path: "deck.pptx", name: "deck.pptx" }, "shared", "websocket:synthetic-A");
+    expect(download).toHaveBeenNthCalledWith(2, { path: "slides/deck.pptx", name: "deck.pptx" }, "shared", "websocket:synthetic-A");
+    await expect(access.download("../other.pptx")).rejects.toThrow();
+    await expect(access.download("/outside/other.pptx")).rejects.toThrow();
+    expect(download).toHaveBeenCalledTimes(2);
+    await act(async () => { saveAccount("synthetic-B"); window.dispatchEvent(new Event("mona-account-changed")); });
+    await waitFor(() => expect(getHostedPlatform()?.token).toBe("synthetic-B"));
+    await expect(access.download("deck.pptx")).rejects.toThrow();
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
   it("mounts the existing ThreadShell and ChatList under a real MonaClient", async () => {
     saveAccount("synthetic-A");
     const view = render(<WorkApp />);

@@ -6,6 +6,7 @@ import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDial
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { reconcileHistoryMessages } from "@/hooks/useSessions";
+import i18n from "@/i18n";
 import { MonaClient } from "@/lib/mona-client";
 import type { InboundEvent, UIMessage } from "@/lib/types";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -423,6 +424,147 @@ describe("chat admission and runtime recovery", () => {
     expect(screen.getByRole("alertdialog")).not.toHaveTextContent("invalid_agent_kind_context");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("shows the balance reason only for the matching rejected input and does not reopen or resend it", () => {
+    const { socket, wrapper } = setup();
+    let sender!: ReturnType<typeof useMonaStream>;
+    function Sender() {
+      sender = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={sender.messageRejection} onDismiss={sender.dismissMessageRejection} />;
+    }
+    function Observer() {
+      const observer = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={observer.messageRejection} onDismiss={observer.dismissMessageRejection} />;
+    }
+    render(<><Sender /><Observer /></>, { wrapper });
+    act(() => sender.send("keep my input", undefined, { taskId: "mine", inputId: "my-input" }));
+    act(() => {
+      socket.emit({ event: "error", chat_id: "chat", input_id: "other-input", message_rejected: true, code: "insufficient_balance" });
+      socket.emit({ event: "error", chat_id: "other-chat", input_id: "my-input", message_rejected: true, code: "insufficient_balance" });
+      socket.emit({ event: "error", chat_id: "chat", input_id: "my-input", code: "insufficient_balance" });
+    });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    const rejection = { event: "error", chat_id: "chat", input_id: "my-input", message_rejected: true,
+      code: "insufficient_balance", detail: "DO_NOT_RENDER_SERVER_DETAIL" } as const;
+    act(() => socket.emit(rejection));
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Your balance is insufficient. Please top up and try again.");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("DO_NOT_RENDER_SERVER_DETAIL");
+    expect(i18n.t("errors.messageRejected.insufficientBalance", { lng: "zh-CN" })).toBe("余额不足，请充值后重试。");
+    expect(sender.messages.at(-1)).toMatchObject({ id: "my-input", content: "keep my input", sendState: "rejected" });
+    expect(socket.messages).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    act(() => socket.emit(rejection));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("keeps unrelated error codes and arbitrary detail on the existing generic rejection path", () => {
+    const { socket, wrapper } = setup();
+    let sender!: ReturnType<typeof useMonaStream>;
+    function Sender() {
+      sender = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={sender.messageRejection} onDismiss={sender.dismissMessageRejection} />;
+    }
+    render(<Sender />, { wrapper });
+    act(() => sender.send("hello", undefined, { inputId: "input", taskId: "task" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", message_rejected: true,
+      code: "other_error", detail: "余额不足，请充值后重试。" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("This message was not accepted.");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("余额不足");
+    expect(sender.messageRejection).toEqual({ runActive: false, inputId: "input" });
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("keeps an uncertain billing request pending and warns not to resend it", () => {
+    const { socket, wrapper, client } = setup();
+    let sender!: ReturnType<typeof useMonaStream>;
+    function Sender() {
+      sender = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={sender.messageRejection} onDismiss={sender.dismissMessageRejection} />;
+    }
+    function Observer() {
+      const observer = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={observer.messageRejection} onDismiss={observer.dismissMessageRejection} />;
+    }
+    render(<><Sender /><Observer /></>, { wrapper });
+    act(() => sender.send("do once", undefined, { inputId: "input", taskId: "task" }));
+    const frame = { event: "error", chat_id: "chat", input_id: "input", message_rejected: true,
+      code: "billing_unknown", detail: "DO_NOT_RENDER_SERVER_DETAIL" } as const;
+    act(() => socket.emit(frame));
+    expect(client.getMessageAdmission("chat", "input")).toBe("unknown");
+    expect(sender.messageRejection).toEqual({ runActive: false, uncertain: true, inputId: "input", reason: "billing_unknown" });
+    expect(sender.messages.at(-1)).toMatchObject({ id: "input", content: "do once", sendState: "pending" });
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Billing status is unconfirmed. Please do not resend.");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("DO_NOT_RENDER_SERVER_DETAIL");
+    expect(i18n.t("errors.messageRejected.billingUnknown", { lng: "zh-CN" })).toBe("计费状态待核对，请勿重复发送。");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    act(() => { socket.emit(frame); sender.send("do once", undefined, { inputId: "input", taskId: "task" }); });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("marks a matching legacy billing error unknown without replaying the input", () => {
+    const { socket, wrapper, client } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("legacy request", undefined, { inputId: "input", taskId: "task" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "other", message_rejected: true, code: "billing_unknown" }));
+    expect(result.current.messageRejection).toBeNull();
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "task", message_rejected: true, code: "billing_unknown" }));
+    expect(client.getMessageAdmission("chat", "input")).toBe("unknown");
+    expect(result.current.messageRejection).toEqual({ runActive: false, uncertain: true, inputId: "input", reason: "billing_unknown" });
+    act(() => result.current.send("legacy request", undefined, { inputId: "input", taskId: "task" }));
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("ignores a balance rejection for an older target turn", () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a" }));
+    act(() => result.current.inject("follow up", undefined, { inputId: "input", taskId: "task" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", target_turn_id: "old-turn",
+      message_rejected: true, code: "insufficient_balance" }));
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ id: "input", sendState: "pending" });
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", target_turn_id: "turn-a",
+      message_rejected: true, code: "insufficient_balance" }));
+    expect(result.current.messageRejection).toMatchObject({ runActive: true, inputId: "input", reason: "insufficient_balance" });
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it.each(["insufficient_balance", "billing_unknown"] as const)(
+    "retains unconfirmed delivery across reconnect until %s arrives", async (code) => {
+    vi.useFakeTimers();
+    try {
+      const sockets: Socket[] = [];
+      const client = new MonaClient({ url: "ws://test", reconnect: true,
+        socketFactory: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; } });
+      clients.push(client);
+      client.connect();
+      sockets[0].onopen?.();
+      function wrapper({ children }: { children: ReactNode }) {
+        return <ClientProvider client={client} token="test-token" runtimeStatus="ready">{children}</ClientProvider>;
+      }
+      const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+      const admission = vi.fn();
+      act(() => result.current.send("one request", undefined, { inputId: "input", taskId: "task", onAdmission: admission }));
+      act(() => sockets[0].close());
+      expect(result.current.messageRejection).toMatchObject({ uncertain: true, inputId: "input" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(sockets).toHaveLength(2);
+      act(() => sockets[1].onopen?.());
+      expect(sockets.flatMap((socket) => socket.messages)).toHaveLength(1);
+      act(() => sockets[1].emit({ event: "error", chat_id: "chat", input_id: "input", message_rejected: true,
+        code }));
+      expect(result.current.messageRejection).toEqual(code === "insufficient_balance"
+        ? { runActive: false, inputId: "input", reason: code }
+        : { runActive: false, uncertain: true, inputId: "input", reason: code });
+      expect(result.current.messages.at(-1)).toMatchObject({ content: "one request", sendState: code === "insufficient_balance" ? "rejected" : "pending" });
+      expect(admission.mock.calls.filter(([state]) => state === "unknown")).toHaveLength(1);
+      expect(sockets.flatMap((socket) => socket.messages)).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it("retains a send started during mount while an earlier idle snapshot is replayed", async () => {

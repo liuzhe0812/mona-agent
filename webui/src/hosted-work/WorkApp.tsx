@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArrowLeft, LoaderCircle, Plus } from "lucide-react";
 
 import { ChatList } from "@/components/ChatList";
@@ -6,6 +6,8 @@ import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
+import { ConversationFileContext } from "@/components/deliver/ConversationFileContext";
+import { projectRelativePath } from "@/components/markdown/MarkdownContext";
 import { useOfficeSessionStore } from "@/components/office/office-session-store";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { useSessions, sessionTitle } from "@/hooks/useSessions";
 import { isSessionUnread, markAllSessionsRead, markSessionRead, useSidebarState } from "@/hooks/useSidebarState";
 import { fetchSettings, resetApiBase } from "@/lib/api";
-import { configureHostedPlatform, getHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
+import { configureHostedPlatform, downloadHostedFile, getHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
 import { publishSettingsUpdate } from "@/lib/settings-updates";
 import { OfficeClientError } from "@/lib/office-client";
 import type { MonaClient } from "@/lib/mona-client";
@@ -228,6 +230,25 @@ function Conversations({ saved, updateSaved, report, onModelNameChange }: Worksp
   const selectedRef = useRef(saved.selected);
   selectedRef.current = saved.selected;
   const selected = sessions.find(item => item.chatId === saved.selected) ?? null;
+  const selectedKey = selected?.key;
+  const fileAccess = useMemo(() => selectedKey ? {
+    sessionKey: selectedKey,
+    scope: "shared" as const,
+    onError: report,
+    download: async (source: string) => {
+      if (getHostedPlatform()?.token !== saved.token) {
+        throw new HostedPlatformError("账号已变化，请在原账号中重新下载文件。");
+      }
+      let path: string;
+      try {
+        path = projectRelativePath(source, "/workspace");
+        if (!path || path.split("/").some(part => part === "..")) throw new Error("invalid path");
+      } catch {
+        throw new HostedPlatformError("文件位置无效，请从当前会话的交付列表打开。");
+      }
+      await downloadHostedFile({ path, name: path.split("/").pop()! }, "shared", selectedKey);
+    },
+  } : null, [selectedKey, saved.token, report]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -315,7 +336,8 @@ function Conversations({ saved, updateSaved, report, onModelNameChange }: Worksp
       </footer>
     </aside>}
     <main className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
-      {selected ? <ThreadShell session={selected} title={sidebar.title_overrides[selected.key] || sessionTitle(selected)}
+      {selected ? <ConversationFileContext.Provider value={fileAccess}>
+        <ThreadShell session={selected} title={sidebar.title_overrides[selected.key] || sessionTitle(selected)}
         onToggleSidebar={() => setSidebarOpen(value => !value)} onCollapseSessionList={() => setSidebarOpen(false)}
         sessionListOpen={sidebarOpen} recentSessions={sessions.filter(item => !sidebar.archived_keys.includes(item.key))}
         onSelectSession={select} onCreateChat={create} onCreateDirectChat={(_agent, workspace, activate) => create(workspace, activate)}
@@ -325,6 +347,7 @@ function Conversations({ saved, updateSaved, report, onModelNameChange }: Worksp
           return id;
         }}
         onTurnEnd={() => void refresh()} onModelNameChange={onModelNameChange} onActionError={report} browserHostVisible={false} />
+        </ConversationFileContext.Provider>
         : <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
             {(loading || creating || status === "connecting") && <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />}
             <p className="text-body text-muted-foreground">{loading || creating || status === "connecting"

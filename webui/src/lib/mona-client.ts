@@ -113,7 +113,8 @@ export type StreamError =
 
 type ErrorHandler = (error: StreamError) => void;
 export type MessageAdmission = "accepted" | "consumed" | "paused" | "rejected" | "unknown" | "cancelled";
-type AdmissionHandler = (state: MessageAdmission) => void;
+export type MessageAdmissionReason = "insufficient_balance" | "billing_unknown";
+type AdmissionHandler = (state: MessageAdmission, reason?: MessageAdmissionReason) => void;
 
 export interface WorkTurnSnapshot {
   readonly turnId: string;
@@ -171,7 +172,7 @@ export interface MonaClientOptions {
 export class MonaClient {
   private messageAdmissions = new Map<string, {
     state?: MessageAdmission; handlers: Set<AdmissionHandler>; timer?: ReturnType<typeof setTimeout>; dispatchAttempted: boolean;
-    targetTurnId?: string; lifecycle: boolean;
+    targetTurnId?: string; lifecycle: boolean; reason?: MessageAdmissionReason;
   }>();
   private socket: WebSocket | null = null;
   private statusHandlers = new Set<StatusHandler>();
@@ -404,6 +405,12 @@ export class MonaClient {
 
   getMessageAdmission(chatId: string, inputId: string): MessageAdmission | undefined {
     return this.messageAdmissions.get(JSON.stringify([chatId, inputId]))?.state;
+  }
+
+  markBillingUnknown(chatId: string, inputId: string): boolean {
+    if (!this.messageAdmissions.has(JSON.stringify([chatId, inputId]))) return false;
+    this.setMessageAdmission(chatId, inputId, "unknown", "billing_unknown");
+    return true;
   }
 
   getWorkTurn(chatId: string): WorkTurnSnapshot | undefined {
@@ -1157,7 +1164,10 @@ export class MonaClient {
       const existing = this.messageAdmissions.get(key);
       if (existing && existing.state !== "rejected" && !(existing.state === "paused" && options.resumeInput)) {
         if (options.onAdmission) existing.handlers.add(options.onAdmission);
-        if (existing.state) options.onAdmission?.(existing.state);
+        if (existing.state && options.onAdmission) {
+          if (existing.reason) options.onAdmission(existing.state, existing.reason);
+          else options.onAdmission(existing.state);
+        }
         return;
       }
       this.messageAdmissions.set(key, { handlers: new Set(options.onAdmission ? [options.onAdmission] : []), dispatchAttempted: false,
@@ -1292,7 +1302,8 @@ export class MonaClient {
     if (parsed.event === "error" && parsed.message_rejected && parsed.chat_id && parsed.input_id) {
       const receipt = this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]));
       if (!receipt?.lifecycle || receipt.targetTurnId === parsed.target_turn_id) {
-        this.setMessageAdmission(parsed.chat_id, parsed.input_id, "rejected");
+        const reason = parsed.code === "insufficient_balance" || parsed.code === "billing_unknown" ? parsed.code : undefined;
+        this.setMessageAdmission(parsed.chat_id, parsed.input_id, reason === "billing_unknown" ? "unknown" : "rejected", reason);
       }
     }
     if (parsed.event === "agent_mentions_routed" && "input_id" in parsed && typeof parsed.input_id === "string") {
@@ -1683,14 +1694,22 @@ export class MonaClient {
     return undefined;
   }
 
-  private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission): void {
+  private setMessageAdmission(chatId: string, inputId: string, state: MessageAdmission, reason?: MessageAdmissionReason): void {
     const key = JSON.stringify([chatId, inputId]);
     const receipt = this.messageAdmissions.get(key);
-    if (!receipt || receipt.state === "consumed" || receipt.state === "paused" || receipt.state === "cancelled" || receipt.state === state) return;
-    clearTimeout(receipt.timer);
-    receipt.timer = undefined;
-    receipt.state = state;
-    for (const handler of receipt.handlers) handler(state);
+    if (!receipt || receipt.state === "consumed" || receipt.state === "paused" || receipt.state === "cancelled"
+      || (receipt.state === "rejected" && state === "unknown")) return;
+    if (receipt.state === state && (!reason || receipt.reason === reason)) return;
+    if (receipt.state !== state) {
+      clearTimeout(receipt.timer);
+      receipt.timer = undefined;
+      receipt.state = state;
+    }
+    receipt.reason = reason;
+    for (const handler of receipt.handlers) {
+      if (reason) handler(state, reason);
+      else handler(state);
+    }
     if (state === "consumed" || state === "rejected" || state === "cancelled" || state === "paused") receipt.handlers.clear();
     if (this.messageAdmissions.size > 256) {
       for (const [oldKey, old] of this.messageAdmissions) {
