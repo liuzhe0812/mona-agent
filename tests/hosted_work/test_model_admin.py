@@ -1,4 +1,4 @@
-"""Administrator edits apply only verified free models while Work is idle."""
+"""Administrator edits preserve provider-independent billing and idle guards."""
 import asyncio
 import copy
 import json
@@ -56,7 +56,7 @@ async def online(tmp_path, monkeypatch):
     data = {"hosted_work": {"public_origin": "https://work.example.invalid", "auth_origin": "https://auth.example.invalid",
             "state_dir": str(tmp_path / "state"), "models": {
                 "qwen": {"label": "Qwen", "model": "qwen-old", "api_base": "https://model.example.invalid/v1",
-                         "api_key_env": "MONA_WORK_MODEL_QWEN_KEY"},
+                         "api_key_env": "MONA_WORK_MODEL_QWEN_KEY", "billing_mode": "free"},
                 "codex": {"label": "Codex draft", "source": "codex", "model": "codex-fixture",
                           "native_config_path": "/private/native.json"},
                 "other": {"label": "Other", "source": "workbuddy", "model": "other-fixture",
@@ -86,6 +86,7 @@ async def online(tmp_path, monkeypatch):
 def configuration(**changes):
     return {"label": "Qwen 更新", "source": "mona", "model": "qwen-new",
             "api_base": "https://model.example.invalid/v1", "api_key_env": "MONA_WORK_MODEL_QWEN_KEY",
+            "billing_mode": "free", "billing_model": "",
             "max_output_tokens": 4096, "context_window_tokens": None, "reasoning_effort": None, **changes}
 
 
@@ -138,6 +139,38 @@ async def test_save_updates_shared_live_config_and_preserves_unrelated_fields(on
     assert SECRET not in json.dumps(body, ensure_ascii=False)
     stale = await put(online, before["revision"])
     assert stale.status == 409 and (await stale.json())["error"] == "configuration_changed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["free", "wallet"])
+async def test_administrator_controls_custom_billing_without_source_based_defaults(online, mode):
+    revision = online.admin.snapshot()["revision"]
+    response = await put(online, revision, config=configuration(billing_mode=mode, billing_model="configured-price"))
+    assert response.status == 200
+    current = (await response.json())["models"][0]
+    assert current["configuration"]["billing_mode"] == mode
+    assert current["configuration"]["billing_model"] == "configured-price"
+    assert current["availability"]["ready"] is (mode == "free")
+    saved = json.loads(online.path.read_text(encoding="utf-8"))["hosted_work"]["models"]["qwen"]
+    assert saved["billing_mode"] == mode and saved["billing_model"] == "configured-price"
+    public = await (await online.client.get("/api/work/models", headers=headers("ordinary"))).json()
+    assert ("qwen" in [item["id"] for item in public["models"]]) is (mode == "free")
+    if mode == "wallet":
+        with pytest.raises(WorkError) as error:
+            online.service._acquire(OWNER, "qwen")
+        assert error.value.code == "billing_unavailable"
+        assert not online.service.active_users and not online.service.active_engines
+
+
+@pytest.mark.asyncio
+async def test_missing_or_invalid_billing_choice_never_silently_enables_free_access(online):
+    revision, original = online.admin.snapshot()["revision"], online.path.read_bytes()
+    missing = configuration()
+    del missing["billing_mode"]
+    for config in (missing, configuration(billing_mode="automatic"), configuration(billing_model="bad\nprice")):
+        response = await put(online, revision, config=config)
+        assert response.status == 400
+        assert online.path.read_bytes() == original
 
 
 @pytest.mark.asyncio

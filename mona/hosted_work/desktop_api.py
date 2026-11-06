@@ -19,6 +19,7 @@ from filelock import FileLock
 
 from mona.hosted_work.contracts import WorkError, identifier
 from mona.hosted_work.desktop_store import DesktopStore, chat_id, request_id, timestamp
+from mona.hosted_work.model_policy import model_available
 from mona.hosted_work.tenant_files import TenantFiles
 from mona.hosted_work.tenant_office import OFFICE_PREFIX, TenantOffice
 from mona.hosted_work.tenant_xlsx import SandboxedXlsxEngineFactory
@@ -139,7 +140,7 @@ class DesktopAPI:
         return value
 
     def settings(self, owner: str) -> dict:
-        models = {key: model for key, model in self.service.config.models.items() if model.source != "codex"}
+        models = {key: model for key, model in self.service.config.models.items() if model_available(model)}
         selected = self.state.model(owner)
         selection = models.get(selected)
         max_tokens = selection.max_output_tokens if selection else 4096

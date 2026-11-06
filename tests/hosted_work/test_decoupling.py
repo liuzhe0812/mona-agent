@@ -21,7 +21,7 @@ from mona.hosted_work.store import WorkStore
 
 def model_config(**changes):
     return HostedWorkModel(label="平台模型", model="fixture-model", api_base="https://models.example.invalid/v1",
-                           api_key_env="MONA_WORK_MODEL_PRIMARY_KEY", **changes)
+                           api_key_env="MONA_WORK_MODEL_PRIMARY_KEY", billing_mode="free", **changes)
 
 
 def mock_auth_transport(monkeypatch, handler):

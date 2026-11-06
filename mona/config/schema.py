@@ -805,6 +805,8 @@ class HostedWorkModel(Base):
     api_base: str = ""
     api_key_env: str = Field(default="", pattern=r"^(?:MONA_WORK_MODEL_[A-Z0-9_]+)?$")
     model: str = Field(min_length=1, max_length=200)
+    billing_mode: Literal["free", "wallet"] = "wallet"
+    billing_model: str = Field(default="", max_length=200)
     native_config_path: str = ""
     # Optional operator input cap; model capacity is resolved from the shared catalog.
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
@@ -819,13 +821,17 @@ class HostedCodexSettings(Base):
     cli_path: str = Field(default="", max_length=2048)
     model: str = Field(default="", max_length=200)
     billing_model: str = Field(default="", max_length=200)
+    billing_mode: Literal["free", "wallet"] = "wallet"
     label: str = Field(default="Codex", min_length=1, max_length=80)
     auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
+    context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
+    max_output_tokens: int = Field(default=4096, ge=256, le=32768)
+    reasoning_effort: str | None = Field(default=None, max_length=64)
 
-    @field_validator("cli_path", "model", "billing_model", "label")
+    @field_validator("cli_path", "model", "billing_model", "label", "reasoning_effort")
     @classmethod
-    def _plain_value(cls, value: str) -> str:
-        if value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+    def _plain_value(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
             raise ValueError("configuration values must be plain text")
         return value
 

@@ -106,7 +106,7 @@ async def make_client(tmp_path, *, attachments=False):
         state_root = Path("\\\\?\\" + str(state_root))
     state_root.mkdir(parents=True)
     config = HostedWorkConfig(state_dir=str(state_root), public_origin="https://mona-ai.cn",
-        models={"qwen": {"label": "Fixture model", "model": "fixture-model"}})
+        models={"qwen": {"label": "Fixture model", "model": "fixture-model", "billing_mode": "free"}})
     store = WorkStore(state_root / "work.sqlite3", config)
     auth, executor = AuthFixture(), ExecutorFixture()
     service = HookedService(config, store, auth, executor)

@@ -1,4 +1,4 @@
-"""Administrator configuration for free, platform-owned API models."""
+"""Administrator-owned custom API connections and billing choices."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -15,7 +15,7 @@ from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.model_access import model_endpoint, model_secret
 
 _FIELDS = frozenset({"label", "source", "api_base", "api_key_env", "model",
-                     "context_window_tokens", "max_output_tokens", "reasoning_effort"})
+                     "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model"})
 EndpointValidator = Callable[..., Awaitable[str]]
 
 
@@ -25,18 +25,20 @@ class ModelAdminError(WorkError):
         self.field = field
 
 
-class FreeModelConfiguration(BaseModel):
+class ModelConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     label: str = Field(min_length=1, max_length=80)
     source: Literal["mona"] = "mona"
     api_base: str = Field(min_length=1, max_length=4096)
     api_key_env: str = Field(pattern=r"^MONA_WORK_MODEL_[A-Z0-9_]+$")
     model: str = Field(min_length=1, max_length=200)
+    billing_mode: Literal["free", "wallet"]
+    billing_model: str = Field(default="", max_length=200)
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     reasoning_effort: str | None = Field(default=None, max_length=64)
 
-    @field_validator("label", "api_base", "model", "reasoning_effort")
+    @field_validator("label", "api_base", "model", "reasoning_effort", "billing_model")
     @classmethod
     def _plain(cls, value: str | None) -> str | None:
         if value is not None and (value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
@@ -48,7 +50,7 @@ class SaveModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     expected_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     model_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")
-    configuration: FreeModelConfiguration
+    configuration: ModelConfiguration
 
 
 def _ready(model: HostedWorkModel) -> bool:
@@ -79,7 +81,7 @@ def _existing_loopback(model: HostedWorkModel | None, value: str) -> bool:
 
 
 class ModelAdmin:
-    """Share the Codex editor's revision and locks; publish only free models."""
+    """Share the Codex editor's revision and locks without choosing prices."""
 
     def __init__(self, admin: CodexAdmin, service, *, endpoint_validator: EndpointValidator | None = None):
         self.admin, self.service, self.endpoint_validator = admin, service, endpoint_validator
@@ -91,7 +93,10 @@ class ModelAdmin:
     def snapshot(self) -> dict:
         _, _, revision, saved = self._read()
         models = [{"id": identifier, "configuration": model.model_dump(include=_FIELDS),
-                   "credentials": {"configured": _ready(model)}}
+                   "credentials": {"configured": _ready(model)},
+                   "availability": {"ready": _ready(model) and model.billing_mode == "free",
+                                    "message": "共用余额计费尚未接通，暂不可调用。" if model.billing_mode == "wallet"
+                                               else "当前服务已加载凭据。" if _ready(model) else "当前服务尚未加载凭据。"}}
                   for identifier, model in self.service.config.models.items() if model.source == "mona"]
         return {"revision": revision, "models": models,
                 "synchronized": saved.models == self.service.config.models,

@@ -54,7 +54,7 @@ def operator_file(tmp_path, section="hosted_work"):
             "state_dir": str(tmp_path / "state"),
             "models": {"qwen": {"label": "Qwen 免费", "source": "mona", "model": "qwen-fixture",
                                  "api_base": "https://model.example.invalid/v1",
-                                 "api_key_env": "MONA_WORK_MODEL_QWEN_KEY"}},
+                                 "api_key_env": "MONA_WORK_MODEL_QWEN_KEY", "billing_mode": "free"}},
             "max_concurrent_runs": 2,
         },
         "unrelated": {"nested": [None, False, 1.25, {"中文": "保留"}], "value": 7},
@@ -139,11 +139,28 @@ async def test_admin_can_read_and_save_a_draft_without_publishing(online, tmp_pa
     assert saved["revision"] != initial["revision"]
     assert saved["public_enabled"] is False and saved["billing"]["ready"] is False
     assert saved["connection"]["state"] == "not_checked"
-    assert saved["qwen"] == {"free": True, "all_accounts": True}
+    assert saved["billing"]["mode"] == "wallet"
+    assert saved["execution"]["ready"] is False and "qwen" not in saved
     stale = await online.client.put(ADMIN_URL, headers=headers(), json={
         "expected_revision": initial["revision"], "configuration": configuration(tmp_path)})
     assert stale.status == 409 and (await stale.json())["error"] == "configuration_changed"
     assert all(request.url.path == "/auth/identity/admin" for request in online.identity_requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["free", "wallet"])
+async def test_codex_administrator_controls_same_billing_and_generation_fields(online, tmp_path, mode):
+    initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()
+    values = {**configuration(tmp_path), "billing_mode": mode, "max_output_tokens": 8192,
+              "context_window_tokens": 65536, "reasoning_effort": "high"}
+    response = await online.client.put(ADMIN_URL, headers=headers(), json={
+        "expected_revision": initial["revision"], "configuration": values})
+    assert response.status == 200
+    saved = await response.json()
+    assert saved["configuration"] == values
+    assert saved["billing"]["mode"] == mode and saved["billing"]["ready"] is (mode == "free")
+    assert saved["execution"]["ready"] is False and saved["public_enabled"] is False
+    assert "qwen" not in saved
 
 
 @pytest.mark.asyncio
@@ -300,7 +317,7 @@ async def test_probe_requires_auth_protocol_isolation_cache_and_account_model(tm
 
 
 @pytest.mark.asyncio
-async def test_manual_codex_public_configuration_cannot_run_unbilled_but_qwen_is_free(online):
+async def test_manual_codex_public_configuration_cannot_run_unbilled_but_explicit_free_model_can(online):
     service = online.service
     service.config.models["manual-codex"] = HostedWorkModel(label="Codex", model=MODEL, source="codex")
     response = await online.client.get("/api/work/models", headers=headers("ordinary"))

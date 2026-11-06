@@ -171,7 +171,7 @@ def test_native_home_override_is_explicit_and_preserves_desktop_default(tmp_path
     assert hosted.for_turn(None)._native_home == (tmp_path / "platform-native").resolve()
 
 
-def test_online_native_config_does_not_change_global_data_root(tmp_path, monkeypatch):
+def test_closed_native_provider_does_not_change_global_data_root(tmp_path, monkeypatch):
     from mona.config import loader
     private_config = tmp_path / "isolated" / "config.json"
     monkeypatch.setattr(loader, "_current_config_path", private_config)
@@ -180,7 +180,8 @@ def test_online_native_config_does_not_change_global_data_root(tmp_path, monkeyp
     operator_config.write_text(Config().model_dump_json(), encoding="utf-8")
     config = HostedWorkConfig(models={"native": {"label": "Platform GPT", "model": "configured-model", "source": "codex",
                                                "native_config_path": str(operator_config)}})
-    provider = create_provider(config, config.models["native"], tmp_path / "empty")
+    from mona.hosted_work.contracts import WorkError
+    with pytest.raises(WorkError) as error:
+        create_provider(config, config.models["native"], tmp_path / "empty")
+    assert error.value.code == "billing_unavailable"
     assert loader.get_config_path() == private_config
-    assert provider._native_home == operator_config.parent / "development" / "native" / "codex"
-    assert provider._CHAT_RETRY_DELAYS == ()

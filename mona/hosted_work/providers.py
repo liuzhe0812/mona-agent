@@ -7,9 +7,11 @@ from pathlib import Path
 from mona.config.schema import Config, HostedWorkConfig, HostedWorkModel, ModelPresetConfig
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.model_access import HostedAPIProvider
+from mona.hosted_work.model_policy import require_model_available
 
 
 def create_provider(config: HostedWorkConfig, selection: HostedWorkModel, empty_native_cwd: Path):
+    require_model_available(selection)
     if selection.source == "mona":
         provider = HostedAPIProvider(config, selection)
     else:

@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
-from mona.config.schema import HostedWorkConfig
+from mona.config.schema import HostedWorkConfig, HostedWorkModel
 from mona.hosted_work.contracts import NewSession, NewTurn, WorkError, owner_key
 from mona.hosted_work.service import WorkService, create_app
 from mona.hosted_work.store import WorkStore
@@ -47,7 +47,7 @@ class ExecutionBoundary:
 @pytest_asyncio.fixture
 async def online(tmp_path):
     config = HostedWorkConfig(public_origin="https://work.example.invalid", state_dir=str(tmp_path),
-        models={"official": {"label": "Mona", "model": "fixture-model"}})
+        models={"official": {"label": "Mona", "model": "fixture-model", "billing_mode": "free"}})
     store = WorkStore(tmp_path / "state.sqlite3", config)
     executor = ExecutionBoundary()
     service = WorkService(config, store, IdentityBoundary(), executor)
@@ -98,6 +98,41 @@ async def test_submit_and_refresh_never_repeat_execution(online):
     assert events["run"]["status"] == "completed"
     assert [item["kind"] for item in events["events"]] == ["progress", "delta"]
     assert "account_token" not in str(events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,mode,error", [("mona", "wallet", "billing_unavailable"),
+    ("codex", "wallet", "billing_unavailable"), ("codex", "free", "provider_unavailable")])
+async def test_billing_choice_cannot_bypass_admission_or_provider_factory(online, tmp_path, source, mode, error):
+    from mona.hosted_work.providers import create_provider
+    client, service, executor = online
+    selection = HostedWorkModel(label="Administrator selection", model="fixture", source=source, billing_mode=mode)
+    service.config.models["configured"] = selection
+    assert (await create(client)).status == 201
+    public = await (await client.get("/api/work/models", headers=headers())).json()
+    assert "configured" not in [row["id"] for row in public["models"]]
+    response = await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(),
+                                 json={"request_id": RID, "model_id": "configured", "text": "Do not dispatch"})
+    assert response.status == 503 and (await response.json())["error"] == error
+    assert service.store.db.execute("SELECT count(*) FROM runs").fetchone()[0] == 0
+    assert not executor.calls and not service.active_users and not service.active_engines
+    with pytest.raises(WorkError) as caught:
+        create_provider(service.config, selection, tmp_path)
+    assert caught.value.code == error
+
+
+@pytest.mark.asyncio
+async def test_observing_accepted_request_after_price_change_never_replays(online):
+    client, service, executor = online
+    await create(client)
+    body = {"request_id": RID, "model_id": "official", "text": "Accepted before pricing update"}
+    assert (await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(), json=body)).status == 202
+    await asyncio.sleep(0)
+    service.config.models["official"].billing_mode = "wallet"
+    assert (await client.post(f"/api/work/sessions/{SID}/runs", headers=headers(), json=body)).status == 202
+    assert len(executor.calls) == 1
+    executor.release.set()
+    await asyncio.gather(*list(service.tasks.values()))
     assert "user-one" not in service.store.db.execute("SELECT payload FROM runs").fetchone()[0]
 
 

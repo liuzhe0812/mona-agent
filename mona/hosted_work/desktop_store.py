@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 from mona.hosted_work.contracts import WorkError, identifier
+from mona.hosted_work.model_policy import model_available
 from mona.hosted_work.store import encoded
 from mona.webui.transcript import replay_transcript_to_ui_messages
 
@@ -172,11 +173,11 @@ class DesktopStore:
 
     def model(self, owner: str) -> str:
         value = self.get(owner, "model_id")
-        models = {key: item for key, item in self.service.config.models.items() if item.source != "codex"}
+        models = {key: item for key, item in self.service.config.models.items() if model_available(item)}
         return value if value in models else next(iter(models), "")
 
     def set_model(self, owner: str, value: str):
-        if value not in self.service.config.models or self.service.config.models[value].source == "codex":
+        if value not in self.service.config.models or not model_available(self.service.config.models[value]):
             raise WorkError("invalid_model", "此模型未开放。")
         self.set(owner, "model_id", value)
 

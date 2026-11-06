@@ -1,4 +1,4 @@
-"""Administrator-only Codex connection drafts. This does not publish a paid model."""
+"""Administrator-only Codex connection and billing drafts."""
 from __future__ import annotations
 
 import asyncio
@@ -102,9 +102,11 @@ class CodexAdmin:
             connection = self.checked[1]
         command = [sys.executable, "-m", "mona.hosted_work.admin", "--config", str(self.path)]
         return {"revision": revision, "configuration": settings.model_dump(), "connection": connection,
-                "billing": {"mode": "wallet", "ready": False,
-                            "message": "使用网站与应用共用的 Mona 余额；余额计费尚未接通，Codex 未向用户开放。"},
-                "public_enabled": False, "qwen": {"free": True, "all_accounts": True},
+                "billing": {"mode": settings.billing_mode, "ready": settings.billing_mode == "free",
+                            "message": "管理员已设置为免费，不扣用户余额。" if settings.billing_mode == "free"
+                                       else "使用网站与应用共用的 Mona 余额；余额计费尚未接通。"},
+                "execution": {"ready": False, "message": "Codex CLI 执行接入尚未完成，暂不可调用。"},
+                "public_enabled": False,
                 "login_commands": ["cd " + shlex.quote(str(Path(__file__).resolve().parents[2])),
                                    shlex.join([*command, "login", "--device-auth" if settings.auth_mode == "chatgpt" else "--with-api-key"]),
                                    shlex.join([*command, "login", "status"])]}
@@ -165,7 +167,7 @@ class CodexAdmin:
                 elif settings.model not in {item.id for item in result.model_details}:
                     connection.update(state="model_unavailable", message="所选模型当前不可用，请重新选择并保存。")
                 else:
-                    connection.update(state="ready", message="专用账户和所选模型连接已验证；余额计费尚未接通，未向用户开放。")
+                    connection.update(state="ready", message="专用账户和所选模型连接已验证。")
             except WorkError:
                 raise
             except (OSError, ValueError, TimeoutError):
@@ -188,7 +190,10 @@ class CodexAdmin:
                 if len(raw) > 8192:
                     raise WorkError("invalid_request", "配置内容过大。", 413)
             if request.method == "PUT":
-                return web.json_response(await self.save(SaveCodex.model_validate_json(raw)))
+                model = SaveCodex.model_validate_json(raw)
+                if "billing_mode" not in model.configuration.model_fields_set:
+                    raise WorkError("invalid_request", "请刷新配置页面后明确选择计费方式。")
+                return web.json_response(await self.save(model))
             if json.loads(raw) != {}:
                 raise WorkError("invalid_request", "检查连接不接受额外配置。")
             return web.json_response(await self.probe())

@@ -26,6 +26,7 @@ from mona.hosted_work.contracts import (
 )
 from mona.hosted_work.executor import ProcessExecutor
 from mona.hosted_work.frontend import register_frontend
+from mona.hosted_work.model_policy import model_available, require_model_available
 from mona.hosted_work.sandbox_files import relative_path
 from mona.hosted_work.store import WorkStore
 
@@ -48,8 +49,7 @@ class WorkService:
             model = self.config.models.get(model_id)
             if model is None:
                 raise WorkError("invalid_model", "所选模型未开放。")
-            if model.source == "codex":
-                raise WorkError("billing_unavailable", "Codex 余额计费尚未接通，暂未开放。", 503)
+            require_model_available(model)
             if model.source != "mona":
                 engine = str(Path(model.native_config_path).resolve()) + ":" + model.source
                 for uncertain_id in self.store.unknown_models():
@@ -450,7 +450,7 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
 
     async def models(request):
         return web.json_response({"models": [{"id": key, "label": model.label, "source": model.source}
-                                            for key, model in service.config.models.items() if model.source != "codex"],
+                                            for key, model in service.config.models.items() if model_available(model)],
                                   "max_file_bytes": service.config.max_file_bytes})
 
     async def sessions(request):

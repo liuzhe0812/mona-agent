@@ -35,8 +35,8 @@ class Auth:
 async def environment(tmp_path):
     config = HostedWorkConfig(enabled=True, state_dir=str(tmp_path), auth_origin="https://mona.example",
         public_origin="https://mona.example", models={
-            "first": HostedWorkModel(label="First", model="server-only-first", api_key_env="MONA_WORK_MODEL_FIRST_KEY"),
-            "second": HostedWorkModel(label="Second", model="server-only-second", api_key_env="MONA_WORK_MODEL_SECOND_KEY"),
+            "first": HostedWorkModel(label="First", model="server-only-first", api_key_env="MONA_WORK_MODEL_FIRST_KEY", billing_mode="free"),
+            "second": HostedWorkModel(label="Second", model="server-only-second", api_key_env="MONA_WORK_MODEL_SECOND_KEY", billing_mode="free"),
         })
     store = WorkStore(tmp_path / "sessions.sqlite3", config)
     auth = Auth()
@@ -88,6 +88,21 @@ async def environment(tmp_path):
 
 def headers(account="A"):
     return {"Authorization": "Bearer account-" + account}
+
+
+@pytest.mark.asyncio
+async def test_priced_selection_is_not_restored_or_selectable_as_free(environment):
+    api, client = environment.api, environment.client
+    api.state.set_model(A, "second")
+    environment.service.config.models["second"].billing_mode = "wallet"
+    assert api.state.model(A) == "first"
+    settings = api.settings(A)
+    assert [row["id"] for row in settings["chat_providers"][0]["models"]] == ["first"]
+    response = await client.put(PREFIX + "/api/development/work-model-source", headers=headers(),
+                                json={"executor": "mona", "provider": "mona_managed", "model": "second"})
+    assert response.status == 400
+    environment.service.config.models["first"].billing_mode = "wallet"
+    assert api.state.model(A) == "" and not api.settings(A)["agent"]["has_api_key"]
 
 
 async def test_settings_use_real_open_models_and_selection_is_per_account(environment):

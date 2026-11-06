@@ -20,7 +20,7 @@ def lifecycle(tmp_path, monkeypatch):
     from mona.config import loader
     monkeypatch.setattr(loader, "_current_config_path", tmp_path / "original.json")
     config = HostedWorkConfig(enabled=True, state_dir=str(tmp_path),
-        models={"official": {"label": "Mona", "model": "fixture"}})
+        models={"official": {"label": "Mona", "model": "fixture", "billing_mode": "free"}})
     state = {"start_failure": False, "save_failure": False, "close_failure": False,
              "provider_close_failure": False, "artifact_changed": False}
     instances = []
@@ -186,7 +186,8 @@ def test_uncertain_native_source_stays_blocked_across_users(tmp_path):
         service = WorkService(config, store, None, None)
         with pytest.raises(WorkError) as exc:
             service._acquire(owner_key("2"), "native")
-        assert exc.value.code == "model_pending"
+        assert exc.value.code == "billing_unavailable"
+        assert store.unknown_count() == 1
     finally:
         store.close()
 
