@@ -8,14 +8,16 @@ from urllib.parse import urlsplit
 from aiohttp import web
 from filelock import FileLock, Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic.alias_generators import to_camel
 
-from mona.config.schema import HostedWorkConfig, HostedWorkModel
+from mona.config.schema import HostedWorkConfig, HostedWorkModel, HostedWorkPrice
 from mona.hosted_work.admin import CodexAdmin
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.model_access import model_endpoint, model_secret
 
 _FIELDS = frozenset({"label", "source", "api_base", "api_key_env", "model",
-                     "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model"})
+                     "context_window_tokens", "max_output_tokens", "reasoning_effort", "billing_mode", "billing_model", "price"})
+_PRICE_FIELDS = frozenset({"input_amount_per_million", "cached_input_amount_per_million", "output_amount_per_million"})
 EndpointValidator = Callable[..., Awaitable[str]]
 
 
@@ -34,6 +36,7 @@ class ModelConfiguration(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     billing_mode: Literal["free", "wallet"]
     billing_model: str = Field(default="", max_length=200)
+    price: HostedWorkPrice | None = None
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     reasoning_effort: str | None = Field(default=None, max_length=64)
@@ -100,8 +103,7 @@ class ModelAdmin:
                   for identifier, model in self.service.config.models.items() if model.source == "mona"]
         return {"revision": revision, "models": models,
                 "synchronized": saved.models == self.service.config.models,
-                "billing": {"mode": "shared_wallet", "ready": False,
-                            "prices_endpoint": "/admin/credits/model-prices", "admin_url": "/admin"}}
+                "billing": {"mode": "shared_wallet", "ready": False}}
 
     def _idle(self) -> None:
         service = self.service
@@ -161,7 +163,7 @@ class ModelAdmin:
                         raise ModelAdminError("invalid_endpoint", "模型地址无效或不允许访问。", 400, field="api_base")
                     self._idle()
                     values = old.model_dump() if old is not None else {}
-                    values.update(request.configuration.model_dump())
+                    values.update(request.configuration.model_dump(exclude_unset=True))
                     values["api_base"] = endpoint
                     model = HostedWorkModel.model_validate(values)
                     try:
@@ -197,7 +199,10 @@ class ModelAdmin:
                 model = SaveModel.model_validate_json(raw)
             except ValidationError as exc:
                 location = exc.errors(include_input=False)[0].get("loc", ())
-                field = location[-1] if location and location[-1] in _FIELDS | {"model_id"} else None
+                if "price" in location:
+                    field = next((name for name in _PRICE_FIELDS if location[-1] in {name, to_camel(name)}), "price")
+                else:
+                    field = location[-1] if location and location[-1] in _FIELDS | {"model_id"} else None
                 raise ModelAdminError("invalid_model", "模型配置无效，请检查填写内容。", 400, field=field) from None
             return web.json_response(await self.save(model))
 

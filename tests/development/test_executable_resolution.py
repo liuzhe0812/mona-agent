@@ -29,7 +29,9 @@ def test_standard_install_location_is_found_without_reading_profiles(tmp_path, m
     assert all(p.state == "not_detected" for p in discover_executors(DevelopmentConfig(), search_path=""))
 
 
-def test_codex_known_npm_shim_resolves_platform_binary_without_executing_shim(tmp_path, monkeypatch):
+@pytest.mark.parametrize("layout", ["codex", "bin"])
+@pytest.mark.parametrize("platform_package", ["sibling", "nested"])
+def test_codex_known_npm_shim_resolves_platform_binary_without_executing_shim(tmp_path, monkeypatch, layout, platform_package):
     monkeypatch.setattr("mona.development.executors.discovery.sys.platform", "win32")
     monkeypatch.setattr("mona.development.executors.discovery.platform.machine", lambda: "AMD64")
     prefix = tmp_path / "npm"
@@ -38,7 +40,8 @@ def test_codex_known_npm_shim_resolves_platform_binary_without_executing_shim(tm
     (root / "package.json").write_text(json.dumps({"name": "@openai/codex"}))
     shim = prefix / "codex.cmd"
     shim.write_text("DO NOT EXECUTE WRAPPER")
-    binary = root.parent / "codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex" / ("codex.exe" if os.name == "nt" else "codex")
+    scope = root.parent if platform_package == "sibling" else root / "node_modules/@openai"
+    binary = scope / "codex-win32-x64/vendor/x86_64-pc-windows-msvc" / layout / ("codex.exe" if os.name == "nt" else "codex")
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"not executed")
     binary.chmod(0o700)
@@ -49,6 +52,30 @@ def test_codex_known_npm_shim_resolves_platform_binary_without_executing_shim(tm
     (root / "package.json").write_text(json.dumps({"name": "unrelated-package"}))
     with pytest.raises(ValueError, match="unsupported_launcher"):
         resolve_executable(ExecutorId.CODEX, shim)
+
+
+@pytest.mark.parametrize("layout", ["codex", "bin"])
+def test_codex_npm_native_symlink_cannot_escape_vendor(tmp_path, monkeypatch, layout):
+    monkeypatch.setattr("mona.development.executors.discovery.sys.platform", "win32")
+    monkeypatch.setattr("mona.development.executors.discovery.platform.machine", lambda: "AMD64")
+    prefix = tmp_path / "npm"
+    root = prefix / "node_modules/@openai/codex"
+    root.mkdir(parents=True)
+    (root / "package.json").write_text(json.dumps({"name": "@openai/codex"}))
+    shim = prefix / "codex.cmd"
+    shim.write_text("DO NOT EXECUTE WRAPPER")
+    external = tmp_path / "outside-native"
+    external.write_bytes(b"do not execute")
+    external.chmod(0o700)
+    candidate = root.parent / "codex-win32-x64/vendor/x86_64-pc-windows-msvc" / layout / ("codex.exe" if os.name == "nt" else "codex")
+    candidate.parent.mkdir(parents=True)
+    try:
+        candidate.symlink_to(external)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"Symbolic links unavailable: {type(exc).__name__}")
+    with pytest.raises(ValueError, match="unsupported_launcher"):
+        resolve_executable(ExecutorId.CODEX, shim)
+    assert external.read_bytes() == b"do not execute"
 
 
 @pytest.mark.parametrize("executor,index", [("codex", 0), ("claude", 1), ("codebuddy", 2)])

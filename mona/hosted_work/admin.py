@@ -16,6 +16,7 @@ from filelock import FileLock, Timeout
 from pydantic import BaseModel, ConfigDict, Field
 
 from mona.config.schema import HostedCodexSettings, HostedWorkConfig
+from mona.hosted_work.codex_discovery import discover_codex
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.frontend import _is_link
 
@@ -94,6 +95,7 @@ class CodexAdmin:
 
     def snapshot(self) -> dict:
         _, _, revision, settings = self._read()
+        detected = discover_codex(work_root=self.root.parent)
         connection = {"state": "not_configured" if not settings.cli_path else "not_checked",
                       "message": "请填写 Ubuntu 上的 Codex 程序路径，保存后检查连接。" if not settings.cli_path
                                  else "配置已保存，请检查专用账户的连接。",
@@ -102,6 +104,7 @@ class CodexAdmin:
             connection = self.checked[1]
         command = [sys.executable, "-m", "mona.hosted_work.admin", "--config", str(self.path)]
         return {"revision": revision, "configuration": settings.model_dump(), "connection": connection,
+                "discovery": {"state": "found" if detected else "not_found", "path": str(detected) if detected else None},
                 "billing": {"mode": settings.billing_mode, "ready": settings.billing_mode == "free",
                             "message": "管理员已设置为免费，不扣用户余额。" if settings.billing_mode == "free"
                                        else "使用网站与应用共用的 Mona 余额；余额计费尚未接通。"},
@@ -117,10 +120,12 @@ class CodexAdmin:
         async with self.lock:
             try:
                 with FileLock(str(self._scoped(self.path.name + ".admin.lock")), timeout=0):
-                    data, key, revision, _ = self._read()
+                    data, key, revision, current = self._read()
                     if revision != request.expected_revision:
                         raise WorkError("configuration_changed", "配置已被修改，请刷新后重新填写。", 409)
-                    data[key]["codex"] = request.configuration.model_dump()
+                    values = current.model_dump()
+                    values.update(request.configuration.model_dump(exclude_unset=True))
+                    data[key]["codex"] = HostedCodexSettings.model_validate(values).model_dump()
                     self._write_locked(data, key, revision, backup_kind="codex")
             except Timeout as exc:
                 raise WorkError("configuration_busy", "配置正在保存，请稍后重试。", 409) from exc

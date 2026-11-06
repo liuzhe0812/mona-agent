@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
-from mona.config.schema import HostedCodexSettings, HostedWorkConfig
+from mona.config.schema import HostedCodexSettings, HostedWorkConfig, HostedWorkPrice
 from mona.hosted_work.admin import CodexAdmin, SaveCodex
 from mona.hosted_work.contracts import NewSession, NewTurn, WorkError, owner_key
 from mona.hosted_work.model_admin import ModelAdmin, ModelAdminError, SaveModel
@@ -23,6 +23,8 @@ from mona.hosted_work.store import WorkStore
 URL = "/api/work/admin/models"
 OWNER, SID, RID = owner_key("71"), "a" * 32, "b" * 32
 SECRET = "fixture-private-model-key"
+PRICE = {"input_amount_per_million": "1.000001", "cached_input_amount_per_million": "0",
+         "output_amount_per_million": "1000000000.000000"}
 
 
 def headers(token="admin"):
@@ -109,8 +111,7 @@ async def test_admin_boundary_snapshot_never_exposes_secrets_or_native_sources(o
     assert [model["id"] for model in data["models"]] == ["qwen"]
     assert data["models"][0]["credentials"] == {"configured": True}
     assert data["models"][0]["configuration"]["api_key_env"] == "MONA_WORK_MODEL_QWEN_KEY"
-    assert data["synchronized"] is True and data["billing"] == {"mode": "shared_wallet", "ready": False,
-        "prices_endpoint": "/admin/credits/model-prices", "admin_url": "/admin"}
+    assert data["synchronized"] is True and data["billing"] == {"mode": "shared_wallet", "ready": False}
     assert SECRET not in json.dumps(data, ensure_ascii=False) and "/private/" not in json.dumps(data)
     assert online.validator.await_count == 0
 
@@ -171,6 +172,92 @@ async def test_missing_or_invalid_billing_choice_never_silently_enables_free_acc
         response = await put(online, revision, config=config)
         assert response.status == 400
         assert online.path.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_independent_model_prices_are_saved_per_model_and_hidden_from_public(online):
+    initial = online.admin.snapshot()
+    assert initial["models"][0]["configuration"]["price"] is None
+    response = await put(online, initial["revision"], config=configuration(price=PRICE, billing_mode="wallet"))
+    assert response.status == 200
+    saved = await response.json()
+    assert saved["models"][0]["configuration"]["price"] == PRICE
+    assert saved["models"][0]["availability"]["ready"] is False
+    assert online.service.config.models["qwen"].price.model_dump() == PRICE
+    second_price = {"input_amount_per_million": "0", "cached_input_amount_per_million": "0.000000",
+                    "output_amount_per_million": "1.00"}
+    response = await put(online, saved["revision"], model_id="second",
+                         config=configuration(label="Second", price=second_price, billing_mode="free"))
+    assert response.status == 200
+    data = await response.json()
+    by_id = {row["id"]: row["configuration"]["price"] for row in data["models"]}
+    assert by_id == {"qwen": PRICE, "second": second_price}
+    persisted = json.loads(online.path.read_text(encoding="utf-8"))["hosted_work"]["models"]
+    assert persisted["qwen"]["price"] == PRICE and persisted["second"]["price"] == second_price
+    public = await (await online.client.get("/api/work/models", headers=headers("ordinary"))).json()
+    assert [row["id"] for row in public["models"]] == ["second"]
+    assert "price" not in json.dumps(public)
+    assert "prices_endpoint" not in json.dumps(data) and data["billing"]["ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_save_preserves_price_and_legacy_mapping_but_explicit_null_clears_price(online):
+    initial = online.admin.snapshot()
+    response = await put(online, initial["revision"],
+                         config=configuration(price=PRICE, billing_model="legacy-mapping"))
+    assert response.status == 200
+    revision = (await response.json())["revision"]
+    legacy = configuration(label="Legacy client update")
+    del legacy["billing_model"]
+    response = await put(online, revision, config=legacy)
+    assert response.status == 200
+    current = (await response.json())["models"][0]["configuration"]
+    assert current["label"] == "Legacy client update" and current["price"] == PRICE
+    assert current["billing_model"] == "legacy-mapping"
+    response = await put(online, online.admin.snapshot()["revision"], config={**legacy, "price": None})
+    assert response.status == 200
+    current = (await response.json())["models"][0]["configuration"]
+    assert current["price"] is None and current["billing_model"] == "legacy-mapping"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["", "-1", "+1", "01", "1e3", "NaN", "Infinity", "1\n", "１",
+                                    "1.0000001", "1000000000.000001", "1000000001", 1, 1.5, False, None])
+async def test_price_rejects_invalid_values_without_writes(online, invalid):
+    initial, original = online.admin.snapshot(), online.path.read_bytes()
+    price = {**PRICE, "input_amount_per_million": invalid}
+    response = await put(online, initial["revision"], config=configuration(price=price))
+    data = await response.json()
+    assert response.status == 400 and data["error"] == "invalid_model"
+    assert data["field"] == "input_amount_per_million"
+    assert online.path.read_bytes() == original and online.service.config.models["qwen"].price is None
+    assert online.validator.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["cached_input_amount_per_million", "output_amount_per_million"])
+async def test_price_errors_identify_the_failing_amount_field(online, field):
+    revision = online.admin.snapshot()["revision"]
+    response = await put(online, revision, config=configuration(price={**PRICE, field: "-1"}))
+    assert response.status == 400 and (await response.json())["field"] == field
+
+
+@pytest.mark.asyncio
+async def test_price_must_be_complete_and_cannot_include_foreign_fields(online):
+    revision, original = online.admin.snapshot()["revision"], online.path.read_bytes()
+    missing = dict(PRICE)
+    del missing["output_amount_per_million"]
+    for price, field in [(missing, "output_amount_per_million"), ({**PRICE, "currency": "USD"}, "price")]:
+        response = await put(online, revision, config=configuration(price=price))
+        assert response.status == 400 and (await response.json())["field"] == field
+        assert online.path.read_bytes() == original
+
+
+def test_codex_and_model_schema_share_exact_optional_price_contract():
+    assert HostedCodexSettings().price is None
+    codex = HostedCodexSettings.model_validate({"price": PRICE})
+    assert codex.price == HostedWorkPrice.model_validate(PRICE)
+    assert codex.model_dump()["price"] == PRICE
 
 
 @pytest.mark.asyncio

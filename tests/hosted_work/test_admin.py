@@ -148,6 +148,53 @@ async def test_admin_can_read_and_save_a_draft_without_publishing(online, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_detected_cli_is_read_only_and_does_not_override_explicit_path(online, tmp_path, monkeypatch):
+    found = tmp_path / "detected" / "codex"
+    looked_at = []
+    def discover(*, work_root):
+        looked_at.append(work_root)
+        return found
+    monkeypatch.setattr("mona.hosted_work.admin.discover_codex", discover)
+    initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()
+    assert initial["discovery"] == {"state": "found", "path": str(found)}
+    config = configuration(tmp_path)
+    saved = await (await online.client.put(ADMIN_URL, headers=headers(), json={
+        "expected_revision": initial["revision"], "configuration": config})).json()
+    assert saved["configuration"]["cli_path"] == config["cli_path"]
+    assert saved["configuration"]["cli_path"] != saved["discovery"]["path"]
+    after = await (await online.client.get(ADMIN_URL, headers=headers())).json()
+    assert after["configuration"]["cli_path"] == config["cli_path"]
+    assert all(root == online.path.parent.parent for root in looked_at)
+    assert after["execution"]["ready"] is False and after["public_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_older_codex_client_cannot_erase_price_or_billing_mapping(online, tmp_path, monkeypatch):
+    monkeypatch.setattr("mona.hosted_work.admin.discover_codex", lambda *, work_root: None)
+    initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()
+    price = {"input_amount_per_million": "2.50", "cached_input_amount_per_million": "0.25",
+             "output_amount_per_million": "7"}
+    config = {**configuration(tmp_path), "billing_model": "existing-price-reference", "price": price}
+    saved = await (await online.client.put(ADMIN_URL, headers=headers(), json={
+        "expected_revision": initial["revision"], "configuration": config})).json()
+    legacy = {key: value for key, value in config.items() if key not in {"price", "billing_model"}}
+    legacy["label"] = "Legacy editor update"
+    response = await online.client.put(ADMIN_URL, headers=headers(), json={
+        "expected_revision": saved["revision"], "configuration": legacy})
+    assert response.status == 200
+    updated = await response.json()
+    assert updated["configuration"]["price"] == price
+    assert updated["configuration"]["billing_model"] == "existing-price-reference"
+    assert updated["configuration"]["label"] == "Legacy editor update"
+    response = await online.client.put(ADMIN_URL, headers=headers(), json={
+        "expected_revision": updated["revision"], "configuration": {**legacy, "price": None}})
+    assert response.status == 200
+    cleared = await response.json()
+    assert cleared["configuration"]["price"] is None
+    assert cleared["configuration"]["billing_model"] == "existing-price-reference"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["free", "wallet"])
 async def test_codex_administrator_controls_same_billing_and_generation_fields(online, tmp_path, mode):
     initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()

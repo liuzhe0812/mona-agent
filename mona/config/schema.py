@@ -796,6 +796,25 @@ class CloudSyncConfig(Base):
     excluded_session_keys: list[str] = Field(default_factory=list, max_length=10_000)
 
 
+class HostedWorkPrice(Base):
+    """Administrator-defined CNY per million tokens; exact decimal strings."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, alias_generator=to_camel, populate_by_name=True)
+    input_amount_per_million: str = Field(min_length=1, max_length=17)
+    cached_input_amount_per_million: str = Field(min_length=1, max_length=17)
+    output_amount_per_million: str = Field(min_length=1, max_length=17)
+
+    @field_validator("input_amount_per_million", "cached_input_amount_per_million", "output_amount_per_million")
+    @classmethod
+    def _valid_amount(cls, value: str) -> str:
+        import re
+        from decimal import Decimal
+
+        if not re.fullmatch(r"(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,6})?", value) or Decimal(value) > 1_000_000_000:
+            raise ValueError("amount must be a nonnegative decimal up to 1000000000 with at most six decimal places")
+        return value
+
+
 class HostedWorkModel(Base):
     """Operator-owned model selection; never accepted from a website request."""
 
@@ -807,6 +826,7 @@ class HostedWorkModel(Base):
     model: str = Field(min_length=1, max_length=200)
     billing_mode: Literal["free", "wallet"] = "wallet"
     billing_model: str = Field(default="", max_length=200)
+    price: HostedWorkPrice | None = None
     native_config_path: str = ""
     # Optional operator input cap; model capacity is resolved from the shared catalog.
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
@@ -822,6 +842,7 @@ class HostedCodexSettings(Base):
     model: str = Field(default="", max_length=200)
     billing_model: str = Field(default="", max_length=200)
     billing_mode: Literal["free", "wallet"] = "wallet"
+    price: HostedWorkPrice | None = None
     label: str = Field(default="Codex", min_length=1, max_length=80)
     auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)

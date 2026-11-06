@@ -42,10 +42,11 @@ def _codex_package_binary(entry: Path) -> Path | None:
                 continue
             for vendor in (root / "vendor", root.parent / f"codex-{sys.platform}-{arch}" / "vendor",
                            root / "node_modules" / "@openai" / f"codex-{sys.platform}-{arch}" / "vendor"):
-                candidate = vendor / triple / "codex" / ("codex.exe" if os.name == "nt" else "codex")
-                if (candidate.is_file() and candidate.resolve().is_relative_to(vendor.resolve())
-                        and (os.name == "nt" or os.access(candidate, os.X_OK))):
-                    return candidate.resolve()
+                for executable_dir in ("codex", "bin"):
+                    candidate = vendor / triple / executable_dir / ("codex.exe" if os.name == "nt" else "codex")
+                    if (candidate.is_file() and candidate.resolve().is_relative_to(vendor.resolve())
+                            and (os.name == "nt" or os.access(candidate, os.X_OK))):
+                        return candidate.resolve()
         except (OSError, ValueError, AttributeError):
             continue
     return None
