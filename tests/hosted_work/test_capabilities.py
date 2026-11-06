@@ -1,5 +1,7 @@
 """Hosted Work reuses desktop discovery without expanding its authorized tools."""
 import asyncio
+import base64
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -78,6 +80,39 @@ async def test_successful_ppt_skill_read_enables_office_and_builtin_references(f
     assert instance.skills.loaded == {"mona-pptx"}
     assert (await registry.execute("skill_asset_copy", {"skill": "mona-design", "asset": "x", "dest": "x"})).startswith("Error:")
     assert (await registry.execute("skill_script_run", {"skill": "mona-design", "script": "x.py"})).startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_ppt_dependency_assets_copy_without_loading_a_second_skill(factory, monkeypatch):
+    instance, sandbox, _ = factory()
+    monkeypatch.setattr("shutil.copy2", lambda *_args, **_kwargs: pytest.fail("assets must be copied inside the sandbox"))
+
+    async def upload(request):
+        assert request["action"] == "upload"
+        raw = base64.b64decode(request["data"], validate=True)
+        return {"path": request["path"], "name": request["path"].rsplit("/", 1)[-1],
+                "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    sandbox.file.side_effect = upload
+    registry = instance.registry
+    await registry.execute("skill_read", {"name": "mona-pptx"})
+    await registry.execute("skill_reference_read", {"skill": "mona-design", "ref_path": "native-pptx.md"})
+    assets = ["09-bento-grid.jpg", "10-dark-hairline-terminal.jpg", "11-two-font-consulting.jpg"]
+    for index, name in enumerate(assets):
+        asset = "style-specimens/ppt/" + name
+        result = json.loads(await registry.execute("skill_asset_copy", {
+            "skill": "mona-design", "asset": asset, "dest": f"/workspace/style-{index}.jpg",
+        }))
+        raw = (instance.skills.root / "mona-design/assets" / asset).read_bytes()
+        assert result["ok"] is True and result["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert instance.skills.loaded == {"mona-pptx"}
+    assert sandbox.file.await_count == 3
+    sandbox.execute.assert_not_awaited()
+    assert (await registry.execute("skill_script_run", {"skill": "mona-design", "script": "x.py"})).startswith("Error:")
+    assert (await registry.execute("skill_asset_copy", {
+        "skill": "private-secret", "asset": "x.jpg", "dest": "out.jpg",
+    })).startswith("Error:")
+    assert sandbox.file.await_count == 3
 
 
 @pytest.mark.asyncio

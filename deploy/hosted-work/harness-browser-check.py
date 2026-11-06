@@ -8,6 +8,8 @@ check requests stopping only unfinished runs belonging to these new sessions;
 the caller still owns account-token revocation and executor cleanup checks.
 Use --observe-session/--observe-run/--prior-report together to validate only
 delivery and restoration of an already completed QA run, without model input.
+Use --preview-only to validate real style images and the pending question,
+then cancel only this check's new run; this does not validate a finished PPT.
 """
 from __future__ import annotations
 
@@ -165,6 +167,9 @@ class Trace:
             skill = (item.get("arguments") or {}).get("name") if isinstance(item.get("arguments"), dict) else None
             if tool == "skill_read" and isinstance(skill, str) and re.fullmatch(r"[a-z0-9-]{1,80}", skill):
                 record["skill"] = skill
+            reference = (item.get("arguments") or {}).get("skill") if isinstance(item.get("arguments"), dict) else None
+            if tool == "skill_reference_read" and reference in {"mona-design", "mona-pptx"}:
+                record["reference_skill"] = reference
 
     def summary(self):
         calls = list(self.calls.values())
@@ -179,6 +184,12 @@ class Trace:
                 "question_frames": self.question_frames, "answer_acks": self.answer_acks}
 
 
+def presentation_route_verified(trace: Trace) -> bool:
+    ended = [item for item in trace.calls.values() if "end" in item["phases"]]
+    return (any(item.get("skill") == "mona-pptx" for item in ended)
+            and any(item.get("skill") == "mona-design" or item.get("reference_skill") == "mona-design" for item in ended))
+
+
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -188,12 +199,15 @@ async def main():
     parser.add_argument("--observe-session", help="Existing disposable QA session; sends no model request")
     parser.add_argument("--observe-run", help="Completed run whose delivery should be checked")
     parser.add_argument("--prior-report", type=Path, help="Original real style/answer/stream evidence, retained unchanged")
+    parser.add_argument("--preview-only", action="store_true", help="Verify real style previews, then cancel this new QA run; no PPT completion claim")
     args = parser.parse_args()
     observe = bool(args.observe_session or args.observe_run or args.prior_report)
     if observe and (not all((args.observe_session, args.observe_run, args.prior_report)) or args.check_identity):
         parser.error("Observation requires all three --observe-* / --prior-report arguments and excludes --check-identity")
     if observe and not all(re.fullmatch(r"[a-f0-9]{32}", value) for value in (args.observe_session, args.observe_run)):
         parser.error("Observed session and run IDs must be 32 lowercase hexadecimal characters")
+    if args.preview_only and (observe or args.check_identity):
+        parser.error("--preview-only requires its own new QA run and excludes observation/identity modes")
     assert 60 <= args.timeout <= 700, "Timeout must be between 60 and 700 seconds"
     credentials = json.loads(sys.stdin.read(65_537))
     token, target = credentials.get("token"), credentials.get("url")
@@ -210,7 +224,9 @@ async def main():
     started = time.monotonic()
     report = {"passed": False, "phase": "initializing", "origin": origin, "real_model": True,
               "mocked_responses": False, "test_sessions": [], "runs": [], "question_answers": [],
-              "mode": "observe_completed_run" if observe else "new_real_model_run"}
+              "mode": "observe_completed_run" if observe else "new_real_model_run",
+              "preview_only": args.preview_only, "scope": "style_preview" if args.preview_only else "complete_presentation",
+              "cancelled_by_qa": False}
     traces, errors, failures, console_errors = {}, [], [], []
     secrets = {token, quote(token, safe=""), quote_plus(token, safe=""), json.dumps(token)[1:-1]}
 
@@ -308,7 +324,7 @@ async def main():
             assert len(files) >= 3 and len(media) >= 3, "Three actual style previews were not delivered"
             expected = {hashlib.sha256(path.read_bytes()).hexdigest()
                         for path in (root / "mona/skills/mona-design/assets/style-specimens").rglob("*.jpg")}
-            selected, seen = [], set()
+            selected, seen, selected_urls = [], set(), []
             for file, item in zip(files, media):
                 if file.get("sha256") in seen:
                     continue
@@ -323,21 +339,65 @@ async def main():
                 secrets.add(parsed.path.rsplit("/", 1)[1])
                 await page.wait_for_function("""url => Array.from(document.images).some(image =>
                     image.src === url && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0)""", arg=address)
+                image = page.locator(f'img[src="{address}"]:visible').first
+                await expect(image).to_be_visible()
+                await image.scroll_into_view_if_needed()
                 response = await context.request.get(address, headers=headers, timeout=20_000)
                 assert response.ok, "Style-preview bytes were unavailable"
                 raw = await response.body()
                 evidence = image_info(raw)
                 assert evidence["sha256"] == file.get("sha256") and evidence["bytes"] == file.get("size"), "Style preview digest/size mismatch"
                 assert evidence["sha256"] in expected, "Preview is not a real bundled style sample"
+                dimensions = await image.evaluate("image => ({width:image.naturalWidth,height:image.naturalHeight})")
+                assert dimensions["width"] == evidence["width"] and dimensions["height"] == evidence["height"], "The visible preview differs from the verified image bytes"
                 extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[evidence["format"]]
                 name = f"style-{len(selected) + 1}" + extension
                 (output / name).write_bytes(raw)
-                selected.append({**evidence, "file": name, "matches_bundled_sample": True, "naturally_loaded_in_ui": True})
+                selected.append({**evidence, "file": name, "matches_bundled_sample": True,
+                                 "naturally_loaded_in_ui": True, "visible_in_ui": True,
+                                 "natural_width": dimensions["width"], "natural_height": dimensions["height"]})
+                selected_urls.append(address)
                 seen.add(evidence["sha256"])
                 if len(selected) == 3:
                     break
             assert len(selected) == 3, "Fewer than three distinct actual samples were shown"
+            await page.wait_for_function("""urls => urls.every(url => Array.from(document.images).some(image => {
+                if (image.src !== url) return false;
+                const rect = image.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0 || rect.top < 0 || rect.left < 0
+                    || rect.bottom > innerHeight || rect.right > innerWidth) return false;
+                return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === image;
+            }))""", arg=selected_urls)
             report["style_previews"] = selected
+            report["simultaneously_visible_style_previews"] = 3
+
+        async def cancel_preview_run(sid, run, trace, summary):
+            assert any(item["id"] == sid and item.get("created_by_this_check") is True
+                       for item in report["test_sessions"]), "Preview cancellation is limited to this check's new QA session"
+            assert run["session_id"] == sid and run["status"] == "running", "Preview QA run is not the current waiting task"
+            panel = page.get_by_role("region", name="待回答问题", exact=True).first
+            await expect(panel).to_be_visible()
+            await verify_styles(trace)
+            assert presentation_route_verified(trace), "Preview did not follow the shared PPT/design reference route"
+            await expect(panel).to_be_visible()
+            report["question_panel_visible"] = True
+            await screenshot("style-preview-visible.png")
+            progress("cancelling_new_preview_qa_run", session_id=sid, run_id=run["id"])
+            await api("/api/work/runs/" + run["id"] + "/stop", method="POST", body={"confirmed": True})
+            report["preview_stop_requested"] = True
+            while True:
+                detail = await api("/api/work/sessions/" + sid)
+                current = next(item for item in detail["runs"] if item["id"] == run["id"])
+                if current["status"] not in {"running", "cancelling"}:
+                    break
+                await asyncio.sleep(0.25)
+            summary.update(status=current["status"], workspace_saved=current["result"].get("workspace_saved") is True,
+                           stop_reason=(current["result"].get("diagnostic") or {}).get("stop_reason"))
+            assert current["status"] == "cancelled" and summary["workspace_saved"], "QA cancellation/workspace save was not confirmed"
+            await expect(page.get_by_role("button", name="停止响应", exact=True)).not_to_be_visible()
+            await expect(panel).not_to_be_visible()
+            report.update(cancelled_by_qa=True, full_presentation_completed=False, preview_workspace_saved=True)
+            return current
 
         async def answer_question(sid, answered):
             trace = traces[sid]
@@ -365,7 +425,7 @@ async def main():
                                                 "first_options_selected": selected, "custom_preference_entered": True})
             progress("question_answered", session_id=sid, questions=count)
 
-        async def task(sid, prompt, *, questions=False):
+        async def task(sid, prompt, *, questions=False, preview_only=False):
             trace = traces[sid]
             prior = {run["id"] for run in (await api("/api/work/sessions/" + sid))["runs"]}
             await page.locator("textarea:visible").last.fill(prompt)
@@ -387,7 +447,13 @@ async def main():
                         assert run["status"] == "completed" and summary["workspace_saved"], "Real model task did not complete and save its workspace"
                         break
                 if questions:
-                    await answer_question(sid, answered)
+                    if preview_only:
+                        if run and trace.pending_questions:
+                            panel = page.get_by_role("region", name="待回答问题", exact=True).first
+                            if await panel.is_visible():
+                                return await cancel_preview_run(sid, run, trace, summary)
+                    else:
+                        await answer_question(sid, answered)
                 if time.monotonic() - heartbeat >= 15:
                     heartbeat = time.monotonic()
                     progress("waiting_for_real_model", session_id=sid, run_id=run["id"] if run else None,
@@ -497,11 +563,17 @@ async def main():
                     file = await completed_delivery(ppt_sid)
                 else:
                     progress("presentation_request", session_id=ppt_sid)
-                    await task(ppt_sid, PPT_PROMPT, questions=True)
+                    await task(ppt_sid, PPT_PROMPT, questions=True, preview_only=args.preview_only)
+                    if args.preview_only:
+                        assert report["cancelled_by_qa"] and report.get("preview_workspace_saved"), "Preview QA cleanup was not confirmed"
+                        assert not errors and not failures, "Unexpected browser errors or failed preview requests occurred"
+                        assert traces[ppt_sid].sent == 1 and not report["question_answers"], "Preview-only check must not submit an answer or another task"
+                        report["new_model_messages_sent"] = traces[ppt_sid].sent
+                        report.update(passed=True, phase="style_preview_completed")
+                        return 0
                     assert report.get("style_previews") and report["question_answers"] and trace.answer_acks, "The real style-choice/answer loop was not completed"
                     assert trace.context_usage, "No actual context-usage events were observed"
-                    skills = {item["skill"] for item in trace.calls.values() if item.get("skill") and "end" in item["phases"]}
-                    assert {"mona-pptx", "mona-design"} <= skills, "Natural presentation routing did not read the shared presentation/design Skills"
+                    assert presentation_route_verified(trace), "Natural presentation routing did not read the shared presentation/design entry"
                     file = trace.delivery
                 assert (file and isinstance(file.get("sha256"), str) and SHA.fullmatch(file["sha256"])
                         and type(file.get("size")) is int and file["size"] > 0), "No verified PPTX delivery event was observed"

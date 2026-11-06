@@ -187,8 +187,8 @@ class HostedSkills:
             _relative(ref_path)
             relative = ref_path if skill == "mona-design" and ref_path.startswith(("assets/", "demos/", "references/")) else "references/" + ref_path.removeprefix("references/")
             # Referenced builtins are public, read-only dependencies, just as in
-            # the desktop reader. Copying assets/executing scripts still requires
-            # a successful load of that specific Skill below.
+            # the desktop reader. Public assets use the same source boundary;
+            # running a script still requires loading that specific Skill.
             self.file(skill, relative, loaded=False, allow_directory=skill == "mona-design")
             return self._public(await self.reference_reader.execute(skill=skill, ref_path=ref_path, offset=offset, limit=limit))
         except (OSError, ValueError, TypeError):
@@ -197,7 +197,9 @@ class HostedSkills:
     async def asset(self, skill: str, asset: str, dest: str):
         try:
             _relative(asset)
-            source = self.file(skill, "assets/" + asset.removeprefix("assets/"))
+            # Desktop asset copying accepts public builtin dependencies without
+            # another skill_read. Script execution still requires its own load.
+            source = self.file(skill, "assets/" + asset.removeprefix("assets/"), loaded=False)
             destination = relative_path(dest)
             raw = source.read_bytes()
             result = await self.tools._file("upload", path=destination, data=base64.b64encode(raw).decode("ascii"))
