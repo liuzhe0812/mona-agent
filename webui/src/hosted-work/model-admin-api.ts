@@ -1,3 +1,5 @@
+export type BillingMode = "free" | "wallet";
+
 export type ApiModelConfiguration = {
   label: string;
   source: "mona";
@@ -7,12 +9,15 @@ export type ApiModelConfiguration = {
   context_window_tokens: number | null;
   max_output_tokens: number;
   reasoning_effort: string | null;
+  billing_mode: BillingMode;
+  billing_model: string;
 };
 
 export type ManagedModel = {
   id: string;
   configuration: ApiModelConfiguration & { source: string };
   credentials: { configured: boolean };
+  availability: { ready: boolean; message: string };
 };
 
 export type ModelSettings = {
@@ -20,6 +25,28 @@ export type ModelSettings = {
   models: ManagedModel[];
   synchronized?: boolean;
   billing: { mode: "shared_wallet"; ready: boolean; prices_endpoint: string; admin_url: string };
+};
+
+export type CodexConfiguration = {
+  cli_path: string;
+  model: string;
+  billing_model: string;
+  billing_mode: BillingMode;
+  label: string;
+  auth_mode: "chatgpt" | "api_key";
+  context_window_tokens: number | null;
+  max_output_tokens: number;
+  reasoning_effort: string | null;
+};
+
+export type CodexStatus = {
+  revision: string;
+  configuration: CodexConfiguration;
+  connection: { state: string; message: string; models: Array<{ id: string; label: string }> };
+  billing: { mode: BillingMode; ready: boolean; message: string };
+  execution: { ready: boolean; message: string };
+  public_enabled: boolean;
+  login_commands: string[];
 };
 
 export type ModelPrice = {
@@ -73,13 +100,42 @@ export function parseModelSettings(value: unknown): ModelSettings {
         && typeof c.api_base === "string" && typeof c.api_key_env === "string" && typeof c.model === "string"
         && (c.context_window_tokens == null || Number.isInteger(c.context_window_tokens))
         && Number.isInteger(c.max_output_tokens) && (c.reasoning_effort == null || typeof c.reasoning_effort === "string")
-        && typeof item.credentials?.configured === "boolean";
+        && (c.billing_mode === "free" || c.billing_mode === "wallet") && typeof c.billing_model === "string"
+        && typeof item.credentials?.configured === "boolean" && typeof item.availability?.ready === "boolean"
+        && typeof item.availability?.message === "string";
     }) || (settings.synchronized !== undefined && typeof settings.synchronized !== "boolean")
     || settings.billing?.mode !== "shared_wallet" || typeof settings.billing.ready !== "boolean"
     || settings.billing.prices_endpoint !== "/admin/credits/model-prices" || settings.billing.admin_url !== "/admin") {
     throw new AdminRequestError(0, "invalid_response");
   }
   return settings;
+}
+
+function parseCodexStatus(value: unknown): CodexStatus {
+  const status = value as CodexStatus | null;
+  const c = status?.configuration;
+  const connection = status?.connection;
+  const billing = status?.billing;
+  const execution = status?.execution;
+  if (!status || typeof status.revision !== "string" || !status.revision || !c ||
+    typeof c.cli_path !== "string" || typeof c.model !== "string" || typeof c.label !== "string" ||
+    typeof c.billing_model !== "string" || (c.billing_mode !== "free" && c.billing_mode !== "wallet") ||
+    (c.auth_mode !== "chatgpt" && c.auth_mode !== "api_key") ||
+    (c.context_window_tokens != null && !Number.isInteger(c.context_window_tokens)) ||
+    !Number.isInteger(c.max_output_tokens) || (c.reasoning_effort != null && typeof c.reasoning_effort !== "string") ||
+    !connection || typeof connection.state !== "string" || typeof connection.message !== "string" ||
+    !Array.isArray(connection.models) || !connection.models.every(model => model && typeof model.id === "string" && typeof model.label === "string") ||
+    !billing || (billing.mode !== "free" && billing.mode !== "wallet") || typeof billing.ready !== "boolean" || typeof billing.message !== "string" ||
+    !execution || typeof execution.ready !== "boolean" || typeof execution.message !== "string" ||
+    typeof status.public_enabled !== "boolean" || !Array.isArray(status.login_commands) ||
+    !status.login_commands.every(command => typeof command === "string")) throw new AdminRequestError(0, "invalid_response");
+  return status;
+}
+
+export async function requestCodexStatus(token: string, method: "GET" | "PUT" | "POST", body?: unknown,
+  signal?: AbortSignal): Promise<CodexStatus> {
+  const url = method === "POST" ? "/api/work/admin/codex/probe" : "/api/work/admin/codex";
+  return parseCodexStatus(await requestAdminJson(token, method, url, body, signal));
 }
 
 export async function requestModelSettings(token: string, body?: {
