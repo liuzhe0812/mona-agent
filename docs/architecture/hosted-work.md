@@ -78,7 +78,7 @@ v20 已接入共享提问工具、回答/重连快照、安全样张、上下文
 
 认证：在线服务的 `/api/work/auth/login` 和 `/api/work/auth/logout` 分别代理 `/auth/web/login` 和 `/auth/web/logout`，不创建第二套账号。每次受保护请求调用 `/auth/identity` 验证真实用户及撤销；该接口只返回 account_id，不返回余额/订阅/设备信息。收费适配不得扩大通用身份接口、绕过旧桌面设备鉴权或向网页开放结算权限。当前发布包只有上述认证能力，计费接口尚未发布。
 
-通用 API：平台在独立配置中填写 api_base，并通过名称以 `MONA_WORK_MODEL_` 开头的环境变量提供运营 API Key。凭据缺失直接拒绝，不读取桌面 API Key 或旧 model-token。不得把账号服务旧 `/v1` 网关重新配置为在线模型入口。用户指定的 Qwen 线路免费，其上游费用由平台承担；Codex 的收费单独通过共享钱包适配，不能借通用 API 配置隐式开启扣费。
+自定义 API：平台在独立配置中填写 api_base，并通过名称以 `MONA_WORK_MODEL_` 开头的环境变量提供运营 API Key。凭据缺失直接拒绝，不读取桌面 API Key 或旧 model-token。不得把账号服务旧 `/v1` 网关重新配置为在线模型入口。自定义 API 和 Codex CLI 均由管理员配置 `billing_mode` 与 `billing_model`，来源不决定是否免费；新配置缺省 wallet，管理 API 要求明确计费方式。既有 Qwen 用户指定的免费状态在迁移时显式保留。
 
 此前撤销的 `/internal/hosted-work/model-token`、节点密钥与模型鉴权例外没有恢复。新增收费边界必须基于真实生产源码独立审阅，不能因用户同意共享钱包而恢复旧例外或发布其他任务的 Auth 修改。
 
@@ -114,9 +114,9 @@ Office 导出已沿用应用的交付协议。对同轮再次 `deliver_file`，�
 
 Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 只存连接与计价模型映射草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
 
-v23/v24 管理页统一为“工作台模型与计费”，原 Auth 后台仅新增同源导航链接。`/api/work/admin/models` 只管理 `HostedWorkModel` 已定义的免费 `source=mona` 线路；只接收密钥的环境变量引用，拒绝未载入凭据、其他来源覆盖、旧版本及活动/未知任务期间保存。与 Codex 草稿共用版本和文件锁，原子写入后在无 await 的空闲临界区更新共享运行配置；恢复页面焦点时刷新公开模型设置，不覆盖正在派发的任务参数。供应商 URL 全量校验 DNS 公网地址并固定实际连接 IP，保留原 Host/TLS SNI，拒绝重定向与跨 origin；只允许保留已有受控字面回环 origin，不开放新内网地址。
+v25b/v26 管理页只提供“自定义 API”“Codex CLI”，共用模型参数与计费表单，独立 `h-full overflow-y-auto` 滚动区域不修改桌面全局样式。`/api/work/admin/models` 管理 `HostedWorkModel` 已定义的 `source=mona` 线路；只接收密钥环境变量引用，拒绝未载入凭据、其他来源覆盖、旧版本及活动/未知任务期间保存。与 Codex 草稿共用版本和文件锁，原子写入后在无 await 的空闲临界区更新共享运行配置；恢复页面焦点时刷新公开模型设置，不覆盖已派发任务参数。供应商 URL 全量校验 DNS 公网地址并固定实际连接 IP，保留原 Host/TLS SNI，拒绝重定向与跨 origin；只允许保留已有受控字面回环 origin，不开放新内网地址。
 
-价格只读取 Auth 现有 `/admin/credits/model-prices` 的启用 token 价格版本，修改继续通过原“模型服务 → 模型计价”；不另建钱包或价表。Codex 账务模型映射仍是草稿，`billing.ready=false`；免费 API 保存和价格展示不等于 Codex 收费已开通。
+价格只读取 Auth 现有 `/admin/credits/model-prices` 的启用 token 价格版本，修改继续通过原“模型服务 → 模型计价”；不另建钱包或价表。共用余额桥未完成时任何 wallet 模型都拒绝派发，不能按来源回退免费；Codex free 也因执行接入未完成保持关闭。`model_policy` 同时约束公开列表、设置与已保存选择恢复、父进程准入和 provider 构造。已接受请求先观察原结果，不因后续策略变化重派。Codex 连接、执行和计费分别报告，free 的计费无需钱包桥不代表执行已就绪。
 
 当前共享钱包的原生 Work 计费桥尚未实现，管理页 `billing.ready=false`、`public_enabled=false`。公开模型列表过滤 Codex，任务准入也明确拒绝 Codex，防止手动加入运行模型后免费执行；Qwen 继续对所有已登录账号免费。管理员连接探测使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把订阅登录或连接成功当作收费已上线。
 

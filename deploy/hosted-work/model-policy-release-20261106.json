@@ -1,0 +1,337 @@
+{
+  "release": "20261106-model-policy-v25b-ui-v26",
+  "deployed": true,
+  "entry": "https://mona-ai.cn/work/admin/",
+  "providers": [
+    "custom_api",
+    "codex_cli"
+  ],
+  "billing_control": "administrator",
+  "billing_modes": [
+    "free",
+    "wallet"
+  ],
+  "current_policy_preserved": {
+    "qwen": "free",
+    "codex_draft": "wallet"
+  },
+  "wallet_bridge_ready": false,
+  "codex_execution_ready": false,
+  "packages": [
+    {
+      "release": "20261106-model-policy-v25",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\model-policy-20261106\\work-model-policy-v25.delta.tar.gz",
+      "bytes": 650641,
+      "sha256": "825f47c3c5be15484d46864b69fe69adec39f9f21210ef8456fb2cca33f64d6a",
+      "release_manifest_sha256": "50250064f74635722664084b70ad111a25e7370f91b5c08b265cbc24cfa1411f",
+      "changed_files": 16,
+      "release_files": 5641,
+      "scope": [
+        "mona/config/schema.py",
+        "mona/hosted_work/admin.py",
+        "mona/hosted_work/model_admin.py",
+        "mona/hosted_work/model_policy.py",
+        "mona/hosted_work/providers.py",
+        "mona/hosted_work/service.py",
+        "mona/hosted_work/desktop_api.py",
+        "mona/hosted_work/desktop_store.py",
+        "tests/hosted_work/test_model_admin.py",
+        "tests/hosted_work/test_admin.py",
+        "tests/hosted_work/test_service.py",
+        "tests/hosted_work/test_desktop_api.py",
+        "tests/hosted_work/test_desktop_wire.py",
+        "tests/hosted_work/test_decoupling.py",
+        "tests/hosted_work/test_failure_boundaries.py",
+        "tests/hosted_work/test_runner.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-model-policy-v25b",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\model-policy-20261106\\work-model-policy-v25b.delta.tar.gz",
+      "bytes": 589963,
+      "sha256": "95379b396671ecb9d79fb36010c292ac5316c3223f9c8f3244edf28b83e6261c",
+      "release_manifest_sha256": "3a3892566d21e2868bba7f094d4414c36e68d5da59e13aa5bc1ac3fc5c951e3c",
+      "changed_files": 1,
+      "release_files": 5641,
+      "scope": [
+        "mona/hosted_work/admin.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-model-policy-ui-v26",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\model-policy-20261106\\work-model-policy-ui-v26.delta.tar.gz",
+      "bytes": 2855920,
+      "sha256": "513e7fa792bdb472530a11f984897e5ba87f59b54bc3350cbb8f2280c4331d9b",
+      "changed_files": 346,
+      "static_files": 5171,
+      "office_unchanged": 465,
+      "backend_changed": false
+    }
+  ],
+  "production": {
+    "passed": true,
+    "ubuntu": {
+      "unit": {
+        "MainPID": "672347",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-model-policy-v25b/content",
+        "ActiveState": "active"
+      },
+      "files_verified": 5641,
+      "manifest_sha256": "3a3892566d21e2868bba7f094d4414c36e68d5da59e13aa5bc1ac3fc5c951e3c",
+      "config_mode": "0o600",
+      "counts": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "run_statuses": {
+        "cancelled": 4,
+        "completed": 21,
+        "failed": 5,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "public_model_ids": [
+        "qwen"
+      ],
+      "qwen_source": "mona",
+      "max_iterations": 100,
+      "docker_pid": "78383",
+      "tunnel_pid": "423172",
+      "original_containers_unchanged": true,
+      "cloud_sync_enabled": false
+    },
+    "vps": {
+      "static_root": "/var/www/mona/work-releases/20261106-model-policy-ui-v26/content",
+      "files_verified": 5171,
+      "office_files": 465,
+      "manifest_sha256": "d3e13c020b6cdecdae450039d4ec58b5f61c0a37e264f411ab9295614f182fb1",
+      "include": "/opt/mona-work-proxy-releases/20261106-model-policy-ui-v26/work-locations.conf",
+      "include_sha256": "ccded410284899754e8acf496ea927f32b503c21428a8db76f9fc4bca316618b",
+      "units": {
+        "nginx": "420299",
+        "mariadb": "420210",
+        "mona-work-visitor": "367299"
+      },
+      "auth_pid": "389486",
+      "oneapi_pid": "310825",
+      "admin_html_sha256": "bfcf182b03ad632945a325cdbbad8afcc27b45c44ee9b0957a747f5d693f7039",
+      "original_website_root_preserved": true
+    }
+  },
+  "acceptance": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "synthetic_auth": false,
+    "browser_passed": true,
+    "browser": {
+      "production": true,
+      "mocked_responses": false,
+      "passed": true,
+      "phase": "complete",
+      "checks": {
+        "qwen_loaded": true,
+        "qwen_explicitly_free": true,
+        "credential_loaded": true,
+        "models_synchronized": true,
+        "no_secret_fields": true,
+        "codex_public_enabled": false,
+        "anonymous_denied_both_routes": true,
+        "normal_denied_both_routes": true,
+        "wheel_scroll_desktop": true,
+        "wheel_scroll_compact": true,
+        "only_two_providers": true,
+        "new_model_not_implicitly_free": true,
+        "custom_both_modes_selectable": true,
+        "existing_price_version": true,
+        "all_three_prices_match": true,
+        "price_mapping_left_unsaved": true,
+        "unchanged_qwen_save": true,
+        "runtime_synchronized_after_save": true,
+        "codex_free_save": true,
+        "codex_free_not_public": true,
+        "qwen_unchanged_during_codex": true,
+        "codex_both_modes_selectable": true,
+        "codex_mode_roundtrip": true,
+        "stale_revision_rejected": true,
+        "codex_restored": true
+      },
+      "safe": {
+        "model_id": "qwen",
+        "price_model": "deepseek-v4.1-flash-1017",
+        "price_version": 1,
+        "revision_changed": true,
+        "guarded_write_counts": {
+          "anonymous_model": 1,
+          "normal_model": 1,
+          "anonymous_codex": 1,
+          "normal_codex": 1,
+          "model_save": 1,
+          "codex_free": 1,
+          "codex_restore": 1,
+          "cas": 1
+        },
+        "blocked_external_requests": 0,
+        "blocked_writes": 0
+      }
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "validation": {
+    "windows_backend_passed": 131,
+    "windows_link_skipped": 2,
+    "linux_candidate": {
+      "exit_code": 0,
+      "tests": "........................................................................ [ 54%]\n.............................................................            [100%]\n133 passed, 1 warning in 3.36s\n",
+      "stderr": "/home/liuzhe/mona-hosted-work/venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the \"fixture\" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to \"function\" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n"
+    },
+    "later_connection_message_subset": {
+      "exit_code": 0,
+      "tests": "...........................                                              [100%]\n27 passed, 1 warning in 1.34s\n"
+    },
+    "frontend_tests_passed": 11,
+    "isolated_typecheck": true,
+    "isolated_build": true
+  },
+  "backend_activation": [
+    {
+      "activated": true,
+      "unit": {
+        "MainPID": "669268",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-model-policy-v25/content",
+        "ActiveState": "active"
+      },
+      "health": {
+        "service": "mona-hosted-work",
+        "status": "alive",
+        "models_configured": true
+      },
+      "backup": "/home/liuzhe/mona-hosted-work/backups/20261106-model-policy-v25",
+      "counts_before": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "counts_after": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "existing_rows_preserved": true,
+      "config_mode": "0o600",
+      "config_changes": [
+        "frontend_dir",
+        "explicit legacy billing choices"
+      ],
+      "legacy_policy_preserved": [
+        "qwen"
+      ],
+      "docker_pid": "78383",
+      "original_containers_unchanged": true,
+      "tunnel_unchanged": true,
+      "wallet_or_auth_code_modified": false
+    },
+    {
+      "activated": true,
+      "unit": {
+        "MainPID": "672347",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-model-policy-v25b/content",
+        "ActiveState": "active"
+      },
+      "health": {
+        "service": "mona-hosted-work",
+        "status": "alive",
+        "models_configured": true
+      },
+      "backup": "/home/liuzhe/mona-hosted-work/backups/20261106-model-policy-v25b",
+      "counts_before": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "counts_after": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "existing_rows_preserved": true,
+      "config_mode": "0o600",
+      "only_config_change": "frontend_dir",
+      "docker_pid": "78383",
+      "original_containers_unchanged": true,
+      "tunnel_unchanged": true,
+      "wallet_or_auth_code_modified": false
+    }
+  ],
+  "frontend_publication": {
+    "published": true,
+    "static_root": "/var/www/mona/work-releases/20261106-model-policy-ui-v26/content",
+    "static_files_verified": 5171,
+    "manifest_sha256": "d3e13c020b6cdecdae450039d4ec58b5f61c0a37e264f411ab9295614f182fb1",
+    "include": "/opt/mona-work-proxy-releases/20261106-model-policy-ui-v26/work-locations.conf",
+    "include_sha256": "ccded410284899754e8acf496ea927f32b503c21428a8db76f9fc4bca316618b",
+    "backup": "/var/www/mona/backups/model-policy-20261106-v26",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "only_work_include_changed": true,
+    "ubuntu_modified": false,
+    "docker_or_other_services_restarted": false
+  },
+  "isolated_ui_source": {
+    "scope": [
+      "webui/src/hosted-work/AdminApp.tsx",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx",
+      "webui/src/hosted-work/model-admin-api.ts"
+    ],
+    "before": {
+      "webui/src/hosted-work/AdminApp.tsx": "374f120de4ed45561d443cec5ac745651e102bdddb89764afd05c6798177b268",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "a6161da1c06f3c316c9cb4eb7ef463b77bdf2bdc84cc6d58d8a1fab40baf983f",
+      "webui/src/hosted-work/model-admin-api.ts": "698421b7bc3d7d232a50fd16cb7d845306d89b72c9e86266e722b8a392413497"
+    },
+    "after": {
+      "webui/src/hosted-work/AdminApp.tsx": "938ae4931f88629040d900338187bcbda2573ff91d5c81593aca0e7938b37c20",
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "6c127877da9b7bb2efba3d9c0a7352154ce256f1c99da030efbe24291733a057",
+      "webui/src/hosted-work/model-admin-api.ts": "90b89506978a3e168e8fe45227085025b15793aac968a7beb8e4001f956b1416"
+    },
+    "only_owned_ui_files_copied": true,
+    "office_and_other_dirty_work_excluded": true,
+    "final_build": "main-build2",
+    "preserves_codex_model_suggestions": true
+  },
+  "first_failure_preserved": {
+    "file": "output/hosted-work/model-policy-20261106/production-acceptance.json",
+    "reason": "QA still matched the previous credential status text; no admin configuration written"
+  },
+  "commits": [
+    "538b531d4",
+    "8180ac6a2"
+  ],
+  "pushed": false,
+  "price_table_written": false,
+  "model_or_cli_task_executed": false,
+  "wallet_payment_subscription_device_logic_changed": false,
+  "docker_restarted": false,
+  "paused_workers_resumed": false,
+  "cloud_sync_enabled": false,
+  "unrelated_dirty_work_excluded": true
+}

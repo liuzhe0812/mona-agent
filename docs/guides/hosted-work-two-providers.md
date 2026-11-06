@@ -1,12 +1,12 @@
-# Ubuntu Work：Qwen 与 Codex 两条线路
+# Ubuntu Work：自定义 API 与 Codex CLI
 
-适用：Ubuntu 的独立 Work 服务，以 `liuzhe` 用户操作；实际 release 以根目录生产记录和 `systemctl --user show mona-hosted-work -p WorkingDirectory` 为准。Qwen/免费 API 对所有已登录账号免费、不设个人白名单；Codex 使用平台专用登录，目标为从网站与客户端共用的 Mona 余额扣费，不另建 Work 钱包或价格表。
+适用：Ubuntu 的独立 Work 服务，以 `liuzhe` 用户操作；实际 release 以根目录生产记录和 `systemctl --user show mona-hosted-work -p WorkingDirectory` 为准。提供者只有自定义 API 和 Codex CLI，两者共用模型参数与计费配置。免费或共用余额由管理员选择，具体价格沿用网站与应用共用价表，不按提供者强制决定，不另建 Work 钱包或价表。
 
-2026-11-06：模型与计费管理后端 v23、前端 v24 已发布。真实管理员已验收免费 API 保存与运行配置同步、共用价格展示、版本冲突拒绝，以及原后台侧栏到新页面的实际跳转；普通账号和匿名读写均拒绝。Codex 收费仍未开通。
+2026-11-06：统一配置后端 v25b、前端 v26 已发布。页面有独立滚动区域，原 v23/v24 的免费 API 分类已撤销，配置能力不再按来源固定免费或收费。生产验收结果以根目录与本轮交付记录为准。
 
 官网入口的 `hosted_work.public_origin` 必须为 `https://mona-ai.cn`，不加 Ubuntu 的 17175 端口。该端口只用于内部连接；写成 `https://mona-ai.cn:17175` 会导致官网 Host/Origin 校验失败。监听地址与端口仍保留原值。
 
-当前 CLI 接入与共用余额的预扣、结算、退款桥仍未完成，`billing.ready=false`。可以保存免费 API 配置、准备 Codex 登录与计价映射，不能声明 Codex 收费已开放。原充值入口和支付流程继续沿用。
+当前 CLI 执行接入与共用余额预扣/结算桥仍未完成。自定义 API 选择免费且凭据就绪时可调用；选择共用余额时保存配置但暂不开放，不能静默免费执行。Codex 无论选哪种计费方式都因执行接入未完成暂不可调用，连接、执行及计费状态分别展示。原充值入口和支付流程继续沿用。
 
 ## 1. Qwen3.7 Plus
 
@@ -20,11 +20,13 @@
   "source": "mona",
   "api_base": "https://coding.dashscope.aliyuncs.com/v1",
   "api_key_env": "MONA_WORK_MODEL_QWEN_KEY",
-  "model": "qwen3.7-plus"
+  "model": "qwen3.7-plus",
+  "billing_mode": "free",
+  "billing_model": ""
 }
 ```
 
-`source=mona` 是此版本通用 API 适配器的配置值。这里不使用原账号服务的模型钱包或 `/v1` 网关。
+`source=mona` 是自定义 API 的内部适配器值，不代表免费。当前 Qwen 的 `billing_mode=free` 保留用户此前指定的状态，管理员可以修改；收费选 `wallet` 并填写 `billing_model`。新增配置缺省为 wallet，管理 API 要求明确传入计费方式。这里不把原账号服务 `/v1` 网关当上游模型接口。
 
 上下文容量由应用共用模型目录解析，不再给所有网页模型套用 32K 默认值。无需为当前 Qwen 手填窗口；若保留旧 `context_window_tokens`，它会作为额外输入预算 cap，而不是供应商容量声明。运行与设置页共用同一解析结果，来源和真实单次占用峰值记录在任务诊断中。
 
@@ -54,22 +56,24 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 
 先在原 `https://mona-ai.cn/admin/` 登录管理员，点击侧栏“工作台模型与计费”，或访问 `https://mona-ai.cn/work/admin/`。模型配置和共用价格读取均支持真实管理员会话。普通注册账号返回 403，页面不接收或回显密钥、认证文件和设备登录码。
 
-### 免费 API 模型
+### 同一表单选择提供者
 
-选择已有线路或点“新增免费 API 模型”，填写后点“保存免费 API 配置”：
+点击“自定义 API”或“Codex CLI”。两种提供者共用显示名称、模型 ID、输入/输出预算、推理强度、计费方式和账务模型 ID。自定义 API 选择已有线路或点“新增模型”，填写接口及环境变量引用；Codex CLI 填写程序路径与认证方式。最后点“保存配置”。切换提供者保留未保存草稿。
 
 | 页面字段 | 含义 |
 | --- | --- |
 | 平台模型标识 | `id`，1–64 位小写字母、数字、短横线或下划线 |
-| API 显示名称 | `label`，用户模型列表中的名称 |
-| 供应商模型 ID | `model`，上游实际支持的模型 ID |
+| 显示名称 | `label`，用户模型列表中的名称 |
+| 模型 ID | `model`，上游实际支持的模型 ID |
 | API Base URL | `api_base`，供应商公网 HTTPS 兼容接口地址 |
 | API Key 环境变量名称 | `api_key_env`，如 `MONA_WORK_MODEL_QWEN_KEY`；只填引用，不填 Key |
 | 输入预算上限（可选） | `context_window_tokens`，留空沿用目录；不改变真实模型窗口 |
 | 最大输出 token | `max_output_tokens`，单次输出上限 |
 | 推理强度（可选） | `reasoning_effort`，按供应商支持填写，不使用时留空 |
+| 计费方式 | `billing_mode`，管理员选择 free（免费）或 wallet（共用余额） |
+| 账务模型 ID | `billing_model`，对应原后台模型价表；空值是尚未配置，不当作免费 |
 
-此入口只保存 `source=mona` 的免费 API 线路，不能覆盖其他来源。页面显示当前服务是否已加载凭据、配置是否同步。缺凭据时请运维先在受限环境预载，再刷新状态重试；任务忙碌时等任务结束再保存；版本变化时刷新并核对。失败会保留草稿。API 和 Codex 使用同一配置版本，但互不覆盖未保存草稿。
+自定义线路仍只写 `source=mona`，不能覆盖其他来源。页面分别显示已保存的凭据、可用状态和当前编辑的计费选择；尚未保存的选择不改变运行状态。缺凭据时请运维先在受限环境预载，再刷新状态重试；任务忙碌时等任务结束再保存；版本变化时刷新并核对。两种提供者使用同一配置版本，失败保留草稿。
 
 ### Codex 连接草稿
 
@@ -78,17 +82,17 @@ EnvironmentFile=/home/liuzhe/mona-hosted-work/config/platform.env
 3. 返回页面检查连接，从实际原生缓存模型列表选择模型并保存，再次检查。仅探测成功不代表真实模型任务或扣费验收已通过。
 4. 填写“账务模型 ID”，对应现有管理后台的模型价格标识；这里只保存映射草稿。连接验证和计费就绪分开，当前仍显示未开放。
 
-连接草稿保存在 `operator-accounts-v2.json` 的 `hosted_work.codex`，字段为 `cli_path`、`model`、`billing_model`、`label`、`auth_mode`。保存不重启服务，按版本校验防止覆盖其他管理员的新修改，仅更新该字段；原配置备份和新配置权限均为 600。它不是公开 `models` 的一项，未计费 Codex 不会被加入公开模型列表，服务端同时拒绝执行。
+连接草稿保存在 `operator-accounts-v2.json` 的 `hosted_work.codex`，包括 `cli_path`、`auth_mode` 及与自定义 API 相同的模型参数、`billing_mode` 和 `billing_model`。保存不重启服务，按版本校验防止覆盖其他管理员的新修改，仅更新该字段；备份和新配置权限均为 600。它不是公开 `models` 的一项；当前执行适配未完成，不因免费设置或连接成功加入公开列表。
 
 CLI 使用固定的 Work 专用 `CODEX_HOME=/home/liuzhe/mona-hosted-work/config/development/native/codex` 和独立空登录目录；不读取个人桌面配置。程序未配置、未认证、认证方式不符、协议或隔离校验不通过、所选模型不在原生缓存及账户模型列表中，均不能显示连接已验证。检查连接不创建模型任务，不调用余额和支付接口。
 
-Qwen 对其他账号免费，不关联此 Codex 草稿，不新增收费、白名单或限流设置。现有平台安全与隔离配置保留。
+Qwen 与 Codex 的计费选择分别保存，不互相覆盖；不新增个人白名单或限流设置。现有平台安全与隔离配置保留。
 
 ### 共用余额与模型价格
 
 价格卡直接读取现有 `/admin/credits/model-prices`，按填写的账务模型 ID 选择已启用、按 token 计费的最高价格版本，展示输入、缓存输入和输出的人民币/百万 token 单价及版本。未匹配到价格时会明确提示。
 
-点“打开模型服务 → 模型计价”进入原 `/admin`，在“模型服务 → 模型计价”编辑。网站与应用共用钱包、共用价表，改价会同时影响两端；此页不另建价格表。价格已配置、Codex 已登录或连接检测通过，都不代表余额扣费桥已接通。
+点“前往管理后台设置模型价格”进入原 `/admin`，在“模型服务 → 模型计价”编辑。网站与应用共用钱包、共用价表，改价会同时影响两端；此页不另建价格表。免费选择由管理员显式保存；选择共用余额时按账务模型映射读价格。价格已配置、Codex 已登录或连接检测通过，都不代表执行或扣费桥已接通。
 
 ## 3. 历史命令行准备方式（旧脚本，不用于新管理入口）
 
