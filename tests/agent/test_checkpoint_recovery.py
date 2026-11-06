@@ -7,6 +7,7 @@ from datetime import datetime
 import pytest
 
 from mona.agent.loop import AgentLoop
+from mona.agent.tools.registry import ToolRegistry
 from mona.session.checkpoint_recovery import restore_checkpoint_messages
 from mona.session.manager import Session
 
@@ -92,7 +93,7 @@ def test_dispatched_or_legacy_pending_write_is_unknown_and_never_executed(tmp_pa
         pytest.fail("Recovery projection must not access the filesystem or execute tools")
     with monkeypatch.context() as scoped:
         scoped.setattr("builtins.open", forbidden)
-        scoped.setattr("mona.agent.tools.registry.ToolRegistry.execute", forbidden)
+        scoped.setattr(ToolRegistry, "execute", forbidden)
         assert restore_checkpoint_messages(session, checkpoint)
     assert marker.read_text(encoding="utf-8") == "original bytes"
     assert "TOOL_OUTCOME_UNKNOWN" in session.messages[-1]["content"]
