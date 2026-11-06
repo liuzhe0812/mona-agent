@@ -1,0 +1,27 @@
+{
+  "backend": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261107-codex-delete-v37/content",
+    "manifest_sha256": "0b710b9fbeb7850a4dd13b04813e6a40ebf9c3ec48a750689170bb3bb62501af",
+    "files_verified": 5660,
+    "other_services_unchanged": true
+  },
+  "frontend": {
+    "release": "/var/www/mona/work-releases/20261106-codex-followups-ui-v36/content",
+    "manifest_sha256": "42cf097bfdf3ec1ac3ffeb89c18b598c34416d1606420d7346e19a18210e7eb1",
+    "files_verified": 5922
+  },
+  "validation": {
+    "reasoning_effort_saved": true,
+    "context_window": 500000,
+    "context_indicator_shown": true,
+    "insufficient_balance_rejected_before_dispatch": true,
+    "ppt_link_download_verified": true,
+    "terminal_billing_deletion_test_sessions": 2,
+    "test_wallet_unchanged": true
+  },
+  "limitations": [
+    "No additional paid model call after preference change",
+    "Codex native state shares the platform CODEX_HOME among accounts",
+    "Web private skills and MCP are not connected"
+  ]
+}
