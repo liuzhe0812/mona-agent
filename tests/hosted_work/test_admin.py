@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
+from pydantic import ValidationError
 
 from mona.config.schema import HostedCodexSettings, HostedWorkConfig, HostedWorkModel
 from mona.development.contracts import ExecutorId
@@ -174,10 +176,11 @@ async def test_older_codex_client_cannot_erase_price_or_billing_mapping(online, 
     initial = await (await online.client.get(ADMIN_URL, headers=headers())).json()
     price = {"input_amount_per_million": "2.50", "cached_input_amount_per_million": "0.25",
              "output_amount_per_million": "7"}
-    config = {**configuration(tmp_path), "billing_model": "existing-price-reference", "price": price}
+    config = {**configuration(tmp_path), "billing_model": "existing-price-reference", "price": price,
+              "local_proxy_url": "http://127.0.0.1:7897"}
     saved = await (await online.client.put(ADMIN_URL, headers=headers(), json={
         "expected_revision": initial["revision"], "configuration": config})).json()
-    legacy = {key: value for key, value in config.items() if key not in {"price", "billing_model"}}
+    legacy = {key: value for key, value in config.items() if key not in {"price", "billing_model", "local_proxy_url"}}
     legacy["label"] = "Legacy editor update"
     response = await online.client.put(ADMIN_URL, headers=headers(), json={
         "expected_revision": saved["revision"], "configuration": legacy})
@@ -185,6 +188,7 @@ async def test_older_codex_client_cannot_erase_price_or_billing_mapping(online, 
     updated = await response.json()
     assert updated["configuration"]["price"] == price
     assert updated["configuration"]["billing_model"] == "existing-price-reference"
+    assert updated["configuration"]["local_proxy_url"] == "http://127.0.0.1:7897"
     assert updated["configuration"]["label"] == "Legacy editor update"
     response = await online.client.put(ADMIN_URL, headers=headers(), json={
         "expected_revision": updated["revision"], "configuration": {**legacy, "price": None}})
@@ -192,6 +196,7 @@ async def test_older_codex_client_cannot_erase_price_or_billing_mapping(online, 
     cleared = await response.json()
     assert cleared["configuration"]["price"] is None
     assert cleared["configuration"]["billing_model"] == "existing-price-reference"
+    assert cleared["configuration"]["local_proxy_url"] == "http://127.0.0.1:7897"
 
 
 @pytest.mark.asyncio
@@ -292,6 +297,32 @@ def test_profile_uses_only_fixed_home_and_empty_bootstrap(tmp_path, monkeypatch)
     assert caught.value.code == "bootstrap_not_empty" and len(prepared) == 1
 
 
+@pytest.mark.parametrize("value", ["https://127.0.0.1:7897", "http://localhost:7897", "http://192.168.1.2:7897",
+                                   "http://127.0.0.1", "http://127.0.0.1:0", "http://user:pw@127.0.0.1:7897",
+                                   "http://127.0.0.1:7897/path", "http://127.0.0.1:7897/?x=1"])
+def test_codex_proxy_rejects_nonlocal_or_credentialed_addresses(value):
+    with pytest.raises(ValidationError):
+        HostedCodexSettings(local_proxy_url=value)
+
+
+def test_codex_proxy_is_scoped_to_the_cli_profile(tmp_path, monkeypatch):
+    path, _ = operator_file(tmp_path)
+    executable = tmp_path / "native-codex"
+    settings = HostedCodexSettings(cli_path=str(executable), local_proxy_url="http://127.0.0.1:7897")
+
+    @dataclass(frozen=True)
+    class Profile:
+        environment: dict
+
+    original = Profile({"PATH": "/usr/bin"})
+    monkeypatch.setattr("mona.development.executors.discovery.resolve_executable", lambda *_args: (executable, False))
+    monkeypatch.setattr("mona.development.executors.codex_policy.prepare_codex_profile", lambda *_args: original)
+    result = CodexAdmin(path).profile(settings)
+    assert original.environment == {"PATH": "/usr/bin"}
+    assert result.environment == {"PATH": "/usr/bin", "HTTP_PROXY": "http://127.0.0.1:7897",
+                                  "HTTPS_PROXY": "http://127.0.0.1:7897", "ALL_PROXY": "http://127.0.0.1:7897"}
+
+
 @pytest.mark.parametrize("target", ["home", "cache"])
 def test_fixed_native_paths_reject_symlink_escape(tmp_path, target):
     path, _ = operator_file(tmp_path)
@@ -324,6 +355,7 @@ def test_fixed_native_paths_reject_symlink_escape(tmp_path, target):
     ({"auth_mode": "api_key"}, {"models": [{"slug": MODEL}]}, "auth_mode_mismatch"),
     ({"protocol_verified": False}, {"models": [{"slug": MODEL}]}, "unavailable"),
     ({"isolation_verified": False}, {"models": [{"slug": MODEL}]}, "unavailable"),
+    ({"protocol_verified": False, "error_code": "native_request_timeout"}, None, "timeout"),
     ({}, None, "ready"),
     ({}, {"models": [{"slug": "other-fixture"}]}, "ready"),
     ({}, {"data": [{"model": MODEL}]}, "ready"),
@@ -359,6 +391,8 @@ async def test_probe_requires_auth_protocol_isolation_and_live_model_list(tmp_pa
     monkeypatch.setattr("mona.development.executors.codex.CodexExecutor", IsolatedExecutor)
     snapshot = await admin.probe()
     assert snapshot["connection"]["state"] == expected
+    if expected == "timeout":
+        assert "超时" in snapshot["connection"]["message"] and "版本" not in snapshot["connection"]["message"]
     assert snapshot["connection"]["models"] == ([{"id": MODEL, "label": MODEL}] if expected == "ready" else [])
     assert snapshot["public_enabled"] is False and snapshot["billing"]["ready"] is False
     assert operations == ["probe", "shutdown"]

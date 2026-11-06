@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from aiohttp import web
@@ -162,7 +163,12 @@ class CodexAdmin:
         bootstrap.mkdir(mode=0o700, parents=True, exist_ok=True)
         if any(bootstrap.iterdir()):
             raise WorkError("bootstrap_not_empty", "专用登录目录不是空目录，请在服务器核对。", 503)
-        return prepare_codex_profile(executable, home, bootstrap)
+        profile = prepare_codex_profile(executable, home, bootstrap)
+        if settings.local_proxy_url:
+            environment = dict(profile.environment)
+            environment.update({key: settings.local_proxy_url for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")})
+            return replace(profile, environment=environment)
+        return profile
 
     async def probe(self) -> dict:
         from mona.development.executors.codex import CodexExecutor
@@ -176,7 +182,10 @@ class CodexAdmin:
                 async with asyncio.timeout(40):
                     result = await host.probe()
                 if not result.protocol_verified or not result.isolation_verified:
-                    connection["message"] = "Codex 程序未通过连接检查，请核对程序及版本。"
+                    if result.error_code == "native_request_timeout":
+                        connection.update(state="timeout", message="连接检测超时，无法确认账号状态，请检查 Ubuntu 网络后重试。")
+                    else:
+                        connection["message"] = "Codex 程序未通过连接检查，请核对程序及版本。"
                 elif result.authentication != "ready":
                     connection.update(state="login_required", message="请在 Ubuntu 终端登录专用 Codex 账户，然后再次检查。")
                 elif result.auth_mode != settings.auth_mode:

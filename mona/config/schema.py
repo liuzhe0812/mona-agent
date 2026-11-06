@@ -846,6 +846,7 @@ class HostedCodexSettings(Base):
     price: HostedWorkPrice | None = None
     label: str = Field(default="Codex", min_length=1, max_length=80)
     auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
+    local_proxy_url: str = Field(default="", max_length=256)
     context_window_tokens: int | None = Field(default=None, ge=4096, le=2_000_000)
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     reasoning_effort: str | None = Field(default=None, max_length=64)
@@ -856,6 +857,23 @@ class HostedCodexSettings(Base):
         if value is not None and (value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
             raise ValueError("configuration values must be plain text")
         return value
+
+    @field_validator("local_proxy_url")
+    @classmethod
+    def _local_proxy(cls, value: str) -> str:
+        if not value:
+            return value
+        from urllib.parse import urlsplit
+        try:
+            parsed = urlsplit(value)
+            if (not value.isascii() or any(ord(c) < 33 or ord(c) == 127 for c in value)
+                    or parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}
+                    or not parsed.port or parsed.username is not None or parsed.password is not None
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+                raise ValueError("invalid local proxy")
+        except ValueError:
+            raise ValueError("invalid local proxy") from None
+        return value.rstrip("/")
 
 
 class HostedWorkConfig(Base):
