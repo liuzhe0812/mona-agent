@@ -395,7 +395,10 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
             async with asyncio.timeout(service.config.tool_timeout_seconds + 60):
                 response = await handler(request)
         except WorkError as exc:
-            response = web.json_response({"error": exc.code, "message": exc.message}, status=exc.status)
+            body = {"error": exc.code, "message": exc.message}
+            if isinstance(getattr(exc, "field", None), str):
+                body["field"] = exc.field
+            response = web.json_response(body, status=exc.status)
         except (ValidationError, ValueError, KeyError, TypeError):
             response = web.json_response({"error": "invalid_request", "message": "请求内容无效，未执行操作。"}, status=400)
         except web.HTTPException:
@@ -412,7 +415,11 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
                                                                   service.config.max_history_bytes * 4 // 3 + 65536))
     if operator_config_path is not None:
         from mona.hosted_work.admin import CodexAdmin
-        CodexAdmin(operator_config_path).register(app)
+        from mona.hosted_work.model_admin import ModelAdmin
+
+        admin = CodexAdmin(operator_config_path)
+        admin.register(app)
+        ModelAdmin(admin, service).register(app)
     async def desktop_request(request):
         return await get_desktop().handle(request)
     app.router.add_route("*", "/api/work/desktop/{path:.*}", desktop_request)

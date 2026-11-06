@@ -65,6 +65,33 @@ class CodexAdmin:
         except (OSError, ValueError, AttributeError):
             return []
 
+    def _write_locked(self, data: dict, key: str, revision: str, *, backup_kind: str) -> None:
+        """Commit a validated, revision-checked edit while holding both locks."""
+        HostedWorkConfig.model_validate(data[key])
+        candidate = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode()
+        previous = self.path.read_bytes()
+        if hashlib.sha256(previous).hexdigest() != revision:
+            raise WorkError("configuration_changed", "配置已被修改，请刷新后重新填写。", 409)
+        backup = self._scoped(self.path.name + ".before-" + backup_kind + "-" + revision + ".json")
+        if not backup.exists():
+            with backup.open("xb") as stream:
+                os.chmod(backup, 0o600)
+                stream.write(previous)
+        elif hashlib.sha256(backup.read_bytes()).hexdigest() != revision:
+            raise WorkError("invalid_configuration", "配置备份未通过校验，请在服务器核对。", 503)
+        descriptor, temporary = tempfile.mkstemp(prefix=".hosted-settings-", dir=self.root)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(candidate)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if hashlib.sha256(self.path.read_bytes()).hexdigest() != revision:
+                raise WorkError("configuration_changed", "配置已被修改，请刷新后重新填写。", 409)
+            os.replace(temporary, self.path)
+            self.path.chmod(0o600)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
     def snapshot(self) -> dict:
         _, _, revision, settings = self._read()
         connection = {"state": "not_configured" if not settings.cli_path else "not_checked",
@@ -92,26 +119,7 @@ class CodexAdmin:
                     if revision != request.expected_revision:
                         raise WorkError("configuration_changed", "配置已被修改，请刷新后重新填写。", 409)
                     data[key]["codex"] = request.configuration.model_dump()
-                    # Validate the complete candidate; preserve every unrelated field verbatim as JSON values.
-                    HostedWorkConfig.model_validate(data[key])
-                    candidate = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode()
-                    backup = self._scoped(self.path.name + ".before-codex-" + revision + ".json")
-                    if not backup.exists():
-                        with backup.open("xb") as stream:
-                            os.chmod(backup, 0o600)
-                            stream.write(self.path.read_bytes())
-                    descriptor, temporary = tempfile.mkstemp(prefix=".codex-settings-", dir=self.root)
-                    try:
-                        with os.fdopen(descriptor, "wb") as stream:
-                            stream.write(candidate)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        if hashlib.sha256(self.path.read_bytes()).hexdigest() != revision:
-                            raise WorkError("configuration_changed", "配置已被修改，请刷新后重新填写。", 409)
-                        os.replace(temporary, self.path)
-                        self.path.chmod(0o600)
-                    finally:
-                        Path(temporary).unlink(missing_ok=True)
+                    self._write_locked(data, key, revision, backup_kind="codex")
             except Timeout as exc:
                 raise WorkError("configuration_busy", "配置正在保存，请稍后重试。", 409) from exc
             self.checked = None

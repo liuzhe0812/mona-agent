@@ -9,6 +9,7 @@ import httpx
 
 from mona.config.schema import HostedWorkConfig, HostedWorkModel
 from mona.hosted_work.contracts import WorkError
+from mona.hosted_work.model_transport import HostedModelTransport
 from mona.providers.openai_compat_provider import OpenAICompatProvider
 from mona.providers.registry import ProviderSpec
 
@@ -58,11 +59,13 @@ def model_secret(selection: HostedWorkModel) -> str:
 
 class HostedAPIProvider(OpenAICompatProvider):
     def __init__(self, config: HostedWorkConfig, selection: HostedWorkModel):
-        super().__init__(api_key=model_secret(selection), api_base=model_endpoint(config, selection),
+        endpoint = model_endpoint(config, selection)
+        super().__init__(api_key=model_secret(selection), api_base=endpoint,
             default_model=selection.model,
             spec=ProviderSpec(name="hosted_work_api", keywords=(), env_key="", display_name=selection.label,
                               is_direct=True, allow_auto_fallback=False))
         self.http_client_factory = lambda: httpx.AsyncClient(
+            transport=HostedModelTransport(endpoint, allow_loopback=urlsplit(endpoint).scheme == "http"),
             trust_env=False, follow_redirects=False, timeout=min(config.run_timeout_seconds, 120),
             limits=httpx.Limits(max_connections=8, max_keepalive_connections=4))
 
