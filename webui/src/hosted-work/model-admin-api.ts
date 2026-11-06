@@ -1,5 +1,25 @@
 export type BillingMode = "free" | "wallet";
 
+export type ModelPrice = {
+  input_amount_per_million: string;
+  cached_input_amount_per_million: string;
+  output_amount_per_million: string;
+};
+
+export function isValidPriceAmount(value: string): boolean {
+  const match = /^(0|[1-9]\d{0,9})(?:\.(\d{1,6}))?$/.exec(value);
+  if (!match) return false;
+  return match[1].length < 10 || (match[1] === "1000000000" && (!match[2] || /^0+$/.test(match[2])));
+}
+
+function isModelPrice(value: unknown): value is ModelPrice | null | undefined {
+  if (value == null) return true;
+  if (typeof value !== "object") return false;
+  const price = value as ModelPrice;
+  return [price.input_amount_per_million, price.cached_input_amount_per_million, price.output_amount_per_million]
+    .every(amount => typeof amount === "string" && isValidPriceAmount(amount));
+}
+
 export type ApiModelConfiguration = {
   label: string;
   source: "mona";
@@ -11,6 +31,7 @@ export type ApiModelConfiguration = {
   reasoning_effort: string | null;
   billing_mode: BillingMode;
   billing_model: string;
+  price: ModelPrice | null;
 };
 
 export type ManagedModel = {
@@ -24,7 +45,7 @@ export type ModelSettings = {
   revision: string;
   models: ManagedModel[];
   synchronized?: boolean;
-  billing: { mode: "shared_wallet"; ready: boolean; prices_endpoint: string; admin_url: string };
+  billing: { mode: "shared_wallet"; ready: boolean };
 };
 
 export type CodexConfiguration = {
@@ -37,6 +58,7 @@ export type CodexConfiguration = {
   context_window_tokens: number | null;
   max_output_tokens: number;
   reasoning_effort: string | null;
+  price: ModelPrice | null;
 };
 
 export type CodexStatus = {
@@ -45,31 +67,15 @@ export type CodexStatus = {
   connection: { state: string; message: string; models: Array<{ id: string; label: string }> };
   billing: { mode: BillingMode; ready: boolean; message: string };
   execution: { ready: boolean; message: string };
+  discovery: { state: "found" | "not_found"; path: string | null };
   public_enabled: boolean;
   login_commands: string[];
-};
-
-export type ModelPrice = {
-  model: string;
-  version: number;
-  enabled: boolean;
-  billing_type: "token";
-  input_amount_per_million: string;
-  cached_input_amount_per_million: string;
-  output_amount_per_million: string;
 };
 
 export class AdminRequestError extends Error {
   constructor(readonly status: number, readonly code = "request_failed", readonly field?: string) {
     super("Configuration request failed");
   }
-}
-
-export function readAdminToken(): string | null {
-  try {
-    const token = sessionStorage.getItem("admin_token");
-    return token && token.length <= 8192 && /^[\x21-\x7e]+$/.test(token) ? token : null;
-  } catch { return null; }
 }
 
 export async function requestAdminJson(token: string, method: "GET" | "PUT" | "POST", url: string,
@@ -101,14 +107,15 @@ export function parseModelSettings(value: unknown): ModelSettings {
         && (c.context_window_tokens == null || Number.isInteger(c.context_window_tokens))
         && Number.isInteger(c.max_output_tokens) && (c.reasoning_effort == null || typeof c.reasoning_effort === "string")
         && (c.billing_mode === "free" || c.billing_mode === "wallet") && typeof c.billing_model === "string"
+        && isModelPrice(c.price)
         && typeof item.credentials?.configured === "boolean" && typeof item.availability?.ready === "boolean"
         && typeof item.availability?.message === "string";
     }) || (settings.synchronized !== undefined && typeof settings.synchronized !== "boolean")
-    || settings.billing?.mode !== "shared_wallet" || typeof settings.billing.ready !== "boolean"
-    || settings.billing.prices_endpoint !== "/admin/credits/model-prices" || settings.billing.admin_url !== "/admin") {
+    || settings.billing?.mode !== "shared_wallet" || typeof settings.billing.ready !== "boolean") {
     throw new AdminRequestError(0, "invalid_response");
   }
-  return settings;
+  return { ...settings, models: settings.models.map(item => ({ ...item,
+    configuration: { ...item.configuration, price: item.configuration.price ?? null } })) };
 }
 
 function parseCodexStatus(value: unknown): CodexStatus {
@@ -117,19 +124,24 @@ function parseCodexStatus(value: unknown): CodexStatus {
   const connection = status?.connection;
   const billing = status?.billing;
   const execution = status?.execution;
+  const discovery: CodexStatus["discovery"] = status?.discovery ?? { state: "not_found", path: null };
   if (!status || typeof status.revision !== "string" || !status.revision || !c ||
     typeof c.cli_path !== "string" || typeof c.model !== "string" || typeof c.label !== "string" ||
     typeof c.billing_model !== "string" || (c.billing_mode !== "free" && c.billing_mode !== "wallet") ||
     (c.auth_mode !== "chatgpt" && c.auth_mode !== "api_key") ||
     (c.context_window_tokens != null && !Number.isInteger(c.context_window_tokens)) ||
     !Number.isInteger(c.max_output_tokens) || (c.reasoning_effort != null && typeof c.reasoning_effort !== "string") ||
+    !isModelPrice(c.price) ||
     !connection || typeof connection.state !== "string" || typeof connection.message !== "string" ||
     !Array.isArray(connection.models) || !connection.models.every(model => model && typeof model.id === "string" && typeof model.label === "string") ||
     !billing || (billing.mode !== "free" && billing.mode !== "wallet") || typeof billing.ready !== "boolean" || typeof billing.message !== "string" ||
     !execution || typeof execution.ready !== "boolean" || typeof execution.message !== "string" ||
+    !((discovery.state === "not_found" && discovery.path === null) || (discovery.state === "found" &&
+      typeof discovery.path === "string" && discovery.path.startsWith("/") && discovery.path.length <= 2048 &&
+      !/[\x00-\x1f\x7f\\]/.test(discovery.path) && !discovery.path.split("/").some(part => part === "." || part === ".."))) ||
     typeof status.public_enabled !== "boolean" || !Array.isArray(status.login_commands) ||
     !status.login_commands.every(command => typeof command === "string")) throw new AdminRequestError(0, "invalid_response");
-  return status;
+  return { ...status, configuration: { ...c, price: c.price ?? null }, discovery };
 }
 
 export async function requestCodexStatus(token: string, method: "GET" | "PUT" | "POST", body?: unknown,
@@ -139,24 +151,8 @@ export async function requestCodexStatus(token: string, method: "GET" | "PUT" | 
 }
 
 export async function requestModelSettings(token: string, body?: {
-  expected_revision: string; model_id: string; configuration: ApiModelConfiguration;
+  expected_revision: string; model_id: string;
+  configuration: Omit<ApiModelConfiguration, "billing_model" | "price"> & { price?: ModelPrice | null };
 }, signal?: AbortSignal): Promise<ModelSettings> {
   return parseModelSettings(await requestAdminJson(token, body ? "PUT" : "GET", "/api/work/admin/models", body, signal));
-}
-
-export async function requestModelPrices(token: string, signal?: AbortSignal): Promise<ModelPrice[]> {
-  const value = await requestAdminJson(token, "GET", "/admin/credits/model-prices", undefined, signal) as { prices?: unknown };
-  if (!Array.isArray(value.prices)) throw new AdminRequestError(0, "invalid_response");
-  const prices = value.prices.filter(item => item?.billing_type === "token");
-  if (!prices.every(item => typeof item.model === "string" && Number.isInteger(item.version) && item.version >= 0
-    && typeof item.enabled === "boolean" && [item.input_amount_per_million, item.cached_input_amount_per_million,
-      item.output_amount_per_million].every(amount => typeof amount === "string" && /^\d+(?:\.\d+)?$/.test(amount)))) {
-    throw new AdminRequestError(0, "invalid_response");
-  }
-  return prices;
-}
-
-export function latestModelPrice(prices: ModelPrice[], model: string): ModelPrice | undefined {
-  return prices.filter(price => price.model === model.trim() && price.enabled && price.billing_type === "token")
-    .sort((left, right) => right.version - left.version)[0];
 }

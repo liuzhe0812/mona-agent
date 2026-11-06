@@ -20,7 +20,7 @@ export function AdminApp() {
   return <main className="h-full min-h-0 overflow-y-auto bg-background px-4 py-8 text-foreground">
     <div className="mx-auto max-w-3xl space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div><h1 className="text-title font-semibold">工作台模型与计费</h1><p className="mt-2 text-ui text-muted-foreground">管理线上工作台的模型连接和共用余额价格。</p></div>
+        <div><h1 className="text-title font-semibold">工作台模型与计费</h1><p className="mt-2 text-ui text-muted-foreground">管理线上工作台的模型连接与价格。</p></div>
         <Button variant="outline" asChild><a href="/admin">管理后台</a></Button>
       </header>
       {token ? <ModelSettingsPanel token={token} /> : <section className="rounded-lg border border-border bg-card p-6">
