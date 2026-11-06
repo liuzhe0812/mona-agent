@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AdminRequestError, isValidPriceAmount, requestCodexStatus, requestModelDiscovery, requestModelSettings,
   type ApiModelConfiguration, type BillingMode, type CodexStatus, type DiscoveredModel, type ManagedModel,
@@ -64,6 +64,7 @@ export function ModelSettingsPanel({ token }: { token: string }) {
   const [catalog, setCatalog] = useState<Catalog>({ state: "idle", models: [] });
   const [edits, setEdits] = useState<Record<string, Edit>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, Partial<Record<Field, string>>>>({});
+  const [editor, setEditor] = useState<{ row: ModelRow; before?: Edit } | null>(null);
   const [cliPath, setCliPath] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<"chatgpt" | "api_key">("chatgpt");
   const cliPathEdited = useRef(false);
@@ -107,10 +108,8 @@ export function ModelSettingsPanel({ token }: { token: string }) {
           const first = models.models.find(item => item.configuration.source === "mona");
           return first ? { apiBase: first.configuration.api_base, apiKeyEnv: first.configuration.api_key_env } : { apiBase: "", apiKeyEnv: "" };
         })());
-        setCliPath(previous => {
-          if (cliPathEdited.current) return previous ?? "";
-          return status.configuration.cli_path || (status.discovery.state === "found" ? status.discovery.path : previous ?? "");
-        });
+        setCliPath(previous => cliPathEdited.current ? previous ?? "" :
+          status.configuration.cli_path || (status.discovery.state === "found" ? status.discovery.path : ""));
         if (!authModeEdited.current) setAuthMode(status.configuration.auth_mode);
         if (models.revision !== status.revision) {
           setRevision("");
@@ -166,9 +165,7 @@ export function ModelSettingsPanel({ token }: { token: string }) {
           return;
         }
         setCodex(previous => previous ? { ...previous, discovery: status.discovery, connection: status.connection } : previous);
-        if (!cliPathEdited.current && !status.configuration.cli_path && status.discovery.state === "found") {
-          setCliPath(previous => previous || status.discovery.path);
-        }
+        if (!cliPathEdited.current && !status.configuration.cli_path) setCliPath(status.discovery.state === "found" ? status.discovery.path : "");
       }).catch(error => {
         if (!controller.signal.aborted && error instanceof AdminRequestError && [401, 403].includes(error.status)) {
           setRevision("");
@@ -239,9 +236,14 @@ export function ModelSettingsPanel({ token }: { token: string }) {
     setNotice("");
   }
 
-  async function saveModel(row: ModelRow) {
-    const editState = edits[row.key];
-    if (!settings || !codex || !revision || !editState || pendingRef.current || pending) return;
+  async function saveModel(row: ModelRow, override?: Edit, preserveDraft = false): Promise<boolean> {
+    const editState = override ?? edits[row.key];
+    if (!settings || !codex || !revision || !editState || pendingRef.current || pending) return false;
+    const latest = row.existing && settings.models.find(item => item.id === row.existing?.id);
+    if (row.existing && (!latest || latest.configuration.model !== row.id || latest.configuration.source !== row.existing.configuration.source)) {
+      setProblem({ title: "配置已变化", description: "原模型配置已变化，请刷新并核对草稿。", refresh: true });
+      return false;
+    }
     const base = draftFor(row, provider, codex);
     const draft = { ...base, ...editState.fields };
     const errors: Partial<Record<Field, string>> = {};
@@ -263,13 +265,13 @@ export function ModelSettingsPanel({ token }: { token: string }) {
     }
     if (!row.discovered && draft.enabled && !row.existing?.configuration.enabled) errors.enabled = "当前目录未提供此模型，暂不能开放。";
     setRowErrors(previous => ({ ...previous, [row.key]: errors }));
-    if (Object.keys(errors).length) return;
+    if (Object.keys(errors).length) return false;
     if ((row.existing?.id ?? null) !== editState.originalId || Object.keys(editState.fields).some(field => {
       const key = field as Field;
       return editState.baseline[key] !== base[key] && editState.fields[key] !== base[key];
     })) {
       setProblem({ title: "配置已变化", description: "原模型配置已变化，请刷新并核对草稿。", refresh: true });
-      return;
+      return false;
     }
     pendingRef.current = true;
     setPending("save");
@@ -295,7 +297,16 @@ export function ModelSettingsPanel({ token }: { token: string }) {
       setRevision(saved.revision);
       setEdits(previous => {
         const next = { ...previous };
-        if (deferPrice) {
+        if (preserveDraft) {
+          const existing = next[row.key];
+          if (existing) {
+            const fields = { ...existing.fields };
+            delete fields.enabled;
+            if (Object.keys(fields).length) {
+              next[row.key] = { ...existing, fields, baseline: { ...existing.baseline, enabled: draft.enabled } };
+            } else delete next[row.key];
+          }
+        } else if (deferPrice) {
           const retained = Object.fromEntries(Object.entries(editState.fields).filter(([field]) => priceFields.includes(field as typeof priceFields[number])));
           if (Object.keys(retained).length) next[row.key] = { ...editState, fields: retained };
           else delete next[row.key];
@@ -303,14 +314,44 @@ export function ModelSettingsPanel({ token }: { token: string }) {
         return next;
       });
       setNotice(`${row.label} 已保存。${deferPrice ? "价格草稿尚未保存。" : ""}`);
+      return true;
     } catch (error) {
       if (error instanceof AdminRequestError && error.code === "model_id_conflict") {
         setProblem({ title: "模型标识冲突", description: "模型配置未保存，请刷新列表后重试。", refresh: true });
       } else failed(error);
+      return false;
     } finally {
       pendingRef.current = false;
       setPending(null);
     }
+  }
+
+  function openEditor(row: ModelRow, enable = false) {
+    if (pendingRef.current || pending) return;
+    setEditor({ row, before: edits[row.key] });
+    if (enable) edit(row, "enabled", true);
+  }
+
+  function cancelEditor() {
+    if (!editor || pendingRef.current) return;
+    setEdits(previous => {
+      const next = { ...previous };
+      if (editor.before) next[editor.row.key] = editor.before;
+      else delete next[editor.row.key];
+      return next;
+    });
+    setEditor(null);
+  }
+
+  function toggleModel(row: ModelRow, enabled: boolean) {
+    if (pendingRef.current || pending || !revision) return;
+    if (enabled && (!row.existing || !row.existing.configuration.price)) {
+      openEditor(row, true);
+      return;
+    }
+    if (!row.existing) return;
+    const base = draftFor(row, provider, codex);
+    void saveModel(row, { fields: { enabled }, originalId: row.existing.id, baseline: base }, true);
   }
 
   async function saveConnection() {
@@ -352,74 +393,94 @@ export function ModelSettingsPanel({ token }: { token: string }) {
         return;
       }
       setCodex(result);
-      setNotice("检测已完成，请查看连接状态和模型列表。");
     } catch (error) { failed(error); }
     finally { pendingRef.current = false; setPending(null); }
   }
 
-  function renderRow(row: ModelRow, index: number) {
+  function renderRow(row: ModelRow) {
     const base = draftFor(row, provider, codex);
-    const fields = edits[row.key]?.fields ?? {};
-    const draft = { ...base, ...fields };
+    const draft = { ...base, ...edits[row.key]?.fields };
     const dirty = !!edits[row.key] && !sameDraftValue(base, draft);
-    const errors = rowErrors[row.key] ?? {};
-    const prefix = `model-${provider}-${index}`;
-    const priceField = (field: "inputPrice" | "cachedPrice" | "outputPrice", label: string) => <div className="space-y-2">
-      <label className="text-ui font-medium" htmlFor={`${prefix}-${field}`}>{label}</label>
-      <Input id={`${prefix}-${field}`} type="text" inputMode="decimal" value={draft[field]} disabled={!!pending}
-        onChange={event => edit(row, field, event.target.value)} aria-invalid={!!errors[field]}
-        aria-describedby={errors[field] ? `${prefix}-${field}-error` : undefined} />
-      {errors[field] && <p id={`${prefix}-${field}-error`} className="text-caption text-destructive">{errors[field]}</p>}
-    </div>;
-    return <fieldset key={row.key} aria-label={`模型 ${row.label}`} className="space-y-4 rounded-lg border border-border p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><p className="text-ui font-medium">{row.label}</p><p className="mt-1 break-all text-caption text-muted-foreground">{row.id}</p>
-          {!row.discovered && <p className="mt-1 text-caption text-muted-foreground">{provider === "custom" && catalog.state === "loading"
-            ? "正在更新供应商目录。" : "当前目录未返回此模型，可关闭或调整已有配置。"}</p>}
-          {row.existing?.configuration.enabled && <p className="mt-1 text-caption text-muted-foreground">当前已保存状态：{row.existing.availability.message}</p>}
-        </div>
-        <div className="flex items-center gap-2"><Checkbox id={`${prefix}-enabled`} aria-label={`开放 ${row.label}`}
-          checked={draft.enabled} disabled={!!pending || (!row.discovered && !row.existing?.configuration.enabled)}
-          onCheckedChange={checked => edit(row, "enabled", checked === true)} />
-          <label htmlFor={`${prefix}-enabled`} className="text-ui">开放</label></div>
+    const enabled = row.existing?.configuration.enabled ?? false;
+    const unavailable = !!row.existing && enabled && !row.existing.availability.ready;
+    const normalized = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[\s_\-·]/g, "");
+    return <div key={row.key} role="group" aria-label={`模型 ${row.label}`}
+      className="flex min-w-0 items-center gap-3 border-b border-border py-2 last:border-0">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 truncate text-ui font-medium" title={row.label}>{row.label}</span>
+        {normalized(row.id) !== normalized(row.label) && <span className="min-w-0 truncate text-caption text-muted-foreground" title={row.id}>{row.id}</span>}
+        {!row.discovered && <span className="text-caption text-muted-foreground">未返回</span>}
+        {unavailable && <span className="text-caption text-muted-foreground">暂不可用</span>}
+        {dirty && <span className="text-caption text-muted-foreground">未保存</span>}
       </div>
-      {errors.enabled && <p className="text-caption text-destructive">{errors.enabled}</p>}
-      {(draft.enabled || row.existing) && <>
-        <div className="space-y-2"><label htmlFor={`${prefix}-displayName`} className="text-ui font-medium">显示名称</label>
-          <Input id={`${prefix}-displayName`} value={draft.displayName} disabled={!!pending}
-            onChange={event => edit(row, "displayName", event.target.value)} aria-invalid={!!errors.displayName}
-            aria-describedby={errors.displayName ? `${prefix}-displayName-error` : undefined} />
-          {errors.displayName && <p id={`${prefix}-displayName-error`} className="text-caption text-destructive">{errors.displayName}</p>}</div>
-        <div className="space-y-2"><span className="text-ui font-medium">计费方式</span>
-          <Select aria-label={`计费方式 ${row.label}`} value={draft.billingMode} disabled={!!pending}
-            onValueChange={value => edit(row, "billingMode", value)} options={[
-              { value: "free", label: "免费" }, { value: "wallet", label: "共用余额" },
-            ]} /></div>
-        {draft.billingMode === "wallet" && !settings?.billing.ready && <p className="text-caption text-muted-foreground">余额计费尚未接通，当前不能调用。</p>}
-        <div className="space-y-2"><p className="text-ui font-medium">工作台模型价格</p><p className="text-caption text-muted-foreground">人民币 / 百万 token；三项全空表示尚未配置。</p>
-          <div className="grid gap-4 md:grid-cols-3">{priceField("inputPrice", "输入价格")}{priceField("cachedPrice", "缓存输入价格")}{priceField("outputPrice", "输出价格")}</div></div>
-        <details className="border-t border-border pt-3 text-ui"><summary className="cursor-pointer font-medium">模型参数</summary>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <div className="space-y-2"><label htmlFor={`${prefix}-maxOutput`}>最大输出 token</label>
-              <Input id={`${prefix}-maxOutput`} type="number" value={draft.maxOutput} disabled={!!pending}
-                onChange={event => edit(row, "maxOutput", event.target.value)} aria-invalid={!!errors.maxOutput} />
-              {errors.maxOutput && <p className="text-caption text-destructive">{errors.maxOutput}</p>}</div>
-            <div className="space-y-2"><label htmlFor={`${prefix}-inputBudget`}>输入预算上限（可选）</label>
-              <Input id={`${prefix}-inputBudget`} type="number" value={draft.inputBudget} disabled={!!pending}
-                onChange={event => edit(row, "inputBudget", event.target.value)} aria-invalid={!!errors.inputBudget} />
-              {errors.inputBudget && <p className="text-caption text-destructive">{errors.inputBudget}</p>}</div>
-          </div>
-        </details>
-      </>}
-      <div className="flex flex-wrap items-center gap-3"><Button type="button" aria-label={`保存 ${row.label}`} disabled={!!pending || !revision || settings?.synchronized === false || !dirty}
-        onClick={() => void saveModel(row)}>保存此模型</Button>
-        {dirty && <><span className="text-caption text-muted-foreground">此模型有未保存的更改。</span>
-          <Button type="button" variant="ghost" disabled={!!pending} onClick={() => setEdits(previous => {
-            const next = { ...previous }; delete next[row.key]; return next;
-          })}>放弃此模型草稿</Button></>}</div>
-    </fieldset>;
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="text-caption text-muted-foreground">开放</span>
+        <Switch size="sm" aria-label={`开放 ${row.label}`} checked={enabled}
+          disabled={!!pending || !revision || (!row.discovered && !enabled)}
+          onCheckedChange={value => toggleModel(row, value)} />
+        <Button type="button" variant="ghost" size="sm" aria-label={`设置 ${row.label}`}
+          disabled={!!pending} onClick={() => openEditor(row)}>设置</Button>
+      </div>
+    </div>;
   }
 
+  const editorRow = editor ? [...rows.listed, ...rows.missing].find(row => row.key === editor.row.key) ?? editor.row : null;
+  const editorDraft = editorRow ? { ...draftFor(editorRow, provider, codex), ...edits[editorRow.key]?.fields } : null;
+  const editorErrors = editorRow ? rowErrors[editorRow.key] ?? {} : {};
+
+  function renderEditor() {
+    if (!editorRow || !editorDraft) return null;
+    const field = (key: "inputPrice" | "cachedPrice" | "outputPrice", label: string) => <div className="space-y-2">
+      <label className="text-ui font-medium" htmlFor={`model-settings-${key}`}>{label}</label>
+      <Input id={`model-settings-${key}`} type="text" inputMode="decimal" value={editorDraft[key]} disabled={!!pending}
+        onChange={event => edit(editorRow, key, event.target.value)} aria-invalid={!!editorErrors[key]}
+        aria-describedby={editorErrors[key] ? `model-settings-${key}-error` : undefined} />
+      {editorErrors[key] && <p id={`model-settings-${key}-error`} className="text-caption text-destructive">{editorErrors[key]}</p>}
+    </div>;
+    return <>
+      <DialogHeader><DialogTitle>设置 {editorRow.label}</DialogTitle>
+        <DialogDescription>配置模型名称、计费方式和价格。</DialogDescription></DialogHeader>
+      <div className="space-y-4">
+        <div className="space-y-2"><label htmlFor="model-settings-name" className="text-ui font-medium">显示名称</label>
+          <Input id="model-settings-name" value={editorDraft.displayName} disabled={!!pending}
+            onChange={event => edit(editorRow, "displayName", event.target.value)} aria-invalid={!!editorErrors.displayName}
+            aria-describedby={editorErrors.displayName ? "model-settings-name-error" : undefined} />
+          {editorErrors.displayName && <p id="model-settings-name-error" className="text-caption text-destructive">{editorErrors.displayName}</p>}
+        </div>
+        <div className="space-y-2"><span className="text-ui font-medium">计费方式</span>
+          <Select aria-label="计费方式" value={editorDraft.billingMode} disabled={!!pending}
+            onValueChange={value => edit(editorRow, "billingMode", value)} options={[
+              { value: "free", label: "免费" }, { value: "wallet", label: "共用余额" },
+            ]} /></div>
+        {editorDraft.billingMode === "wallet" && !settings?.billing.ready &&
+          <p className="text-caption text-muted-foreground">余额计费尚未接通，当前不能调用。</p>}
+        <div className="space-y-2"><p className="text-ui font-medium">模型价格</p>
+          <p className="text-caption text-muted-foreground">人民币 / 百万 token；三项全空表示尚未配置。</p>
+          <div className="grid gap-4 sm:grid-cols-3">{field("inputPrice", "输入价格")}{field("cachedPrice", "缓存输入价格")}{field("outputPrice", "输出价格")}</div>
+        </div>
+        {editorErrors.enabled && <p className="text-caption text-destructive">{editorErrors.enabled}</p>}
+        <details className="border-t border-border pt-3 text-ui"><summary className="cursor-pointer font-medium">模型参数</summary>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2"><label htmlFor="model-settings-output">最大输出 token</label>
+              <Input id="model-settings-output" type="number" value={editorDraft.maxOutput} disabled={!!pending}
+                onChange={event => edit(editorRow, "maxOutput", event.target.value)} aria-invalid={!!editorErrors.maxOutput} />
+              {editorErrors.maxOutput && <p className="text-caption text-destructive">{editorErrors.maxOutput}</p>}</div>
+            <div className="space-y-2"><label htmlFor="model-settings-budget">输入预算上限（可选）</label>
+              <Input id="model-settings-budget" type="number" value={editorDraft.inputBudget} disabled={!!pending}
+                onChange={event => edit(editorRow, "inputBudget", event.target.value)} aria-invalid={!!editorErrors.inputBudget} />
+              {editorErrors.inputBudget && <p className="text-caption text-destructive">{editorErrors.inputBudget}</p>}</div>
+          </div>
+        </details>
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" disabled={!!pending} onClick={cancelEditor}>取消</Button>
+        <Button type="button" disabled={!!pending} onClick={() => {
+          if (!edits[editorRow.key]) { setEditor(null); return; }
+          void saveModel(editorRow).then(saved => { if (saved) setEditor(null); });
+        }}>{pending === "save" ? "保存中…" : "保存"}</Button>
+      </DialogFooter>
+    </>;
+  }
   const availableConnection = connection && connections.some(item => connectionId(item) === connectionId(connection));
   const cliDirty = !!codex && (cliPath !== codex.configuration.cli_path || authMode !== codex.configuration.auth_mode);
   return <>
@@ -453,51 +514,45 @@ export function ModelSettingsPanel({ token }: { token: string }) {
               : catalog.state === "error" ? catalog.message
                 : catalog.state === "idle" ? "填写供应商地址与凭据引用后自动获取。" : `已获取 ${catalog.models.length} 个模型。`}</span></div>
         </div> : <div className="space-y-4 border-t border-border pt-4">
-          <p className="text-ui text-muted-foreground">{codex.execution.message}</p>
-          <div className="space-y-2"><label htmlFor="codex-path" className="text-ui font-medium">CLI 程序路径</label>
-            <Input id="codex-path" value={cliPath ?? ""} disabled={!!pending} onChange={event => {
-              cliPathEdited.current = true; setCliPath(event.target.value); setNotice("");
-            }} /></div>
-          <p role="status" className="text-caption text-muted-foreground">{codex.discovery.state === "found"
-            ? `已检测到 Codex CLI：${codex.discovery.path}`
-            : codex.configuration.cli_path ? "未发现其他安装位置，可检查已保存的程序路径。" : "尚未检测到 Codex CLI，安装后会自动重新检测。"}</p>
-          {codex.discovery.state === "found" && <Button type="button" variant="outline" disabled={!!pending} onClick={() => {
-            cliPathEdited.current = true; setCliPath(codex.discovery.path); setNotice("");
-          }}>使用检测到的路径</Button>}
-          {codex.discovery.state === "found" && !codex.configuration.cli_path && cliPath === codex.discovery.path &&
-            <p className="text-caption text-muted-foreground">路径已填入，请保存配置后检查连接。</p>}
+          {(!cliPath || (["unavailable", "timeout"].includes(codex.connection.state) && codex.discovery.state === "not_found")) &&
+            <p role="status" className="text-ui text-muted-foreground">未检测到 Codex，请先在 Ubuntu 安装。</p>}
+          {["unavailable", "timeout"].includes(codex.connection.state) && codex.discovery.state === "found"
+            && !!codex.configuration.cli_path && codex.configuration.cli_path !== codex.discovery.path &&
+            <Button type="button" variant="outline" size="sm" disabled={!!pending} onClick={() => {
+              cliPathEdited.current = true; setCliPath(codex.discovery.path); setNotice("");
+            }}>使用新安装的 Codex</Button>}
           <div className="space-y-2"><span className="text-ui font-medium">认证方式</span>
             <Select aria-label="认证方式" value={authMode} disabled={!!pending} onValueChange={value => {
               authModeEdited.current = true; setAuthMode(value as "chatgpt" | "api_key"); setNotice("");
             }} options={[{ value: "chatgpt", label: "ChatGPT 账号" }, { value: "api_key", label: "API Key" }]} /></div>
-          <div className="flex flex-wrap items-center gap-3"><Button type="button" disabled={!!pending || !revision || !cliDirty} onClick={() => void saveConnection()}>保存连接</Button>
+          <div className="flex flex-wrap items-center gap-3"><Button type="button" disabled={!!pending || !revision || !cliDirty || !cliPath} onClick={() => void saveConnection()}>保存连接</Button>
             <Button type="button" variant="outline" disabled={!!pending || !revision || cliDirty || !codex.configuration.cli_path}
               onClick={() => void probe()}>{pending === "probe" ? "检测中…" : "检测连接"}</Button></div>
-          <p className="text-ui text-muted-foreground">{codex.connection.message || "尚未检测连接。"}</p>
-          <details className="border-t border-border pt-4 text-ui"><summary className="cursor-pointer font-medium">Ubuntu 登录说明</summary>
-            <p className="mt-3 text-muted-foreground">请在 Ubuntu 终端完成专用账户登录。</p>
-            {codex.login_commands.length > 0 && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">{codex.login_commands.join("\n")}</pre>}
-          </details>
+          {codex.connection.state === "not_configured" ? cliPath && <p className="text-ui text-muted-foreground">请保存连接。</p>
+            : <p className="text-ui text-muted-foreground">{codex.connection.message || "尚未检测连接。"}</p>}
         </div>}
         {notice && <p role="status" className="text-ui text-muted-foreground">{notice}</p>}
         <div className="space-y-4 border-t border-border pt-4">
           <h3 className="text-title-sm font-semibold">模型列表</h3>
-          <p className="text-caption text-muted-foreground">供应商返回列表，实际调用权限未验证。每个模型的开放状态和价格分别保存。</p>
+          <p className="text-caption text-muted-foreground">模型权限以实际调用为准。</p>
           {settings.synchronized === false && <p className="text-ui text-muted-foreground">配置尚未同步至服务，暂不能保存模型更改。</p>}
           {provider === "codex" && ["not_checked", "not_configured"].includes(codex.connection.state) && rows.listed.length > 0 &&
             <p className="text-caption text-muted-foreground">显示上次缓存，实际权限未验证。</p>}
-          {provider === "codex" && rows.listed.length === 0 && <p className="text-ui text-muted-foreground">尚未取得 Codex 模型；请完成终端登录并检测连接。</p>}
+          {provider === "codex" && rows.listed.length === 0 && <p className="text-ui text-muted-foreground">尚未取得 Codex 模型，请检测连接。</p>}
           {provider === "custom" && catalog.state === "ready" && rows.listed.length === 0 && <p className="text-ui text-muted-foreground">供应商未返回模型。</p>}
-          {rows.listed.map((row, index) => renderRow(row, index))}
-          {rows.missing.length > 0 && <div className="space-y-4"><h4 className="text-ui font-medium">已配置但当前目录未返回</h4>
-            {rows.missing.map((row, index) => renderRow(row, rows.listed.length + index))}</div>}
+          <div>{rows.listed.map(renderRow)}</div>
+          {rows.missing.length > 0 && <div><h4 className="text-ui font-medium">已配置但未返回</h4>
+            {rows.missing.map(renderRow)}</div>}
         </div>
       </>}
     </section>
-    <Dialog open={!!problem} onOpenChange={open => { if (!open) setProblem(null); }}><DialogContent><DialogHeader>
-      <DialogTitle>{problem?.title}</DialogTitle><DialogDescription>{problem?.description}</DialogDescription>
-    </DialogHeader><DialogFooter>{problem?.login && <Button asChild><a href="/admin">前往管理员登录</a></Button>}
-      {problem?.refresh && <Button onClick={() => { setProblem(null); setReload(value => value + 1); }}>刷新配置状态</Button>}
-      <Button variant="outline" onClick={() => setProblem(null)}>关闭</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!problem || !!editor} onOpenChange={open => {
+      if (!open) { if (problem) setProblem(null); else setEditor(null); }
+    }}><DialogContent className="max-h-[90vh] overflow-y-auto" showCloseButton={false}>
+      {problem ? <><DialogHeader><DialogTitle>{problem.title}</DialogTitle><DialogDescription>{problem.description}</DialogDescription>
+      </DialogHeader><DialogFooter>{problem.login && <Button asChild><a href="/admin">前往管理员登录</a></Button>}
+        {problem.refresh && <Button onClick={() => { setProblem(null); setReload(value => value + 1); }}>刷新配置状态</Button>}
+        <Button variant="outline" onClick={() => setProblem(null)}>关闭</Button></DialogFooter></> : renderEditor()}
+    </DialogContent></Dialog>
   </>;
 }
