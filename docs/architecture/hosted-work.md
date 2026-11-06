@@ -1,6 +1,6 @@
 # Mona 线上工作台：独立宿主与共享会话界面
 
-## 2026-11-06 会话执行链共用边界（本地候选，尚未部署）
+## 2026-11-06 会话执行链共用边界（v20 已部署并验收）
 
 普通会话共用应用的 `AgentRunner`、`ContextBuilder`、`Consolidator`、能力按需加载、内置 Skill 模板、`UserQuestions`/提问工具、计划/目标工具、`WorkTurnController`、`SubagentManager`、恢复投影和标题生成。Hosted 仅适配账号、逻辑工作区、持久化和 HTTP/WS；不是另一套模型循环。共享类新增的依赖注入参数均保留桌面缺省行为。
 
@@ -9,6 +9,10 @@
 问答、预览与追加输入绑定 owner/session/run。预览先下载并核对真实图像字节，存入隔离预览目录；短期媒体票据只在请求时生成，历史只存逻辑路径。重复问答/输入批次保持幂等；取消、未知状态或服务重启不自动选答案、不重放写入。子任务共用同一个 Runner，结果作为 runtime 注入返回主任务；每个子任务有独立工具/能力集合和编辑器状态，主任务结束前核对真实退出和交付。
 
 模型用量展示取最后一次请求，累计用量继续保留独立字段。Widget 的 streaming 仅发送空代码；完整代码通过原共享校验后才显示。上下文、文件编辑、计划、目标与结束均沿应用原协议更新现有 UI。发布状态和必要验收见 [实施清单](../plans/hosted-work-full-parity-20261105.md)。下文旧版本“当前”属于记录当时，不能代替根目录最新生产状态。
+
+执行轮数缺省值取 `AgentDefaults.max_tool_iterations`（当前 100），不另设网页 30 轮上限。完整执行历史成功持久化后清除临时恢复 checkpoint，与应用 SAVE 阶段一致；中断或结果未确认时保留恢复证据，不自动重放写入。素材复制复用应用 `SkillAssetCopyTool` 的完整 schema，复制 I/O 留在沙箱适配边界，兼容素材引用中的 `assets/` 前缀且仍校验实际文件、已加载 Skill 和目标范围。
+
+生产验收已完成真实 Qwen 样张/面板选择/三页原生 PPTX/UI 下载/刷新恢复；此前失败和只观察同一完成任务的补充证据均留档。画布静态前端 v18 同时保留原共享编辑器，只修请求版本竞态、退出前尚未发出的自动保存、浏览器本地下载和 PDF 打印 CSP，未重建 Office。当前后台/前端目录与 PID 以根目录两份生产文档为准。
 
 2026-11-05：生产已切至 v10，共享会话仍复用第 11 节所列桌面原组件。网页隐藏新对话欢迎右块、猫形提示词入口和左下退出按钮，桌面保留；Office 465 个产物与 v8 逐字节一致，未重新构建或修改。Ubuntu 当前 release 为 `/home/liuzhe/mona-hosted-work/releases/20261105-skills-ui-v10/content`，PID `34615`；VPS 继续使用 v9 静态 root `/var/www/mona/work-releases/20261105-skills-ui-v9/content` 的 3,890 个文件及原代理，Nginx master `420299` 不变。v10 仅修改 executor 的 Widget 事件白名单和对应测试，前端、Skill 与 Office 均与 v9 一致。
 

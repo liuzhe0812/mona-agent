@@ -1,12 +1,12 @@
 {
-  "release": "20261106-harness-work-v17",
-  "created_at": "2026-11-05T17:30:27.111400+00:00",
-  "deployed": false,
-  "production_validation": false,
+  "release": "20261106-harness-work-v17b",
+  "created_at": "2026-11-06T00:48:45.000982+00:00",
+  "deployed": true,
+  "production_validation": true,
   "base_release": "20261105-stream-work-v15",
-  "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-v17.delta.tar.gz",
-  "sha256": "61235ab8373bb7d96e3e65a48e02b86181ea175fc55d5b1c29d1721fb777703a",
-  "bytes": 888466,
+  "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-v17b.delta.tar.gz",
+  "sha256": "3ac2e04b268be85e2f77aec5ddc139e62b40e92ab9933ffad84a4a5af6b632dc",
+  "bytes": 888457,
   "changed_files": 82,
   "release_files": 5636,
   "shared_code": [
@@ -22,18 +22,21 @@
   ],
   "office_and_frontend_unchanged": true,
   "unrelated_interaction_changes_excluded": true,
-  "blocking_reason": "Ubuntu SSH 172.31.3.176:22 timeout; no backend upload or service mutation",
+  "blocking_reason": null,
   "validation": {
     "workspace_related": "528 passed, 17 skipped, 1 known Codex baseline deselected; one extra image-input test passed",
-    "isolated_candidate": "481 passed across candidate suite and focused dependency/image reruns; 17 skipped, 1 known Codex baseline deselected",
+    "isolated_candidate": "472 passed, 17 skipped, 1 deselected; missing unchanged Office templates restored and 8 affected cases passed",
     "real_local_browser": "1 passed; v16 assets; synthetic identity and model event edges only",
     "real_production_model": "not run for this candidate"
   },
   "canvas": "queued separately after harness development per user instruction",
-  "release_manifest_sha256": "56329cccbbf62c6f71211976cff589008e225e8722601b075a4023e8c712e53e",
+  "release_manifest_sha256": "ce7156d1234da4bf49a88d04d11e5738a6a761d943ec40a0fbf03bca215917a6",
   "base_release_manifest_sha256": "6fe059f0097d52d4906c2b39d48de2424912b2802a95a94b410459a37edb6165",
   "code_commits": [
     "1d24d63a6",
     "cadfb0a62"
-  ]
+  ],
+  "supersedes": "v17 candidate; test fixture binds the registry class directly, with no runtime-code difference",
+  "active_release": "20261106-harness-work-v20",
+  "superseded_by": "See harness-release-20261106.json for v19/v20 acceptance fixes and final deployment"
 }

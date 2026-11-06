@@ -1,0 +1,345 @@
+{
+  "release": "20261106-harness-work-v20",
+  "deployed": true,
+  "real_production_model_verified": true,
+  "packages": [
+    {
+      "release": "20261106-harness-work-v17b",
+      "created_at": "2026-11-06T00:48:45.000982+00:00",
+      "deployed": false,
+      "production_validation": false,
+      "base_release": "20261105-stream-work-v15",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-v17b.delta.tar.gz",
+      "sha256": "3ac2e04b268be85e2f77aec5ddc139e62b40e92ab9933ffad84a4a5af6b632dc",
+      "bytes": 888457,
+      "changed_files": 82,
+      "release_files": 5636,
+      "shared_code": [
+        "mona/agent/context.py",
+        "mona/agent/loop.py",
+        "mona/agent/subagent.py",
+        "mona/agent/runner.py",
+        "mona/agent/tools/memory_tools.py",
+        "mona/agent/tools/registry.py",
+        "mona/config/schema.py",
+        "mona/templates/SOUL.md",
+        "mona/utils/prompt_templates.py"
+      ],
+      "office_and_frontend_unchanged": true,
+      "unrelated_interaction_changes_excluded": true,
+      "blocking_reason": "Ubuntu SSH 172.31.3.176:22 timeout; no backend upload or service mutation",
+      "validation": {
+        "workspace_related": "528 passed, 17 skipped, 1 known Codex baseline deselected; one extra image-input test passed",
+        "isolated_candidate": "472 passed, 17 skipped, 1 deselected; missing unchanged Office templates restored and 8 affected cases passed",
+        "real_local_browser": "1 passed; v16 assets; synthetic identity and model event edges only",
+        "real_production_model": "not run for this candidate"
+      },
+      "canvas": "queued separately after harness development per user instruction",
+      "release_manifest_sha256": "ce7156d1234da4bf49a88d04d11e5738a6a761d943ec40a0fbf03bca215917a6",
+      "base_release_manifest_sha256": "6fe059f0097d52d4906c2b39d48de2424912b2802a95a94b410459a37edb6165",
+      "code_commits": [
+        "1d24d63a6",
+        "cadfb0a62"
+      ],
+      "supersedes": "v17 candidate; test fixture binds the registry class directly, with no runtime-code difference"
+    },
+    {
+      "release": "20261106-harness-work-v19",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-assets-v19.delta.tar.gz",
+      "bytes": 595198,
+      "sha256": "eab44fbd9e3cab196a8be9a1da31f72429152b16e7f66f50c1902beb1a633357",
+      "release_manifest_sha256": "8e89bf88c6e379cdadbc99dad48197b450ecc6da57b5b1560de9f671c7e3bf11",
+      "changed_files": 2,
+      "release_files": 5636,
+      "scope": [
+        "mona/hosted_work/skills.py",
+        "tests/hosted_work/test_skills.py"
+      ],
+      "reason": "reuse the desktop asset schema and accept a validated assets/ prefix"
+    },
+    {
+      "release": "20261106-harness-work-v20",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\harness-parity-20261106\\work-harness-finish-v20.delta.tar.gz",
+      "bytes": 607603,
+      "sha256": "43c6616a2da24239fb936acf6bbe09296cf5566e14caa16810a1683416abe688",
+      "release_manifest_sha256": "4307d19bf816bca89c7e85d9d7544897637c52bd0ef061ada5659cf0ffa166ea",
+      "changed_files": 3,
+      "release_files": 5636,
+      "scope": [
+        "mona/config/schema.py",
+        "mona/hosted_work/turn.py",
+        "tests/hosted_work/test_runner.py"
+      ],
+      "reason": "use ordinary Work 100-iteration default and seal a fully saved execution history"
+    }
+  ],
+  "activation": {
+    "activated": true,
+    "unit": {
+      "MainPID": "580839",
+      "NRestarts": "0",
+      "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-harness-work-v20/content",
+      "ActiveState": "active"
+    },
+    "health": {
+      "service": "mona-hosted-work",
+      "status": "alive",
+      "models_configured": true
+    },
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261106-harness-work-v20",
+    "counts_before": {
+      "sessions": 21,
+      "runs": 31,
+      "files": 6
+    },
+    "counts_after": {
+      "sessions": 21,
+      "runs": 31,
+      "files": 6
+    },
+    "existing_rows_preserved": true,
+    "config_mode": "0o600",
+    "only_config_change": "frontend_dir plus max_iterations=100 aligned to ordinary Work",
+    "docker_pid": "78383",
+    "original_containers_unchanged": true,
+    "tunnel_unchanged": true,
+    "wallet_or_auth_code_modified": false
+  },
+  "identity": {
+    "passed": true,
+    "production": true,
+    "synthetic_auth": false,
+    "mocked_responses": false,
+    "real_model": true,
+    "session_id": "ff4d2448b5d8474f85ba7b361297f794",
+    "run_id": "60eee046f654bfa627ec08eae6a3de32",
+    "status": "completed",
+    "content": "我是 Mona 🐈，一个有自己性格、好奇心和判断力的 AI 伙伴，温暖可靠，工作时直接高效，偶尔也会带点小俏皮。",
+    "events": {
+      "user_questions": 1,
+      "goal_status": 2,
+      "message_accepted": 1,
+      "artifact_task_started": 1,
+      "reasoning_delta": 60,
+      "reasoning_end": 1,
+      "delta": 8,
+      "context_usage": 2,
+      "stream_end": 1,
+      "turn_end": 1
+    },
+    "usage": {
+      "prompt_tokens": 6368,
+      "completion_tokens": 238,
+      "total_tokens": 6606
+    },
+    "context_usage": {
+      "prompt_tokens": 6368,
+      "completion_tokens": 238,
+      "total_tokens": 6606,
+      "context_tokens": 6606,
+      "context_window_tokens": 1000000,
+      "context_model": "qwen",
+      "context_provider": "mona_managed"
+    },
+    "diagnostic": {
+      "stop_reason": "completed",
+      "iterations": 1,
+      "context_window_tokens": 1000000,
+      "context_window_source": "catalog",
+      "max_context_tokens": 6606,
+      "provider_status": null
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "presentation": {
+    "passed": true,
+    "production": true,
+    "synthetic_auth": false,
+    "mocked_responses": false,
+    "real_model": true,
+    "browser_passed": true,
+    "browser": {
+      "passed": true,
+      "phase": "completed",
+      "origin": "https://mona-ai.cn",
+      "real_model": true,
+      "mocked_responses": false,
+      "test_sessions": [
+        {
+          "id": "d8a2738cea6844e2975dd4283bf6dd47",
+          "title": "Mona介绍PPT验收 0451d5270c",
+          "created_by_this_check": false
+        }
+      ],
+      "runs": [
+        {
+          "session_id": "d8a2738cea6844e2975dd4283bf6dd47",
+          "run_id": "351394eb8eb7b8d5534cf16298f71c3b",
+          "status": "completed",
+          "workspace_saved": true,
+          "observed_existing": true
+        }
+      ],
+      "question_answers": [],
+      "mode": "observe_completed_run",
+      "combined_prior_proof": {
+        "report": "output/hosted-work/harness-parity-20261106/production-ppt3/acceptance.json",
+        "report_sha256": "27d14b5c1ac6a425fe2accf24bf8bda498b5777f1d7c13261010a83b91f65c18",
+        "prior_report_passed": false,
+        "session_id": "d8a2738cea6844e2975dd4283bf6dd47",
+        "run_id": "351394eb8eb7b8d5534cf16298f71c3b",
+        "scope": "prior_real_model_style_choice_and_stream_completion",
+        "completed_workspace_saved": true,
+        "style_previews": [
+          {
+            "sha256": "90d78334ae11ff9b22b0ea06be121a5833ac6826638857d4983313db76e3eb75",
+            "bytes": 69785,
+            "width": 1200,
+            "height": 750,
+            "format": "JPEG",
+            "file": "output/hosted-work/harness-parity-20261106/production-ppt3/style-1.jpg"
+          },
+          {
+            "sha256": "acc405fa6573376009ccf50d8345f1d5a270b87ab75ca97b293f3909f6a1af23",
+            "bytes": 94912,
+            "width": 1200,
+            "height": 750,
+            "format": "JPEG",
+            "file": "output/hosted-work/harness-parity-20261106/production-ppt3/style-2.jpg"
+          },
+          {
+            "sha256": "6b873145d2e56d111c3c0dd6e74ef77dab4ed5bbcc38df0eb15f29c55227be2a",
+            "bytes": 76585,
+            "width": 1200,
+            "height": 750,
+            "format": "JPEG",
+            "file": "output/hosted-work/harness-parity-20261106/production-ppt3/style-3.jpg"
+          }
+        ],
+        "answered_question_requests": 1,
+        "custom_preference_entered": true,
+        "tool_starts": 48,
+        "tool_ends": 40,
+        "tool_errors": 8,
+        "missing_tool_finishes": [],
+        "context_usage_samples": 42,
+        "turn_end_observed": true,
+        "generic_processing_frames": 0
+      },
+      "ui_file_card_visible": true,
+      "office_session_id": "office_51eefafc3c9e408b90e9643634ab1527",
+      "presentation": {
+        "file": "mona-product-intro.pptx",
+        "bytes": 37355,
+        "sha256": "c9b260ff0ccd6906eb4ce1f6a1cddbeb853c246cdb3825c2ee419ef0b248dedb",
+        "slides": 3,
+        "native_text_shapes_per_slide": [
+          3,
+          11,
+          9
+        ],
+        "download_method": "ui_file_menu"
+      },
+      "new_model_messages_sent": 0,
+      "refresh_preserves_editor_and_delivery_without_replay": true,
+      "elapsed_seconds": 16.4,
+      "page_errors": [],
+      "failed_requests": [],
+      "console_errors": [],
+      "protocol": {
+        "d8a2738cea6844e2975dd4283bf6dd47": {
+          "event_counts": {
+            "attached": 12,
+            "task_plan": 12,
+            "user_questions": 12,
+            "goal_status": 12
+          },
+          "tool_calls": [],
+          "tool_starts": 0,
+          "tool_ends": 0,
+          "tool_errors": 0,
+          "missing_tool_finishes": [],
+          "context_usage": [],
+          "turn_end_ids": [],
+          "generic_processing_frames": 0,
+          "message_frames_sent": 0,
+          "question_frames": 12,
+          "answer_acks": 0
+        }
+      }
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "final": {
+    "passed": true,
+    "unit": {
+      "MainPID": "580839",
+      "NRestarts": "0",
+      "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-harness-work-v20/content",
+      "ActiveState": "active"
+    },
+    "files_verified": 5636,
+    "manifest_sha256": "4307d19bf816bca89c7e85d9d7544897637c52bd0ef061ada5659cf0ffa166ea",
+    "config_mode": "0o600",
+    "max_iterations": 100,
+    "counts": {
+      "sessions": 22,
+      "runs": 32,
+      "files": 6
+    },
+    "runs": {
+      "cancelled": 4,
+      "completed": 23,
+      "failed": 4,
+      "interrupted": 1
+    },
+    "operations": {
+      "finished": 1
+    },
+    "final_qa_completed": true,
+    "final_history_sealed": true,
+    "docker_pid": "78383",
+    "original_containers_unchanged": true,
+    "paused_workers_still_exited": 4,
+    "tunnel_pid": "423172"
+  },
+  "protected_document": {
+    "found": true,
+    "bytes": 37003,
+    "sha256": "26d0cc98591c67cd321265628e7b2d2e686e44f6a4d3ab2e5a4271f11671d8d9",
+    "same_as_before_deployment": true,
+    "original_run_status": null
+  },
+  "static_frontend": "20261106-canvas-work-v18",
+  "cloud_sync_enabled": false,
+  "paid_codex_enabled": false,
+  "known_dependency_limits": [
+    "PDF/Office raw file parsing needs a safe Linux runtime",
+    "image/video provider tools remain unavailable without their scoped service",
+    "notes/knowledge/conversation search sources need hosted adapters and services"
+  ],
+  "code_commits": [
+    "1d24d63a6",
+    "cadfb0a62",
+    "2c48bc6ca",
+    "68126a706",
+    "8c61ffdf1",
+    "696465df3",
+    "fda446369"
+  ],
+  "pushed": false
+}

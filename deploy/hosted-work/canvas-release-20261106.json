@@ -1,0 +1,237 @@
+{
+  "release": "20261106-canvas-work-v18",
+  "scope": "Canvas autosave and local browser export fixes",
+  "source": {
+    "scope": [
+      "webui/src/lib/tauri.ts",
+      "webui/src/lib/hosted-canvas-storage.ts",
+      "webui/src/components/notes/mindmap/MindMapDocumentEditor.tsx",
+      "webui/src/components/canvas/CanvasFileView.tsx",
+      "webui/src/components/canvas/useConversationCanvases.ts",
+      "webui/src/components/notes/flowchart/FlowchartDocumentEditor.tsx"
+    ],
+    "before": {
+      "webui/src/lib/tauri.ts": "1ed713cd2968a27c3fd0bf142e7476e23c5ac6755fd36e9cdc8f97793993f1af",
+      "webui/src/lib/hosted-canvas-storage.ts": "a4c4b9842082f589fc62782c0069d4a8a1f5dc63b4bc6ed26eaea73e7f78be4a",
+      "webui/src/components/notes/mindmap/MindMapDocumentEditor.tsx": "4dbea448d619b787cf292328fb69392d8788f4f53142848e97dfd1def0e2619a",
+      "webui/src/components/canvas/CanvasFileView.tsx": "90b84f7a435c04fd04c18e0e739072e37182dc05ecebf5c0c6a6441c59ead68b",
+      "webui/src/components/canvas/useConversationCanvases.ts": "a39e2d076dcefb9dbac54487cf227546d59df76e36e089c01f70ced98f36b67c",
+      "webui/src/components/notes/flowchart/FlowchartDocumentEditor.tsx": "b3a13271a75f0722f154fa47dee07b0b80a80fb99eaaaa85b294e2fe163bbc25"
+    },
+    "after": {
+      "webui/src/lib/tauri.ts": "66f21191eebce9f25404e961094e9250e827c7c3f03bea48a494b7a1c3900803",
+      "webui/src/lib/hosted-canvas-storage.ts": "05e8ab35978957f3af25cea385f06b90b139b0f44e482c0f75320c0bff6221e1",
+      "webui/src/components/notes/mindmap/MindMapDocumentEditor.tsx": "f6bcb19335dada70df86b8957d230039d5836ea90616b16c88405321d023e72c",
+      "webui/src/components/canvas/CanvasFileView.tsx": "401a54ad1118e91f77d34211a506db7d0d681af490c3b6d037a653c6ffe58c1a",
+      "webui/src/components/canvas/useConversationCanvases.ts": "572e428365853205a38c816ce86fd7b2bcc2ad358d87e59c59f6d740d76a96e0",
+      "webui/src/components/notes/flowchart/FlowchartDocumentEditor.tsx": "7865fbfd7027133cb60fd152aada4e5a21cc65d921e547eb9d0bdc64d55a0244"
+    },
+    "other_task_sources_unchanged": {
+      "webui/src/components/thread/ThreadShell.tsx": "3cb246dbc574e84dc8a7c5d9de631d6cf45239eda247155ff3986460e234e3c4",
+      "webui/src/components/doc/office/OfficeWorkbenchView.tsx": "f37bf9bd94bacaae6b6073820b995d3cc051b3c98b2e7a29f0310883ad4e1a16"
+    },
+    "office_rebuild": false,
+    "build_directory": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\canvas-fix-20261106\\main-build-v2"
+  },
+  "package": {
+    "release": "20261106-canvas-work-v18",
+    "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\canvas-fix-20261106\\work-canvas-static-v18.delta.tar.gz",
+    "bytes": 2372989,
+    "sha256": "2d610b20296eea1908b8f13b66199f6d41fdfa667b8d2edeb1a10737c80e8fa8",
+    "changed_files": 63,
+    "static_files": 4422,
+    "office_unchanged": 465,
+    "backend_changed": false,
+    "harness_v17_deployed": false
+  },
+  "published": {
+    "published": true,
+    "static_root": "/var/www/mona/work-releases/20261106-canvas-work-v18/content",
+    "static_files_verified": 4422,
+    "manifest_sha256": "422bec4697b074315708969689716a1e328baf894cc7547a4f3c8702a3a5a342",
+    "include": "/opt/mona-work-proxy-releases/20261106-canvas-work-v18/work-locations.conf",
+    "include_sha256": "0fb58d0b6300196eb8ded89d497bef5a958f91cdb551b5965ed1dd5b81f5ed8d",
+    "backup": "/var/www/mona/backups/canvas-20261106-v18",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "only_work_include_changed": true,
+    "ubuntu_modified": false,
+    "docker_or_other_services_restarted": false,
+    "html_observations": [
+      {
+        "status": 200,
+        "sha256": "519d7ed80b73e343919f20839a4abffe78cd988fab6eeae1ce15ef53bf165188"
+      },
+      {
+        "status": 200,
+        "sha256": "ecc708321cd841c856c93a743af21209a71914da21a0fb330e87f19924997786"
+      }
+    ],
+    "initial_attempt_rolled_back": true
+  },
+  "production": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "synthetic_auth": false,
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true,
+    "initial_orchestrator_error_type": "JSONDecodeError",
+    "report_recovery": "Read the complete credential-free browser acceptance JSON; dependency deprecation text preceded stdout JSON.",
+    "browser_passed": true,
+    "browser": {
+      "passed": true,
+      "phase": "completed",
+      "origin": "https://mona-ai.cn",
+      "synthetic_auth": false,
+      "mocked_responses": false,
+      "model_executed": false,
+      "test_sessions": [
+        {
+          "id": "fc711c6994d248c2b047ddf2ce55cc43",
+          "title": "画布验收 d84163041c"
+        },
+        {
+          "id": "1c635c751a694ff4a0fd824a43e41538",
+          "title": "画布切换验收 d84163041c"
+        }
+      ],
+      "downloads": {
+        "flowchart_png": {
+          "file": "flowchart.png",
+          "bytes": 54145,
+          "sha256": "95ee8cb8bf9aa91ebe227876cb5314cdec95809f95d86fc20d8b674fa0a3099d",
+          "width": 764,
+          "height": 999
+        },
+        "flowchart_svg": {
+          "file": "flowchart.svg",
+          "bytes": 2522867,
+          "sha256": "79b94ab55dcb03e914863180720ae73f54eb720fc3ff8d96e1527e6ee15f6733",
+          "verified_node_text": [
+            "FLOW_FAST_d84163041c"
+          ]
+        },
+        "mindmap_png": {
+          "file": "mindmap.png",
+          "bytes": 25081,
+          "sha256": "387ce8b5f6aa5988374b1bb0fdcd6a32a35040d5c8b97da7d39de841974fec01",
+          "width": 1074,
+          "height": 454
+        },
+        "mindmap_freemind": {
+          "file": "mindmap.mm",
+          "bytes": 151,
+          "sha256": "6a5758a24988e8728a0c25021aaf9afb3dcd829797c5e5ff7fa4682c7c60cadc",
+          "verified_node_text": [
+            "MIND_FAST_d84163041c",
+            "CHILD_d84163041c"
+          ]
+        }
+      },
+      "fast_switch_ms": {
+        "flowchart": 346.8,
+        "mindmap": 316.9
+      },
+      "flowchart_path": "/workspace/canvases/canvas-a8e3bbc4-aacf-4085-a869-aa8eff407222.mona-canvas",
+      "flowchart_save_switch_refresh": true,
+      "printing_preview": {
+        "file": "flowchart-print-preview.pdf",
+        "bytes": 91782,
+        "sha256": "669bb5b01ebbb86790b74e8ff834b8e83032b7da0c534a9fa563b9d275a83884",
+        "pages": 1,
+        "first_page_points": [
+          612.0,
+          792.0
+        ],
+        "rendered_page": {
+          "file": "flowchart-print-page.png",
+          "bytes": 29238,
+          "sha256": "fa35b4dd15ff9b9270e4e5dad72804aafcfd9cbf36de2b5a3aea0da1cea38aeb",
+          "width": 459,
+          "height": 594
+        },
+        "validation": "printing_preview_content",
+        "user_manual_save_verified": false,
+        "system_print_dialog_verified": false,
+        "popup": {
+          "decoded": true,
+          "width": 764,
+          "height": 999,
+          "svg": true,
+          "containsEditedNode": true,
+          "inlineScripts": 0,
+          "svgScripts": 0
+        },
+        "script_src_csp_violations": []
+      },
+      "mindmap_path": "/workspace/canvases/canvas-a4da028f-50fc-41fc-aba2-409b99632abb.mona-canvas",
+      "mindmap_save_switch_refresh": true,
+      "page_errors": [],
+      "failed_requests": [],
+      "console_errors": [
+        "Setting the document's base URI to 'https://mona-ai.cn/work/assets/select-CmB1KF48.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked.",
+        "Setting the document's base URI to 'https://mona-ai.cn/work/assets/hosted-work-BQduxamz.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked."
+      ],
+      "blocked_model_requests": [],
+      "csp_diagnostics": [
+        "Setting the document's base URI to 'https://mona-ai.cn/work/assets/select-CmB1KF48.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked.",
+        "Setting the document's base URI to 'https://mona-ai.cn/work/assets/hosted-work-BQduxamz.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked."
+      ],
+      "known_export_csp_warnings": [
+        {
+          "message": "Setting the document's base URI to 'https://mona-ai.cn/work/assets/select-CmB1KF48.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked.",
+          "count": 3
+        },
+        {
+          "message": "Setting the document's base URI to 'https://mona-ai.cn/work/assets/hosted-work-BQduxamz.css' violates the following Content Security Policy directive: \"base-uri 'none'\". The action has been blocked.",
+          "count": 177
+        }
+      ],
+      "unexpected_csp_violations": []
+    }
+  },
+  "final": {
+    "passed": true,
+    "static_files_verified": 4422,
+    "manifest_sha256": "422bec4697b074315708969689716a1e328baf894cc7547a4f3c8702a3a5a342",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "auth_pid": "389486",
+    "oneapi_pid": "310825",
+    "html": {
+      "/work/": {
+        "status": 200,
+        "cache_control": "no-store",
+        "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+      },
+      "/work/hosted-work.html": {
+        "status": 200,
+        "cache_control": "no-store",
+        "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+      }
+    },
+    "only_work_include_changed": true,
+    "dynamic_widget_still_proxied": true,
+    "anonymous_api_status": 401,
+    "ubuntu_service_not_modified": true,
+    "docker_or_other_services_restarted": false
+  },
+  "harness_v17_deployed": false,
+  "pushed": false,
+  "code_commits": [
+    "696465df3"
+  ]
+}
