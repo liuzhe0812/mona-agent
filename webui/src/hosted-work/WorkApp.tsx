@@ -12,8 +12,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { useSessions, sessionTitle } from "@/hooks/useSessions";
 import { isSessionUnread, markAllSessionsRead, markSessionRead, useSidebarState } from "@/hooks/useSidebarState";
-import { resetApiBase } from "@/lib/api";
-import { configureHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
+import { fetchSettings, resetApiBase } from "@/lib/api";
+import { configureHostedPlatform, getHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
+import { publishSettingsUpdate } from "@/lib/settings-updates";
 import { OfficeClientError } from "@/lib/office-client";
 import type { MonaClient } from "@/lib/mona-client";
 import type { ConnectionStatus } from "@/lib/types";
@@ -178,6 +179,25 @@ function HostedRuntime(props: WorkspaceProps) {
       release(); clearHostedViewState();
     };
   }, [retry, saved.token, unauthorized]);
+
+  useEffect(() => {
+    let disposed = false;
+    let loading = false;
+    const refresh = async () => {
+      if (loading || document.visibilityState === "hidden" || getHostedPlatform()?.token !== saved.token) return;
+      loading = true;
+      try {
+        const settings = await fetchSettings(saved.token);
+        if (!disposed && getHostedPlatform()?.token === saved.token) publishSettingsUpdate(saved.token, settings);
+      } catch (error) {
+        if (!disposed && (error as { status?: number }).status === 401) unauthorized(saved.token);
+        else if (!disposed) console.warn("工作台模型设置暂未刷新，将在页面恢复时重试。");
+      } finally { loading = false; }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { disposed = true; window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [saved.token, unauthorized]);
 
   if (!client) return <main className="flex h-full flex-col items-center justify-center gap-4 px-6">
     {connectionError

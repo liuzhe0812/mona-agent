@@ -1,10 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { ModelSettingsPanel } from "./ModelSettingsPanel";
+import { AdminRequestError as RequestError, requestAdminJson } from "./model-admin-api";
 
 type Configuration = {
   cli_path: string;
@@ -20,7 +22,6 @@ type AdminStatus = {
   connection: { state: string; message: string; models: Array<{ id: string; label: string }> };
   billing: { mode: string; ready: boolean; message: string };
   public_enabled: boolean;
-  qwen: { free: boolean; all_accounts: boolean };
   login_commands: string[];
 };
 
@@ -40,10 +41,6 @@ function getToken(): string | null {
   }
 }
 
-class RequestError extends Error {
-  constructor(readonly status: number) { super("Request failed"); }
-}
-
 function parseStatus(value: unknown): AdminStatus {
   if (!value || typeof value !== "object") throw new RequestError(0);
   const status = value as AdminStatus;
@@ -57,24 +54,13 @@ function parseStatus(value: unknown): AdminStatus {
     !connection || typeof connection.state !== "string" || typeof connection.message !== "string" ||
     !Array.isArray(connection.models) || !connection.models.every(model => model && typeof model.id === "string" && typeof model.label === "string") ||
     !billing || typeof billing.mode !== "string" || typeof billing.ready !== "boolean" || typeof billing.message !== "string" ||
-    typeof status.public_enabled !== "boolean" || !status.qwen || typeof status.qwen.free !== "boolean" ||
-    typeof status.qwen.all_accounts !== "boolean" || !Array.isArray(status.login_commands) ||
+    typeof status.public_enabled !== "boolean" || !Array.isArray(status.login_commands) ||
     !status.login_commands.every(command => typeof command === "string")) throw new RequestError(0);
   return status;
 }
 
 async function requestStatus(token: string, method: "GET" | "PUT" | "POST", url: string, body?: unknown, signal?: AbortSignal): Promise<AdminStatus> {
-  const response = await fetch(url, {
-    method,
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-    credentials: "omit",
-    cache: "no-store",
-    redirect: "error",
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal,
-  });
-  if (!response.ok) throw new RequestError(response.status);
-  return parseStatus(await response.json());
+  return parseStatus(await requestAdminJson(token, method, url, body, signal));
 }
 
 function problemFor(error: unknown): Problem {
@@ -84,8 +70,11 @@ function problemFor(error: unknown): Problem {
   if (error instanceof RequestError && error.status === 403) {
     return { title: "没有管理权限", description: "当前账号没有此配置的管理权限，请使用管理员账号登录。", login: true };
   }
-  if (error instanceof RequestError && error.status === 409) {
+  if (error instanceof RequestError && error.code === "configuration_changed") {
     return { title: "配置已变化", description: "其他管理员已更新配置，请重新加载并检查后再保存。" };
+  }
+  if (error instanceof RequestError && error.code === "work_busy") {
+    return { title: "工作台正在处理任务", description: "请在当前任务结束后保存。草稿已保留。" };
   }
   return { title: "操作未完成", description: "无法完成配置操作，请检查连接后重试。" };
 }
@@ -116,6 +105,11 @@ export function AdminApp() {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [problem, setProblem] = useState<Problem | null>(null);
   const [notice, setNotice] = useState("");
+  const [sharedRevision, setSharedRevision] = useState<string | null>(null);
+  const updateRevision = useCallback((revision: string) => {
+    setSharedRevision(revision);
+    setStatus(previous => previous ? { ...previous, revision } : previous);
+  }, []);
 
   useEffect(() => {
     if (!token) return;
@@ -124,6 +118,7 @@ export function AdminApp() {
     requestStatus(token, "GET", endpoint, undefined, controller.signal).then(next => {
       if (controller.signal.aborted) return;
       setStatus(next);
+      updateRevision(next.revision);
       setDraft({ ...next.configuration });
       setErrors({});
     }).catch(error => {
@@ -132,7 +127,7 @@ export function AdminApp() {
       if (!controller.signal.aborted) setBusy(null);
     });
     return () => controller.abort();
-  }, [token, refresh]);
+  }, [token, refresh, updateRevision]);
 
   const dirty = !!status && !!draft && JSON.stringify(status.configuration) !== JSON.stringify(draft);
 
@@ -153,8 +148,9 @@ export function AdminApp() {
     setBusy("save");
     setNotice("");
     try {
-      const next = await requestStatus(token, "PUT", endpoint, { expected_revision: status.revision, configuration });
+      const next = await requestStatus(token, "PUT", endpoint, { expected_revision: sharedRevision ?? status.revision, configuration });
       setStatus(next);
+      updateRevision(next.revision);
       setDraft({ ...next.configuration });
       setNotice("配置已保存。请检测连接；Codex 开放状态以服务端信息为准。");
     } catch (error) {
@@ -171,6 +167,7 @@ export function AdminApp() {
     try {
       const next = await requestStatus(token, "POST", `${endpoint}/probe`, {});
       setStatus(next);
+      updateRevision(next.revision);
       setDraft({ ...next.configuration });
       setNotice("检测已完成，请查看连接状态。");
     } catch (error) {
@@ -183,9 +180,11 @@ export function AdminApp() {
   return <main className="min-h-screen bg-background px-4 py-8 text-foreground">
     <div className="mx-auto max-w-3xl space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div><h1 className="text-title font-semibold">线上模型配置</h1><p className="mt-2 text-ui text-muted-foreground">管理线上工作台的模型连接和计费配置。</p></div>
+        <div><h1 className="text-title font-semibold">工作台模型与计费</h1><p className="mt-2 text-ui text-muted-foreground">管理线上工作台的模型连接和共用余额价格。</p></div>
         <Button variant="outline" asChild><a href="/admin">管理后台</a></Button>
       </header>
+      {token && <ModelSettingsPanel token={token} revision={sharedRevision ?? status?.revision ?? ""}
+        billingModel={draft?.billing_model ?? ""} onRevisionChange={updateRevision} disabled={!!busy && busy !== "load"} />}
       {!token ? <section className="rounded-lg border border-border bg-card p-6">
         <p className="text-ui">请先登录管理后台，再打开此页面。</p>
         <Button className="mt-4" asChild><a href="/admin">前往管理员登录</a></Button>
@@ -202,7 +201,6 @@ export function AdminApp() {
                 : status.public_enabled ? "Codex 已向用户开放。" : "Codex 暂未向用户开放。"}</p>
               {status.billing.ready && status.billing.message && <p className="mt-1 text-muted-foreground">{status.billing.message}</p>}
             </div>
-            <div><p className="font-medium">Qwen3.7</p><p className="mt-1 text-muted-foreground">{status.qwen.free && status.qwen.all_accounts ? "所有账号免费，不扣余额。" : "当前配置未对所有账号免费开放。"}</p></div>
           </div>
         </section>
         <form className="space-y-6 rounded-lg border border-border bg-card p-6" onSubmit={save} noValidate>

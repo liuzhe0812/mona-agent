@@ -2,7 +2,69 @@
 # Replace RELEASE with a new, manifest-verified static release. Copy only the
 # public webui/dist-hosted-work files, never server source or user state.
 # These specific prefixes take precedence over the existing /work/ proxy.
-# Keep /api/work/ and the main Work HTML on the Ubuntu service.
+# Keep /api/work/ and the dynamic widget frame on the Ubuntu service.
+# Public SPA entries must use the matching build, including the distinct admin
+# HTML. These pages contain no account data; all admin APIs remain protected.
+
+location = /work/ {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    root /var/www/mona/work-releases/RELEASE/content;
+    try_files /hosted-work.html =404;
+    access_log off;
+    default_type text/html;
+    disable_symlinks on;
+    add_header Cache-Control "no-store" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
+}
+
+location = /work/hosted-work.html {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    root /var/www/mona/work-releases/RELEASE/content;
+    try_files /hosted-work.html =404;
+    access_log off;
+    default_type text/html;
+    disable_symlinks on;
+    add_header Cache-Control "no-store" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
+}
+
+location = /work/admin {
+    return 308 /work/admin/$is_args$args;
+}
+
+location = /work/admin/ {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    root /var/www/mona/work-releases/RELEASE/content;
+    try_files /hosted-admin.html =404;
+    access_log off;
+    default_type text/html;
+    disable_symlinks on;
+    add_header Cache-Control "no-store" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
+}
+
+location = /work/hosted-admin.html {
+    if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
+    root /var/www/mona/work-releases/RELEASE/content;
+    try_files /hosted-admin.html =404;
+    access_log off;
+    default_type text/html;
+    disable_symlinks on;
+    add_header Cache-Control "no-store" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
+}
 
 location ^~ /work/assets/ {
     if ($host = www.mona-ai.cn) { return 308 https://mona-ai.cn$request_uri; }
