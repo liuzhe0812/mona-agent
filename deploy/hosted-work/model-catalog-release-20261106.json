@@ -1,0 +1,261 @@
+{
+  "release": "20261106-work-models-v29-ui-v30",
+  "deployed": true,
+  "entry": "https://mona-ai.cn/work/admin/",
+  "providers": [
+    "custom_api",
+    "codex_cli"
+  ],
+  "automatic_provider_catalog": true,
+  "per_model_open_and_price": true,
+  "admin_reasoning_field_removed": true,
+  "existing_qwen_preserved": true,
+  "model_prices_independent_from_desktop": true,
+  "shared_account_balance_preserved": true,
+  "wallet_bridge_ready": false,
+  "codex_execution_ready": false,
+  "codex_web_auth_added": false,
+  "codex_web_auth_reference": "https://learn.chatgpt.com/docs/app-server#auth-endpoints",
+  "packages": [
+    {
+      "release": "20261106-work-models-v29",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-models-20261106\\work-models-v29.delta.tar.gz",
+      "bytes": 632039,
+      "sha256": "272a4fb43448af1322682bff017de2f722f458bccafb3c2602e42e7c84559c00",
+      "release_manifest_sha256": "8cb400d54d477f7ab2942381bca191d4801a1ac2f598eba2672cc0dcf213d8af",
+      "changed_files": 10,
+      "release_files": 5646,
+      "scope": [
+        "mona/config/schema.py",
+        "mona/hosted_work/model_admin.py",
+        "mona/hosted_work/model_policy.py",
+        "mona/hosted_work/model_discovery.py",
+        "mona/hosted_work/service.py",
+        "mona/hosted_work/admin.py",
+        "tests/hosted_work/test_model_admin.py",
+        "tests/hosted_work/test_model_discovery.py",
+        "tests/hosted_work/test_service.py",
+        "tests/hosted_work/test_admin.py"
+      ],
+      "wallet_execution_enabled": false,
+      "codex_execution_enabled": false
+    },
+    {
+      "release": "20261106-work-models-ui-v30",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\work-models-20261106\\work-models-ui-v30.delta.tar.gz",
+      "bytes": 2893561,
+      "sha256": "3c5f991bb04a7cf0f24b3bc40d44992e7f6b6ad13fec89dec025eb850c099efa",
+      "changed_files": 346,
+      "static_files": 5516,
+      "office_unchanged": 465,
+      "backend_changed": false
+    }
+  ],
+  "production": {
+    "passed": true,
+    "ubuntu": {
+      "unit": {
+        "MainPID": "732118",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-work-models-v29/content",
+        "ActiveState": "active"
+      },
+      "files_verified": 5646,
+      "manifest_sha256": "8cb400d54d477f7ab2942381bca191d4801a1ac2f598eba2672cc0dcf213d8af",
+      "config_mode": "0o600",
+      "counts": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "run_statuses": {
+        "cancelled": 4,
+        "completed": 21,
+        "failed": 5,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "configured_model_count": 1,
+      "qwen_enabled": true,
+      "qwen_billing_mode": "free",
+      "qwen_price_configured": false,
+      "docker_pid": "78383",
+      "tunnel_pid": "423172",
+      "original_containers_unchanged": true,
+      "cloud_sync_enabled": false
+    },
+    "vps": {
+      "static_root": "/var/www/mona/work-releases/20261106-work-models-ui-v30/content",
+      "files_verified": 5516,
+      "office_files": 465,
+      "manifest_sha256": "bf4b626fcea1c49bf37ef699d72ca1146f9a4625dbf093f357642af647d042d6",
+      "include": "/opt/mona-work-proxy-releases/20261106-work-models-ui-v30/work-locations.conf",
+      "include_sha256": "0c9ef9d403c18fcaa54e2139abd749339d17bc05ac1b4c2d3e538c5cf9889457",
+      "units": {
+        "nginx": "420299",
+        "mariadb": "420210",
+        "mona-work-visitor": "367299"
+      },
+      "auth_pid": "389486",
+      "oneapi_pid": "310825",
+      "admin_html_sha256": "bfcf182b03ad632945a325cdbbad8afcc27b45c44ee9b0957a747f5d693f7039",
+      "original_website_root_preserved": true
+    }
+  },
+  "acceptance": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "synthetic_auth": false,
+    "browser_passed": true,
+    "browser": {
+      "production": true,
+      "mocked_responses": false,
+      "passed": true,
+      "phase": "complete",
+      "checks": {
+        "actual_catalog_loaded": true,
+        "anonymous_discovery_denied": true,
+        "ordinary_discovery_denied": true,
+        "existing_model_preserved": true,
+        "selection_is_draft": true,
+        "reasoning_field_hidden": true,
+        "per_model_price_survives_reload": true,
+        "original_price_and_open_status_restored": true,
+        "codex_detected_path_prefilled": true,
+        "codex_empty_list_honest": true
+      },
+      "safe": {
+        "provider_model_count": 6,
+        "guarded_write_counts": {
+          "discover_anonymous": 1,
+          "discover_normal": 1,
+          "discover_admin": 3,
+          "price_save": 1,
+          "price_restore": 1
+        },
+        "forbidden_shared_price_requests": 0,
+        "blocked_writes": 0,
+        "blocked_external_requests": 0
+      }
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "candidate_tests": {
+    "exit_code": 0,
+    "tests": "........................................................................ [ 39%]\n........................................................................ [ 78%]\n........................................                                 [100%]\n184 passed, 1 warning in 3.72s\n",
+    "stderr": "/home/liuzhe/mona-hosted-work/venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the \"fixture\" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to \"function\" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n",
+    "real_provider_discovery": {
+      "passed": true,
+      "model_count": 6,
+      "model_ids": [
+        "glm-5",
+        "kimi-k2.5",
+        "MiniMax-M2.5",
+        "qwen3.5-plus",
+        "qwen3.6-plus",
+        "qwen3.7-plus"
+      ],
+      "credentials_printed": false,
+      "model_execution": false
+    }
+  },
+  "validation": {
+    "windows_backend_passed": 182,
+    "windows_platform_skipped": 2,
+    "frontend_tests_passed": 23,
+    "isolated_typecheck": true,
+    "isolated_build": true
+  },
+  "backend_activation": {
+    "activated": true,
+    "unit": {
+      "MainPID": "732118",
+      "NRestarts": "0",
+      "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-work-models-v29/content",
+      "ActiveState": "active"
+    },
+    "health": {
+      "service": "mona-hosted-work",
+      "status": "alive",
+      "models_configured": true
+    },
+    "backup": "/home/liuzhe/mona-hosted-work/backups/20261106-work-models-v29",
+    "counts_before": {
+      "sessions": 25,
+      "runs": 31,
+      "files": 6
+    },
+    "counts_after": {
+      "sessions": 25,
+      "runs": 31,
+      "files": 6
+    },
+    "existing_rows_preserved": true,
+    "config_mode": "0o600",
+    "only_config_change": "frontend_dir",
+    "docker_pid": "78383",
+    "original_containers_unchanged": true,
+    "tunnel_unchanged": true,
+    "wallet_or_auth_code_modified": false
+  },
+  "frontend_publication": {
+    "published": true,
+    "static_root": "/var/www/mona/work-releases/20261106-work-models-ui-v30/content",
+    "static_files_verified": 5516,
+    "manifest_sha256": "bf4b626fcea1c49bf37ef699d72ca1146f9a4625dbf093f357642af647d042d6",
+    "include": "/opt/mona-work-proxy-releases/20261106-work-models-ui-v30/work-locations.conf",
+    "include_sha256": "0c9ef9d403c18fcaa54e2139abd749339d17bc05ac1b4c2d3e538c5cf9889457",
+    "backup": "/var/www/mona/backups/work-models-20261106-v30",
+    "units": {
+      "nginx": "420299",
+      "mariadb": "420210",
+      "mona-work-visitor": "367299"
+    },
+    "only_work_include_changed": true,
+    "ubuntu_modified": false,
+    "docker_or_other_services_restarted": false
+  },
+  "isolated_ui_source": {
+    "scope": [
+      "webui/src/hosted-work/ModelSettingsPanel.tsx",
+      "webui/src/hosted-work/model-admin-api.ts"
+    ],
+    "before": {
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "ef55749e2790de7eddbdf39e1fc71404ee02866778be33ec39026a48e514a623",
+      "webui/src/hosted-work/model-admin-api.ts": "610d88e9be28dd2b64c2983e55e18ee0f06c6bd4226633ae527a9e37c8e36531"
+    },
+    "after": {
+      "webui/src/hosted-work/ModelSettingsPanel.tsx": "79d486fa2a2c5f91e77269ebcc8c62b42f2908501c36ff564bf8a0fadf1572f8",
+      "webui/src/hosted-work/model-admin-api.ts": "dc5dc18b03a399cef8ea44f60210dbae1a196253ad648e2414877b915e2dcb1c"
+    },
+    "only_owned_ui_files_copied": true,
+    "office_and_other_dirty_work_excluded": true
+  },
+  "first_failure_preserved": {
+    "file": "output/hosted-work/work-models-20261106/production-acceptance.json",
+    "phase": "model_choices",
+    "admin_configuration_written": false
+  },
+  "commits": [
+    "03eca57b0",
+    "c6d19ebed"
+  ],
+  "pushed": false,
+  "shared_price_table_written": false,
+  "model_or_cli_task_executed": false,
+  "wallet_payment_subscription_device_logic_changed": false,
+  "docker_restarted": false,
+  "paused_workers_resumed": false,
+  "cloud_sync_enabled": false,
+  "unrelated_dirty_work_excluded": true
+}
