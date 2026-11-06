@@ -1,0 +1,5 @@
+--- a/app/config.py
++++ b/app/config.py
+@@ -54,1 +54,2 @@
+     worker_shared_key: str = ""
++    hosted_work_billing_secret: str = Field(default="", repr=False)
