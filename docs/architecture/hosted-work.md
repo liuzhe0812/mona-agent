@@ -10,7 +10,7 @@
 
 模型用量展示取最后一次请求，累计用量继续保留独立字段。Widget 的 streaming 仅发送空代码；完整代码通过原共享校验后才显示。上下文、文件编辑、计划、目标与结束均沿应用原协议更新现有 UI。发布状态和必要验收见 [实施清单](../plans/hosted-work-full-parity-20261105.md)。下文旧版本“当前”属于记录当时，不能代替根目录最新生产状态。
 
-执行轮数缺省值取 `AgentDefaults.max_tool_iterations`（当前 100），不另设网页 30 轮上限。完整执行历史成功持久化后清除临时恢复 checkpoint，与应用 SAVE 阶段一致；中断或结果未确认时保留恢复证据，不自动重放写入。素材复制复用应用 `SkillAssetCopyTool` 的完整 schema，复制 I/O 留在沙箱适配边界，兼容素材引用中的 `assets/` 前缀且仍校验实际文件、已加载 Skill 和目标范围。
+执行轮数缺省值取 `AgentDefaults.max_tool_iterations`（当前 100），不另设网页 30 轮上限。完整执行历史成功持久化后清除临时恢复 checkpoint，与应用 SAVE 阶段一致；中断或结果未确认时保留恢复证据，不自动重放写入。素材复制复用应用 `SkillAssetCopyTool` 的完整 schema，复制 I/O 留在沙箱适配边界，兼容素材引用中的 `assets/` 前缀并校验只读内置来源、实际文件、链接/大小及目标范围。与应用一致，复制公开内置依赖素材不额外要求其所属 Skill 被单独 `skill_read`；执行脚本仍要求对应 Skill 已加载，私人目录仍禁止。v21 已修正这一额外门槛，并验证三张真实样张同时可见。
 
 生产验收已完成真实 Qwen 样张/面板选择/三页原生 PPTX/UI 下载/刷新恢复；此前失败和只观察同一完成任务的补充证据均留档。画布静态前端 v18 同时保留原共享编辑器，只修请求版本竞态、退出前尚未发出的自动保存、浏览器本地下载和 PDF 打印 CSP，未重建 Office。当前后台/前端目录与 PID 以根目录两份生产文档为准。
 
@@ -44,7 +44,7 @@ v8 最终复核原有 8 个容器的 ID、状态和启动时间及其他服务�
 
 官网仅提供基本 Work：账号登录、会话、平台模型选择、文本与附件输入、执行进度、停止和文件交付。不开通开发、运维、邮件、笔记、桌面操作或其他模块；用户不能提交 API Key、自定义端点、原生引擎目录、宿主命令或身份字段。
 
-调用链：浏览器工作台主页面 `/work/` 与 `/api/work/` → Work 专用反向通道 → Ubuntu `172.31.3.176:17175` → 独立可信执行宿主 → 用户 gVisor 工具沙箱。`/work/assets/`、`/work/office-editor/` 等公共静态前缀由 VPS 的已验 release 直供；Work 主页面、API 和按账号隔离的工作数据仍由 Ubuntu 提供；账号认证继续使用 VPS Auth。官网只需增加入口与目标转发，无需嵌入原业务进程。业务依赖限于现有用户认证及收费线路的共享钱包计费，不访问 Pro、设备、同步、支付或后台任务接口。
+调用链：工作台公共 HTML/资源由 VPS 已验 release 直供；`/api/work/` 与动态 Widget → Work 专用反向通道 → Ubuntu `172.31.3.176:17175` → 独立可信执行宿主 → 用户 gVisor 工具沙箱。账号与隔离工作数据仍由 Ubuntu 接口提供，认证继续使用 VPS Auth。官网只需入口与目标转发，无需嵌入原业务进程。业务依赖限于现有用户认证及收费线路的共享钱包计费，不访问 Pro、设备、同步、支付或后台任务接口。
 
 模型调用留在可信宿主，使用在线 Work 自己的运营凭据，不向上游模型传递用户账号令牌，也不把模型密钥放进用户脚本环境。工具请求只能回到固定工具表，公共网页读取经过受控 HTTP 入口。每账号身份只从 Auth 的只读 `/auth/identity` 返回值派生，不接受前端指定 user_id；付费模型另需服务端余额准入，不能由前端标签决定收费。
 
@@ -54,7 +54,7 @@ v8 最终复核原有 8 个容器的 ID、状态和启动时间及其他服务�
 
 ## 2. 桌面兼容边界
 
-共享执行循环不等于完整 harness 已迁移：网页当前仍独立组装 system、工具集合与受限 Skill 目录。应用 `UserQuestionPanel` 和客户端回答方法可共用，但生产 Hosted 尚未注册 `AskUserQuestionTool`、处理回答/重连快照或提供等待前的安全样张预览，因此未指定风格的新 PPT 的完整方向确认流程尚未对齐，不能宣称整套 Skill 执行链路一致。2026-11-05 本地修正改为复用应用 `skills_section.md` 并允许公开只读内置参考跨 Skill 依赖；复制/脚本仍要求对应 Skill 成功加载，私人层仍禁止。该修正因 Ubuntu 管理连接不可达尚未发布。
+v20 已接入共享提问工具、回答/重连快照、安全样张、上下文与恢复投影，v21 继续对齐公开内置依赖素材复制。共享执行循环仍不代表全部外部依赖已可用：用户工具与文件保留 Hosted 沙箱适配，缺失的解析运行时、模型服务及检索服务按实际返回不可用。私人 Skill 层仍禁止，内置脚本仍需先加载对应 Skill。
 
 桌面入口、Gateway/Services、工具授权、原生账号及既有数据目录不变。新增配置只有显式启动在线宿主才使用，桌面不自动生成用户容器。
 
@@ -104,7 +104,7 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 
 ## 6. 文件与部署入口
 
-2026-11-05 网页菜单 v16 起，VPS 同时提供无账号数据的 `/work/`、`/work/hosted-work.html` 静态入口和公开资源，沿用原 CSP/no-store；前端发布与 Ubuntu API 发布可独立进行。页面入口和 assets 必须指向同一已验证静态版本并保留旧 hash。动态 `/work/widget-frame.html?channel=...`、管理 API、账号 API 和 WebSocket 仍由 Ubuntu 处理，不把动态 Widget 模板直接当普通静态页面提供。浏览器/终端未接入时，Hosted 新建菜单隐藏两项；桌面保留。
+VPS 提供无账号数据的 `/work/`、`/work/hosted-work.html` 和公开资源；v24 起 `/work/admin/`、`/work/hosted-admin.html` 同样直供该 release 的独立 `hosted-admin.html`，不能误指向普通会话 HTML。沿用原 CSP/no-store，前端发布与 Ubuntu API 可独立进行。各 HTML 入口和 assets 必须指向同一已验证静态版本并保留旧 hash。动态 `/work/widget-frame.html?channel=...`、管理 API、账号 API 和 WebSocket 仍由 Ubuntu 处理，不把动态 Widget 模板直接当普通静态页面提供。浏览器/终端按用户要求在 Hosted 新建菜单隐藏，桌面保留。
 
 网页普通 Work 继续直接使用共享 `AgentRunner`，进度 Hook 继承应用 `AgentProgressHook`，通道适配只负责将推理、回答、工具与 Widget 转成既有桌面事件；保留真实 call/turn/input ID，不另造核心循环或逐轮固定提示。参数做有界展示，工具原始结果只保留在执行历史中，不重复塞入进度。失败关闭已有流并显示安全原因，unknown 不重派或伪装完成。
 
@@ -113,6 +113,10 @@ Codex/GPT 与 WorkBuddy：复用 NativeWorkProvider，WorkBuddy 内部 ExecutorI
 Office 导出已沿用应用的交付协议。对同轮再次 `deliver_file`，适配器只命中当前 scope 中已登记的逻辑路径/大小/SHA，重新核对后复用 `DeliverFileTool`，由同一 bus 去重；临时 workspace context 必须恢复，核对间变化仍拒绝。同名未登记文件不得借账号文档根旁路交付，继续原 gVisor 生命周期；不同会话或新轮次不继承该登记。核心 Office 与全部编辑器产物保持共用。
 
 Codex 管理页为 `/work/admin/`，API 为 `/api/work/admin/codex` 及 `/probe`，每次都通过原 Auth `/auth/identity/admin` 验证管理员。服务入口显式注入可信配置路径，网页不能选择运营配置或凭据位置。`HostedCodexSettings` 只存连接与计价模型映射草稿；保存采用原文件摘要版本校验、受限备份及原子替换，不改变公开 `models`、Qwen、认证或用户状态，不触发重启。
+
+v23/v24 管理页统一为“工作台模型与计费”，原 Auth 后台仅新增同源导航链接。`/api/work/admin/models` 只管理 `HostedWorkModel` 已定义的免费 `source=mona` 线路；只接收密钥的环境变量引用，拒绝未载入凭据、其他来源覆盖、旧版本及活动/未知任务期间保存。与 Codex 草稿共用版本和文件锁，原子写入后在无 await 的空闲临界区更新共享运行配置；恢复页面焦点时刷新公开模型设置，不覆盖正在派发的任务参数。供应商 URL 全量校验 DNS 公网地址并固定实际连接 IP，保留原 Host/TLS SNI，拒绝重定向与跨 origin；只允许保留已有受控字面回环 origin，不开放新内网地址。
+
+价格只读取 Auth 现有 `/admin/credits/model-prices` 的启用 token 价格版本，修改继续通过原“模型服务 → 模型计价”；不另建钱包或价表。Codex 账务模型映射仍是草稿，`billing.ready=false`；免费 API 保存和价格展示不等于 Codex 收费已开通。
 
 当前共享钱包的原生 Work 计费桥尚未实现，管理页 `billing.ready=false`、`public_enabled=false`。公开模型列表过滤 Codex，任务准入也明确拒绝 Codex，防止手动加入运行模型后免费执行；Qwen 继续对所有已登录账号免费。管理员连接探测使用专用 home、空 cwd 和原生协议，不执行模型任务、不伪造模型缓存，不把订阅登录或连接成功当作收费已上线。
 

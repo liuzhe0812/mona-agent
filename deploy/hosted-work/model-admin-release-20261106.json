@@ -1,0 +1,272 @@
+{
+  "release": "20261106-model-admin-v23-ui-v24c",
+  "deployed": true,
+  "admin_entry": "https://mona-ai.cn/work/admin/",
+  "paid_codex_enabled": false,
+  "shared_wallet_bridge_ready": false,
+  "qwen": {
+    "all_logged_in_accounts": true,
+    "free": true,
+    "new_rate_limits": false
+  },
+  "packages": [
+    {
+      "release": "20261106-style-preview-v21",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\style-preview-20261106\\work-style-preview-v21.delta.tar.gz",
+      "bytes": 594408,
+      "sha256": "1a0fff8e9a1859bf9092e4afae3d5b14e9581e081606bf00143b7094f05c8341",
+      "release_manifest_sha256": "07b6d16636937ab37a7b03978de19a99867e4a306d9cde9275b5a43210f31529",
+      "changed_files": 2,
+      "release_files": 5636,
+      "scope": [
+        "mona/hosted_work/skills.py",
+        "tests/hosted_work/test_capabilities.py"
+      ],
+      "frontend_changed": false
+    },
+    {
+      "release": "20261106-hide-ai-edit-v22",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\hide-ai-edit-20261106\\work-hide-ai-edit-v22.delta.tar.gz",
+      "bytes": 2379317,
+      "sha256": "01842e80b1720cf383ddb53cb1f8d8481007ef47bc0fc9083ced67721ee6f730",
+      "changed_files": 63,
+      "static_files": 4484,
+      "office_unchanged": 465,
+      "backend_changed": false
+    },
+    {
+      "release": "20261106-model-admin-v23",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\model-admin-20261106\\work-model-admin-v23.delta.tar.gz",
+      "bytes": 608626,
+      "sha256": "8441657c31411fd9a7e53e09e6ee357675f86bb28f59a75cf9e3a2504b785a44",
+      "release_manifest_sha256": "102d79571a26b8e55a6963fc2fb66ba3eb311c2f47f9480e8a818567ffea132a",
+      "changed_files": 7,
+      "release_files": 5640,
+      "scope": [
+        "mona/hosted_work/admin.py",
+        "mona/hosted_work/model_admin.py",
+        "mona/hosted_work/model_transport.py",
+        "mona/hosted_work/model_access.py",
+        "mona/hosted_work/service.py",
+        "tests/hosted_work/test_model_admin.py",
+        "tests/hosted_work/test_model_transport.py"
+      ],
+      "paid_codex_enabled": false
+    },
+    {
+      "release": "20261106-model-admin-ui-v24",
+      "artifact": "D:\\liuzhe\\Desktop\\code\\Mona\\output\\hosted-work\\model-admin-20261106\\work-model-admin-ui-v24.delta.tar.gz",
+      "bytes": 2784602,
+      "sha256": "2cb1368280a00be0702a539c13d829982d60fd9b09cae28a3a44f4aacc1e2124",
+      "changed_files": 345,
+      "static_files": 4827,
+      "office_unchanged": 465,
+      "backend_changed": false
+    }
+  ],
+  "production": {
+    "passed": true,
+    "ubuntu": {
+      "unit": {
+        "MainPID": "644369",
+        "NRestarts": "0",
+        "WorkingDirectory": "/home/liuzhe/mona-hosted-work/releases/20261106-model-admin-v23/content",
+        "ActiveState": "active"
+      },
+      "files_verified": 5640,
+      "manifest_sha256": "102d79571a26b8e55a6963fc2fb66ba3eb311c2f47f9480e8a818567ffea132a",
+      "config_mode": "0o600",
+      "counts": {
+        "sessions": 25,
+        "runs": 31,
+        "files": 6
+      },
+      "run_statuses": {
+        "cancelled": 4,
+        "completed": 21,
+        "failed": 5,
+        "interrupted": 1
+      },
+      "operations": {
+        "finished": 1
+      },
+      "public_model_ids": [
+        "qwen"
+      ],
+      "qwen_source": "mona",
+      "max_iterations": 100,
+      "docker_pid": "78383",
+      "tunnel_pid": "423172",
+      "original_containers_unchanged": true,
+      "cloud_sync_enabled": false
+    },
+    "vps": {
+      "static_root": "/var/www/mona/work-releases/20261106-model-admin-ui-v24/content",
+      "files_verified": 4827,
+      "office_files": 465,
+      "manifest_sha256": "f7898c0a4cd02fb7edb341794da606a7f0e7da7f499ec5901c93dc4d0f728bf3",
+      "include": "/opt/mona-work-proxy-releases/20261106-model-admin-ui-v24c/work-locations.conf",
+      "include_sha256": "3ae0039f535a5414287e64dc1b2d5a63c0fe588c56429030ac1b6059bb06ed44",
+      "units": {
+        "nginx": "420299",
+        "mariadb": "420210",
+        "mona-work-visitor": "367299"
+      },
+      "auth_pid": "389486",
+      "oneapi_pid": "310825",
+      "admin_html_sha256": "bfcf182b03ad632945a325cdbbad8afcc27b45c44ee9b0957a747f5d693f7039",
+      "original_website_root_preserved": true
+    }
+  },
+  "model_admin_acceptance": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "synthetic_auth": false,
+    "browser_passed": true,
+    "browser": {
+      "production": true,
+      "mocked_responses": false,
+      "passed": true,
+      "phase": "complete",
+      "checks": {
+        "qwen_loaded": true,
+        "credential_loaded": true,
+        "models_synchronized": true,
+        "no_secret_fields": true,
+        "wallet_billing_ready": false,
+        "codex_public_enabled": false,
+        "anonymous_denied_read_and_write": true,
+        "normal_denied_read_and_write": true,
+        "existing_price_version": true,
+        "all_three_prices_match": true,
+        "unchanged_qwen_save": true,
+        "runtime_synchronized_after_save": true,
+        "codex_draft_preserved": true,
+        "codex_not_published": true,
+        "stale_revision_rejected": true
+      },
+      "safe": {
+        "model_id": "qwen",
+        "price_model": "deepseek-v4.1-flash-1017",
+        "price_version": 1,
+        "revision_changed": true,
+        "blocked_external_requests": 0,
+        "guarded_write_counts": {
+          "anonymous": 1,
+          "normal": 1,
+          "admin": 1,
+          "cas": 1
+        }
+      }
+    },
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "navigation_acceptance": {
+    "passed": true,
+    "production": true,
+    "mocked_responses": false,
+    "browser_passed": true,
+    "admin_sidebar_link_visible": true,
+    "real_link_navigation": true,
+    "model_settings_loaded": true,
+    "paid_codex_not_open": true,
+    "writes_attempted": 0,
+    "all_test_sessions_revoked": true,
+    "wallet_after": {
+      "available_units": 0,
+      "reserved_units": 0,
+      "active_requests": 0,
+      "version": 0
+    },
+    "wallet_unchanged": true
+  },
+  "preview_acceptance": {
+    "passed": true,
+    "scope": "style_preview",
+    "run_id": "bc76b0655d9746a2d48f02300d2fc8b1",
+    "cancelled_by_qa": true,
+    "full_presentation_completed": false,
+    "simultaneously_visible_images": 3
+  },
+  "office_control_acceptance": {
+    "passed": true,
+    "native_slides_before": 1,
+    "native_slides_after": 2,
+    "saved_bytes": 32321,
+    "refresh_persisted": true,
+    "model_executed": false
+  },
+  "auth_navigation": {
+    "published": true,
+    "path": "/opt/mona-auth-releases/20261101-auto-billing-030149/content/app/admin/index.html",
+    "candidate": "/opt/mona-auth-ui-releases/20261106-work-model-admin-nav/index.html",
+    "backup": "/opt/mona-auth-backups/work-model-admin-nav-20261106",
+    "before_sha256": "7a0f1be2f500468a1318131ebaf0d82d12932a9a24eef3e42a470e2eeefcd2ae",
+    "after_sha256": "bfcf182b03ad632945a325cdbbad8afcc27b45c44ee9b0957a747f5d693f7039",
+    "only_navigation_inserted": true,
+    "auth_restarted": false,
+    "auth_pid": "389486",
+    "wallet_or_payment_modified": false
+  },
+  "auth_navigation_commit": {
+    "auth_commit": "1268e0cb3c15aaecaf85e478d8c7ecff7a3c81a4",
+    "only_navigation_committed": true,
+    "unrelated_dirty_html_preserved": true
+  },
+  "validation": {
+    "linux_backend_passed": 112,
+    "frontend_related_passed": 14,
+    "isolated_typecheck": true,
+    "isolated_build": true,
+    "real_free_model_tls_ip_connection": {
+      "passed": true,
+      "provider": "qwen",
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 17,
+        "completion_tokens": 33,
+        "total_tokens": 50
+      },
+      "tls_verified": true,
+      "dns_ip_pinned": true,
+      "model_credentials_printed": false
+    }
+  },
+  "ui_routes": {
+    "published": true,
+    "include": "/opt/mona-work-proxy-releases/20261106-model-admin-ui-v24c/work-locations.conf",
+    "include_sha256": "3ae0039f535a5414287e64dc1b2d5a63c0fe588c56429030ac1b6059bb06ed44",
+    "static_root": "/var/www/mona/work-releases/20261106-model-admin-ui-v24/content",
+    "manifest_sha256": "f7898c0a4cd02fb7edb341794da606a7f0e7da7f499ec5901c93dc4d0f728bf3",
+    "backup": "/var/www/mona/backups/model-admin-20261106-v24c",
+    "all_spa_entries_current": true,
+    "admin_uses_distinct_html": true,
+    "only_work_include_changed": true,
+    "units_unchanged": true,
+    "api_socket_widget_proxy_unchanged": true
+  },
+  "failure_evidence_preserved": [
+    "model-admin-20261106/production-acceptance.json: legacy admin HTML",
+    "model-admin-20261106/production-acceptance2.json: wrong ordinary HTML entry",
+    "hide-ai-edit-20261106/production-ui/acceptance.json: cold native iframe timeout"
+  ],
+  "commits": [
+    "261927354",
+    "f3922052b",
+    "638847886",
+    "1311bb8fc"
+  ],
+  "unrelated_dirty_work_excluded": true,
+  "wallet_payment_subscription_device_logic_changed": false,
+  "cloud_sync_enabled": false,
+  "docker_restarted": false,
+  "paused_workers_resumed": false
+}
