@@ -54,6 +54,7 @@ interface MessageRejection {
   uncertain?: boolean;
   inputId?: string;
   stopOutcome?: "unknown" | "unsupported";
+  stopTurnId?: string;
   reason?: MessageAdmissionReason;
 }
 
@@ -637,7 +638,8 @@ export function useMonaStream(
   const [isCompacting, setIsCompacting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stoppingRef = useRef(false);
-  const stopRequestRef = useRef<{ turnId?: string } | null>(null);
+  const stopRequestRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
+  const unresolvedStopRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
@@ -696,6 +698,7 @@ export function useMonaStream(
     if (activeChatRef.current !== deletedChatId) return;
     pendingMessageRef.current = null;
     stopRequestRef.current = null;
+    unresolvedStopRef.current = null;
     clearPendingStreamWork();
     setDeletionVersion((value) => value + 1);
   }), [client, clearPendingStreamWork]);
@@ -1029,6 +1032,7 @@ export function useMonaStream(
     setLiveTokenUsage(undefined);
     stoppingRef.current = false;
     stopRequestRef.current = null;
+    unresolvedStopRef.current = null;
     setStopping(false);
     buffer.current = null;
     activeAssistantRef.current = null;
@@ -1050,6 +1054,14 @@ export function useMonaStream(
   useEffect(() => {
     if (!chatId || !client) return;
 
+    const confirmStop = (turnId: string | undefined) => {
+      if (!turnId) return null;
+      const confirmed = unresolvedStopRef.current?.turnId === turnId ? unresolvedStopRef.current : null;
+      if (confirmed) unresolvedStopRef.current = null;
+      if (stopRequestRef.current?.turnId === turnId) stopRequestRef.current = null;
+      setMessageRejection((current) => current?.stopOutcome === "unknown" && current.stopTurnId === turnId ? null : current);
+      return confirmed;
+    };
     const handle = (ev: InboundEvent) => {
       if (client.isChatDeleted(chatId)) return;
       if (ev.event === "error") {
@@ -1214,6 +1226,7 @@ export function useMonaStream(
         if (ev.status === "running") {
           if (ev.turn_id && stopRequestRef.current?.turnId && ev.turn_id !== stopRequestRef.current.turnId) {
             stopRequestRef.current = null;
+            unresolvedStopRef.current = null;
             stoppingRef.current = false;
             suppressStreamUntilTurnEndRef.current = false;
             setStopping(false);
@@ -1227,8 +1240,11 @@ export function useMonaStream(
           }
         } else {
           // Attach may report the previous idle state before this message is admitted.
-          if ((pendingMessageRef.current?.awaitingAdmission && !stoppingRef.current) || client.getRunStartedAt(chatId) !== null) return;
-          if (stoppingRef.current) acceptPendingMessage();
+          const confirmed = ev.stop_confirmed === true ? confirmStop(ev.turn_id) : null;
+          const confirmedInput = !!confirmed?.inputId && confirmed.inputId === pendingMessageRef.current?.messageId;
+          if ((pendingMessageRef.current?.awaitingAdmission && !stoppingRef.current && !confirmedInput)
+              || client.getRunStartedAt(chatId) !== null) return;
+          if (stoppingRef.current || confirmedInput) acceptPendingMessage();
           setIsStreaming(false);
           setIsAwaitingModelResponse(false);
           setIsCompacting(false);
@@ -1298,6 +1314,7 @@ export function useMonaStream(
       if (ev.event === "turn_end") {
         const pending = pendingMessageRef.current;
         if (pending && ev.task_id && ev.task_id !== pending.taskId) return;
+        if (ev.stop_confirmed === true) confirmStop(ev.turn_id);
         acceptPendingMessage();
         setMessages((previous) => finishPendingWidgets(previous));
         setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
@@ -1941,8 +1958,10 @@ export function useMonaStream(
     const pending = pendingMessageRef.current;
     if (pending?.awaitingAdmission && client.cancelUnsentInput?.(chatId, pending.messageId)) return;
     const turn = client.getWorkTurn?.(chatId);
-    const request = { turnId: pending?.awaitingAdmission && turn?.inputId !== pending.messageId ? undefined : turn?.turnId };
+    const request = { turnId: pending?.awaitingAdmission && turn?.inputId !== pending.messageId ? undefined : turn?.turnId,
+      inputId: turn?.inputId };
     stopRequestRef.current = request;
+    unresolvedStopRef.current = request;
     stoppingRef.current = true;
     setStopping(true);
     setMessageRejection(null);
@@ -1972,8 +1991,12 @@ export function useMonaStream(
       setStopping(false);
       suppressStreamUntilTurnEndRef.current = false;
       const current = client.getWorkTurn?.(chatId);
-      if (current && request.turnId && current.turnId !== request.turnId) return;
+      if (current && request.turnId && current.turnId !== request.turnId) {
+        if (unresolvedStopRef.current === request) unresolvedStopRef.current = null;
+        return;
+      }
       if (outcome === "stopped" || outcome === "already_finished") {
+        unresolvedStopRef.current = null;
         const started = client.getRunStartedAt(chatId);
         setIsStreaming(started !== null);
         setRunStartedAt(started);
@@ -1981,8 +2004,10 @@ export function useMonaStream(
         if (started === null) setIsCompacting(false);
         onTurnEnd?.();
       } else {
+        if (!request.turnId) unresolvedStopRef.current = null;
         setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null,
-          stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown" });
+          stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown",
+          ...(request.turnId ? { stopTurnId: request.turnId } : {}) });
       }
     })();
   }, [chatId, clearActivitySegment, client, flushPendingStreamEvents, isStreaming, onTurnEnd]);

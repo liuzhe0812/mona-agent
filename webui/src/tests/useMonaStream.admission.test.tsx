@@ -225,6 +225,68 @@ describe("chat admission and runtime recovery", () => {
     expect(result.current.messageRejection).toBeNull();
   });
 
+  it("does not show a stale unknown stop after the exact hosted turn is confirmed finished", async () => {
+    const { socket, wrapper } = setup();
+    const onTurnEnd = vi.fn();
+    const { result } = renderHook(() => useMonaStream("chat", empty, false, onTurnEnd), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "turn-a", stop_confirmed: true } as InboundEvent));
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "unknown" }));
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(onTurnEnd).toHaveBeenCalledTimes(1);
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
+  });
+
+  it("dismisses an unknown stop only after the same hosted turn is confirmed finished", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "unknown" }));
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle", turn_id: "other", stop_confirmed: true } as InboundEvent));
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle", turn_id: "turn-a", stop_confirmed: true } as InboundEvent));
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
+  });
+
+  it("resolves the exact stopped turn after reconnect when its admission reply was lost", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("original input"));
+    const inputId = socket.messages[0].input_id;
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10,
+      turn_id: "turn-a", input_id: inputId }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "unknown" }));
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle", turn_id: "turn-a", stop_confirmed: true } as InboundEvent));
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("retains a truly unknown stop after an unconfirmed desktop turn end", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "turn-a" }));
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "unknown", external_unknown: true } as InboundEvent));
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+  });
+
   it("does not apply a late stop result to a different visible chat", async () => {
     const { socket, wrapper } = setup();
     const { result, rerender } = renderHook(({ chat }) => useMonaStream(chat, empty), {

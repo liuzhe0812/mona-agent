@@ -274,6 +274,21 @@ class DesktopWire:
             run = self.service.store.run(peer.owner, active[0])
             await peer.socket.send_json(self._goal(run, self.state.get(peer.owner, "run:" + run["id"], {})))
         else:
+            latest = self.service.store.db.execute(
+                "SELECT id FROM runs WHERE owner=? AND session_id=? ORDER BY created DESC LIMIT 1",
+                (peer.owner, sid)).fetchone()
+            if latest:
+                run = self.service.store.run(peer.owner, latest[0])
+                task = self.service.tasks.get((peer.owner, run["id"]))
+                if task is not None and not self._task_finished(task):
+                    state = "unknown" if task.done() else "cancelling"
+                    await peer.socket.send_json(self._goal({**run, "status": state},
+                        self.state.get(peer.owner, "run:" + run["id"], {})))
+                    return
+                if self._finished_recorded(peer.owner, run):
+                    await peer.socket.send_json({"event": "goal_status", "chat_id": sid, "status": "idle",
+                                                 "turn_id": run["id"], "stop_confirmed": True})
+                    return
             await peer.socket.send_json({"event": "goal_status", "chat_id": sid, "status": "idle"})
 
     @staticmethod
@@ -282,6 +297,14 @@ class DesktopWire:
         return {"event": "goal_status", "chat_id": run["session_id"], "status": "running",
                 "turn_id": run["id"], "input_id": metadata.get("input_id"), "turn_state": state,
                 "started_at": run["created"]}
+
+    @staticmethod
+    def _task_finished(task) -> bool:
+        return task.done() and not task.cancelled() and task.exception() is None
+
+    def _finished_recorded(self, owner: str, run: dict) -> bool:
+        return (run["status"] not in {"running", "cancelling", "unknown"}
+                and self.state.get(owner, "wire_finished:" + run["id"]) == run["status"])
 
     def _record_user(self, owner: str, run: dict, metadata: dict):
         if not metadata:
@@ -564,19 +587,25 @@ class DesktopWire:
         if run["session_id"] != sid:
             raise WorkError("request_conflict", "停止目标不属于当前会话。", 409)
         source = _scope(frame.get("request_id"), "请求标识")
-        outcome = "already_finished"
-        if run["status"] in {"running", "cancelling"}:
+        was_active = run["status"] in {"running", "cancelling"}
+        if was_active:
             await self.service.stop(peer.owner, rid)
-            task = self.service.tasks.get((peer.owner, rid))
-            if task is not None:
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), 7.5)
-                except TimeoutError:
-                    pass
-            current = self.service.store.run(peer.owner, rid)
-            outcome = "stopped" if current["status"] not in {"running", "cancelling", "unknown"} else "unknown"
-        elif run["status"] == "unknown":
+        task = self.service.tasks.get((peer.owner, rid))
+        if task is not None and not task.done() and run["status"] != "unknown":
+            try:
+                await asyncio.wait_for(asyncio.shield(task), 7.5)
+            except TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                if not task.cancelled():
+                    raise
+            except Exception:
+                pass  # A failed cleanup cannot confirm that the task stopped.
+        current = self.service.store.run(peer.owner, rid)
+        if not self._finished_recorded(peer.owner, current) or task is not None and not self._task_finished(task):
             outcome = "unknown"
+        else:
+            outcome = "stopped" if was_active else "already_finished"
         await peer.socket.send_json({"event": "work_turn_stop_result", "ok": True, "chat_id": sid,
                                      "turn_id": rid, "request_id": source, "outcome": outcome})
 
@@ -797,6 +826,7 @@ class DesktopWire:
             await self.emit_to_chat(owner, sid, self._goal(stored, metadata))
         else:
             ending = {"event": "turn_end", "turn_id": rid, "input_id": metadata.get("input_id"), "task_id": task_id,
+                      "stop_confirmed": True,
                       "token_usage": usage}
             self.state.append(owner, sid, ending, f"run:{rid}:turn_end:{status}")
             await self.emit_to_chat(owner, sid, ending)

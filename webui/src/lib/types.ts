@@ -1305,6 +1305,7 @@ export type InboundEvent =
       chat_id: string;
       turn_id?: string;
       input_id?: string;
+      stop_confirmed?: boolean;
       turn_state?: "running" | "stopping" | "unknown";
       latency_ms?: number;
       task_id?: string;
@@ -1318,6 +1319,7 @@ export type InboundEvent =
       chat_id: string;
       turn_id?: string;
       input_id?: string;
+      stop_confirmed?: boolean;
       turn_state?: "running" | "stopping" | "unknown";
       /** Turn executing (user message through agent loop). */
       status: "running" | "idle";

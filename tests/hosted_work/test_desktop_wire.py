@@ -6,13 +6,14 @@ import base64
 import hashlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp import WSMsgType, WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from mona.config.schema import HostedWorkConfig
-from mona.hosted_work.contracts import WorkError
+from mona.hosted_work.contracts import NewSession, NewTurn, WorkError
 from mona.hosted_work.desktop_store import DesktopStore, request_id
 from mona.hosted_work.desktop_wire import SOCKET_PATH, DesktopWire
 from mona.hosted_work.service import WorkService
@@ -73,8 +74,8 @@ class ExecutorFixture:
 
 
 class HookedService(WorkService):
-    async def _drive(self, owner, token, run, engine):
-        await super()._drive(owner, token, run, engine)
+    async def _drive(self, owner, token, run, engine, **kwargs):
+        await super()._drive(owner, token, run, engine, **kwargs)
         current = self.store.run(owner, run["id"])
         await self.wire.on_run_finish(owner, current, current["result"])
 
@@ -292,9 +293,62 @@ async def test_stop_requires_exact_owner_chat_and_confirmed_executor_end(tmp_pat
         assert not (await receive(bob, "work_turn_stop_result"))["ok"]
         assert not executor.release.is_set()
         await alice.send_json({"type": "stop_work_turn", "chat_id": sid, "expected_turn_id": running["turn_id"], "request_id": "stop-a"})
-        stopped = await receive(alice, "work_turn_stop_result")
+        frames = []
+        async with asyncio.timeout(3):
+            while not frames or frames[-1].get("event") != "work_turn_stop_result":
+                frames.append(await alice.receive_json())
+        stopped = frames[-1]
         assert stopped["ok"] and stopped["turn_id"] == running["turn_id"] and stopped["outcome"] == "stopped"
+        assert any(frame.get("event") == "turn_end" and frame.get("turn_id") == running["turn_id"]
+                   and frame.get("stop_confirmed") is True for frame in frames)
         assert wire.service.store.run(ALICE, running["turn_id"])["status"] == "cancelled"
+
+
+async def test_stop_and_reattach_wait_for_the_exact_run_cleanup(tmp_path, monkeypatch):
+    client, wire, _, _ = await make_client(tmp_path)
+    async with client:
+        sid, rid = "a" * 32, "c" * 32
+        store = wire.service.store
+        store.create_session(ALICE, NewSession(request_id=sid))
+        store.create_run(ALICE, sid, NewTurn(request_id=rid, model_id="qwen", text="work"))
+        release = asyncio.Event()
+        task = asyncio.create_task(release.wait())
+        wire.service.tasks[ALICE, rid] = task
+
+        class Capture:
+            def __init__(self): self.frames = []
+            async def send_json(self, frame): self.frames.append(frame)
+
+        socket = Capture()
+        peer = SimpleNamespace(owner=ALICE, socket=socket, chats=set())
+        async def stop(_owner, _rid):
+            store.finish(ALICE, rid, "cancelled", {"message": "stopped"})
+        monkeypatch.setattr(wire.service, "stop", stop)
+        real_wait_for = asyncio.wait_for
+        async def wait_for(awaitable, timeout):
+            return await real_wait_for(awaitable, 0.01 if timeout == 7.5 else timeout)
+        monkeypatch.setattr("mona.hosted_work.desktop_wire.asyncio.wait_for", wait_for)
+        try:
+            await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop"})
+            assert socket.frames[-1]["outcome"] == "unknown"
+            await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop-again"})
+            assert socket.frames[-1]["outcome"] == "unknown"
+            socket.frames.clear()
+            await wire._attach(peer, sid)
+            status = next(frame for frame in socket.frames if frame["event"] == "goal_status")
+            assert status["status"] == "running" and status["turn_id"] == rid
+            assert not status.get("stop_confirmed")
+            wire.state.set(ALICE, "wire_finished:" + rid, "cancelled")
+            release.set()
+            await task
+            socket.frames.clear()
+            await wire._attach(peer, sid)
+            status = next(frame for frame in socket.frames if frame["event"] == "goal_status")
+            assert status["status"] == "idle" and status["turn_id"] == rid and status["stop_confirmed"] is True
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            wire.service.tasks.pop((ALICE, rid), None)
 
 
 async def test_single_use_tickets_and_auth_rechecked_before_each_frame(tmp_path):
@@ -359,6 +413,7 @@ async def test_unknown_result_is_not_reported_as_success_and_platform_requests_a
         await receive(socket, "delta")
         executor.release.set()
         unknown = await receive(socket, "goal_status", lambda frame: frame.get("turn_state") == "unknown")
+        assert not unknown.get("stop_confirmed")
         run = wire.service.store.run(ALICE, unknown["turn_id"])
         assert run["status"] == "unknown"
         await wire.on_run_finish(ALICE, run, {"content": "forged success", "status": "completed"})
