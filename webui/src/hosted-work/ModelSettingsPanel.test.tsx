@@ -36,6 +36,9 @@ function setup(options: Options = {}) {
   let sourceModels = options.codexModels ?? [];
   vi.mocked(fetch).mockImplementation(async (input, init) => {
     const url = String(input);
+    if (url === "/api/work/admin/image") return response({ revision, synchronized: true,
+      configuration: { enabled: false, price: null },
+      availability: { ready: false, message: "请先开放一个 Codex 模型，生图暂不可用。" } });
     if (url === "/api/work/admin/models/discover") {
       if (options.discoveryStatus) return response({ error: options.discoveryError ?? "model_catalog_unavailable" }, options.discoveryStatus);
       const body = JSON.parse(init?.body as string);
@@ -110,6 +113,14 @@ async function openSettings(name: string) {
 }
 
 describe("automatically discovered work models", () => {
+  it("places image settings only under the Codex provider", async () => {
+    render(<ModelSettingsPanel token="work-admin-token" />);
+    await card("Qwen3.7 Plus");
+    expect(screen.queryByRole("button", { name: "设置 GPT 生图" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Codex CLI" }));
+    expect(screen.getByRole("button", { name: "设置 GPT 生图" })).toBeInTheDocument();
+  });
+
   it("shows a compact list with one switch and settings action per model", async () => {
     render(<ModelSettingsPanel token="work-admin-token" />);
     await card("Qwen3.7 Plus");

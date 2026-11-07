@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AdminRequestError, isValidPriceAmount, requestCodexStatus, requestModelDiscovery, requestModelSettings,
   type ApiModelConfiguration, type BillingMode, type CodexStatus, type DiscoveredModel, type ManagedModel,
   type ModelPrice, type ModelSettings } from "./model-admin-api";
+import { ImageSettingsEntry } from "./ImageSettingsEntry";
 
 type Provider = "custom" | "codex";
 type Connection = { apiBase: string; apiKeyEnv: string };
@@ -532,6 +533,7 @@ export function ModelSettingsPanel({ token }: { token: string }) {
             : <p className="text-ui text-muted-foreground">{codex.connection.message || "尚未检测连接。"}</p>}
         </div>}
         {notice && <p role="status" className="text-ui text-muted-foreground">{notice}</p>}
+        {provider === "codex" && <ImageSettingsEntry token={token} onSaved={() => setReload(value => value + 1)} />}
         <div className="space-y-4 border-t border-border pt-4">
           <h3 className="text-title-sm font-semibold">模型列表</h3>
           <p className="text-caption text-muted-foreground">模型权限以实际调用为准。</p>

@@ -39,7 +39,11 @@ export function getHostedPlatform(): Readonly<HostedPlatformConfiguration> | nul
   return activeSession?.configuration ?? null;
 }
 
-export async function hostedPlatformFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function hostedPlatformFetch(
+  url: string,
+  init?: RequestInit,
+  options?: { logoutOnUnauthorized?: boolean },
+): Promise<Response> {
   const session = activeSession;
   if (!session) throw new HostedPlatformError("工作台连接尚未就绪。", 0, "not_connected");
   const target = new URL(url, window.location.origin);
@@ -60,7 +64,7 @@ export async function hostedPlatformFetch(url: string, init?: RequestInit): Prom
   if (activeSession !== session) {
     throw new HostedPlatformError("账号已变化，请在原账号中核对操作结果。", 0, "account_changed");
   }
-  if (response.status === 401 && !session.unauthorized) {
+  if (response.status === 401 && options?.logoutOnUnauthorized !== false && !session.unauthorized) {
     session.unauthorized = true;
     session.configuration.onUnauthorized?.();
   }

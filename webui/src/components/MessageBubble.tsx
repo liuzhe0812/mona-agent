@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
+import { ConversationFileContext } from "@/components/deliver/ConversationFileContext";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
@@ -42,6 +44,7 @@ import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 import { InlineWidget } from "@/components/visualizer/InlineWidget";
 import { openExternalUrl } from "@/lib/tauri";
+import { fetchGeneratedMedia, isGeneratedMediaUrl } from "@/hosted-work/generated-media";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
@@ -566,12 +569,59 @@ export function MessageMedia({
   media: UIMediaAttachment[];
   align: "left" | "right";
 }) {
+  const sessionKey = useContext(ConversationFileContext)?.sessionKey ?? "";
+  const generatedKey = JSON.stringify({ sessionKey, sources: [...new Set(media
+    .filter((item) => item.kind === "image" && isGeneratedMediaUrl(item.url))
+    .map((item) => item.url!))] });
+  const [generated, setGenerated] = useState<{ key: string; urls: Record<string, string>; failed: string[] }>(
+    { key: "", urls: {}, failed: [] },
+  );
+  useEffect(() => {
+    const { sessionKey: sourceSession, sources } = JSON.parse(generatedKey) as { sessionKey: string; sources: string[] };
+    if (sources.length === 0) return;
+    const controller = new AbortController();
+    const created = new Set<string>();
+    let active = true;
+    let cursor = 0;
+    const revoke = () => { for (const url of created) URL.revokeObjectURL(url); created.clear(); };
+    const accountChanged = () => {
+      active = false; controller.abort(); revoke();
+      setGenerated({ key: generatedKey, urls: {}, failed: [] });
+    };
+    window.addEventListener("mona-account-changed", accountChanged);
+    const worker = async () => {
+      while (active && cursor < sources.length) {
+        const source = sources[cursor++];
+        try {
+          const blob = await fetchGeneratedMedia(source, sourceSession, controller.signal);
+          if (!active) return;
+          const url = URL.createObjectURL(blob);
+          created.add(url);
+          setGenerated((previous) => ({ key: generatedKey,
+            urls: { ...(previous.key === generatedKey ? previous.urls : {}), [source]: url },
+            failed: previous.key === generatedKey ? previous.failed : [] }));
+        } catch {
+          if (active) setGenerated((previous) => ({ key: generatedKey,
+            urls: previous.key === generatedKey ? previous.urls : {},
+            failed: [...(previous.key === generatedKey ? previous.failed : []), source] }));
+        }
+      }
+    };
+    for (let i = 0; i < Math.min(4, sources.length); i++) void worker();
+    return () => {
+      active = false; controller.abort(); revoke();
+      window.removeEventListener("mona-account-changed", accountChanged);
+    };
+  }, [generatedKey]);
   if (media.length === 0) return null;
   const images: UIImage[] = [];
   const nonImages: UIMediaAttachment[] = [];
   for (const item of media) {
     if (item.kind === "image") {
-      images.push({ url: item.url, name: item.name });
+      const url = isGeneratedMediaUrl(item.url)
+        ? generated.key === generatedKey && item.url ? generated.urls[item.url] : undefined
+        : item.url;
+      images.push({ url, name: item.name });
     } else {
       nonImages.push(item);
     }
@@ -587,6 +637,9 @@ export function MessageMedia({
       {images.length > 0 ? (
         <UserImages images={images} align={align} size={align === "left" ? "large" : "compact"} />
       ) : null}
+      {generated.key === generatedKey && generated.failed.length > 0 && (
+        <span role="status" className="text-caption text-muted-foreground">图片暂时无法查看，请刷新会话后重试。</span>
+      )}
       {nonImages.map((item, i) => (
         <MediaCell key={`${item.url ?? item.name ?? item.kind}-${i}`} media={item} />
       ))}
