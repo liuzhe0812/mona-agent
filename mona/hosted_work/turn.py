@@ -150,6 +150,12 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         if allowed is not None:
             tools.registry.set_allowed_tool_names(allowed | {tool.name})
 
+    image_runtime = None
+    if payload.get("desktop_ui") and payload.get("hosted_image"):
+        from mona.hosted_work.image_runtime import ImageRuntime
+
+        image_runtime = ImageRuntime(config, payload, sandbox, tools)
+        register(image_runtime.tool())
     if payload.get("desktop_ui"):
         from mona.hosted_work.question_tool import build_question_tool
         question = build_question_tool(config, payload, sandbox, emit, tools.pending_delivery_files)
@@ -177,6 +183,8 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         await emit("delta", {"text": entry.reply})
         await emit("history", {"messages": records})
         await runtime.persist_state()
+        if image_runtime is not None:
+            await image_runtime.close()
         return {"status": "completed", "content": entry.reply, "message": "", "usage": {}, "final_usage": {}}
     window = runtime.window
     hook = WorkHook(emit, authorize, payload, runtime)
@@ -223,7 +231,13 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
 
     try:
         try:
-            result = await AgentRunner(provider).run(AgentRunSpec(
+            if image_runtime is not None:
+                from mona.hosted_work.image_runtime import HostedImageRunner
+
+                runner = HostedImageRunner(provider, image_runtime)
+            else:
+                runner = AgentRunner(provider)
+            result = await runner.run(AgentRunSpec(
             initial_messages=messages, tools=tools.registry, model=selection.model,
             max_iterations=config.max_iterations, max_tool_result_chars=100000,
             max_tokens=selection.max_output_tokens, reasoning_effort=selection.reasoning_effort,
@@ -247,6 +261,8 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
                         result.messages.extend(await children.injection_callback())
         finally:
             await children.close()
+            if image_runtime is not None:
+                await image_runtime.close()
         await hook.flush()
         await emit("history", {"messages": runtime.history_for_storage(result.messages)})
         await runtime.persist_state(result.messages)

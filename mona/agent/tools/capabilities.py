@@ -236,6 +236,11 @@ class LoadCapabilityTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    def _load_image_skill(self) -> str:
+        from mona.agent.skills import SkillsLoader
+
+        return SkillsLoader(self._workspace, agent_id=self._agent_id).load_skills_for_context(["image-generation"])
+
     async def execute(self, capabilities: list[str], **kwargs: Any) -> str:
         requested = {
             name.strip()
@@ -278,12 +283,7 @@ class LoadCapabilityTool(Tool):
         if instructions:
             parts.append(instructions)
         if "image" in added and "generate_image" in available_tools:
-            from mona.agent.skills import SkillsLoader
-
-            skill = SkillsLoader(
-                self._workspace,
-                agent_id=self._agent_id,
-            ).load_skills_for_context(["image-generation"])
+            skill = self._load_image_skill()
             if skill:
                 activate_capabilities({"skill_resources"})
                 parts.append("# Required image-generation instructions\n\n" + skill)

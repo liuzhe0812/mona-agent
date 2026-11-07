@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,6 +19,13 @@ def names(registry):
 
 def tool(name):
     return HostedTool(name, "fixture", {}, [], AsyncMock(return_value=name + " done"))
+
+
+def enable_fixture_image(instance):
+    registry = instance.registry
+    registry.register(tool("generate_image"))
+    registry.set_allowed_tool_names(set(registry.get_allowed_tool_names() or ()) | {"generate_image"})
+    instance.skills.allowed_names.add("generate_image")
 
 
 @pytest.fixture
@@ -61,6 +68,101 @@ async def test_shared_capability_loader_hides_then_enables_only_authorized_tools
     assert {"exec", "write_file"} <= names(registry)
     await registry.execute("exec", {"command": "pwd"})
     sandbox.execute.assert_awaited_once_with("pwd")
+
+
+@pytest.mark.asyncio
+async def test_image_capability_uses_hosted_builtin_loader_without_private_telemetry(factory, monkeypatch):
+    import mona.agent as agent
+
+    instance, sandbox, _editors = factory()
+    enable_fixture_image(instance)
+    loader = instance.skills.loader
+    loaded = MagicMock(wraps=loader.load_skills_for_context)
+    monkeypatch.setattr(loader, "load_skills_for_context", loaded)
+    monkeypatch.setattr(agent, "skill_usage", SimpleNamespace(
+        bump_access=lambda *_args, **_kwargs: pytest.fail("private telemetry accessed")), raising=False)
+    registry = instance.registry
+
+    result = await registry.execute("load_capability", {"capabilities": ["image"]})
+
+    loaded.assert_called_once_with(["image-generation"], track_usage=False)
+    assert "### Skill: image-generation" in result and "# Image Generation" in result
+    assert str(instance.skills.root) not in result
+    assert instance.skills.loaded == {"image-generation"}
+    assert {"generate_image", "skill_reference_read", "skill_script_run"} <= names(registry)
+    assert instance.skills.file("image-generation", "scripts/find_upstream_cases.py").is_file()
+    reference = await registry.execute("skill_reference_read", {
+        "skill": "image-generation", "ref_path": "upstream/templates-index.md",
+    })
+    assert reference and not (isinstance(reference, str) and reference.startswith("Error:"))
+    sandbox.file.assert_not_awaited()
+    sandbox.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_image_capability_stays_unavailable_without_a_registered_backend(factory, monkeypatch):
+    instance, _sandbox, _editors = factory(extra=[tool("generate_image")])
+    loaded = MagicMock(wraps=instance.skills.loader.load_skills_for_context)
+    monkeypatch.setattr(instance.skills.loader, "load_skills_for_context", loaded)
+
+    result = await instance.registry.execute("load_capability", {"capabilities": ["image"]})
+
+    assert "none in this configuration" in result
+    assert "### Skill: image-generation" not in result
+    assert not instance.registry.has("generate_image") and not instance.skills.loaded
+    loaded.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_image_capability_rejects_linked_skill_before_enabling(factory, tmp_path, monkeypatch):
+    builtin = tmp_path / "builtin"
+    private = tmp_path / "private"
+    builtin.mkdir()
+    private.mkdir()
+    (private / "SKILL.md").write_text("PRIVATE_SKILL_MUST_NOT_LOAD", encoding="utf-8")
+    try:
+        (builtin / "image-generation").symlink_to(private, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("creating a directory symlink is unavailable on this host")
+    monkeypatch.setattr("mona.hosted_work.skills.BUILTIN_SKILLS_DIR", builtin)
+    instance, _sandbox, _editors = factory()
+    enable_fixture_image(instance)
+    loaded = MagicMock(wraps=instance.skills.loader.load_skills_for_context)
+    monkeypatch.setattr(instance.skills.loader, "load_skills_for_context", loaded)
+
+    result = await instance.registry.execute("load_capability", {"capabilities": ["image"]})
+
+    assert result.startswith("Error:") and "PRIVATE_SKILL_MUST_NOT_LOAD" not in result
+    assert "generate_image" not in names(instance.registry) and not instance.skills.loaded
+    loaded.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_image_capability_rejects_detected_link_on_all_platforms(factory, monkeypatch):
+    instance, _sandbox, _editors = factory()
+    enable_fixture_image(instance)
+    skill_dir = instance.skills.root / "image-generation"
+    original = type(skill_dir).is_symlink
+    monkeypatch.setattr(type(skill_dir), "is_symlink", lambda path: path == skill_dir or original(path))
+    loaded = MagicMock(wraps=instance.skills.loader.load_skills_for_context)
+    monkeypatch.setattr(instance.skills.loader, "load_skills_for_context", loaded)
+
+    result = await instance.registry.execute("load_capability", {"capabilities": ["image"]})
+
+    assert result.startswith("Error:") and "generate_image" not in names(instance.registry)
+    assert not instance.skills.loaded
+    loaded.assert_not_called()
+
+
+def test_default_skill_context_loading_retains_desktop_usage_tracking(tmp_path, monkeypatch):
+    import mona.agent as agent
+    from mona.agent.skills import SkillsLoader
+
+    bump = MagicMock()
+    monkeypatch.setattr(agent, "skill_usage", SimpleNamespace(bump_access=bump), raising=False)
+    content = SkillsLoader(tmp_path).load_skills_for_context(["image-generation"])
+    assert "### Skill: image-generation" in content
+    bump.assert_called_once_with("image-generation", agent_id="mona")
 
 
 @pytest.mark.asyncio

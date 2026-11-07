@@ -258,3 +258,6 @@ class ModelAdmin:
 
         app.router.add_get("/api/work/admin/models", handle)
         app.router.add_put("/api/work/admin/models", handle)
+        from mona.hosted_work.image_admin import ImageAdmin
+
+        ImageAdmin(self).register(app)

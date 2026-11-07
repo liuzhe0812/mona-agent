@@ -1,20 +1,42 @@
 """Bind the shared request capability loader to Hosted Work's authorized tools."""
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from mona.agent.tools.capabilities import LoadCapabilityTool
 
 
 class HostedLoadCapabilityTool(LoadCapabilityTool):
+    def __init__(self, *, skills, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._hosted_skills = skills
+        self._image_skill: ContextVar[str | None] = ContextVar("hosted_image_skill", default=None)
+
+    def _load_image_skill(self) -> str:
+        content = self._image_skill.get()
+        if not content:
+            return ""
+        self._hosted_skills.loaded.add("image-generation")
+        self._hosted_skills._allow_resources()
+        return self._hosted_skills._public(content)
+
     async def execute(self, capabilities: list[str], **kwargs: Any) -> str:
-        # The desktop loader creates a default (private-inclusive) SkillsLoader
-        # for image generation. Hosted must not use that path; an eventual image
-        # adapter needs explicit builtin-only loader injection first.
-        if ("image" in capabilities and self._registry is not None
-                and self._registry.is_permitted("generate_image")):
-            return "Error: 图片能力尚未完成当前工作台的隔离接入。"
-        return await super().execute(capabilities, **kwargs)
+        content = None
+        if (any(isinstance(name, str) and name.strip() == "image" for name in capabilities)
+                and self._registry is not None and self._registry.is_permitted("generate_image")):
+            try:
+                self._hosted_skills.file("image-generation", "SKILL.md", loaded=False)
+                content = self._hosted_skills.loader.load_skills_for_context(["image-generation"], track_usage=False)
+                if not content:
+                    raise ValueError("missing builtin image skill")
+            except (OSError, ValueError, TypeError):
+                return "Error: 图片技能不可用，未启用图片能力。"
+        context = self._image_skill.set(content)
+        try:
+            return await super().execute(capabilities, **kwargs)
+        finally:
+            self._image_skill.reset(context)
 
 
 def retained_capability_history(history, successful_skill_reads: set[str]) -> list[dict]:

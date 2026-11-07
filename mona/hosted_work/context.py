@@ -91,7 +91,9 @@ class _SkillCatalog:
         return [name for name in self.hosted.loader.get_always_skills() if name in ready]
 
     def load_skills_for_context(self, names):
-        content = self.hosted._public(self.hosted.loader.load_skills_for_context(names))
+        for name in names:
+            self.hosted.file(name, "SKILL.md", loaded=False)
+        content = self.hosted._public(self.hosted.loader.load_skills_for_context(names, track_usage=False))
         if content:
             self.hosted.loaded.update(names)
             self.hosted._allow_resources()

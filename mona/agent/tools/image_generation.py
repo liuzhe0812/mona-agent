@@ -257,6 +257,9 @@ class ImageGenerationTool(Tool):
             return []
         return [self._resolve_reference_image(value) for value in values if value]
 
+    def _store_artifact(self, image_data_url: str, **kwargs: Any) -> dict[str, Any]:
+        return store_generated_image_artifact(image_data_url, **kwargs)
+
     async def execute(
         self,
         prompt: str,
@@ -303,7 +306,7 @@ class ImageGenerationTool(Tool):
                 if not response.images:
                     raise ImageGenerationError("模型服务未返回图片")
                 for image_data_url in response.images:
-                    artifact = store_generated_image_artifact(
+                    artifact = self._store_artifact(
                         image_data_url,
                         prompt=prompt,
                         model=model,

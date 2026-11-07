@@ -59,8 +59,7 @@ class HostedTools:
         self.fault: str | None = None
         self.pending_delivery_files: list[dict] = []
         excluded = set().union(*(CAPABILITY_TOOL_GROUPS[name] for name in ("browser", "computer", "terminal")))
-        # Image loading in the shared loader still needs a builtin-only loader
-        # injection before an image backend may be registered in hosted Work.
+        # No hosted image backend is registered until its own integration is ready.
         excluded.add("generate_image")
         editor_tools = tuple(tool for tool in editor_tools if tool.name not in excluded)
         self._document_delivery = next((tool.deliver_existing_file for tool in editor_tools
@@ -91,7 +90,6 @@ class HostedTools:
         for tool in editor_tools:
             self.registry.register(tool)
         allowed = {item[0] for item in definitions} | {tool.name for tool in editor_tools} | {"read_file"}
-        self.registry.register(HostedLoadCapabilityTool(workspace="/workspace", agent_id="mona", registry=self.registry))
         allowed.add("load_capability")
         if session_id:
             from mona.agent.tools.visualizer import ShowWidgetTool
@@ -104,6 +102,8 @@ class HostedTools:
         from mona.hosted_work.skills import HostedSkills
 
         self.skills = HostedSkills(self, allowed, history=history)
+        self.registry.register(HostedLoadCapabilityTool(workspace="/workspace", agent_id="mona", registry=self.registry,
+                                                        skills=self.skills))
         self.skills.register()
         media = [item.get("path") for item in attachments or ()
                  if isinstance(item, dict) and isinstance(item.get("path"), str)]

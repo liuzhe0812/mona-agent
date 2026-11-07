@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import mimetypes
 import os
 import re
@@ -10,7 +11,7 @@ import secrets
 import sqlite3
 import stat
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,6 +28,10 @@ from mona.hosted_work.tenant_xlsx import SandboxedXlsxEngineFactory
 PREFIX = "/api/work/desktop"
 _OWNER = re.compile(r"^[a-f0-9]{64}$")
 _MEDIA = re.compile(r"^" + PREFIX + r"/media/([A-Za-z0-9_-]{32,128})$")
+_GENERATED_MEDIA = re.compile(r"^" + PREFIX + r"/generated-media/([A-Za-z0-9_-]{32,128})$")
+_GENERATED_IMAGE = re.compile(r"^/workspace/\.generated-previews/([a-f0-9]{32})/"
+                              r"([a-f0-9]{32})/([a-f0-9]{64})\.(?:png|jpg|webp)$")
+_LEGACY_GENERATED_IMAGE = re.compile(r"^/workspace/\.generated-previews/[a-f0-9]{32}/[a-f0-9]{64}\.(?:png|jpg|webp)$")
 _SESSION = re.compile(r"^/api/sessions/([^/]+)/(webui-thread|delete|clear-workspace|set-workspace)$")
 
 
@@ -45,11 +50,12 @@ def _size(value: int) -> str:
 @dataclass(frozen=True)
 class _FileTicket:
     owner: str
-    token: str
+    token: str = field(repr=False)
     session: str
     path: str
     digest: str
     expires: float
+    requires_account: bool = False
 
 
 class DesktopAPI:
@@ -92,7 +98,9 @@ class DesktopAPI:
 
     @staticmethod
     def is_file_ticket(request: web.Request) -> bool:
-        return request.method == "GET" and _MEDIA.fullmatch(request.path) is not None
+        return request.method == "GET" and (
+            _MEDIA.fullmatch(request.path) is not None or _GENERATED_MEDIA.fullmatch(request.path) is not None
+        )
 
     async def socket(self, request: web.Request):
         return await self.office.handle(request) if TenantOffice.is_socket(request) else await self.wire.handle_socket(request)
@@ -143,6 +151,10 @@ class DesktopAPI:
         models = {key: model for key, model in self.service.config.models.items() if model_available(model, self.service.config)}
         selected = self.state.model(owner)
         selection = models.get(selected)
+        from mona.hosted_work.image_policy import image_ready, resolve_image_model
+
+        image = self.service.config.image_generation
+        image_available = image_ready(self.service.config)
         max_tokens = selection.max_output_tokens if selection else 4096
         from mona.hosted_work.codex_catalog import codex_catalog
         from mona.hosted_work.model_access import model_context_window
@@ -194,8 +206,9 @@ class DesktopAPI:
                 "browser": {"use_jev": False, "jev_ready": False},
                 "computer_use": {"use_decision_model": False, "vision_model_preset": None, "max_steps": 0,
                     "max_duration_seconds": 0, "decision_model_ready": False, "vision_model_options": []},
-                "image_generation": {"enabled": False, "provider": "", "model": "", "provider_configured": False,
-                    "default_aspect_ratio": "1:1", "default_image_size": "1K", "max_images_per_turn": 0,
+                "image_generation": {"enabled": image_available, "provider": image.provider if image_available else "",
+                    "model": resolve_image_model(self.service.config, image, selection) if image_available else "", "provider_configured": image_available,
+                    "default_aspect_ratio": "1:1", "default_image_size": "1K", "max_images_per_turn": 4 if image_available else 0,
                     "model_parameters": {}, "providers": [], "save_dir": "/workspace"},
                 "video_generation": {"enabled": False, "provider": "", "model": "", "provider_configured": False,
                     "default_aspect_ratio": "16:9", "default_duration": 0, "model_parameters": {},
@@ -259,8 +272,61 @@ class DesktopAPI:
                 "task_files": [row for logical, row in working.items() if logical not in delivered],
                 "task_id": task_id, "truncated": False}
 
+    def _require_generated_ready(self, owner: str, sid: str, raw: str) -> None:
+        if not self.previews.generated(raw):
+            return
+        logical = raw if raw.startswith("/") else "/workspace/" + raw
+        match = _GENERATED_IMAGE.fullmatch(logical)
+        if match is None:
+            if _LEGACY_GENERATED_IMAGE.fullmatch(logical):
+                return  # Existing pre-billing previews have no operation journal.
+            raise WorkError("not_found", "未找到该文件。", 404)
+        run_id, operation_id, digest = match.groups()
+        try:
+            row = self.service.store.db.execute(
+                "SELECT j.stage,j.billing_mode,j.image_result FROM image_billing_journal j "
+                "JOIN runs r ON r.owner=j.owner AND r.id=j.run_id "
+                "WHERE j.owner=? AND j.run_id=? AND j.operation_id=? AND r.session_id=?",
+                (owner, run_id, operation_id, sid),
+            ).fetchone()
+        except sqlite3.Error:
+            raise WorkError("not_found", "未找到该文件。", 404) from None
+        if row is None:
+            raise WorkError("not_found", "未找到该文件。", 404)
+        if row["stage"] not in {"settled", "free_completed"}:
+            raise WorkError("billing_pending", "图片状态尚未确认，请稍后查看。", 409)
+        if row["stage"] == "free_completed":
+            if row["billing_mode"] == "free":
+                return
+            raise WorkError("not_found", "未找到该文件。", 404)
+        try:
+            receipt = json.loads(row["image_result"])
+        except (TypeError, ValueError):
+            raise WorkError("not_found", "未找到该文件。", 404) from None
+        if receipt != {"sha256": digest, "image_count": 1}:
+            raise WorkError("not_found", "未找到该文件。", 404)
+
+    def _visible_image_history(self, owner: str, sid: str, history: dict) -> dict:
+        for message in history.get("messages", []):
+            if not isinstance(message, dict) or not isinstance(message.get("deliveredFiles"), list):
+                continue
+            visible = []
+            for item in message["deliveredFiles"]:
+                raw = item.get("absolute_path") or item.get("path") if isinstance(item, dict) else None
+                try:
+                    self._require_generated_ready(owner, sid, raw)
+                except WorkError:
+                    continue
+                visible.append(item)
+            if visible:
+                message["deliveredFiles"] = visible
+            else:
+                message.pop("deliveredFiles", None)
+        return history
+
     async def read_file(self, owner: str, sid: str, raw: str, artifact_id: str | None = None) -> tuple[str, bytes]:
         self.state.session(owner, sid)
+        self._require_generated_ready(owner, sid, raw)
         if self.previews.handles(raw):
             if artifact_id:
                 raise WorkError("not_found", "未找到该文件。", 404)
@@ -282,11 +348,20 @@ class DesktopAPI:
         return path.name, self.files._read_bytes(path, self.service.config.max_file_bytes)
 
     def media_url(self, owner: str, token: str, sid: str, raw: str) -> str:
+        return self._media_url_and_name(owner, token, sid, raw)[0]
+
+    def _media_url_and_name(self, owner: str, token: str, sid: str, raw: str) -> tuple[str, str]:
         self.state.session(owner, sid)
         if not token or len(token) > 8192:
             raise WorkError("login_required", "请重新登录。", 401)
+        if not isinstance(raw, str) or not raw:
+            raise WorkError("not_found", "未找到该文件。", 404)
+        self._require_generated_ready(owner, sid, raw)
+        name = Path(raw).name
         if self.previews.handles(raw):
-            _, data = self.previews.read(owner, sid, raw)
+            stored_name, data = self.previews.read(owner, sid, raw)
+            if self.previews.generated(raw):
+                name = stored_name
             digest = hashlib.sha256(data).hexdigest()
             logical = raw if raw.startswith("/") else "/workspace/" + raw
         else:
@@ -307,8 +382,10 @@ class DesktopAPI:
         if len(self._file_tickets) >= 2048:
             raise WorkError("request_capacity", "文件读取较多，请稍后重试。", 429)
         ticket = secrets.token_urlsafe(32)
-        self._file_tickets[ticket] = _FileTicket(owner, token, sid, logical, digest, now + 60)
-        return self.service.config.public_origin.rstrip("/") + PREFIX + "/media/" + ticket
+        requires_account = self.previews.generated(logical)
+        self._file_tickets[ticket] = _FileTicket(owner, token, sid, logical, digest, now + 60, requires_account)
+        route = "/generated-media/" if requires_account else "/media/"
+        return self.service.config.public_origin.rstrip("/") + PREFIX + route + ticket, name
 
     def history_media(self, owner: str, token: str, sid: str, paths: list[str]):
         media = []
@@ -316,8 +393,9 @@ class DesktopAPI:
             try:
                 mime = _mime(path)
                 if mime.startswith(("image/", "video/")):
+                    url, name = self._media_url_and_name(owner, token, sid, path)
                     media.append({"kind": "image" if mime.startswith("image/") else "video",
-                                  "url": self.media_url(owner, token, sid, path), "name": Path(path).name})
+                                  "url": url, "name": name})
             except WorkError:
                 continue  # A missing preview is not replaced with another account's file.
         return media
@@ -331,13 +409,20 @@ class DesktopAPI:
         })
 
     async def file_ticket(self, request: web.Request):
-        match = _MEDIA.fullmatch(request.path)
+        generated_match = _GENERATED_MEDIA.fullmatch(request.path)
+        match = generated_match or _MEDIA.fullmatch(request.path)
         binding = self._file_tickets.get(match[1]) if match else None
         if binding is None or binding.expires <= time.monotonic():
             raise WorkError("login_required", "文件链接已过期，请重新打开文件。", 401)
+        if binding.requires_account != bool(generated_match):
+            raise WorkError("not_found", "未找到该文件。", 404)
         if await self.service.auth.identity(binding.token) != binding.owner:
             raise WorkError("login_required", "文件链接已失效，请重新登录。", 401)
         supplied = request.headers.get("Authorization", "")
+        if binding.requires_account and not supplied:
+            raise WorkError("login_required", "请重新登录后查看图片。", 401)
+        if binding.requires_account and request.headers.get("X-Mona-Session-Key") != "websocket:" + binding.session:
+            raise WorkError("not_found", "未找到该文件。", 404)
         if supplied and (not supplied.startswith("Bearer ")
                          or await self.service.auth.identity(supplied[7:]) != binding.owner):
             raise WorkError("not_found", "未找到该文件。", 404)
@@ -461,8 +546,9 @@ class DesktopAPI:
                     before = int(request.query["before"]) if "before" in request.query else None
                 except ValueError:
                     raise WorkError("invalid_cursor", "历史位置无效。") from None
-                return web.json_response(self.state.history(owner, sid, limit=limit, before=before, revision=request.query.get("revision"),
-                    augment_user_media=lambda paths: self.history_media(owner, request["account_token"], sid, paths)))
+                history = self.state.history(owner, sid, limit=limit, before=before, revision=request.query.get("revision"),
+                    augment_user_media=lambda paths: self.history_media(owner, request["account_token"], sid, paths))
+                return web.json_response(self._visible_image_history(owner, sid, history))
             if action == "delete" and method == "GET":
                 self.state.delete(owner, sid)
                 return web.json_response({"deleted": True})

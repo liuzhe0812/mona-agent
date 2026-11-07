@@ -264,6 +264,12 @@ class DesktopStore:
                     "AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid)).fetchone()
                 if billing_pending:
                     raise WorkError("billing_pending", "此会话的计费状态尚未确认，请核对后再删除。", 409)
+                image_journal = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_billing_journal'").fetchone()
+                if image_journal and db.execute(
+                    "SELECT 1 FROM image_billing_journal WHERE owner=? AND stage NOT IN ('settled','released','rejected','free_completed') "
+                    "AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid)
+                ).fetchone():
+                    raise WorkError("billing_pending", "此会话的图片计费尚未确认，请核对后再删除。", 409)
                 # The authoritative charge and idempotency record remain in Auth.
                 db.execute("DELETE FROM billing_journal WHERE owner=? AND run_id IN "
                            "(SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))

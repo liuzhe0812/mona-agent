@@ -23,6 +23,10 @@ _ASK_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PREFIX = "/workspace/.question-previews"
 _PATH = re.compile(r"^/workspace/\.question-previews/([a-f0-9]{32})/([a-f0-9]{64})\.(png|jpg|webp)$")
+_GENERATED_PREFIX = "/workspace/.generated-previews"
+_GENERATED_PATH = re.compile(r"^/workspace/\.generated-previews/(?P<run>[a-f0-9]{32})/"
+                             r"(?:(?P<operation>[a-f0-9]{32})/)?"
+                             r"(?P<digest>[a-f0-9]{64})\.(?P<extension>png|jpg|webp)$")
 _EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _SUFFIXES = {"image/png": (".png",), "image/jpeg": (".jpg", ".jpeg", ".jpe"), "image/webp": (".webp",)}
 
@@ -68,15 +72,24 @@ class QuestionPreviews:
         if not isinstance(raw, str):
             return False
         value = "/workspace/" + raw if not raw.startswith("/") else raw
-        return value == _PREFIX or value.startswith(_PREFIX + "/")
+        return any(value == prefix or value.startswith(prefix + "/") for prefix in (_PREFIX, _GENERATED_PREFIX))
 
     @staticmethod
-    def _request_key(sid: str, rid: str, ask_id: str) -> str:
-        return f"question_preview_request:{sid}:{rid}:{ask_id}"
+    def generated(raw: object) -> bool:
+        if not isinstance(raw, str):
+            return False
+        value = "/workspace/" + raw if not raw.startswith("/") else raw
+        return value == _GENERATED_PREFIX or value.startswith(_GENERATED_PREFIX + "/")
 
     @staticmethod
-    def _file_key(sid: str, rid: str, digest: str, ext: str) -> str:
-        return f"question_preview_file:{sid}:{rid}:{digest}:{ext}"
+    def _request_key(sid: str, rid: str, ask_id: str, *, generated: bool = False) -> str:
+        return f"{'generated' if generated else 'question'}_preview_request:{sid}:{rid}:{ask_id}"
+
+    @staticmethod
+    def _file_key(sid: str, rid: str, digest: str, ext: str, *,
+                  generated: bool = False, operation: str | None = None) -> str:
+        scope = f":{operation}" if generated and operation is not None else ""
+        return f"{'generated' if generated else 'question'}_preview_file:{sid}:{rid}{scope}:{digest}:{ext}"
 
     def _run(self, owner: str, sid: str, rid: str, *, active: bool) -> None:
         if not isinstance(owner, str) or not _OWNER.fullmatch(owner):
@@ -90,12 +103,17 @@ class QuestionPreviews:
         if active and run["status"] != "running":
             raise WorkError("execution_stopped", "本轮已经结束，未继续准备样张。", 409)
 
-    def _directory(self, owner: str, sid: str, rid: str, *, create: bool) -> Path:
+    def _directory(self, owner: str, sid: str, rid: str, *, create: bool,
+                   generated: bool = False, operation: str | None = None) -> Path:
         home = self.files._home(owner)
         if _linked(home.lstat()) or home.resolve(strict=True) != home:
             raise _bad_preview()
         current = home
-        for name in ("previews", sid, rid):
+        if operation is not None:
+            identifier(operation)
+            if not generated:
+                raise _bad_preview()
+        for name in ("previews", sid, rid, *(("generated",) if generated else ()), *((operation,) if operation else ())):
             path = current / name
             if create:
                 try:
@@ -155,7 +173,7 @@ class QuestionPreviews:
                 temporary.unlink(missing_ok=True)
         self._read_bytes(path, digest, len(raw), mime)
 
-    def _items(self, images: list[dict]) -> list[tuple[dict, bytes]]:
+    def _items(self, images: list[dict], *, generated: bool = False) -> list[tuple[dict, bytes]]:
         if not isinstance(images, list) or not 1 <= len(images) <= 128:
             raise _bad_preview()
         values, total = [], 0
@@ -168,7 +186,8 @@ class QuestionPreviews:
                     or not isinstance(encoded, str) or len(encoded) > 4 * ((size + 2) // 3)):
                 raise _bad_preview()
             total += size
-            if total > self.config.max_history_bytes:
+            limit = self.config.max_file_bytes if generated else self.config.max_history_bytes
+            if total > limit:
                 raise WorkError("file_limit", "样张总大小超过允许范围。", 413)
             try:
                 raw = base64.b64decode(encoded, validate=True)
@@ -180,13 +199,28 @@ class QuestionPreviews:
         return values
 
     def prepare(self, owner: str, sid: str, rid: str, ask_id: str, images: list[dict]) -> list[dict]:
-        self._run(owner, sid, rid, active=True)
+        return self._prepare(owner, sid, rid, ask_id, images, generated=False)
+
+    def prepare_generated(self, owner: str, sid: str, rid: str, delivery_id: str, images: list[dict]) -> list[dict]:
+        return self._prepare(owner, sid, rid, delivery_id, images, generated=True)
+
+    def _prepare_generated_result(self, owner: str, sid: str, rid: str,
+                                  delivery_id: str, images: list[dict]) -> list[dict]:
+        """For the trusted provider coordinator after a previously dispatched run stops."""
+        return self._prepare(owner, sid, rid, delivery_id, images, generated=True, active=False)
+
+    def _prepare(self, owner: str, sid: str, rid: str, ask_id: str, images: list[dict], *,
+                 generated: bool, active: bool = True) -> list[dict]:
+        self._run(owner, sid, rid, active=active)
         if not isinstance(ask_id, str) or not _ASK_ID.fullmatch(ask_id):
             raise WorkError("invalid_request", "提问标识无效。")
-        request_key = self._request_key(sid, rid, ask_id)
+        operation = identifier(ask_id) if generated else None
+        request_key = self._request_key(sid, rid, ask_id, generated=generated)
+        prefix = _GENERATED_PREFIX if generated else _PREFIX
+        path_prefix = f"{prefix}/{rid}/{operation}/" if generated else f"{prefix}/{rid}/"
         previous = self.state.get(owner, request_key)
         try:
-            items = self._items(images)
+            items = self._items(images, generated=generated)
         except WorkError:
             if previous is not None:
                 raise WorkError("request_conflict", "同一提问的样张内容已变化。", 409) from None
@@ -202,21 +236,22 @@ class QuestionPreviews:
             for record, (item, _) in zip(records, items):
                 if not isinstance(record, dict) or not isinstance(record.get("path"), str):
                     raise _bad_preview()
-                logical = f"{_PREFIX}/{rid}/{item['sha256']}.{_EXTENSIONS[item['mime']]}"
-                if (record["path"] != logical or record.get("absolute_path") != logical
+                logical = f"{path_prefix}{item['sha256']}.{_EXTENSIONS[item['mime']]}"
+                legacy = f"{prefix}/{rid}/{item['sha256']}.{_EXTENSIONS[item['mime']]}" if generated else logical
+                if (record["path"] not in {logical, legacy} or record.get("absolute_path") != record["path"]
                         or any(record.get(key) != item[key] for key in ("mime", "size", "sha256"))):
                     raise _bad_preview()
-                name, _ = self.read(owner, sid, logical)
+                name, _ = self.read(owner, sid, record["path"])
                 if record.get("name") != name:
                     raise _bad_preview()
             return records
 
-        directory = self._directory(owner, sid, rid, create=True)
+        directory = self._directory(owner, sid, rid, create=True, generated=generated, operation=operation)
         for item, raw in items:
             ext = _EXTENSIONS[item["mime"]]
             self._write_once(directory, item["sha256"] + "." + ext, raw, item["sha256"], item["mime"])
 
-        self._run(owner, sid, rid, active=True)
+        self._run(owner, sid, rid, active=active)
         database = self.state.db(owner)
         try:
             database.execute("BEGIN IMMEDIATE")
@@ -224,13 +259,14 @@ class QuestionPreviews:
             if self.state.get(owner, request_key) is not None:
                 raise WorkError("request_conflict", "同一提问的样张记录已变化，请重新查看。", 409)
             records = []
-            for item, _ in items:
+            for index, (item, _) in enumerate(items):
                 ext = _EXTENSIONS[item["mime"]]
-                logical = f"{_PREFIX}/{rid}/{item['sha256']}.{ext}"
-                file_key = self._file_key(sid, rid, item["sha256"], ext)
+                logical = f"{path_prefix}{item['sha256']}.{ext}"
+                file_key = self._file_key(sid, rid, item["sha256"], ext, generated=generated, operation=operation)
                 stored = self.state.get(owner, file_key)
                 if stored is None:
-                    stored = {"path": logical, **item}
+                    name = f"image-{operation}{'-' + str(index) if len(items) > 1 else ''}.{ext}" if generated else item["name"]
+                    stored = {"path": logical, **item, "name": name}
                     self.state.set(owner, file_key, stored)
                 elif (not isinstance(stored, dict) or stored.get("path") != logical
                       or not _valid_name(stored.get("name"), stored.get("mime"))
@@ -251,16 +287,22 @@ class QuestionPreviews:
 
     def read(self, owner: str, sid: str, raw: str) -> tuple[str, bytes]:
         value = "/workspace/" + raw if isinstance(raw, str) and not raw.startswith("/") else raw
-        match = _PATH.fullmatch(value) if isinstance(value, str) else None
+        generated = self.generated(value)
+        pattern = _GENERATED_PATH if generated else _PATH
+        match = pattern.fullmatch(value) if isinstance(value, str) else None
         if match is None:
             raise _not_found()
-        rid, digest, ext = match.groups()
+        if generated:
+            rid, operation, digest, ext = match.group("run", "operation", "digest", "extension")
+        else:
+            rid, digest, ext = match.groups()
+            operation = None
         self._run(owner, sid, rid, active=False)
-        stored = self.state.get(owner, self._file_key(sid, rid, digest, ext))
+        stored = self.state.get(owner, self._file_key(sid, rid, digest, ext, generated=generated, operation=operation))
         if (not isinstance(stored, dict) or stored.get("path") != value or stored.get("sha256") != digest
                 or not _valid_name(stored.get("name"), stored.get("mime"))
                 or _EXTENSIONS.get(stored["mime"]) != ext
                 or type(stored.get("size")) is not int or not 0 < stored["size"] <= self.config.max_file_bytes):
             raise _not_found()
-        directory = self._directory(owner, sid, rid, create=False)
+        directory = self._directory(owner, sid, rid, create=False, generated=generated, operation=operation)
         return stored["name"], self._read_bytes(directory / (digest + "." + ext), digest, stored["size"], stored["mime"])

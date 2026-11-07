@@ -208,12 +208,13 @@ class SkillsLoader:
                 return builtin
         return None
 
-    def load_skills_for_context(self, skill_names: list[str]) -> str:
+    def load_skills_for_context(self, skill_names: list[str], *, track_usage: bool = True) -> str:
         """
         Load specific skills for inclusion in agent context.
 
         Args:
             skill_names: List of skill names to load.
+            track_usage: Record access in the agent's skill usage sidecar.
 
         Returns:
             Formatted skills content.
@@ -223,13 +224,15 @@ class SkillsLoader:
         # access: list_skills / get_skill_metadata / build_skills_summary only
         # read frontmatter and must NOT bump, otherwise every system prompt
         # refresh would reset the inactivity clock.
-        from mona.agent import skill_usage
+        if track_usage:
+            from mona.agent import skill_usage
         parts: list[str] = []
         for name in skill_names:
             markdown = self.load_skill(name)
             if markdown is None:
                 continue
-            skill_usage.bump_access(name, agent_id=self.agent_id)
+            if track_usage:
+                skill_usage.bump_access(name, agent_id=self.agent_id)
             parts.append(f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}")
         return "\n\n---\n\n".join(parts)
 

@@ -1485,6 +1485,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         "Codex OAuth token is unavailable. "
         "Log in with Codex subscription first."
     )
+    _strict_stream = False
 
     def _default_base_url(self) -> str:
         return "https://chatgpt.com/backend-api"
@@ -1493,6 +1494,20 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         if model.startswith(("openai-codex/", "openai_codex/")):
             return model.split("/", 1)[1]
         return model
+
+    async def _read_auth(self):
+        """Load the desktop account; trusted hosts may bind a narrower source."""
+        try:
+            from oauth_cli_kit import get_token as get_codex_token
+        except ImportError:
+            raise ImageGenerationError(self.missing_key_message) from None
+        try:
+            token = await asyncio.to_thread(get_codex_token)
+        except Exception as exc:
+            raise ImageGenerationError(self.missing_key_message) from exc
+        if not token or not token.access:
+            raise ImageGenerationError(self.missing_key_message)
+        return token
 
     async def generate(
         self,
@@ -1503,17 +1518,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         aspect_ratio: str | None = None,
         image_size: str | None = None,
     ) -> GeneratedImageResponse:
-        try:
-            from oauth_cli_kit import get_token as get_codex_token
-        except ImportError:
-            raise ImageGenerationError(self.missing_key_message)
-
-        try:
-            token = await asyncio.to_thread(get_codex_token)
-        except Exception as exc:
-            raise ImageGenerationError(self.missing_key_message) from exc
-        if not token or not token.access:
-            raise ImageGenerationError(self.missing_key_message)
+        token = await self._read_auth()
 
         if (
             (image_size and image_size.strip().upper() != "1K")
@@ -1576,7 +1581,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
             raise error from exc
 
         try:
-            images, content_text = await _parse_codex_sse_images(response)
+            images, content_text = await _parse_codex_sse_images(response, strict=self._strict_stream)
         except (httpx.TimeoutException, httpx.RequestError) as exc:
             raise _request_error("Codex", exc) from exc
 
@@ -1717,11 +1722,40 @@ async def _openai_images_from_payload(
 
 async def _parse_codex_sse_images(
     response: httpx.Response,
+    *,
+    strict: bool = False,
 ) -> tuple[list[str], str]:
     import json as _json
 
     images: list[str] = []
     text_parts: list[str] = []
+    completed = False
+
+    def consume(raw: str, *, log_failure: bool = True) -> None:
+        nonlocal completed
+        try:
+            event = _json.loads(raw)
+        except Exception:
+            if strict:
+                raise ImageGenerationError("图片结果待核对。", code="result_unknown") from None
+            return
+        if not isinstance(event, dict):
+            if strict:
+                raise ImageGenerationError("图片结果待核对。", code="result_unknown")
+            return
+        ev_type = event.get("type", "")
+        if strict and ev_type in ("error", "response.failed", "response.incomplete"):
+            # The frame may contain upstream secrets, so never log or return it.
+            raise ImageGenerationError("图片结果待核对。", code="result_unknown")
+        if log_failure and ev_type in ("error", "response.failed"):
+            logger.error("Codex SSE failure: {}", raw[:2000])
+        if ev_type == "response.completed":
+            if strict and (not isinstance(event.get("response"), dict)
+                           or event["response"].get("status") != "completed"):
+                raise ImageGenerationError("图片结果待核对。", code="result_unknown")
+            completed = True
+        _collect_images_from_sse_event(event, images)
+        _collect_text_from_sse_event(event, text_parts)
 
     buffer: list[str] = []
     async for line_bytes in response.aiter_lines():
@@ -1737,15 +1771,7 @@ async def _parse_codex_sse_images(
                     raw = "".join(data_lines)
                     if raw == "[DONE]":
                         break
-                    try:
-                        event = _json.loads(raw)
-                    except Exception:
-                        continue
-                    ev_type = event.get("type", "")
-                    if ev_type in ("error", "response.failed"):
-                        logger.error("Codex SSE failure: {}", raw[:2000])
-                    _collect_images_from_sse_event(event, images)
-                    _collect_text_from_sse_event(event, text_parts)
+                    consume(raw)
             continue
         buffer.append(line)
 
@@ -1754,13 +1780,10 @@ async def _parse_codex_sse_images(
         data_lines = [bl[5:].strip() for bl in buffer if bl.startswith("data:")]
         raw = "".join(data_lines)
         if raw and raw != "[DONE]":
-            try:
-                event = _json.loads(raw)
-            except Exception:
-                pass
-            else:
-                _collect_images_from_sse_event(event, images)
-                _collect_text_from_sse_event(event, text_parts)
+            consume(raw, log_failure=False)
+
+    if strict and not completed:
+        raise ImageGenerationError("图片结果待核对。", code="result_unknown")
 
     return images, "".join(text_parts).strip()
 

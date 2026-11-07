@@ -45,6 +45,8 @@ class WorkService:
         self.active_engines: set[str] = set()
         self.tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.desktop = None
+        self.image_control = None
+        self.image_coordinator = None
         self._billing_recovery: asyncio.Task | None = None
 
     def _acquire(self, owner: str, model_id: str | None = None) -> str | None:
@@ -175,6 +177,7 @@ class WorkService:
                      billing=None, model=None, billing_id=None):
         run_id, sid = run["id"], run["session_id"]
         billing_finished = False
+        image_bound = False
         title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
             if kind == "history":
@@ -217,6 +220,27 @@ class WorkService:
                 payload["effective_reasoning_effort"] = run["input"].get("effective_reasoning_effort")
             if billing is not None:
                 payload["billing_authorized"] = True
+            if payload["desktop_ui"]:
+                from mona.hosted_work.image_policy import image_ready, resolve_image_model
+
+                image = self.config.image_generation.model_copy(deep=True)
+                image.model = resolve_image_model(self.config, image, self.config.models.get(payload["model_id"]))
+                if image_ready(self.config, image):
+                    if self.image_control is None:
+                        from mona.hosted_work.image_control import ImageControl
+
+                        self.image_control = ImageControl(self.config, self.store)
+                    if self.image_coordinator is None:
+                        from mona.hosted_work.image_coordinator import ImageCoordinator
+                        from mona.hosted_work.image_provider_factory import (
+                            make_codex_image_provider,
+                        )
+
+                        self.image_coordinator = ImageCoordinator(self.config, self.image_control, self.desktop,
+                                                                  provider_factory=make_codex_image_provider)
+                    capability = self.image_control.bind(owner, sid, run_id, image, token)
+                    image_bound = True
+                    payload["hosted_image"] = {"settings": image.model_dump(), "capability": capability}
             result = await self.executor.execute(payload, event)
             if billing is not None:
                 try:
@@ -283,7 +307,27 @@ class WorkService:
                 if self.desktop is not None and hasattr(self.desktop, "inputs"):
                     await self.desktop.inputs.finish(owner, sid, run_id)
             finally:
-                self._release(owner, engine)
+                try:
+                    if image_bound:
+                        waiter = asyncio.create_task(self.image_coordinator.wait_run(owner, run_id))
+                        while not waiter.done():
+                            try:
+                                await asyncio.shield(waiter)
+                            except asyncio.CancelledError:
+                                continue  # Settle and preserve any already-dispatched image first.
+                        await waiter
+                        await self.image_control.close_run(owner, run_id)
+                        self.image_coordinator.forget_run(owner, run_id)
+                        if hasattr(self.executor, "processes") and (owner, run_id) not in self.executor.processes:
+                            from mona.hosted_work.image_generation import cleanup_image_staging
+
+                            cleanup_image_staging(self.config.state_dir, owner, run_id, executor_stopped=True)
+                except Exception as exc:
+                    logger.warning("Hosted image cleanup unconfirmed exception_type={}", type(exc).__name__)
+                finally:
+                    if image_bound:
+                        self.image_control.unbind(owner, run_id)
+                    self._release(owner, engine)
         if self.desktop is not None:
             try:
                 await self.desktop.wire.on_run_finish(owner, run, {})
@@ -469,7 +513,46 @@ class WorkService:
     async def _billing_recovery_loop(self):
         while True:
             await self._recover_billing_once()
+            await self._recover_image_billing_once()
             await asyncio.sleep(30)
+
+    async def _recover_image_billing_once(self):
+        if self.image_control is None:
+            exists = self.store.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_billing_journal'").fetchone()
+            if not exists:
+                return
+            from mona.hosted_work.image_control import ImageControl
+
+            self.image_control = ImageControl(self.config, self.store)
+        from mona.hosted_work.image_recovery import recover_image_billing
+
+        def active(owner, run):
+            return ((owner, run) in self.tasks or owner in self.active_users
+                    or self.image_coordinator is not None and self.image_coordinator.active_run(owner, run))
+
+        def preview_verified(owner, run, operation, receipt):
+            if self.desktop is None:
+                return False
+            try:
+                if self.image_coordinator is None:
+                    from mona.hosted_work.image_coordinator import ImageCoordinator
+                    from mona.hosted_work.image_provider_factory import make_codex_image_provider
+
+                    self.image_coordinator = ImageCoordinator(self.config, self.image_control, self.desktop,
+                                                              provider_factory=make_codex_image_provider)
+                sid = self.store.run(owner, run)["session_id"]
+                return bool(receipt) and self.image_coordinator.ensure_history(owner, sid, run, operation)
+            except (WorkError, OSError, ValueError, KeyError, TypeError):
+                return False
+
+        settled = await recover_image_billing(self.image_control, is_active=active, preview_verified=preview_verified)
+        for owner, run, operation in settled:
+            try:
+                sid = self.store.run(owner, run)["session_id"]
+                await self.image_coordinator.publish_ready(owner, sid, run, operation)
+            except (WorkError, OSError, ValueError, KeyError, TypeError):
+                pass  # Durable history remains available on refresh.
 
     async def close(self):
         if self._billing_recovery is not None:
@@ -526,6 +609,11 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
             if DesktopAPI.is_file_ticket(request):
                 async with asyncio.timeout(service.config.tool_timeout_seconds + 60):
                     return await get_desktop().file_ticket(request)
+            if request.path == "/api/work/internal/image" and request.method == "POST":
+                async with asyncio.timeout(service.config.tool_timeout_seconds + 60):
+                    response = await handler(request)
+                response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+                return response
             if request.path == "/api/work/auth/login" and request.method == "POST":
                 if request.content_length is not None and request.content_length > 8192:
                     raise WorkError("invalid_request", "登录请求过大。", 413)
@@ -560,8 +648,62 @@ def create_app(service: WorkService, *, operator_config_path: Path | None = None
     app = web.Application(middlewares=[boundary], client_max_size=max(service.config.max_file_bytes + 65536,
                                                                   service.config.max_history_bytes * 4 // 3 + 65536))
     async def recover_billing(_app):
+        if service.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_billing_journal'").fetchone():
+            get_desktop()
         service._billing_recovery = asyncio.create_task(service._billing_recovery_loop())
     app.on_startup.append(recover_billing)
+    async def image_internal(request):
+        raw = bytearray()
+        async for chunk in request.content.iter_chunked(8192):
+            raw.extend(chunk)
+            if len(raw) > 256 * 1024:
+                raise WorkError("invalid_request", "图片请求过大。", 413)
+        body = json.loads(raw)
+        if not isinstance(body, dict) or set(body) != {"owner", "session_id", "run_id", "command", "args"}:
+            raise WorkError("invalid_request", "图片请求格式无效。")
+        owner, sid, rid, command, args = (body[key] for key in ("owner", "session_id", "run_id", "command", "args"))
+        if (not isinstance(owner, str) or not re.fullmatch(r"[a-f0-9]{64}", owner)
+                or not isinstance(args, dict) or service.image_control is None):
+            raise WorkError("image_unavailable", "图片服务暂不可用。", 503)
+        sid, rid = identifier(sid), identifier(rid)
+        control = service.image_control
+        required = {"capability", "operation"} | ({"fingerprint"} if command == "image_begin" else
+            {"fingerprint", "prompt", "model", "aspect_ratio", "image_size"} if command == "image_generate" else
+            {"usage_missing"} if command == "image_uncertain" else set())
+        if command not in {"image_begin", "image_dispatch", "image_generate", "image_uncertain"} or set(args) != required:
+            raise WorkError("invalid_request", "图片请求格式无效。")
+        common = (owner, sid, rid, args["capability"])
+        control._binding(*common)
+        run = service.store.run(owner, rid)
+        if run["session_id"] != sid:
+            raise WorkError("not_found", "未找到图片操作。", 404)
+        if command in {"image_begin", "image_dispatch"} and run["status"] != "running":
+            raise WorkError("execution_stopped", "本轮已结束，未继续生成图片。", 409)
+        if command == "image_begin":
+            result = await control.begin(*common, args["operation"], args["fingerprint"])
+        elif command == "image_dispatch":
+            binding = control._binding(*common)
+            try:
+                if await service.auth.identity(binding.token) != owner:
+                    raise WorkError("login_required", "请重新登录后继续。", 401)
+            except WorkError:
+                await control.release_unstarted(*common, args["operation"])
+                raise
+            result = await control.dispatch(*common, args["operation"])
+        elif command == "image_generate":
+            if service.image_coordinator is None:
+                raise WorkError("image_unavailable", "图片服务暂不可用。", 503)
+            result = await service.image_coordinator.generate(*common, args["operation"],
+                fingerprint=args["fingerprint"], prompt=args["prompt"], model=args["model"],
+                aspect_ratio=args["aspect_ratio"], image_size=args["image_size"])
+        else:
+            if type(args["usage_missing"]) is not bool:
+                raise WorkError("invalid_request", "图片请求格式无效。")
+            if service.image_coordinator is None or not service.image_coordinator.active(owner, rid, args["operation"]):
+                await control.uncertain(*common, args["operation"], usage_missing=args["usage_missing"])
+            result = {"status": "uncertain"}
+        return web.json_response({"result": result})
+    app.router.add_post("/api/work/internal/image", image_internal)
     if operator_config_path is not None:
         from mona.hosted_work.admin import CodexAdmin
         from mona.hosted_work.model_admin import ModelAdmin

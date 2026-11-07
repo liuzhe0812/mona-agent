@@ -815,6 +815,36 @@ class HostedWorkPrice(Base):
         return value
 
 
+class HostedWorkImagePrice(Base):
+    """Administrator-set Work image price in CNY per generated image."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, alias_generator=to_camel, populate_by_name=True)
+    amount_per_image: str = Field(min_length=1, max_length=17)
+
+    @field_validator("amount_per_image")
+    @classmethod
+    def _valid_amount(cls, value: str) -> str:
+        return HostedWorkPrice._valid_amount(value)
+
+
+class HostedWorkImageSettings(Base):
+    """Work image settings using the operator's Codex account."""
+
+    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
+    enabled: bool = False
+    provider: Literal["codex"] = "codex"
+    model: str = Field(default="", max_length=200)
+    billing_mode: Literal["free", "wallet"] = "wallet"
+    price: HostedWorkImagePrice | None = None
+
+    @field_validator("model")
+    @classmethod
+    def _plain_value(cls, value: str) -> str:
+        if value != value.strip() or any(ord(c) < 33 or ord(c) == 127 for c in value):
+            raise ValueError("configuration values must be plain text")
+        return value
+
+
 class HostedWorkModel(Base):
     """Operator-owned model selection; never accepted from a website request."""
 
@@ -892,6 +922,7 @@ class HostedWorkConfig(Base):
     port: int = Field(default=17175, ge=1024, le=65535)
     models: dict[str, HostedWorkModel] = Field(default_factory=dict)
     codex: HostedCodexSettings = Field(default_factory=HostedCodexSettings)
+    image_generation: HostedWorkImageSettings = Field(default_factory=HostedWorkImageSettings)
     billing_key_env: str = Field(default="MONA_WORK_BILLING_SERVICE_KEY", pattern=r"^(?:MONA_WORK_BILLING_[A-Z0-9_]+)?$")
     sandbox_image: str = ""
     sandbox_runtime: Literal["runsc"] = "runsc"
