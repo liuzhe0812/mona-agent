@@ -1,0 +1,35 @@
+{
+  "backend": {
+    "release": "/home/liuzhe/mona-hosted-work/releases/20261107-codex-image-v40/content",
+    "manifest_sha256": "258ba0dc79c08618654278cfd9a624fb16785e7b3d337091c52da4d9e83e0095",
+    "pid": "1327507",
+    "existing_rows_preserved": true
+  },
+  "frontend": {
+    "release": "/var/www/mona/work-releases/20261107-codex-image-ui-v39/content",
+    "manifest_sha256": "3402e6345d0608f1a66056e9850c6274c19a3abe5a3bde555dbb54c379706738",
+    "office_files_unchanged": 465
+  },
+  "billing_sidecar": {
+    "release": "/opt/mona-auth-releases/20261107-hosted-image-billing-v2/content",
+    "pid": "467180",
+    "database_schema_changed": false,
+    "unauthenticated_status": 401
+  },
+  "validation": {
+    "upstream_image_generated": true,
+    "upstream_image_bytes": 1119811,
+    "upstream_image_sha256": "8f1cc632c31c6ce61d1125a1327c41b6675a80933cc645ae3d6b7178134c77ac",
+    "upstream_probe_charged_mona_wallet": false,
+    "admin_price_configured": "0.1",
+    "admin_ui_verified": true,
+    "simulated_wallet_and_web_integration_passed": true,
+    "real_web_image_charge_verified": false
+  },
+  "limitations": [
+    "Real billed web image acceptance waits for sufficient user balance",
+    "Codex image adapter supports 1K square without reference edits",
+    "Codex native home is shared between Work accounts",
+    "Hosted Codex image authorization remains unconfirmed"
+  ]
+}
