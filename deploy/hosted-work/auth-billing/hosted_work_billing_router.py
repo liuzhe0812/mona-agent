@@ -19,6 +19,7 @@ from app.hosted_work_billing import (
     settle,
     view,
 )
+from app.hosted_work_image_billing import release_image_not_started, settle_image
 from app.models import User
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
@@ -129,6 +130,44 @@ class Settlement(Contract):
     usage: Usage
 
 
+class ImagePrice(Contract):
+    amount_per_image: str
+
+    @field_validator("amount_per_image")
+    @classmethod
+    def valid_price(cls, value: str) -> str:
+        return Price.valid_price(value)
+
+
+class ImageReserve(Contract):
+    run_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    model: str = Field(min_length=1, max_length=200)
+    reserve_units: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    price: ImagePrice
+
+    @field_validator("model")
+    @classmethod
+    def valid_model(cls, value: str) -> str:
+        return Reserve.valid_model(value)
+
+    @model_validator(mode="after")
+    def reserve_matches_image_price(self):
+        from app.hosted_work_image_pricing import image_price_units
+
+        if self.reserve_units != image_price_units(self.price.model_dump()):
+            raise ValueError("Image reserve must match the per-image price")
+        return self
+
+
+class ImageReceipt(Contract):
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    image_count: int = Field(ge=1, le=1)
+
+
+class ImageSettlement(Contract):
+    receipt: ImageReceipt
+
+
 class Uncertain(Contract):
     reason: Literal["usage_unavailable", "provider_outcome_unknown", "interrupted"]
 
@@ -140,6 +179,22 @@ router = APIRouter(prefix="/auth/internal/hosted-work/billing", dependencies=[De
 def reserve_route(payload: Reserve, user: User = Depends(website_user), db: Session = Depends(get_db)):
     return view(reserve(db, run_id=payload.run_id, user_id=user.id, model=payload.model,
                         price=payload.price.model_dump(), reserved=payload.reserve_units))
+
+
+@router.post("/image/reserve")
+def image_reserve_route(payload: ImageReserve, user: User = Depends(website_user), db: Session = Depends(get_db)):
+    return view(reserve(db, run_id=payload.run_id, user_id=user.id, model=payload.model,
+                        price={"kind": "image_per_image_v1", **payload.price.model_dump()}, reserved=payload.reserve_units))
+
+
+@router.post("/image/{run_id}/settle")
+def image_settle_route(run_id: str, payload: ImageSettlement, db: Session = Depends(get_db)):
+    return view(settle_image(db, run_id, payload.receipt.model_dump()))
+
+
+@router.post("/image/{run_id}/release-not-started")
+def image_release_not_started_route(run_id: str, db: Session = Depends(get_db)):
+    return view(release_image_not_started(db, run_id))
 
 
 @router.get("/{run_id}")

@@ -139,13 +139,15 @@ def settle(db: Session, run_id: str, usage: dict):
     row = _get_charge(db, run_id, lock=True)
     if row.user_id != owner:
         _conflict()
+    price = row.price_json
+    if not isinstance(price, dict) or price.get("kind") is not None:
+        _conflict()
     if row.usage_json is not None and row.usage_json != usage:
         _conflict()
     if row.status == "settled":
         return row
     if row.status not in ("running", "uncertain"):
         _conflict()
-    price = row.price_json
     rates = SimpleNamespace(
         input_rate=int(Decimal(price["input_amount_per_million"]) * 1_000_000),
         cached_input_rate=int(Decimal(price["cached_input_amount_per_million"]) * 1_000_000),
