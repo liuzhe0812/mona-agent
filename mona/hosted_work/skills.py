@@ -215,8 +215,11 @@ class HostedSkills:
             source = self.file(skill, "scripts/" + script)
             if source.suffix != ".py":
                 return json.dumps({"ok": False, "code": "runtime_unavailable", "message": "该脚本的隔离运行环境尚未就绪。"}, ensure_ascii=False)
-            probe = json.loads(await self.tools.execute("python3 -I -c " + shlex.quote(
-                "import sys,json,importlib.metadata as m;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'packages':{d.metadata['Name']:d.version for d in m.distributions()}}))")))
+            # The sandbox command result merges stdout/stderr; keep this
+            # internal machine-readable probe's JSON free of Python warnings.
+            probe_command = "python3 -I -c " + shlex.quote(
+                "import sys,json,importlib.metadata as m;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'packages':{d.metadata['Name']:d.version for d in m.distributions()}}))") + " 2>/dev/null"
+            probe = json.loads(await self.tools.execute(probe_command))
             runtime = json.loads(probe["output"]) if probe.get("exit_code") == 0 else {}
             project = self.root / skill / "pyproject.toml"
             if project.is_file():
@@ -250,8 +253,7 @@ class HostedSkills:
                 self.staged[skill] = json.loads(output)["root"]
             command = shlex.join(["env", "MONA_ACTIVE_WORKSPACE=/workspace", "PYTHONUTF8=1", "python3",
                                   str(PurePosixPath(self.staged[skill]) / "scripts" / script), *shlex.split(args)])
-            async with asyncio.timeout(min(timeout_seconds, self.tools.config.tool_timeout_seconds)):
-                return await self.tools.execute(command)
+            return await self.tools.execute(command, timeout=timeout_seconds)
         except (SandboxError, TimeoutError) as error:
             self.tools.fault = "技能脚本结果尚未确认，已停止本轮；请先核对已有文件，不要自动重跑。"
             raise asyncio.CancelledError(self.tools.fault) from error
@@ -269,7 +271,7 @@ class HostedSkills:
             ("skill_read", "按名称读取内置 Skill；任务匹配时先读取，再使用现有授权工具。", {"name": name}, ["name"], self.read),
             ("skill_reference_read", "读取已加载 Skill 的参考资料或真实设计样张。", {"skill": name, "ref_path": path, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 24000}}, ["skill", "ref_path"], self.reference),
             ("skill_asset_copy", "把已加载 Skill 的素材复制到当前工作区新路径。", {"skill": name, "asset": path, "dest": path}, ["skill", "asset", "dest"], self.asset),
-            ("skill_script_run", "在当前隔离工作区运行已加载 Skill 的配套脚本；缺少运行时会明确拒绝。", {"skill": name, "script": path, "args": {"type": "string", "maxLength": 16000}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600}}, ["skill", "script"], self.script),
+            ("skill_script_run", "在当前隔离工作区运行已加载 Skill 的配套脚本；缺少运行时会明确拒绝。", {"skill": name, "script": path, "args": {"type": "string", "maxLength": 16000}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1800}}, ["skill", "script"], self.script),
         ]
         self.initial_names = self.allowed_names | {"skill_read", "skill_list"}
         self.resource_names = {item[0] for item in definitions[2:]}

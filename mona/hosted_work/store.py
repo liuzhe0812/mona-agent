@@ -92,6 +92,14 @@ class WorkStore:
                 FOREIGN KEY(owner,session_id) REFERENCES sessions(owner,id)
             );
             CREATE INDEX IF NOT EXISTS runs_active ON runs(status,owner);
+            CREATE TABLE IF NOT EXISTS execution_ended (
+                owner TEXT NOT NULL, run_id TEXT NOT NULL,
+                reason TEXT NOT NULL CHECK(reason IN ('completed','not_dispatched')),
+                run_updated REAL NOT NULL, result TEXT NOT NULL, checkpoint TEXT NOT NULL,
+                recorded REAL NOT NULL,
+                PRIMARY KEY(owner,run_id),
+                FOREIGN KEY(owner,run_id) REFERENCES runs(owner,id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS billing_journal (
                 owner TEXT NOT NULL, run_id TEXT NOT NULL, charge_id TEXT NOT NULL UNIQUE,
                 stage TEXT NOT NULL CHECK(stage IN (
@@ -265,6 +273,74 @@ class WorkStore:
             raise WorkError("invalid_history", "会话记录格式无效。", 409)
         return value
 
+    def clean_rejected_history(self, owner: str, session_id: str):
+        """Remove only provably rejected pre-dispatch turns from model history.
+
+        Older releases persisted the input and an error response before the
+        wallet rejected it. The creation timestamp is the identity originally
+        written into that input; matching text by itself is never sufficient.
+        The separate desktop transcript is retained by the caller first.
+        """
+        from mona.hosted_work.context import history_fingerprint
+
+        with self.transaction():
+            self.require_idle(owner)
+            history = self.history(owner, session_id)
+            if any(not isinstance(message, dict) for message in history):
+                raise WorkError("invalid_history", "会话记录格式无效。", 409)
+            rows = self.db.execute(
+                "SELECT r.*,b.stage AS billing_stage FROM runs r LEFT JOIN billing_journal b "
+                "ON b.owner=r.owner AND b.run_id=r.id WHERE r.owner=? AND r.session_id=?",
+                (owner, session_id),
+            ).fetchall()
+            identities = {}
+            candidates = []
+            for row in rows:
+                payload, result = json.loads(row["payload"]), json.loads(row["result"])
+                identity = (datetime.fromtimestamp(row["created"], timezone.utc).isoformat(), payload.get("text"))
+                identities[identity] = identities.get(identity, 0) + 1
+                diagnostic = result.get("diagnostic") if isinstance(result, dict) else None
+                if (row["status"] == "failed" and isinstance(diagnostic, dict)
+                        and diagnostic.get("stop_reason") == "billing_rejected"):
+                    candidates.append((row, identity, result))
+
+            removed = set()
+            for row, (created, text), result in candidates:
+                matches = [index for index, message in enumerate(history)
+                           if message.get("role") == "user" and message.get("timestamp") == created
+                           and message.get("content") == text]
+                if not matches:
+                    continue  # Previously cleaned or no longer present; never match by text alone.
+                index = matches[0]
+                notice = {"role": "assistant", "content": result.get("message")}
+                if (row["billing_stage"] != "rejected" or result.get("workspace_saved") is not False
+                        or row["event_bytes"] != 0 or json.loads(row["checkpoint"]) != {}
+                        or identities[(created, text)] != 1
+                        or len(matches) != 1 or index + 1 >= len(history)
+                        or history[index + 1] != notice or index in removed or index + 1 in removed):
+                    raise WorkError("history_conflict", "会话记录尚待核对，请新建会话继续。", 409)
+                removed.update((index, index + 1))
+            if not removed:
+                return
+
+            context_row = self.db.execute("SELECT state FROM conversation_context WHERE owner=? AND session_id=?",
+                                          (owner, session_id)).fetchone()
+            context = self._restore_media(owner, json.loads(context_row[0])) if context_row else {}
+            if context:
+                cursor = context.get("last_consolidated")
+                if (context.get("format") != "mona-hosted-context-v1" or context.get("owner") != owner
+                        or context.get("session_id") != session_id or type(cursor) is not int
+                        or not 0 <= cursor <= len(history)
+                        or context.get("history_prefix_digest") != history_fingerprint(history[:cursor])
+                        or any(index < cursor for index in removed)):
+                    # Never rewrite an existing summary: it may already contain
+                    # rejected content and cannot be safely edited by identity.
+                    raise WorkError("history_conflict", "会话记录已整理，请新建会话继续。", 409)
+            cleaned = self._pack_media(owner, [message for index, message in enumerate(history) if index not in removed])
+            self._check_history(cleaned)
+            self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?",
+                            (encoded(cleaned), owner, session_id))
+
     def turn_state(self, owner: str, session_id: str, *, compact: bool = False) -> tuple[list, dict]:
         """Bound the combined history and context expanded for one turn."""
         history = json.loads(self.session(owner, session_id)["history"])
@@ -331,13 +407,50 @@ class WorkStore:
             (owner, self.config.max_sessions_per_user))]
 
     def unknown_count(self) -> int:
-        runs = self.db.execute("SELECT COUNT(*) FROM runs WHERE status='unknown'").fetchone()[0]
+        runs = self.db.execute("SELECT COUNT(*) FROM runs r WHERE r.status='unknown' AND NOT EXISTS "
+                               "(SELECT 1 FROM execution_ended e WHERE e.owner=r.owner AND e.run_id=r.id "
+                               "AND e.run_updated=r.updated AND e.result=r.result AND e.checkpoint=r.checkpoint)").fetchone()[0]
         operations = self.db.execute("SELECT COUNT(*) FROM workspace_operations WHERE status='unknown'").fetchone()[0]
         return runs + operations
 
     def unknown_models(self) -> set[str]:
         return {json.loads(row["payload"])["model_id"] for row in self.db.execute(
-            "SELECT payload FROM runs WHERE status='unknown'")}
+            "SELECT r.payload FROM runs r WHERE r.status='unknown' AND NOT EXISTS "
+            "(SELECT 1 FROM execution_ended e WHERE e.owner=r.owner AND e.run_id=r.id "
+            "AND e.run_updated=r.updated AND e.result=r.result AND e.checkpoint=r.checkpoint)")}
+
+    def record_execution_ended(self, owner: str, run_id: str, reason: str) -> bool:
+        """Record service-confirmed termination, without changing the run or its charge.
+
+        Called only after the service has proved the process and its dependants
+        ended, or proved no model process was ever dispatched. Bound to the
+        exact saved run state; changed records no longer release capacity.
+        """
+        if reason not in {"completed", "not_dispatched"}:
+            return False
+        identifier(run_id)
+        with self.transaction():
+            row = self.db.execute("SELECT status,result,checkpoint,updated FROM runs WHERE owner=? AND id=?",
+                                  (owner, run_id)).fetchone()
+            if row is None or row["status"] != "unknown":
+                return False
+            result = json.loads(row["result"])
+            diagnostic = result.get("diagnostic") if isinstance(result, dict) else None
+            if (not isinstance(diagnostic, dict) or diagnostic.get("stop_reason") != "billing_unknown"
+                    or result.get("workspace_saved") is not (reason == "completed")):
+                return False
+            # A successful hosted turn clears its checkpoint after durable
+            # history. A leftover checkpoint cannot prove all tools ended.
+            if reason == "completed" and json.loads(row["checkpoint"]) != {}:
+                return False
+            billing = self.db.execute("SELECT stage FROM billing_journal WHERE owner=? AND run_id=?",
+                                      (owner, run_id)).fetchone()
+            if ((reason == "completed" and billing is None)
+                    or billing is not None and billing["stage"] in {"settled", "released", "rejected"}):
+                return False
+            self.db.execute("INSERT OR REPLACE INTO execution_ended VALUES(?,?,?,?,?,?,?)",
+                            (owner, run_id, reason, row["updated"], row["result"], row["checkpoint"], time.time()))
+            return True
 
     def unknown_records(self) -> list[dict]:
         runs = [{"kind": "run", "owner": row["owner"], "id": row["id"]} for row in self.db.execute(
@@ -449,7 +562,10 @@ class WorkStore:
                     raise WorkError("request_conflict", "该发送请求已用于其他内容，未重复执行。", 409)
                 return self.run_info(old), False
             self.require_idle(owner)
-            active = self.db.execute("SELECT COUNT(*) FROM runs WHERE status IN ('running','cancelling','unknown')").fetchone()[0]
+            active = self.db.execute("SELECT COUNT(*) FROM runs r WHERE r.status IN ('running','cancelling') OR "
+                                     "(r.status='unknown' AND NOT EXISTS "
+                                     "(SELECT 1 FROM execution_ended e WHERE e.owner=r.owner AND e.run_id=r.id "
+                                     "AND e.run_updated=r.updated AND e.result=r.result AND e.checkpoint=r.checkpoint))").fetchone()[0]
             if active >= self.config.max_concurrent_runs:
                 raise WorkError("capacity", "当前在线任务已满，请稍后发送。", 429)
             count = self.db.execute("SELECT COUNT(*) FROM runs WHERE owner=? AND session_id=?", (owner, session_id)).fetchone()[0]

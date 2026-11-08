@@ -66,7 +66,7 @@ def hosted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     runtime = {"python": "3.11.9", "packages": {}}
 
-    async def execute(command):
+    async def execute(command, timeout=None):
         if "importlib.metadata" in command:
             return json.dumps({"exit_code": 0, "output": json.dumps(runtime)})
         return json.dumps({"exit_code": 0, "output": "executed in fixture sandbox"})
@@ -264,13 +264,29 @@ async def test_standard_library_script_is_staged_and_run_only_in_sandbox(hosted,
             "SKILL.md", "assets/logo.bin", "references/guide.md", "scripts/echo.py",
         }
     assert hosted.tools.execute.await_count == 2
+    assert hosted.tools.execute.await_args_list[0].args[0].endswith(" 2>/dev/null")
     command = hosted.tools.execute.await_args.args[0]
+    assert hosted.tools.execute.await_args.kwargs == {"timeout": 120}
     assert shlex.split(command) == [
         "env", "MONA_ACTIVE_WORKSPACE=/workspace", "PYTHONUTF8=1", "python3",
         f"/tmp/mona-builtin-skills/{digest}/scripts/echo.py", "hello world", "semi; literal", "$(echo never)",
     ]
     assert str(hosted.root) not in command
     asyncio.create_subprocess_exec.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_script_can_use_desktop_deadline_without_the_file_transport_limit(hosted):
+    from mona.agent.tools.skill_tools import SkillScriptRunTool
+
+    await hosted.skills.read("alpha")
+    tool = hosted.tools.registry.get("skill_script_run")
+    spec = tool.parameters["properties"]["timeout_seconds"]
+    assert spec["maximum"] == SkillScriptRunTool(track_usage=False).parameters["properties"]["timeout_seconds"]["maximum"]
+    assert not tool.validate_params({"skill": "alpha", "script": "echo.py", "timeout_seconds": 1800})
+    result = json.loads(await hosted.skills.script("alpha", "echo.py", timeout_seconds=1800))
+    assert result["exit_code"] == 0
+    assert hosted.tools.execute.await_args.kwargs == {"timeout": 1800}
 
 
 @pytest.mark.asyncio

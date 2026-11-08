@@ -182,11 +182,19 @@ class DockerSandbox:
             raise WorkError(code, message, status)
         return result
 
-    async def execute(self, command: str) -> dict:
-        if not self.started or not command or len(command) > 32000 or "\x00" in command:
+    async def execute(self, command: str, *, timeout: int | None = None) -> dict:
+        # Match desktop exec by default. Skill scripts may request their desktop
+        # limit of 1800 seconds; the public exec tool separately caps at 600.
+        timeout = 60 if timeout is None else timeout
+        if (not self.started or not command or len(command) > 32000 or "\x00" in command
+                or type(timeout) is not int or not 1 <= timeout <= 1800):
             raise SandboxError("invalid_command", "命令无效或隔离环境尚未就绪。")
-        code, output = await self._invoke(["exec", "--workdir=/workspace", self.name, "/bin/sh", "-c", command],
-                                          timeout=self.config.tool_timeout_seconds, check=False)
+        # Merge only the command's stderr inside the container. Docker's own
+        # diagnostics remain on the separate, unreturned host stderr stream.
+        # Pass the original command as an argument, never as wrapper source.
+        code, output = await self._invoke(["exec", "--workdir=/workspace", self.name, "/bin/sh", "-c",
+                                           'exec /bin/sh -c "$1" 2>&1', "mona-hosted", command],
+                                          timeout=timeout, check=False)
         return {"exit_code": code, "output": output.decode("utf-8", errors="replace")}
 
     async def save(self):

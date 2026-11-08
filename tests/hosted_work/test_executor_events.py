@@ -128,6 +128,57 @@ async def test_widget_child_frame_reaches_event_handler_before_completed_result(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("run_timeout,expected", [(None, None), (45, 210)])
+async def test_process_wait_has_no_default_wall_clock_limit(monkeypatch, child_fixture, run_timeout, expected):
+    config, _ = child_fixture
+    config.run_timeout_seconds = run_timeout
+    process = FakeProcess([{"kind": "result", "data": {"status": "completed", "workspace_saved": True}}],
+                          exit_on_close=True)
+    monkeypatch.setattr(executor_module.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    original_wait_for = asyncio.wait_for
+    observed = []
+
+    async def track_wait_for(awaitable, timeout):
+        observed.append(timeout)
+        return await original_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(executor_module.asyncio, "wait_for", track_wait_for)
+    result = await executor_module.ProcessExecutor(config).execute(
+        {"action": "turn", "owner": OWNER, "run_id": RUN, "model_id": "qwen"}, AsyncMock())
+    assert result["status"] == "completed" and observed == [expected]
+    assert json.loads(process.stdin.data)["config"]["run_timeout_seconds"] == run_timeout
+
+
+@pytest.mark.asyncio
+async def test_stop_during_spawn_sends_no_payload_and_kills_unresponsive_process(monkeypatch, child_fixture):
+    config, _ = child_fixture
+    process = FakeProcess([], exit_on_close=False)
+    executor = executor_module.ProcessExecutor(config)
+    monkeypatch.setattr(executor_module.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(executor_module, "_STOP_GRACE_TIMEOUT", 0.01)
+
+    async def spawn(*_args, **_kwargs):
+        executor.cancel(OWNER, RUN)
+        return process
+
+    def send(_fd, sig, *_args):
+        if sig == 0:
+            if process.returncode is not None:
+                raise ProcessLookupError
+        elif sig == signal.SIGTERM:
+            process.signals.append(sig)  # The child ignores graceful termination.
+        else:
+            process.send_signal(sig)
+
+    monkeypatch.setattr(executor_module.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(executor_module.signal, "pidfd_send_signal", send, raising=False)
+    result = await executor.execute({"action": "turn", "owner": OWNER, "run_id": RUN, "model_id": "qwen"}, AsyncMock())
+    assert result["status"] == "cancelled" and process.stdin.data == b""
+    assert process.signals == [signal.SIGTERM, signal.SIGKILL]
+    assert not executor.processes and not executor.stop_watchdogs
+
+
+@pytest.mark.asyncio
 async def test_child_frame_can_transport_bounded_multi_image_history(monkeypatch, child_fixture):
     config, cleanup = child_fixture
     config.max_history_bytes = 65536
@@ -221,6 +272,27 @@ async def test_stop_watchdog_kills_pinned_group_after_leader_exits(monkeypatch, 
         assert key in executor.forced_groups
     finally:
         os.close(fd)
+
+
+@pytest.mark.asyncio
+async def test_stop_watchdog_unblocks_cleanup_if_the_group_cannot_be_killed(monkeypatch, child_fixture):
+    config, _ = child_fixture
+    process = FakeProcess([], exit_on_close=False)
+    executor = executor_module.ProcessExecutor(config)
+    key = (OWNER, RUN)
+    pending = asyncio.create_task(asyncio.Event().wait())
+    await asyncio.sleep(0)
+    executor.execution_tasks[key] = pending
+    monkeypatch.setattr(executor_module, "_STOP_GRACE_TIMEOUT", 0)
+    monkeypatch.setattr(executor_module, "_group_present", lambda *_args: True)
+    monkeypatch.setattr(executor_module.signal, "SIGKILL", 9, raising=False)
+    def fail_kill(*_args):
+        raise PermissionError
+    monkeypatch.setattr(executor_module.signal, "pidfd_send_signal", fail_kill, raising=False)
+    await executor._watch_cancelled_group(key, process, 42)
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert key in executor.forced_groups
 
 
 @pytest.mark.asyncio

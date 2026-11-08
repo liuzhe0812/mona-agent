@@ -119,7 +119,7 @@ async def test_specs_use_parent_verified_limits_and_preserve_shared_callbacks(tm
     assert spec.context_block_limit == 100_000 and spec.context_provider == "mona_managed"
     assert spec.max_tool_result_chars == 100_000 and spec.max_iterations == 7
     assert spec.concurrent_tools and spec.max_parallel_tool_calls == 10 and not spec.fail_on_tool_error
-    assert spec.llm_timeout_s == 45 and spec.enforce_llm_timeout_for_streaming
+    assert spec.llm_timeout_s is None and not spec.enforce_llm_timeout_for_streaming
     assert spec.checkpoint_callback is checkpoint and spec.progress_callback is progress
     assert spec.session_key == ctx.session.key and spec.model_context_callback is None
     assert spec.request_snapshot_callback is None and spec.injection_callback is None

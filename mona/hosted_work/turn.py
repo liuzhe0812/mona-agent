@@ -286,7 +286,6 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
             context_window_tokens=window.tokens, context_window_verified=window.source != "default",
             context_block_limit=selection.context_window_tokens, provider_retry_mode="standard",
             concurrent_tools=True, max_parallel_tool_calls=AgentDefaults().max_parallel_tool_calls, fail_on_tool_error=False,
-            llm_timeout_s=config.run_timeout_seconds, enforce_llm_timeout_for_streaming=True,
             session_key=runtime.session.key,
             ))
             if result.stop_reason == "completed":

@@ -1,5 +1,6 @@
 """File mutation contracts use controlled files; real gVisor acceptance is opt-in."""
 import hashlib
+import io
 import json
 import os
 import sys
@@ -34,6 +35,69 @@ def rename(source, destination, digest):
 
 def trash(source, digest):
     return sandbox_files.operate({"action": "trash", "path": source, "expected_sha256": digest}, 4096)
+
+
+@pytest.mark.parametrize("expected", [None, "0" * 64])
+def test_write_conflict_is_a_safe_helper_reply(workspace, monkeypatch, capsys, expected):
+    write()
+    request = {"action": "write", "path": "source.txt", "content": "replacement"}
+    if expected is not None:
+        request["expected_sha256"] = expected
+    monkeypatch.setattr(sys, "argv", ["sandbox_files", "file", "4096"])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(request).encode()), encoding="utf-8"))
+
+    sandbox_files.main()
+
+    assert json.loads(capsys.readouterr().out) == {"error": "file_changed"}
+    assert (workspace / "source.txt").read_text(encoding="utf-8") == "private document"
+
+
+@pytest.mark.parametrize("action", ["stat", "read", "download", "list"])
+def test_missing_file_is_a_safe_helper_reply(workspace, monkeypatch, capsys, action):
+    request = {"action": action, "path": "missing.txt"}
+    monkeypatch.setattr(sys, "argv", ["sandbox_files", "file", "4096"])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(request).encode()), encoding="utf-8"))
+
+    sandbox_files.main()
+
+    assert json.loads(capsys.readouterr().out) == {"error": "file_not_found"}
+
+
+def test_invalid_write_path_is_a_safe_helper_reply(workspace, monkeypatch, capsys):
+    request = {"action": "write", "path": "../outside.txt", "content": "replacement"}
+    monkeypatch.setattr(sys, "argv", ["sandbox_files", "file", "4096"])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(request).encode()), encoding="utf-8"))
+
+    sandbox_files.main()
+
+    assert json.loads(capsys.readouterr().out) == {"error": "invalid_file_operation"}
+    assert not (workspace.parent / "outside.txt").exists()
+
+
+def test_write_race_does_not_overwrite_the_new_file(workspace, monkeypatch):
+    def competing_create(_source, destination):
+        Path(destination).write_text("other writer", encoding="utf-8")
+        raise FileExistsError
+
+    monkeypatch.setattr(sandbox_files.os, "link", competing_create)
+    with pytest.raises(sandbox_files.FileOperationError) as error:
+        write("new.txt", "replacement")
+    assert error.value.code == "file_exists"
+    assert (workspace / "new.txt").read_text(encoding="utf-8") == "other writer"
+    assert not list(workspace.glob(".mona-write-*"))
+
+
+def test_unknown_write_failure_is_not_reported_as_a_conflict(workspace, monkeypatch):
+    original = write()
+
+    def fail_replace(*_args):
+        raise OSError("unconfirmed write")
+
+    monkeypatch.setattr(sandbox_files.os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        sandbox_files.operate({"action": "write", "path": "source.txt", "content": "replacement",
+                               "expected_sha256": original["sha256"]}, 4096)
+    assert (workspace / "source.txt").read_text(encoding="utf-8") == "private document"
 
 
 def test_rename_is_digest_bound_preserves_bytes_and_never_overwrites(workspace):

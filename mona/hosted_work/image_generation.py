@@ -207,11 +207,11 @@ class _ObservedProvider:
             if actual is None or wrapped is not actual:
                 raise ImageGenerationError("image response could not be verified", code="result_unknown")
             return actual
-        except (Exception, asyncio.CancelledError):
+        except Exception:
             if actual is None:
                 raise
-            # Preserve a received image when settlement or cancellation becomes
-            # uncertain, but do not claim the overall operation succeeded.
+            # Preserve a received image when settlement becomes uncertain,
+            # but do not claim the overall operation succeeded.
             self.post_response_uncertain = True
             return actual
 
@@ -501,10 +501,6 @@ class HostedImageGenerationTool(Tool):
                         return _result("MEDIA_RESULT_UNKNOWN", "图片生成结果暂未确认，请先检查已有结果。", artifacts)
                 return json.dumps({"ok": True, "artifacts": artifacts,
                                    "next_step": "图片已保存至当前工作区，可通过现有交付流程提供。"}, ensure_ascii=False)
-        except asyncio.CancelledError:
-            if invoked:
-                return _result("MEDIA_RESULT_UNKNOWN", "图片生成结果暂未确认，请先检查已有结果。", artifacts)
-            raise
         except TimeoutError:
             return _result("MEDIA_RESULT_UNKNOWN", "图片生成结果暂未确认，请先检查已有结果。", artifacts)
         except Exception as exc:

@@ -3,10 +3,12 @@
 Requires explicit MONA_HOSTED_SANDBOX_SMOKE=1 and a preinstalled pinned
 MONA_HOSTED_SANDBOX_IMAGE. Does not install/pull images or alter Docker config.
 """
+import asyncio
 import json
 import os
 import shlex
 import sys
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -14,6 +16,7 @@ import pytest
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.contracts import owner_key
 from mona.hosted_work.sandbox import DockerSandbox
+from mona.hosted_work.tools import HostedTools
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or os.environ.get("MONA_HOSTED_SANDBOX_SMOKE") != "1",
@@ -85,3 +88,29 @@ print(json.dumps({'uid': os.getuid(), 'network_blocked': True, 'host_hidden': Tr
     finally:
         await first.close()
         await second.close()
+
+
+@pytest.mark.asyncio
+async def test_real_timed_out_command_cannot_keep_writing_after_quiesce(tmp_path):
+    image = os.environ.get("MONA_HOSTED_SANDBOX_IMAGE", "")
+    assert image
+    config = HostedWorkConfig(sandbox_image=image, state_dir=str(tmp_path), workspace_bytes=8 * 1024 * 1024)
+    sandbox = DockerSandbox(config, owner_key("900000003"), uuid4().hex, tmp_path / "one.zip")
+    try:
+        await sandbox.start()
+        reply = await sandbox.execute("printf 'standard output'; printf 'standard error' >&2; exit 7")
+        assert reply == {"exit_code": 7, "output": "standard outputstandard error"}
+        tools = HostedTools(sandbox, AsyncMock(), config=config)
+        with pytest.raises(asyncio.CancelledError):
+            await tools.execute("sleep 2; printf late > /workspace/late.txt", timeout=1)
+        assert tools.fault and "不要自动重跑" in tools.fault
+        # Stopping docker's client alone is insufficient. Saving first kills
+        # remaining processes in this exact user sandbox before taking a snapshot.
+        await sandbox.save()
+        await asyncio.sleep(1.5)
+        listing = await sandbox.file({"action": "list", "path": "."})
+        assert not any(entry["name"] == "late.txt" for entry in listing["entries"])
+    finally:
+        await sandbox.close()
+    _, remaining = await sandbox._invoke(["ps", "-a", "--filter", f"name=^/{sandbox.name}$", "--format", "{{.Names}}"])
+    assert not remaining.strip()

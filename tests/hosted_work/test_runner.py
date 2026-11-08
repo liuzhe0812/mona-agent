@@ -50,8 +50,15 @@ class SandboxBoundary:
 
 
 @pytest.mark.asyncio
-async def test_existing_runner_executes_only_explicit_online_tools():
-    config = HostedWorkConfig(models={"official": {"label": "Mona", "model": "fixture-model"}})
+async def test_existing_runner_executes_only_explicit_online_tools(monkeypatch):
+    from mona.agent.runner import AgentRunner
+
+    original_run = AgentRunner.run
+    async def check_spec(self, spec):
+        assert spec.llm_timeout_s is None and not spec.enforce_llm_timeout_for_streaming
+        return await original_run(self, spec)
+    monkeypatch.setattr(AgentRunner, "run", check_spec)
+    config = HostedWorkConfig(run_timeout_seconds=45, models={"official": {"label": "Mona", "model": "fixture-model"}})
     model, sandbox, events = ModelBoundary(), SandboxBoundary(), []
     async def emit(kind, value):
         events.append((kind, value))
@@ -60,7 +67,7 @@ async def test_existing_runner_executes_only_explicit_online_tools():
     assert result["status"] == "completed" and result["content"] == "任务完成"
     assert sandbox.calls == [{"action": "write", "path": "result.txt", "content": "实际工具写入", "expected_sha256": None}]
     names = {tool["function"]["name"] for tool in model.requests[0][1]}
-    assert names == {"read_file", "list_dir", "web_fetch", "deliver_file", "skill_list", "skill_read",
+    assert names == {"read_file", "list_dir", "web_fetch", "web_search", "deliver_file", "skill_list", "skill_read",
                      "load_capability", "update_plan", "spawn"}
     assert {"write_file", "exec"} <= {tool["function"]["name"] for tool in model.requests[1][1]}
     assert all(request[0][0] == model.requests[0][0][0] for request in model.requests)

@@ -285,8 +285,8 @@ async def test_active_staging_has_no_prompt_sidecar_or_reference_paths(setup_too
         assert all(prompt.encode() not in path.read_bytes() for path in files)
     finally:
         task.cancel()
-        result = json.loads(await task)
-        assert result["code"] == "MEDIA_RESULT_UNKNOWN"
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert not list(run_root.glob("call-*"))
 
 
@@ -344,7 +344,7 @@ async def test_staging_creation_refuses_a_linked_owner(setup_tool, state_root):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_inflight_request_notifies_wrapper_and_returns_unknown(setup_tool):
+async def test_cancelled_inflight_request_notifies_wrapper_and_propagates(setup_tool):
     create, _, calls, _, _, behavior = setup_tool
     behavior["sleep_at"] = 0
     cancelled = []
@@ -357,8 +357,30 @@ async def test_cancelled_inflight_request_notifies_wrapper_and_returns_unknown(s
     task = asyncio.create_task(create(Sandbox(), call_wrapper=wrapper).execute("test"))
     await asyncio.wait_for(behavior["entered"].wait(), 1)
     task.cancel()
-    result = json.loads(await task)
-    assert result["code"] == "MEDIA_RESULT_UNKNOWN" and result["retry_safe"] is False
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(calls) == len(cancelled) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_image_reply_still_stops_the_tool(setup_tool):
+    create, _, calls, _, _, _ = setup_tool
+    entered, cancelled = asyncio.Event(), []
+
+    async def waiting_settlement(call, invoke):
+        await invoke()
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(call.operation_id)
+            raise
+
+    task = asyncio.create_task(create(Sandbox(), call_wrapper=waiting_settlement).execute("test"))
+    await asyncio.wait_for(entered.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert len(calls) == len(cancelled) == 1
 
 
@@ -401,7 +423,7 @@ async def test_settlement_timeout_after_image_keeps_result_unknown(setup_tool):
     sandbox = Sandbox()
     result = json.loads(await create(sandbox, call_wrapper=waiting_settlement, timeout=0.05).execute("test"))
     assert result["ok"] is False and result["code"] == "MEDIA_RESULT_UNKNOWN"
-    assert result["retry_safe"] is False and len(result["artifacts"]) == 1
+    assert result["retry_safe"] is False and result["artifacts"] == []
     assert len(calls) == len(cancellation) == 1
 
 

@@ -1,6 +1,7 @@
 """Exercise the real HTTP/store/admission boundary; only identity and execution edges are isolated."""
 import asyncio
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -202,6 +203,29 @@ async def test_stop_cancels_only_the_owned_run_image_flights(online):
     await service.stop(OWNER, RID)
     await asyncio.gather(*list(service.tasks.values()))
     assert cancelled == [(OWNER, RID)] and executor.cancelled == [(OWNER, RID)]
+
+
+@pytest.mark.asyncio
+async def test_stop_signals_executor_before_waiting_for_question_cleanup(online):
+    _, service, executor = online
+    service.store.create_session(OWNER, NewSession(request_id=SID))
+    service.store.create_run(OWNER, SID, NewTurn(request_id=RID, model_id="official", text="work"))
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def cancel_questions(_owner, _sid, _run):
+        entered.set()
+        await release.wait()
+
+    service.desktop = SimpleNamespace(questions=SimpleNamespace(cancel_run=cancel_questions))
+    stopped = asyncio.create_task(service.stop(OWNER, RID))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert executor.cancelled == [(OWNER, RID)]
+        assert not stopped.done()
+    finally:
+        release.set()
+        await stopped
+        service.desktop = None
 
 
 @pytest.mark.asyncio

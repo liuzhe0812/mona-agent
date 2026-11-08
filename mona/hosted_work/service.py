@@ -44,6 +44,7 @@ class WorkService:
         self.active_users: set[str] = set()
         self.active_engines: set[str] = set()
         self.tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.admissions: dict[tuple[str, str], asyncio.Event] = {}
         self.desktop = None
         self.image_control = None
         self.image_coordinator = None
@@ -92,6 +93,15 @@ class WorkService:
         if engine:
             self.active_engines.discard(engine)
 
+    def _clean_rejected_history(self, owner: str, session_id: str):
+        # Materialize the user-facing transcript before removing legacy failed
+        # admissions from the distinct model history.
+        state = getattr(self.desktop, "state", None)
+        records = getattr(state, "records", None)
+        if callable(records):
+            records(owner, session_id)
+        self.store.clean_rejected_history(owner, session_id)
+
     async def submit(self, owner: str, token: str, session_id: str, request: NewTurn):
         # Observe an accepted request before admission checks: retries never start a second job.
         try:
@@ -103,10 +113,30 @@ class WorkService:
             if (NewTurn.model_validate(existing["input"]).model_dump(exclude={"effective_reasoning_effort"})
                     != request.model_dump(exclude={"effective_reasoning_effort"}) or existing["session_id"] != session_id):
                 raise WorkError("request_conflict", "发送请求的内容已变化，未重复执行。", 409)
+            admission = self.admissions.get((owner, request.request_id))
+            if admission is not None:
+                await admission.wait()
+                existing = self.store.run(owner, request.request_id)
+            result = existing["result"]
+            diagnostic = result.get("diagnostic", {})
+            if (existing["status"] == "failed" and isinstance(diagnostic, dict)
+                    and diagnostic.get("stop_reason") == "billing_rejected"):
+                journal = self.store.db.execute("SELECT stage FROM billing_journal WHERE owner=? AND run_id=?",
+                                                (owner, request.request_id)).fetchone()
+                if journal is None or journal["stage"] != "rejected" or result.get("workspace_saved") is not False:
+                    raise WorkError("billing_unknown", "计费状态待确认，请勿重复发送。", 503)
+                raise BillingError(diagnostic.get("billing_code", "billing_rejected"), result.get("message", "计费未通过。"),
+                                   diagnostic.get("billing_status", 402), rejected=True)
+            if existing["status"] in {"running", "cancelling"}:
+                journal = self.store.db.execute("SELECT stage FROM billing_journal WHERE owner=? AND run_id=?",
+                                                (owner, request.request_id)).fetchone()
+                if journal is not None and journal["stage"] in {"reserving", "reserved", "dispatching"}:
+                    raise WorkError("billing_unknown", "计费状态待确认，请勿重复发送。", 503)
             return existing
         # Distinguish this account's persisted unknown result before shared
         # capacity/model checks can misreport it as another running task.
         self.store.require_idle(owner)
+        self._clean_rejected_history(owner, session_id)
         # Verify the combined expansion bound before reserving a wallet charge.
         self.store.turn_state(owner, session_id)
         engine = self._acquire(owner, request.model_id)
@@ -117,7 +147,9 @@ class WorkService:
         reserved = False
         dispatch_started = False
         journal_started = False
+        task_created = False
         billing_id = None
+        admission = None
         try:
             if model.source == "codex" and model.billing_mode == "wallet":
                 billing = HostedBilling(self.config)
@@ -135,6 +167,8 @@ class WorkService:
             if not created:
                 self._release(owner, engine)
                 return run
+            admission = asyncio.Event()
+            self.admissions[(owner, run["id"])] = admission
             if billing is not None:
                 billing_id = charge_id(owner, run["id"])
                 self.store.billing_begin(owner, run["id"], billing_id)
@@ -152,8 +186,18 @@ class WorkService:
                 self.store.billing_update(owner, run["id"], "running")
             task = asyncio.create_task(self._drive(owner, token, run, engine, billing=billing,
                                                    model=model, billing_id=billing_id))
+            task_created = True
             self.tasks[(owner, run["id"])] = task
-            task.add_done_callback(lambda _: self.tasks.pop((owner, run["id"]), None))
+            def finished(done):
+                self.tasks.pop((owner, run["id"]), None)
+                if done.cancelled():
+                    return
+                try:
+                    if done.result() is True:
+                        self.store.record_execution_ended(owner, run["id"], "completed")
+                except Exception as exc:
+                    logger.warning("Hosted Work termination evidence unavailable exception_type={}", type(exc).__name__)
+            task.add_done_callback(finished)
             return run
         except BaseException as exc:
             rejected = isinstance(exc, BillingError) and exc.rejected and not reserved
@@ -170,13 +214,25 @@ class WorkService:
                     self.store.finish(owner, run["id"], "failed" if rejected else "unknown", {
                         "message": exc.message if rejected else "计费状态待核对，本次任务不会自动重新执行。",
                         "workspace_saved": False,
-                        "diagnostic": {"stop_reason": "billing_rejected" if rejected else "billing_unknown"},
+                        "diagnostic": {"stop_reason": "billing_rejected" if rejected else "billing_unknown",
+                                       **({"billing_code": exc.code, "billing_status": exc.status} if rejected else {})},
                     })
+                    if rejected:
+                        self._clean_rejected_history(owner, session_id)
             finally:
                 self._release(owner, engine)
+            if run is not None and created and not rejected and not task_created:
+                try:
+                    self.store.record_execution_ended(owner, run["id"], "not_dispatched")
+                except Exception as evidence_error:
+                    logger.warning("Hosted Work termination evidence unavailable exception_type={}", type(evidence_error).__name__)
             if isinstance(exc, BillingError) and not rejected:
                 raise WorkError("billing_unknown", "计费状态待核对，请勿重复发送。", 503) from None
             raise
+        finally:
+            if admission is not None:
+                self.admissions.pop((owner, request.request_id), None)
+                admission.set()
 
     async def _drive(self, owner: str, token: str, run: dict, engine: str | None, *,
                      billing=None, model=None, billing_id=None):
@@ -184,6 +240,7 @@ class WorkService:
         billing_finished = False
         image_bound = False
         cancelled_with_pending_billing = False
+        completed_with_pending_billing = False
         cleanup_confirmed = True
         title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
@@ -255,6 +312,8 @@ class WorkService:
                     image_bound = True
                     payload["hosted_image"] = {"settings": image.model_dump(), "capability": capability}
             result = await self.executor.execute(payload, event)
+            execution_completed = (result.get("status") == "completed" and result.get("workspace_saved") is True
+                                   and (result.get("diagnostic") or {}).get("stop_reason") == "completed")
             execution_cancelled = (result.get("status") == "cancelled" and result.get("workspace_saved") is True
                                    and (result.get("diagnostic") or {}).get("stop_reason") == "cancelled")
             if billing is not None:
@@ -275,6 +334,7 @@ class WorkService:
                     billing_finished = True
                 except BillingError:
                     cancelled_with_pending_billing = execution_cancelled
+                    completed_with_pending_billing = execution_completed
                     result.update(status="unknown", message="本轮已执行，计费状态待核对；请勿重复发送。")
                     result["diagnostic"] = {"stop_reason": "billing_unknown",
                                             "billing_reasons": result.get("billing_issue_codes", [])}
@@ -366,6 +426,15 @@ class WorkService:
             except WorkError as exc:
                 if exc.status != 404:
                     raise
+        if completed_with_pending_billing and cleanup_confirmed:
+            wire = getattr(self.desktop, "_wire", None) if self.desktop is not None else None
+            platform = getattr(wire, "_platform", None) if wire is not None else {}
+            pending_editor = not isinstance(platform, dict) or any(key[0] == owner for key in platform)
+            pending_image = bool(image_bound and any(item["run_id"] == run_id
+                                 for item in self.image_control.journal.pending(owner)))
+            processes = getattr(self.executor, "processes", {})
+            return not pending_editor and not pending_image and (owner, run_id) not in processes
+        return False
 
     @staticmethod
     def _file_info(value: dict) -> dict:
@@ -390,11 +459,12 @@ class WorkService:
             self.store.cancelling(owner, run_id)
             if self.image_coordinator is not None:
                 self.image_coordinator.cancel_run(owner, run_id)
+            # Stop this run before waiting on any question or input cleanup.
+            self.executor.cancel(owner, run_id)
             if self.desktop is not None and hasattr(self.desktop, "questions"):
                 await self.desktop.questions.cancel_run(owner, run["session_id"], run_id)
             if self.desktop is not None and hasattr(self.desktop, "inputs"):
                 await self.desktop.inputs.pause(owner, run["session_id"], run_id)
-            self.executor.cancel(owner, run_id)
         elif run["status"] == "unknown" and self.image_coordinator is not None:
             # A parent-owned image request may still be draining after the run
             # was persisted as unknown. Stop only that exact run's flight;

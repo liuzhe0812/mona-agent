@@ -108,6 +108,42 @@ async def test_shared_question_long_poll_reuses_one_identity_and_secure_transpor
 
 
 @pytest.mark.asyncio
+async def test_default_question_waits_for_user_across_polls(monkeypatch):
+    settings = HostedWorkConfig(public_origin="https://mona-ai.cn", bind_host="127.0.0.1")
+    assert settings.question_timeout_seconds is None
+    assert HostedWorkConfig.model_validate(settings.model_dump()).question_timeout_seconds is None
+
+    requests = []
+    waiting = asyncio.Event()
+    answer = asyncio.Event()
+
+    async def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return response({"status": "pending"})
+        waiting.set()
+        await answer.wait()
+        return response({"status": "answered", "answers": ANSWERS})
+
+    install_transport(monkeypatch, handler)
+
+    async def emit(_kind, _value):
+        pass
+
+    tool = build_question_tool(settings, payload(), Sandbox(), emit, [])
+    task = asyncio.create_task(tool.execute(QUESTIONS))
+    try:
+        await asyncio.wait_for(waiting.wait(), 2)
+        assert not task.done() and requests[0] == requests[1]
+        answer.set()
+        assert json.loads(await asyncio.wait_for(task, 2)) == {"answers": ANSWERS}
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_preview_retries_same_payload_and_preserves_non_image_delivery(monkeypatch):
     png, jpg, webp = image_bytes("PNG"), image_bytes("JPEG"), image_bytes("WEBP")
     values = {"a.png": png, "b.jpg": jpg, "c.webp": webp}

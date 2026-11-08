@@ -112,6 +112,7 @@ class ProcessExecutor:
         self.config = config
         self.processes: dict[tuple[str, str], asyncio.subprocess.Process] = {}
         self.group_handles: dict[tuple[str, str], int] = {}
+        self.execution_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.forced_groups: set[tuple[str, str]] = set()
         self.stop_watchdogs: dict[tuple[str, str], asyncio.Task] = {}
         self.cancelled: set[tuple[str, str]] = set()
@@ -124,12 +125,16 @@ class ProcessExecutor:
         try:
             if _group_present(process, handle):
                 self.forced_groups.add(key)
-                signal.pidfd_send_signal(handle, signal.SIGKILL, None, _PIDFD_PROCESS_GROUP)
+                await _stop_remaining_group(process, handle)
         except ProcessLookupError:
             pass
         except (WorkError, OSError, TypeError, AttributeError, NotImplementedError):
-            # The main execution path must retain an unknown result.
+            # Do not leave a stopped run waiting forever if the OS cannot
+            # confirm process-group termination. Cleanup records it as unknown.
             self.forced_groups.add(key)
+            task = self.execution_tasks.get(key)
+            if task is not None:
+                task.cancel()
 
     def cancel(self, owner: str, run_id: str):
         key = (owner, run_id)
@@ -170,14 +175,18 @@ class ProcessExecutor:
         key = (payload["owner"], payload["run_id"])
         if key in self.processes:
             raise WorkError("duplicate_execution", "此任务已在执行，未重复派发。", 409)
-        if key in self.cancelled:
-            self.cancelled.discard(key)
+
+        def stopped_before_dispatch():
             result = {"status": "cancelled", "message": "任务在派发前已停止。", "workspace_saved": True}
             selected = self.config.models.get(payload.get("model_id", ""))
             if selected is not None and selected.source == "codex":
                 result["billing_usage"] = {"prompt_tokens": 0, "cached_tokens": 0,
                                            "completion_tokens": 0, "complete": True}
             return result
+
+        if key in self.cancelled:
+            self.cancelled.discard(key)
+            return stopped_before_dispatch()
         # History/checkpoints may contain losslessly restored image blocks.
         # Their total encoded size has its own account-scoped bound; retain a
         # separate bound for text and protocol overhead.
@@ -204,16 +213,9 @@ class ProcessExecutor:
             self.cancelled.discard(key)
             raise WorkError("execution_cleanup_unknown", "无法确认任务进程可安全停止，本次未开始执行。", 503)
         self.processes[key] = process
+        self.execution_tasks[key] = asyncio.current_task()
         if handle is not None:
             self.group_handles[key] = handle
-        if key in self.cancelled:
-            if handle is not None:
-                try:
-                    signal.pidfd_send_signal(handle, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            else:
-                process.send_signal(signal.SIGTERM)
         result = None
 
         async def stdout():
@@ -246,12 +248,21 @@ class ProcessExecutor:
 
         readers = [asyncio.create_task(stdout()), asyncio.create_task(stderr())]
         try:
-            envelope = {"config": self.config.model_dump(), "payload": payload}
-            process.stdin.write(json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode())
-            await process.stdin.drain()
+            stopped_early = key in self.cancelled
+            if stopped_early:
+                self.cancel(*key)
+            else:
+                envelope = {"config": self.config.model_dump(), "payload": payload}
+                process.stdin.write(json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode())
+                await process.stdin.drain()
             process.stdin.close()
-            await asyncio.wait_for(asyncio.gather(*readers, process.wait()),
-                                   self.config.run_timeout_seconds + self.config.tool_timeout_seconds + 45)
+            timeout = self.config.run_timeout_seconds
+            if timeout is not None:
+                timeout += self.config.tool_timeout_seconds + 45
+            await asyncio.wait_for(asyncio.gather(*readers, process.wait()), timeout)
+            if stopped_early:
+                await _stop_remaining_group(process, handle)
+                return stopped_before_dispatch()
             if process.returncode != 0 or result is None:
                 raise WorkError("execution_unknown", "执行结果待核对，不会自动重新执行。", 503)
             if await _stop_remaining_group(process, handle) or key in self.forced_groups:
@@ -298,6 +309,7 @@ class ProcessExecutor:
                 watchdog.cancel()
                 await asyncio.gather(watchdog, return_exceptions=True)
             self.processes.pop(key, None)
+            self.execution_tasks.pop(key, None)
             self.group_handles.pop(key, None)
             if handle is not None:
                 os.close(handle)

@@ -225,9 +225,15 @@ def operate(request: dict, file_limit: int):
     if action in {"rename", "trash"}:
         return _mutate(request, file_limit)
     if action == "list":
-        directory = ROOT if request.get("path") in (None, "", ".", "/workspace") else resolve(request["path"])
+        try:
+            directory = ROOT if request.get("path") in (None, "", ".", "/workspace") else resolve(request["path"])
+            paths = sorted(directory.iterdir())
+        except FileNotFoundError:
+            raise FileOperationError("file_not_found") from None
+        except (ValueError, NotADirectoryError):
+            raise FileOperationError("invalid_file_operation") from None
         entries = []
-        for path in sorted(directory.iterdir()):
+        for path in paths:
             if path == ROOT / TRASH:
                 continue
             entry = {"path": path.relative_to(ROOT).as_posix(), "name": path.name,
@@ -236,18 +242,26 @@ def operate(request: dict, file_limit: int):
             if len(entries) > 500:
                 return {"entries": entries[:500], "truncated": True}
         return {"entries": entries, "truncated": False}
-    path = resolve(request["path"])
+    try:
+        path = resolve(request["path"])
+    except ValueError:
+        raise FileOperationError("invalid_file_operation") from None
     if action in {"read", "download", "stat"}:
-        metadata = info(path, file_limit)
-        if action == "download":
-            metadata["data"] = base64.b64encode(path.read_bytes()).decode("ascii")
-        elif action == "read":
-            text = path.read_text(encoding="utf-8")
-            offset = request.get("offset", 0)
-            if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-                raise ValueError("invalid read offset")
-            metadata.update(content=text[offset:offset + 16000], next_offset=min(len(text), offset + 16000),
-                            truncated=offset + 16000 < len(text))
+        try:
+            metadata = info(path, file_limit)
+            if action == "download":
+                metadata["data"] = base64.b64encode(path.read_bytes()).decode("ascii")
+            elif action == "read":
+                text = path.read_text(encoding="utf-8")
+                offset = request.get("offset", 0)
+                if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                    raise ValueError("invalid read offset")
+                metadata.update(content=text[offset:offset + 16000], next_offset=min(len(text), offset + 16000),
+                                truncated=offset + 16000 < len(text))
+        except FileNotFoundError:
+            raise FileOperationError("file_not_found") from None
+        except (ValueError, IsADirectoryError, NotADirectoryError):
+            raise FileOperationError("invalid_file_operation") from None
         return metadata
     if action not in {"write", "upload"}:
         raise ValueError("unsupported file action")
@@ -261,9 +275,9 @@ def operate(request: dict, file_limit: int):
         if action == "upload" and current["sha256"] == hashlib.sha256(data).hexdigest():
             return current
         if not expected or current["sha256"] != expected:
-            raise ValueError("file changed; read the current file before overwriting")
+            raise FileOperationError("file_changed")
     elif expected:
-        raise ValueError("expected file no longer exists")
+        raise FileOperationError("file_changed")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(prefix=".mona-write-", dir=path.parent)
     try:
@@ -271,10 +285,13 @@ def operate(request: dict, file_limit: int):
             stream.write(data)
         if path.exists():
             if not expected or info(path, file_limit)["sha256"] != expected:
-                raise ValueError("file changed during save")
+                raise FileOperationError("file_changed")
             os.replace(temp, path)
         else:
-            os.link(temp, path)
+            try:
+                os.link(temp, path)
+            except FileExistsError:
+                raise FileOperationError("file_exists") from None
             os.unlink(temp)
     finally:
         if os.path.exists(temp):

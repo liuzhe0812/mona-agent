@@ -120,6 +120,18 @@ def test_direct_model_does_not_receive_a_user_token(monkeypatch, tmp_path):
     assert "worker_key_env" not in HostedWorkConfig.model_fields
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_timeout,expected", [(None, 120), (45, 45), (900, 120)])
+async def test_direct_model_uses_a_bounded_idle_timeout_with_optional_run_deadline(monkeypatch, run_timeout, expected):
+    monkeypatch.setenv("MONA_WORK_MODEL_PRIMARY_KEY", "synthetic-platform-key")
+    provider = HostedAPIProvider(HostedWorkConfig(run_timeout_seconds=run_timeout), model_config())
+    client = provider.http_client_factory()
+    try:
+        assert client.timeout.read == expected
+    finally:
+        await client.aclose()
+
+
 def test_missing_platform_key_does_not_borrow_desktop_or_account_credentials(monkeypatch, tmp_path):
     monkeypatch.delenv("MONA_WORK_MODEL_PRIMARY_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-desktop-key")

@@ -80,7 +80,7 @@ class HostedAPIProvider(OpenAICompatProvider):
                               is_direct=True, allow_auto_fallback=False))
         self.http_client_factory = lambda: httpx.AsyncClient(
             transport=HostedModelTransport(endpoint, allow_loopback=urlsplit(endpoint).scheme == "http"),
-            trust_env=False, follow_redirects=False, timeout=min(config.run_timeout_seconds, 120),
+            trust_env=False, follow_redirects=False, timeout=min(config.run_timeout_seconds or 120, 120),
             limits=httpx.Limits(max_connections=8, max_keepalive_connections=4))
 
     @staticmethod
