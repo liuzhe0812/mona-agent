@@ -1,5 +1,7 @@
 # Mona 线上工作台：独立宿主与共享会话界面
 
+网页与桌面执行能力的实际差异、必要隔离理由及待对齐项见 [执行差异清单](hosted-work-parity.md)。
+
 ## 2026-11-06 会话执行链共用边界（v20 已部署并验收）
 
 普通会话共用应用的 `AgentRunner`、`ContextBuilder`、`Consolidator`、能力按需加载、内置 Skill 模板、`UserQuestions`/提问工具、计划/目标工具、`WorkTurnController`、`SubagentManager`、恢复投影和标题生成。Hosted 仅适配账号、逻辑工作区、持久化和 HTTP/WS；不是另一套模型循环。共享类新增的依赖注入参数均保留桌面缺省行为。
