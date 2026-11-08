@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 
 from mona.agent.context import ContextBuilder
 from mona.agent.hook import AgentHook, CompositeHook
@@ -52,6 +53,7 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
     parent_editors = tuple(tool for tool in editor_tools if tool.name in {"office", "canvas"})
     parent_office = next((tool for tool in parent_editors if isinstance(tool, _HostedOfficeTool)), None)
     child_tools = []
+    image_runtimes = {}
 
     async def factory(task_id, task, origin, hook, checkpoint):
         if (origin.get("channel") != "websocket" or origin.get("chat_id") != session_id
@@ -74,6 +76,18 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
                 child_office._delivery_bus.delivered = parent_office._delivery_bus.delivered
         tools = HostedTools(sandbox, emit, editors, session_id=session_id, history=(), config=ctx.config,
                             metadata=metadata, attachments=attachments)
+        image_runtime = None
+        if payload.get("desktop_ui") and payload.get("hosted_image"):
+            from mona.hosted_work.image_runtime import ImageRuntime
+
+            image_runtime = ImageRuntime(ctx.config, payload, sandbox, tools, operation_scope=secrets.token_hex(16))
+            image_tool = image_runtime.tool()
+            tools.registry.register(image_tool)
+            tools.skills.allowed_names.add(image_tool.name)
+            tools.skills.initial_names.add(image_tool.name)
+            allowed = tools.registry.get_allowed_tool_names()
+            if allowed is not None:
+                tools.registry.set_allowed_tool_names(allowed | {image_tool.name})
         if getattr(ctx, "_runtime", None) is not None:
             from mona.hosted_work.owner_memory import build_memory_tools
 
@@ -84,7 +98,6 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
                 allowed = tools.registry.get_allowed_tool_names()
                 if allowed is not None:
                     tools.registry.set_allowed_tool_names(allowed | {tool.name})
-        child_tools.append(tools)
         system = render_template(
             "agent/subagent_system.md", time_ctx="", workspace="/workspace",
             skills_summary=json.dumps(tools.skills.catalog(), ensure_ascii=False),
@@ -102,7 +115,7 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
             office_display_name=metadata.get("office_display_name"),
         )
         selection, window = ctx.selection, ctx.window
-        return AgentRunSpec(
+        spec = AgentRunSpec(
             initial_messages=[{"role": "system", "content": system},
                               {"role": "user", "content": task + "\n\n" + runtime}],
             tools=tools.registry, model=selection.model,
@@ -116,5 +129,12 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
             fail_on_tool_error=False, session_key=ctx.session.key,
             error_message=None, max_iterations_message="本轮达到执行步数上限，已有进度已保留。",
         )
+        child_tools.append(tools)
+        if image_runtime is not None:
+            image_runtimes[spec.tools] = image_runtime
+        return spec
 
+    # The hosted manager consumes the runtime associated with this exact
+    # child's registry. Never share mutable runner state between children.
+    factory._image_runtimes = image_runtimes
     return factory, child_tools

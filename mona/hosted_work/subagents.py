@@ -6,7 +6,7 @@ import copy
 import inspect
 from pathlib import Path
 
-from mona.agent.runner import AgentRunSpec
+from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.subagent import SubagentManager
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.registry import ToolRegistry
@@ -17,6 +17,25 @@ _PARENT_TOOLS = frozenset({
     "ask_user_question", "long_task", "complete_goal", "update_plan", "spawn",
     "delegate_agent", "propose_workflow", "run_collaboration",
 })
+
+
+class _HostedSubagentRunner(AgentRunner):
+    """Retain shared Runner behavior and attach each child's own image scope."""
+
+    def __init__(self, provider, image_runtimes):
+        super().__init__(provider)
+        self.image_runtimes = image_runtimes
+
+    async def run(self, spec):
+        image = self.image_runtimes.pop(spec.tools, None)
+        if image is None:
+            return await super().run(spec)
+        from mona.hosted_work.image_runtime import HostedImageRunner
+
+        try:
+            return await HostedImageRunner(self.provider, image).run(spec)
+        finally:
+            await image.close()
 
 
 class _ResultBus:
@@ -89,6 +108,7 @@ class HostedSubagents:
             raise WorkError("session_scope", "子任务不属于当前会话。", 403)
         self.closed = False
         self._results = asyncio.Queue()
+        self._image_runtimes = getattr(spawn_spec_factory, "_image_runtimes", None)
 
         async def receive_result(message):
             if on_result is not None:
@@ -105,6 +125,11 @@ class HostedSubagents:
             if (not isinstance(spec, AgentRunSpec) or not isinstance(spec.tools, ToolRegistry)
                     or spec.session_key != self.session_key or _PARENT_TOOLS.intersection(spec.tools.tool_names)
                     or spec.model != runtime_context.selection.model):
+                if (isinstance(spec, AgentRunSpec) and isinstance(spec.tools, ToolRegistry)
+                        and isinstance(self._image_runtimes, dict)):
+                    image = self._image_runtimes.pop(spec.tools, None)
+                    if image is not None:
+                        await image.close()
                 raise WorkError("subagent_scope", "子任务运行配置不属于当前会话。", 403)
             return spec
 
@@ -114,6 +139,8 @@ class HostedSubagents:
             max_tool_result_chars=100_000, session_manager=runtime_context.sessions,
             run_spec_factory=build_spec,
         )
+        if isinstance(self._image_runtimes, dict):
+            self.manager.runner = _HostedSubagentRunner(provider, self._image_runtimes)
         self.spawn_tool = _BoundSpawnTool(self)
 
     @property
@@ -179,6 +206,11 @@ class HostedSubagents:
         await self.manager.cancel_by_session(self.session_key)
         if any(not task.done() for task in self.manager._running_tasks.values()):
             raise WorkError("subagent_cleanup", "子任务尚未确认停止，请保留已有进度并核对结果。", 503)
+        if isinstance(self._image_runtimes, dict):
+            images = tuple(self._image_runtimes.values())
+            self._image_runtimes.clear()
+            for image in images:
+                await image.close()
         if self.bus.delivery_failed:
             raise WorkError("subagent_result", "子任务结果无法确认，已有进度已保留。", 503)
 

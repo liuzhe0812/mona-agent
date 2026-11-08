@@ -62,9 +62,13 @@ class _RemoteCodexImage(OpenAIImageGenerationClient):
 
 
 class ImageRuntime:
-    def __init__(self, config, payload: dict, sandbox, tools):
+    def __init__(self, config, payload: dict, sandbox, tools, *, operation_scope: str | None = None):
         self.config, self.payload, self.sandbox, self.tools = config, payload, sandbox, tools
         self.owner, self.session, self.run = payload["owner"], identifier(payload["session_id"]), identifier(payload["run_id"])
+        if operation_scope is not None and (not isinstance(operation_scope, str)
+                                            or not re.fullmatch(r"[a-f0-9]{32}", operation_scope)):
+            raise ValueError("invalid image operation scope")
+        self.operation_scope = operation_scope
         image = payload.get("hosted_image")
         if not isinstance(image, dict) or set(image) != {"settings", "capability"}:
             raise WorkError("image_unavailable", "图片服务暂不可用。", 503)
@@ -84,7 +88,14 @@ class ImageRuntime:
         call_id = _CALL_ID.get()
         if not isinstance(call_id, str) or not call_id or type(index) is not int or index < 0:
             raise ValueError("image tool identity is unavailable")
-        value = json.dumps(["hosted-image-v1", self.owner, self.run, call_id, index], separators=(",", ":"))
+        if self.operation_scope is None:
+            # Preserve existing parent operation IDs for billing/recovery.
+            identity = ["hosted-image-v1", self.owner, self.run, call_id, index]
+        else:
+            # A provider may reuse the same tool-call ID in concurrent children.
+            identity = ["hosted-image-child-v1", self.owner, self.session, self.run,
+                        self.operation_scope, call_id, index]
+        value = json.dumps(identity, separators=(",", ":"))
         return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
 
     async def _post(self, command: str, arguments: dict) -> dict:

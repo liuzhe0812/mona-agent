@@ -258,6 +258,101 @@ async def test_generated_image_real_local_transport_billing_and_private_preview(
         await alice.close()
 
 
+async def test_subagent_image_reaches_conversation_with_parent_run_billing(environment):
+    """Use the real child runner, image RPC and websocket; only provider/wallet are synthetic."""
+    from unittest.mock import AsyncMock
+
+    from mona.config.schema import HostedWorkImagePrice, HostedWorkImageSettings
+    from mona.hosted_work.editor_tools import build_editor_tools
+    from mona.hosted_work.image_control import ImageControl
+    from mona.hosted_work.image_coordinator import ImageCoordinator
+    from mona.hosted_work.subagent_spec import build_subagent_factory
+    from mona.hosted_work.subagents import build_subagent_runtime
+    from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+    from mona.providers.context_window import ResolvedContextWindow
+    from mona.providers.image_generation import GeneratedImageResponse
+    from mona.session.manager import Session
+
+    e = environment
+    output = BytesIO()
+    Image.new("RGB", (4, 4), "red").save(output, format="PNG")
+    raw, charges, files = output.getvalue(), [], {}
+
+    class Billing:
+        async def reserve_image(self, operation, _token, _settings):
+            charges.append(("reserve", operation))
+            return {"run_id": operation, "status": "reserved", "reserved_units": 4}
+
+        async def dispatch(self, operation):
+            charges.append(("dispatch", operation))
+            return {"run_id": operation, "status": "running"}
+
+        async def settle_image(self, operation, _settings, receipt):
+            assert receipt == {"sha256": hashlib.sha256(raw).hexdigest(), "image_count": 1}
+            charges.append(("settle", operation))
+            return {"run_id": operation, "status": "settled", "actual_units": 4}
+
+    class ImageProvider:
+        async def generate(self, **_kwargs):
+            return GeneratedImageResponse(images=["data:image/png;base64," + base64.b64encode(raw).decode()],
+                                          content="", raw={"status": "completed"})
+
+    class Model(LLMProvider):
+        async def chat(self, messages, **_kwargs):
+            replies = [item for item in messages if item.get("role") == "tool"]
+            if not replies:
+                return LLMResponse(None, [ToolCallRequest("load", "load_capability", {"capabilities": ["image"]})])
+            if len(replies) == 1:
+                return LLMResponse(None, [ToolCallRequest("image-call", "generate_image", {"prompt": "red square"})])
+            return LLMResponse("finished")
+
+        def get_default_model(self):
+            return "never-called-production-model"
+
+    class Sandbox:
+        async def file(self, request):
+            path = request["path"]
+            if request["action"] == "upload":
+                files[path] = base64.b64decode(request["data"], validate=True)
+            data = files[path]
+            return {"path": path, "name": Path(path).name, "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(), "data": base64.b64encode(data).decode()}
+
+    settings = HostedWorkImageSettings(enabled=True, model="fixture-image",
+                                      price=HostedWorkImagePrice(amount_per_image="0.000004"))
+    control = e.service.image_control = ImageControl(e.service.config, e.service.store, billing_factory=lambda _: Billing())
+    e.service.image_coordinator = ImageCoordinator(e.service.config, control, e.api,
+                                                    provider_factory=lambda *_: ImageProvider())
+    capability = control.bind(ALICE, SID_A, RID, settings, "synthetic-alice-token")
+    payload = {"owner": ALICE, "session_id": SID_A, "run_id": RID, "model_id": "fixture", "desktop_ui": True,
+               "account_token": "synthetic-alice-token", "hosted_image": {"settings": settings.model_dump(),
+                                                                             "capability": capability}}
+    provider, session, sandbox, emit = Model(), Session("websocket:" + SID_A), Sandbox(), AsyncMock()
+    ctx = SimpleNamespace(owner=ALICE, config=e.service.config, selection=e.service.config.models["fixture"],
+        session_id=SID_A, session=session, sessions=SimpleNamespace(get_or_create=lambda _key: session),
+        provider=provider, window=ResolvedContextWindow(262_144, "catalog"), builder=SimpleNamespace(timezone="UTC"))
+    factory, children = build_subagent_factory(ctx, payload, sandbox, provider, emit, None,
+                                               build_editor_tools(e.service.config, payload, emit))
+    hosted = build_subagent_runtime(ctx, payload, provider, factory)
+    alice = await connect(e)
+    try:
+        await hosted.spawn_tool.execute("draw a red square")
+        await hosted.wait()
+        assert all(item.phase == "done" and item.stop_reason == "completed"
+                   for item in hosted.manager._task_statuses.values())
+        event = await receive(alice, "deliver_files", lambda frame: bool(frame.get("media_urls")))
+        path = urlsplit(event["media_urls"][0]["url"]).path
+        response = await e.client.get(path, headers=image_headers())
+        assert response.status == 200 and await response.read() == raw
+        assert (await e.client.get(path, headers=image_headers("bob", SID_B))).status == 404
+        assert [action for action, _ in charges] == ["reserve", "dispatch", "settle"]
+        assert len({operation for _, operation in charges}) == 1
+        assert len(children) == len(files) == 1 and len(children[0].pending_delivery_files) == 1
+    finally:
+        await hosted.close()
+        await alice.close()
+
+
 async def test_real_question_preview_reconnect_answer_and_fresh_media_tickets(environment):
     e = environment
     alice = await connect(e)
