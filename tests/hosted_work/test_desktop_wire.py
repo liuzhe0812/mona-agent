@@ -330,9 +330,9 @@ async def test_stop_and_reattach_wait_for_the_exact_run_cleanup(tmp_path, monkey
         monkeypatch.setattr("mona.hosted_work.desktop_wire.asyncio.wait_for", wait_for)
         try:
             await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop"})
-            assert socket.frames[-1]["outcome"] == "unknown"
+            assert socket.frames[-1]["outcome"] == "pending"
             await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop-again"})
-            assert socket.frames[-1]["outcome"] == "unknown"
+            assert socket.frames[-1]["outcome"] == "pending"
             socket.frames.clear()
             await wire._attach(peer, sid)
             status = next(frame for frame in socket.frames if frame["event"] == "goal_status")
@@ -345,6 +345,68 @@ async def test_stop_and_reattach_wait_for_the_exact_run_cleanup(tmp_path, monkey
             await wire._attach(peer, sid)
             status = next(frame for frame in socket.frames if frame["event"] == "goal_status")
             assert status["status"] == "idle" and status["turn_id"] == rid and status["stop_confirmed"] is True
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            wire.service.tasks.pop((ALICE, rid), None)
+
+
+async def test_stop_waits_when_billing_is_unknown_but_the_run_is_still_finishing(tmp_path):
+    client, wire, _, _ = await make_client(tmp_path)
+    async with client:
+        sid, rid = "a" * 32, "c" * 32
+        store = wire.service.store
+        store.create_session(ALICE, NewSession(request_id=sid))
+        store.create_run(ALICE, sid, NewTurn(request_id=rid, model_id="qwen", text="work"))
+        store.finish(ALICE, rid, "unknown", {"message": "billing pending"})
+
+        class Capture:
+            def __init__(self): self.frames = []
+            async def send_json(self, frame): self.frames.append(frame)
+
+        socket = Capture()
+        peer = SimpleNamespace(owner=ALICE, socket=socket, chats=set())
+        async def finish_cleanup():
+            await asyncio.sleep(0)
+            store.db.execute("UPDATE runs SET status='interrupted' WHERE owner=? AND id=?", (ALICE, rid))
+            wire.state.set(ALICE, "wire_finished:" + rid, "interrupted")
+
+        task = asyncio.create_task(finish_cleanup())
+        wire.service.tasks[ALICE, rid] = task
+        try:
+            await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop"})
+            assert socket.frames[-1]["outcome"] == "already_finished"
+        finally:
+            await asyncio.gather(task, return_exceptions=True)
+            wire.service.tasks.pop((ALICE, rid), None)
+
+
+async def test_attach_reports_stopping_until_unknown_run_cleanup_actually_ends(tmp_path):
+    client, wire, _, _ = await make_client(tmp_path)
+    async with client:
+        sid, rid = "a" * 32, "c" * 32
+        store = wire.service.store
+        store.create_session(ALICE, NewSession(request_id=sid))
+        store.create_run(ALICE, sid, NewTurn(request_id=rid, model_id="qwen", text="work"))
+        store.finish(ALICE, rid, "unknown", {"message": "billing pending"})
+
+        class Capture:
+            def __init__(self): self.frames = []
+            async def send_json(self, frame): self.frames.append(frame)
+
+        socket = Capture()
+        peer = SimpleNamespace(owner=ALICE, socket=socket, chats=set())
+        release = asyncio.Event()
+        task = asyncio.create_task(release.wait())
+        wire.service.tasks[ALICE, rid] = task
+        try:
+            await wire._attach(peer, sid)
+            assert next(f for f in socket.frames if f["event"] == "goal_status")["turn_state"] == "stopping"
+            release.set()
+            await task
+            socket.frames.clear()
+            await wire._attach(peer, sid)
+            assert next(f for f in socket.frames if f["event"] == "goal_status")["turn_state"] == "unknown"
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

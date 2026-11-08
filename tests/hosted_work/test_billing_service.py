@@ -3,6 +3,8 @@
 import asyncio
 import copy
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -209,6 +211,104 @@ async def test_unconfirmed_usage_is_unknown_and_never_settled(environment, recei
     assert billing.balance == 100 and billing.settlements == 0
     assert (await service.submit(OWNER, TOKEN, SID, request()))["status"] == "unknown"
     assert [event[0] for event in events] == ["reserve", "dispatch", "execute", "uncertain"]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_cancel_keeps_billing_pending_but_does_not_block_new_work(environment):
+    service, executor, billing, events = environment
+    executor.result.update(status="cancelled", content="", billing_usage=None,
+                           diagnostic={"stop_reason": "cancelled"})
+    await service.submit(OWNER, TOKEN, SID, request())
+    service.store.save_checkpoint(OWNER, RID, {"phase": "tools_completed", "pending_tool_calls": [],
+                                               "completed_tool_results": []})
+    stopped = await finish(service, executor)
+    assert stopped["status"] == "interrupted"
+    assert stopped["result"]["diagnostic"] == {"stop_reason": "billing_unknown", "billing_reasons": [],
+                                                "execution_status": "cancelled"}
+    assert "计费" in stopped["result"]["message"]
+    assert service.store.billing_pending()[0]["stage"] == "uncertain"
+    assert billing.balance == 100 and billing.settlements == 0
+    assert (await service.submit(OWNER, TOKEN, SID, request()))["status"] == "interrupted"
+    assert [event[0] for event in events] == ["reserve", "dispatch", "execute", "uncertain"]
+    service.store.require_idle(OWNER)
+    await service.submit(OWNER, TOKEN, SID, NewTurn(request_id="c" * 32, model_id="qwen", text="new request"))
+    await service.tasks[(OWNER, "c" * 32)]
+    assert service.store.billing_pending()[0]["stage"] == "uncertain"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", [
+    {},
+    {"phase": "native_execution", "native_work": {"status": "unknown"}},
+    {"phase": "tools_started", "pending_tool_calls": [{"id": "write-1"}],
+     "started_tool_call_ids": ["write-1"], "completed_tool_results": []},
+    {"phase": "tools_completed", "pending_tool_calls": [],
+     "completed_tool_results": [{"content": "Error: TOOL_OUTCOME_UNKNOWN"}]},
+    {"phase": "tools_completed", "pending_tool_calls": [],
+     "completed_tool_results": [{"content": '{"status":"unknown"}'}]},
+])
+async def test_cancel_does_not_unblock_unconfirmed_or_missing_tool_evidence(environment, checkpoint):
+    service, executor, billing, _events = environment
+    executor.result.update(status="cancelled", content="", billing_usage=None,
+                           diagnostic={"stop_reason": "cancelled"})
+    await service.submit(OWNER, TOKEN, SID, request())
+    service.store.save_checkpoint(OWNER, RID, checkpoint)
+    stopped = await finish(service, executor)
+    assert stopped["status"] == "unknown"
+    assert service.store.billing_pending()[0]["stage"] == "uncertain"
+    assert billing.balance == 100 and billing.settlements == 0
+    with pytest.raises(WorkError):
+        service.store.require_idle(OWNER)
+
+
+@pytest.mark.asyncio
+async def test_normal_output_containing_unknown_is_not_treated_as_an_unknown_receipt(environment):
+    service, executor, _billing, _events = environment
+    executor.result.update(status="cancelled", content="", billing_usage=None,
+                           diagnostic={"stop_reason": "cancelled"})
+    await service.submit(OWNER, TOKEN, SID, request())
+    service.store.save_checkpoint(OWNER, RID, {"phase": "tools_completed", "pending_tool_calls": [],
+        "completed_tool_results": [{"content": "The answer includes the word unknown."}]})
+    assert (await finish(service, executor))["status"] == "interrupted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,saved,reason", [
+    ("cancelled", False, "cancelled"),
+    ("unknown", True, "execution_unknown"),
+    ("failed", True, "cancelled"),
+])
+async def test_cancel_requires_confirmed_executor_outcome(environment, status, saved, reason):
+    service, executor, billing, _events = environment
+    executor.result.update(status=status, content="", workspace_saved=saved, billing_usage=None,
+                           diagnostic={"stop_reason": reason})
+    await service.submit(OWNER, TOKEN, SID, request())
+    service.store.save_checkpoint(OWNER, RID, {"phase": "tools_completed", "pending_tool_calls": [],
+                                               "completed_tool_results": []})
+    stopped = await finish(service, executor)
+    assert stopped["status"] == "unknown"
+    assert service.store.billing_pending()[0]["stage"] == "uncertain"
+    assert billing.settlements == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_does_not_unblock_an_inflight_editor_request(environment):
+    service, executor, billing, _events = environment
+    executor.result.update(status="cancelled", content="", billing_usage=None,
+                           diagnostic={"stop_reason": "cancelled"})
+    state = SimpleNamespace(get=lambda *_args: {}, sidebar=lambda *_args: {})
+    wire = SimpleNamespace(_platform={(OWNER, SID, "editor-request"): object()}, on_run_finish=AsyncMock())
+    service.desktop = SimpleNamespace(state=state, _wire=wire, wire=wire)
+    try:
+        await service.submit(OWNER, TOKEN, SID, request())
+        service.store.save_checkpoint(OWNER, RID, {"phase": "tools_completed", "pending_tool_calls": [],
+                                                   "completed_tool_results": []})
+        stopped = await finish(service, executor)
+        assert stopped["status"] == "unknown"
+        assert service.store.billing_pending()[0]["stage"] == "uncertain"
+        assert billing.settlements == 0
+    finally:
+        service.desktop = None
 
 
 @pytest.mark.asyncio

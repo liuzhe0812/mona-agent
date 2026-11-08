@@ -272,6 +272,9 @@ class DesktopWire:
             (peer.owner, sid)).fetchone()
         if active:
             run = self.service.store.run(peer.owner, active[0])
+            task = self.service.tasks.get((peer.owner, run["id"]))
+            if run["status"] == "unknown" and task is not None and not task.done():
+                run = {**run, "status": "cancelling"}
             await peer.socket.send_json(self._goal(run, self.state.get(peer.owner, "run:" + run["id"], {})))
         else:
             latest = self.service.store.db.execute(
@@ -591,7 +594,7 @@ class DesktopWire:
         if was_active:
             await self.service.stop(peer.owner, rid)
         task = self.service.tasks.get((peer.owner, rid))
-        if task is not None and not task.done() and run["status"] != "unknown":
+        if task is not None and not task.done():
             try:
                 await asyncio.wait_for(asyncio.shield(task), 7.5)
             except TimeoutError:
@@ -602,7 +605,9 @@ class DesktopWire:
             except Exception:
                 pass  # A failed cleanup cannot confirm that the task stopped.
         current = self.service.store.run(peer.owner, rid)
-        if not self._finished_recorded(peer.owner, current) or task is not None and not self._task_finished(task):
+        if task is not None and not task.done():
+            outcome = "pending"
+        elif not self._finished_recorded(peer.owner, current) or task is not None and not self._task_finished(task):
             outcome = "unknown"
         else:
             outcome = "stopped" if was_active else "already_finished"

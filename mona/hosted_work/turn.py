@@ -367,6 +367,7 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
             raise WorkError("invalid_operation", "此操作不可用。")
     except asyncio.CancelledError:
         result.update(status="cancelled", message="本轮已停止，已有输出保留。")
+        result["diagnostic"] = {"stop_reason": "cancelled", "stage": stage}
     except Exception as exc:
         result.update(status="failed", message=exc.message if isinstance(exc, WorkError) else "在线任务未能完成，请核对已有结果。")
         result["diagnostic"] = {"stop_reason": "execution_error", "stage": stage,

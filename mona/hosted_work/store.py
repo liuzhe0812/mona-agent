@@ -16,6 +16,57 @@ def encoded(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def _checkpoint_has_no_unconfirmed_tools(checkpoint: object) -> bool:
+    """Only known checkpoint formats can prove no dispatched tool is unresolved."""
+    if not isinstance(checkpoint, dict) or checkpoint.get("phase") not in {
+        "awaiting_tools", "tools_started", "tools_partial", "tools_completed", "final_response",
+    }:
+        return False
+    pending = checkpoint.get("pending_tool_calls")
+    completed = checkpoint.get("completed_tool_results")
+    if not isinstance(pending, list) or not isinstance(completed, list):
+        return False
+    if pending:
+        started = checkpoint.get("started_tool_call_ids")
+        if not isinstance(started, list) or any(not isinstance(item, str) for item in started):
+            return False
+        if any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+               or item["id"] in started for item in pending):
+            return False
+    def unconfirmed(value: object) -> bool:
+        if isinstance(value, dict):
+            for field in ("status", "code"):
+                item = value.get(field)
+                if isinstance(item, str) and item.lower() in {
+                    "unknown", "outcome_unknown", "result_unknown", "execution_unknown",
+                    "tool_outcome_unknown", "media_result_unknown",
+                }:
+                    return True
+            return any(unconfirmed(item) for item in value.values())
+        if isinstance(value, list):
+            return any(unconfirmed(item) for item in value)
+        if isinstance(value, str):
+            stripped = value.lstrip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    return unconfirmed(json.loads(value))
+                except ValueError:
+                    pass
+            text = value.lower()
+            return any(marker in text for marker in ("tool_outcome_unknown", "media_result_unknown", "outcome_unknown",
+                       "execution_unknown", "result_unknown", "结果待核对", "结果尚未确认", "结果未确认", "结果未知"))
+        return False
+
+    # Check structured tool receipts and explicit unknown-result markers, not
+    # arbitrary words in successful output or the original user request.
+    try:
+        if unconfirmed(completed):
+            return False
+    except (RecursionError, TypeError, ValueError):
+        return False
+    return True
+
+
 class WorkStore:
     def __init__(self, path: Path, config: HostedWorkConfig):
         self.config = config
@@ -262,6 +313,34 @@ class WorkStore:
             else:
                 self.db.execute("UPDATE workspace_operations SET status='finished' WHERE owner=? AND id=?", (owner, record_id))
             self.db.execute("INSERT INTO resolutions VALUES(?,?,?,?,?)", (owner, kind, record_id, time.time(), note.strip()))
+
+    def confirm_cancelled_with_pending_billing(self, owner: str, run_id: str) -> bool:
+        """End tracking only after the service has confirmed process cleanup.
+
+        This never settles, releases, or alters the independent billing journal.
+        A missing checkpoint, unconfirmed write, or ambiguous record stays unknown.
+        """
+        identifier(run_id)
+        with self.transaction():
+            row = self.db.execute("SELECT status,result,checkpoint FROM runs WHERE owner=? AND id=?",
+                                  (owner, run_id)).fetchone()
+            billing = self.db.execute("SELECT stage FROM billing_journal WHERE owner=? AND run_id=?",
+                                      (owner, run_id)).fetchone()
+            if row is None or row["status"] != "unknown" or billing is None or billing["stage"] not in {
+                "uncertain", "usage_ready", "running", "dispatching",
+            }:
+                return False
+            result = json.loads(row["result"])
+            diagnostic = result.get("diagnostic") if isinstance(result, dict) else None
+            if (not isinstance(diagnostic, dict) or diagnostic.get("stop_reason") != "billing_unknown"
+                    or result.get("workspace_saved") is not True
+                    or not _checkpoint_has_no_unconfirmed_tools(json.loads(row["checkpoint"]))):
+                return False
+            result["message"] = "本轮已停止，计费用量尚待核对，预留余额暂时保留。"
+            result["diagnostic"] = {**diagnostic, "execution_status": "cancelled"}
+            self.db.execute("UPDATE runs SET status='interrupted',result=?,updated=? WHERE owner=? AND id=?",
+                            (encoded(result), time.time(), owner, run_id))
+            return True
 
     def require_idle(self, owner: str):
         if self.db.execute("SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone():

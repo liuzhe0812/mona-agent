@@ -4,7 +4,7 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
-import type { MessageAdmission, MessageAdmissionReason, StreamError } from "@/lib/mona-client";
+import type { MessageAdmission, MessageAdmissionReason, MonaClient, StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
   AgentModelBinding,
@@ -25,6 +25,46 @@ import type {
 const MAX_UI_TRACE_LINES = 500;
 const MAX_UI_TOOL_EVENTS = 500;
 const MAX_UI_REASONING_CHARS = 128_000;
+
+type StopTarget = { state: "ready"; turnId: string } | { state: "finished" } | { state: "unknown" } | { state: "cancelled" };
+
+function waitForStopTarget(client: MonaClient, chatId: string, inputId: string, taskId: string): {
+  promise: Promise<StopTarget>;
+  cancel: () => void;
+} {
+  let finish: (value: StopTarget) => void = () => {};
+  const promise = new Promise<StopTarget>((resolve) => {
+    let settled = false;
+    let unsubscribeChat = () => {};
+    let unsubscribeStatus = () => {};
+    const timer = window.setTimeout(() => finish({ state: "unknown" }), 10_000);
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      unsubscribeChat();
+      unsubscribeStatus();
+      resolve(value);
+    };
+    unsubscribeChat = client.onChat(chatId, (event) => {
+      if (event.event === "goal_status" && event.input_id === inputId && event.turn_id) {
+        if (event.status === "idle") finish({ state: "finished" });
+        else if (event.turn_state === "unknown") finish({ state: "unknown" });
+        else finish({ state: "ready", turnId: event.turn_id });
+      } else if (event.event === "turn_end" && event.input_id === inputId && (!event.task_id || event.task_id === taskId)) {
+        finish({ state: "finished" });
+      } else if (event.event === "error" && event.message_rejected && event.input_id === inputId) {
+        finish({ state: "cancelled" });
+      }
+    });
+    unsubscribeStatus = client.onStatus((status) => {
+      if (status !== "open") finish({ state: "unknown" });
+    });
+    // onStatus invokes the listener synchronously, before it returns unsubscribe.
+    if (settled) unsubscribeStatus();
+  });
+  return { promise, cancel: () => finish({ state: "cancelled" }) };
+}
 
 function boundedReasoning(value: string): string {
   return value.length > MAX_UI_REASONING_CHARS
@@ -640,6 +680,7 @@ export function useMonaStream(
   const stoppingRef = useRef(false);
   const stopRequestRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
   const unresolvedStopRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
+  const stopTargetWaitRef = useRef<(() => void) | null>(null);
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
@@ -652,7 +693,14 @@ export function useMonaStream(
   const activeChatRef = useRef(chatId);
   activeChatRef.current = chatId;
   const mountedRef = useRef(true);
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopTargetWaitRef.current?.();
+      stopTargetWaitRef.current = null;
+    };
+  }, []);
   const pendingMessageRef = useRef<PendingMessage | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
@@ -696,6 +744,8 @@ export function useMonaStream(
 
   useEffect(() => client?.onSessionDeleted((deletedChatId) => {
     if (activeChatRef.current !== deletedChatId) return;
+    stopTargetWaitRef.current?.();
+    stopTargetWaitRef.current = null;
     pendingMessageRef.current = null;
     stopRequestRef.current = null;
     unresolvedStopRef.current = null;
@@ -1030,6 +1080,8 @@ export function useMonaStream(
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     setTaskPlan(restoredTaskPlan);
     setLiveTokenUsage(undefined);
+    stopTargetWaitRef.current?.();
+    stopTargetWaitRef.current = null;
     stoppingRef.current = false;
     stopRequestRef.current = null;
     unresolvedStopRef.current = null;
@@ -1061,6 +1113,20 @@ export function useMonaStream(
       if (stopRequestRef.current?.turnId === turnId) stopRequestRef.current = null;
       setMessageRejection((current) => current?.stopOutcome === "unknown" && current.stopTurnId === turnId ? null : current);
       return confirmed;
+    };
+    const finishWaitingStop = (inputId: string | undefined) => {
+      const request = stopRequestRef.current;
+      if (!inputId) return;
+      if (request && !request.turnId && request.inputId === inputId) {
+        stopTargetWaitRef.current?.();
+        stopTargetWaitRef.current = null;
+        stopRequestRef.current = null;
+      }
+      const unresolved = unresolvedStopRef.current;
+      if (unresolved && !unresolved.turnId && unresolved.inputId === inputId) {
+        unresolvedStopRef.current = null;
+        setMessageRejection((current) => current?.stopOutcome === "unknown" && !current.stopTurnId ? null : current);
+      }
     };
     const handle = (ev: InboundEvent) => {
       if (client.isChatDeleted(chatId)) return;
@@ -1231,6 +1297,14 @@ export function useMonaStream(
             suppressStreamUntilTurnEndRef.current = false;
             setStopping(false);
           }
+          if (ev.turn_state === "unknown" && stoppingRef.current && ev.turn_id
+              && unresolvedStopRef.current?.turnId === ev.turn_id) {
+            stopRequestRef.current = null;
+            stoppingRef.current = false;
+            setStopping(false);
+            suppressStreamUntilTurnEndRef.current = false;
+            setMessageRejection({ runActive: true, stopOutcome: "unknown", stopTurnId: ev.turn_id });
+          }
           setIsStreaming(true);
           if (!stoppingRef.current) setStopping(false);
           if (typeof ev.started_at === "number") {
@@ -1240,6 +1314,9 @@ export function useMonaStream(
           }
         } else {
           // Attach may report the previous idle state before this message is admitted.
+          const waiting = stopRequestRef.current;
+          if (waiting && !waiting.turnId && waiting.inputId && ev.input_id !== waiting.inputId) return;
+          if (ev.turn_id) finishWaitingStop(ev.input_id);
           const confirmed = ev.stop_confirmed === true ? confirmStop(ev.turn_id) : null;
           const confirmedInput = !!confirmed?.inputId && confirmed.inputId === pendingMessageRef.current?.messageId;
           if ((pendingMessageRef.current?.awaitingAdmission && !stoppingRef.current && !confirmedInput)
@@ -1314,6 +1391,7 @@ export function useMonaStream(
       if (ev.event === "turn_end") {
         const pending = pendingMessageRef.current;
         if (pending && ev.task_id && ev.task_id !== pending.taskId) return;
+        finishWaitingStop(ev.input_id);
         if (ev.stop_confirmed === true) confirmStop(ev.turn_id);
         acceptPendingMessage();
         setMessages((previous) => finishPendingWidgets(previous));
@@ -1959,7 +2037,7 @@ export function useMonaStream(
     if (pending?.awaitingAdmission && client.cancelUnsentInput?.(chatId, pending.messageId)) return;
     const turn = client.getWorkTurn?.(chatId);
     const request = { turnId: pending?.awaitingAdmission && turn?.inputId !== pending.messageId ? undefined : turn?.turnId,
-      inputId: turn?.inputId };
+      inputId: pending?.awaitingAdmission ? pending.messageId : turn?.inputId };
     stopRequestRef.current = request;
     unresolvedStopRef.current = request;
     stoppingRef.current = true;
@@ -1981,11 +2059,33 @@ export function useMonaStream(
     void (async () => {
       let outcome;
       try {
+        if (!request.turnId && pending?.awaitingAdmission && request.inputId) {
+          const wait = waitForStopTarget(client, chatId, request.inputId, pending.taskId);
+          stopTargetWaitRef.current = wait.cancel;
+          const target = await wait.promise;
+          if (stopTargetWaitRef.current === wait.cancel) stopTargetWaitRef.current = null;
+          if (!mountedRef.current || activeChatRef.current !== chatId || stopRequestRef.current !== request) return;
+          if (target.state === "finished" || target.state === "cancelled") {
+            stopRequestRef.current = null;
+            unresolvedStopRef.current = null;
+            stoppingRef.current = false;
+            setStopping(false);
+            suppressStreamUntilTurnEndRef.current = false;
+            return;
+          }
+          if (target.state === "unknown") throw new Error("stop target unconfirmed");
+          const current = client.getWorkTurn(chatId);
+          if (client.status !== "open" || !current || current.turnId !== target.turnId || current.inputId !== request.inputId) {
+            throw new Error("stop target changed");
+          }
+          request.turnId = target.turnId;
+        }
         outcome = await client.stopWorkTurn?.(chatId, request.turnId) ?? "unsupported";
       } catch {
         outcome = "unknown";
       }
       if (!mountedRef.current || activeChatRef.current !== chatId || stopRequestRef.current !== request) return;
+      if (outcome === "pending") return;
       stopRequestRef.current = null;
       stoppingRef.current = false;
       setStopping(false);
@@ -2004,7 +2104,7 @@ export function useMonaStream(
         if (started === null) setIsCompacting(false);
         onTurnEnd?.();
       } else {
-        if (!request.turnId) unresolvedStopRef.current = null;
+        if (!request.turnId && !request.inputId) unresolvedStopRef.current = null;
         setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null,
           stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown",
           ...(request.turnId ? { stopTurnId: request.turnId } : {}) });

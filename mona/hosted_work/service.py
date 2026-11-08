@@ -178,6 +178,8 @@ class WorkService:
         run_id, sid = run["id"], run["session_id"]
         billing_finished = False
         image_bound = False
+        cancelled_with_pending_billing = False
+        cleanup_confirmed = True
         title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
             if kind == "history":
@@ -242,6 +244,8 @@ class WorkService:
                     image_bound = True
                     payload["hosted_image"] = {"settings": image.model_dump(), "capability": capability}
             result = await self.executor.execute(payload, event)
+            execution_cancelled = (result.get("status") == "cancelled" and result.get("workspace_saved") is True
+                                   and (result.get("diagnostic") or {}).get("stop_reason") == "cancelled")
             if billing is not None:
                 try:
                     usage = settlement_usage(result.get("billing_usage"))
@@ -259,6 +263,7 @@ class WorkService:
                     self.store.billing_update(owner, run_id, "settled")
                     billing_finished = True
                 except BillingError:
+                    cancelled_with_pending_billing = execution_cancelled
                     result.update(status="unknown", message="本轮已执行，计费状态待核对；请勿重复发送。")
                     result["diagnostic"] = {"stop_reason": "billing_unknown",
                                             "billing_reasons": result.get("billing_issue_codes", [])}
@@ -323,11 +328,23 @@ class WorkService:
 
                             cleanup_image_staging(self.config.state_dir, owner, run_id, executor_stopped=True)
                 except Exception as exc:
+                    cleanup_confirmed = False
                     logger.warning("Hosted image cleanup unconfirmed exception_type={}", type(exc).__name__)
                 finally:
                     if image_bound:
                         self.image_control.unbind(owner, run_id)
                     self._release(owner, engine)
+        if cancelled_with_pending_billing and cleanup_confirmed:
+            wire = getattr(self.desktop, "_wire", None) if self.desktop is not None else None
+            platform = getattr(wire, "_platform", None) if wire is not None else {}
+            pending_editor = not isinstance(platform, dict) or any(key[0] == owner for key in platform)
+            pending_image = bool(image_bound and any(item["run_id"] == run_id
+                                 for item in self.image_control.journal.pending(owner)))
+            if not pending_editor and not pending_image:
+                try:
+                    self.store.confirm_cancelled_with_pending_billing(owner, run_id)
+                except (WorkError, ValueError, TypeError) as exc:
+                    logger.warning("Hosted Work cancellation confirmation failed exception_type={}", type(exc).__name__)
         if self.desktop is not None:
             try:
                 await self.desktop.wire.on_run_finish(owner, run, {})

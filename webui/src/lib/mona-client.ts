@@ -438,7 +438,7 @@ export class MonaClient {
       type: "stop_work_turn", chat_id: chatId, request_id: requestId, expected_turn_id: expectedTurnId,
     }));
     if (result.chat_id !== chatId || result.turn_id !== expectedTurnId) return "unknown";
-    const outcome = result.outcome === "stopped" || result.outcome === "already_finished"
+    const outcome = result.outcome === "stopped" || result.outcome === "already_finished" || result.outcome === "pending"
       || result.outcome === "unsupported" ? result.outcome : "unknown";
     if ((outcome === "stopped" || outcome === "already_finished")
       && this.workTurnsByChatId.get(chatId)?.turnId === expectedTurnId) {

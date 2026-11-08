@@ -1,4 +1,5 @@
 """Failure paths exercise the real turn lifecycle without executing a model or host command."""
+import asyncio
 import copy
 from unittest.mock import AsyncMock
 
@@ -133,6 +134,30 @@ async def test_unknown_cleanup_never_reports_completion_or_retries(lifecycle, fa
 async def test_combined_cleanup_and_save_failure_preserves_unknown(lifecycle):
     lifecycle[2].update(provider_close_failure=True, save_failure=True)
     assert (await drive(lifecycle))["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "close_failure", "provider_close_failure"])
+async def test_cancelled_execution_reports_cancel_only_after_cleanup(lifecycle, monkeypatch, failure):
+    entered = asyncio.Event()
+
+    async def runner(*_args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(turn, "run_turn", runner)
+    if failure:
+        lifecycle[2][failure] = True
+    task = asyncio.create_task(drive(lifecycle))
+    await asyncio.wait_for(entered.wait(), 3)
+    task.cancel()
+    result = await asyncio.wait_for(task, 3)
+    if failure:
+        assert result["status"] == "unknown"
+        assert result["diagnostic"]["stop_reason"] == "execution_unknown"
+    else:
+        assert result["status"] == "cancelled" and result["workspace_saved"] is True
+        assert result["diagnostic"]["stop_reason"] == "cancelled"
 
 
 @pytest.mark.asyncio

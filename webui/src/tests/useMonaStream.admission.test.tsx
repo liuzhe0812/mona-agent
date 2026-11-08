@@ -189,23 +189,102 @@ describe("chat admission and runtime recovery", () => {
     expect(socket.sent.map((frame) => JSON.parse(frame)).some((frame) => frame.type === "stop_work_turn")).toBe(false);
   });
 
-  it("keeps a dispatched original input unknown until its exact turn can be stopped", async () => {
+  it("waits for the dispatched input's exact turn and stops it once", async () => {
     const { socket, wrapper } = setup();
     const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
     act(() => result.current.send("original request"));
     const inputId = result.current.messages[0].id;
     expect(socket.messages[0].input_id).toBe(inputId);
     await act(async () => result.current.stop());
-    expect(result.current.messageRejection?.stopOutcome).toBe("unsupported");
+    expect(result.current.messageRejection).toBeNull();
     expect(result.current.isStreaming).toBe(true);
-    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "original-turn", input_id: inputId }));
-    act(() => result.current.stop());
+    expect(result.current.stopping).toBe(true);
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "idle" }));
+    expect(result.current.stopping).toBe(true);
+    expect(result.current.isStreaming).toBe(true);
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 9,
+      turn_id: "other-turn", input_id: "other-input" }));
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(0);
+    await act(async () => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10,
+      turn_id: "original-turn", input_id: inputId }));
     const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
     expect(stop.expected_turn_id).toBe("original-turn");
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
     await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id,
       ok: true, chat_id: "chat", turn_id: "original-turn", outcome: "stopped" }));
     expect(result.current.isStreaming).toBe(false);
     expect(socket.messages).toHaveLength(1);
+  });
+
+  it("does not dispatch stop if the matching input finishes before a turn id arrives", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("quick request"));
+    const input = socket.messages[0];
+    act(() => result.current.stop());
+    await act(async () => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "finished-turn",
+      input_id: input.input_id, task_id: input.task_id } as InboundEvent));
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(0);
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("does not dispatch or show an unknown dialog if the matched turn finishes in the same event batch", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("quick request"));
+    const input = socket.messages[0];
+    act(() => result.current.stop());
+    await act(async () => {
+      socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10,
+        turn_id: "quick-turn", input_id: input.input_id });
+      socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "quick-turn",
+        input_id: input.input_id, task_id: input.task_id, stop_confirmed: true } as InboundEvent);
+    });
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection).toBeNull();
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(0);
+  });
+
+  it("does not replay a queued stop after disconnect before the turn is identified", async () => {
+    const { socket, client, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("original input"));
+    const inputId = socket.messages[0].input_id;
+    act(() => result.current.stop());
+    await act(async () => socket.close());
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+    client.connect(); socket.readyState = 1; socket.onopen?.();
+    await act(async () => socket.emit({ event: "goal_status", chat_id: "chat", status: "running",
+      started_at: 10, turn_id: "original-turn", input_id: inputId }));
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(0);
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("does not dispatch a stop after the turn identity wait times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { socket, wrapper } = setup();
+      const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+      act(() => result.current.send("original input"));
+      const inputId = socket.messages[0].input_id;
+      act(() => result.current.stop());
+      await act(async () => vi.advanceTimersByTime(10_000));
+      expect(result.current.stopping).toBe(false);
+      expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+      await act(async () => socket.emit({ event: "goal_status", chat_id: "chat", status: "running",
+        started_at: 10, turn_id: "late-turn", input_id: inputId }));
+      expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(0);
+      expect(socket.messages).toHaveLength(1);
+      act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "late-turn", input_id: inputId,
+        task_id: socket.messages[0].task_id, stop_confirmed: true } as InboundEvent));
+      expect(result.current.messageRejection).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the newer turn running when an older stop finishes", async () => {
@@ -239,6 +318,53 @@ describe("chat admission and runtime recovery", () => {
     expect(result.current.isStreaming).toBe(false);
     expect(onTurnEnd).toHaveBeenCalledTimes(1);
     expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
+  });
+
+  it("keeps waiting without a dialog while the stopped turn is still cleaning up", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "pending" }));
+    expect(result.current.stopping).toBe(true);
+    expect(result.current.messageRejection).toBeNull();
+    act(() => result.current.stop());
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
+    act(() => socket.emit({ event: "turn_end", chat_id: "chat", turn_id: "turn-a", stop_confirmed: true } as InboundEvent));
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("shows the unknown result once cleanup actually ends without confirmation", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "pending" }));
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a",
+      turn_state: "unknown", started_at: 10 }));
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
+    expect(result.current.messageRejection?.stopTurnId).toBe("turn-a");
+  });
+
+  it("does not let a late pending reply hide an already unknown outcome", async () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a",
+      turn_state: "unknown", started_at: 10 }));
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "pending" }));
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection?.stopOutcome).toBe("unknown");
   });
 
   it("dismisses an unknown stop only after the same hosted turn is confirmed finished", async () => {

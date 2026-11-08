@@ -362,7 +362,7 @@ export interface RoomCommandResult {
   agents?: RoomAgentInfo[];
 }
 
-export type WorkTurnStopOutcome = "stopped" | "already_finished" | "unknown" | "unsupported";
+export type WorkTurnStopOutcome = "stopped" | "already_finished" | "pending" | "unknown" | "unsupported";
 
 /** Job states mirrored from ``mona/agent/jobs.py`` (guide 5.6). */
 export type AgentJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
