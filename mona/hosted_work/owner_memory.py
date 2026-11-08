@@ -108,7 +108,8 @@ class _OwnerEvents(MemorySearchTool):
 
 class _OwnerSearch(SearchMemoryTool):
     description = (SearchMemoryTool.description +
-                   " In this context only memory and events are connected; other sources are unavailable.")
+                   " In this context account memory, events, and authorized conversation history may be connected; "
+                   "other sources are unavailable.")
 
     def __init__(self, ctx, scope: _OwnerScope):
         super().__init__(ctx)
@@ -119,8 +120,18 @@ class _OwnerSearch(SearchMemoryTool):
         # workspace or a process-global desktop workspace for their identity.
         return f"hosted:{self.scope.owner}:{self.scope.session_id}"
 
+    async def _search_queries(self, source, query, alternatives, limit, filters):
+        if source != "conversations":
+            return await super()._search_queries(source, query, alternatives, limit, filters)
+        from mona.hosted_work.conversation_memory import conversation_query_budget
 
-def build_memory_tools(ctx) -> tuple:
+        # Alternate/relaxed queries are part of the same user request and may
+        # not each claim a separate full transcript scan allowance.
+        with conversation_query_budget(self.scope.ctx.config):
+            return await super()._search_queries(source, query, alternatives, limit, filters)
+
+
+def build_memory_tools(ctx, *, include_conversations: bool = False) -> tuple:
     """Create fresh shared facades and an account-only source registry.
 
     Ownerless in-process callers are deliberately given no private sources.
@@ -133,6 +144,11 @@ def build_memory_tools(ctx) -> tuple:
     registry = ToolRegistry()
     registry.register(_OwnerMemoryRead(scope))
     registry.register(_OwnerEvents(scope))
+    if include_conversations:
+        from mona.hosted_work.conversation_memory import conversation_tools
+
+        for tool in conversation_tools(ctx, scope):
+            registry.register(tool)
     context = SimpleNamespace(registry=registry, workspace="/workspace")
     search, read = _OwnerSearch(context, scope), ReadMemoryTool(context)
     registry.register(search)

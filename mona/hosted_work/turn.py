@@ -212,7 +212,7 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         register(tool)
     from mona.hosted_work.owner_memory import build_memory_tools
 
-    for tool in build_memory_tools(runtime):
+    for tool in build_memory_tools(runtime, include_conversations=True):
         register(tool)
     if entry.reply is not None:
         records = [*history, {"role": "assistant", "content": entry.reply}]
