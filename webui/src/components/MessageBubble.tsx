@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -45,6 +46,7 @@ import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 import { InlineWidget } from "@/components/visualizer/InlineWidget";
 import { openExternalUrl } from "@/lib/tauri";
 import { fetchGeneratedMedia, isGeneratedMediaUrl } from "@/hosted-work/generated-media";
+import { duplicateGeneratedImageSources } from "@/hosted-work/duplicate-generated-images";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
@@ -205,6 +207,11 @@ export function MessageBubble({
   showTurnActions = true,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
+  const duplicateImageSources = useMemo(
+    () => message.role === "assistant" && !message.isStreaming
+      ? duplicateGeneratedImageSources(message.inlineMediaFiles ?? message.deliveredFiles, message.media) : [],
+    [message.role, message.isStreaming, message.deliveredFiles, message.inlineMediaFiles, message.media],
+  );
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -405,7 +412,8 @@ export function MessageBubble({
       || message.content.split(/\r?\n/).length > LONG_REPLY_LINE_THRESHOLD
     );
   const replyCollapsed = canCollapseReply && !expanded;
-  const renderedContent = <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>;
+  const renderedContent = <MarkdownText streaming={!!message.isStreaming}
+    duplicateImageSources={duplicateImageSources}>{message.content}</MarkdownText>;
   return (
     <MessageContextMenu>
       <div

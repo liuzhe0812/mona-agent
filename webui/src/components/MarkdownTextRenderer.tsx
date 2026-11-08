@@ -22,6 +22,7 @@ import { MarkdownMedia, ProjectFileLink } from "./markdown/MarkdownMedia";
 import { MarkdownTable } from "./markdown/MarkdownTable";
 import { normalizeConversationMarkdown } from "./markdown/normalize-markdown";
 import { remarkProjectAssets } from "./markdown/remark-project-assets";
+import { remarkDeduplicateGeneratedImages } from "./markdown/remark-deduplicate-generated";
 import { MarkdownGallery } from "./markdown/MarkdownGallery";
 import "./markdown/conversation-markdown.css";
 
@@ -32,6 +33,7 @@ interface MarkdownTextRendererProps {
   className?: string;
   highlightCode?: boolean;
   streaming?: boolean;
+  duplicateImageSources?: readonly string[];
 }
 
 const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath];
@@ -80,12 +82,17 @@ export default function MarkdownTextRenderer({
   className,
   highlightCode = true,
   streaming = false,
+  duplicateImageSources,
 }: MarkdownTextRendererProps) {
   const context = useMarkdownContext();
   const conversationFiles = useContext(ConversationFileContext);
   const conversation = context !== null;
   const source = useMemo(() => conversation ? normalizeConversationMarkdown(children, streaming) : children, [children, streaming, conversation]);
-  const plugins = useMemo(() => conversation ? [...remarkPlugins, remarkProjectAssets] : remarkPlugins, [conversation]);
+  const plugins = useMemo(() => [
+    ...remarkPlugins,
+    ...(conversation ? [remarkProjectAssets] : []),
+    ...(duplicateImageSources?.length ? [remarkDeduplicateGeneratedImages(duplicateImageSources)] : []),
+  ], [conversation, duplicateImageSources]);
   const decodeSource = (src: string) => src.startsWith("mona-project:") ? decodeURIComponent(src.slice(13)) : src;
   const components = useMemo<Components>(
     () => ({

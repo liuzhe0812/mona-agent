@@ -673,6 +673,8 @@ export interface UIMessage {
   media?: UIMediaAttachment[];
   /** Files delivered via deliver_file tool, rendered as FileCards. */
   deliveredFiles?: DeliveredFile[];
+  /** Same-message file metadata retained when transcript file cards are hidden. */
+  inlineMediaFiles?: DeliveredFile[];
   /** Authoritative task plan snapshot attached to completed assistant history. */
   taskPlan?: TaskPlanWsPayload;
   /** Assistant turn: accumulated model reasoning / thinking text. Built up

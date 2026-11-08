@@ -18,6 +18,7 @@ interface MarkdownTextProps {
   children: string;
   className?: string;
   streaming?: boolean;
+  duplicateImageSources?: readonly string[];
 }
 
 const loadMarkdownRenderer = () => import("@/components/MarkdownTextRenderer");
@@ -28,14 +29,17 @@ const MemoizedMarkdownRenderer = memo(function MemoizedMarkdownRenderer({
   className,
   highlightCode,
   streaming,
+  duplicateImageSources,
 }: {
   source: string;
   className?: string;
   highlightCode: boolean;
   streaming: boolean;
+  duplicateImageSources?: readonly string[];
 }) {
   return (
-    <LazyMarkdownRenderer className={className} highlightCode={highlightCode} streaming={streaming}>
+    <LazyMarkdownRenderer className={className} highlightCode={highlightCode} streaming={streaming}
+      duplicateImageSources={duplicateImageSources}>
       {source}
     </LazyMarkdownRenderer>
   );
@@ -72,6 +76,7 @@ export function MarkdownText({
   children,
   className,
   streaming = false,
+  duplicateImageSources,
 }: MarkdownTextProps) {
   const renderedSource = useStreamingMarkdownSource(children, streaming);
   const highlightCode = !streaming && renderedSource === children;
@@ -99,6 +104,7 @@ export function MarkdownText({
         className={className}
         highlightCode={highlightCode}
         streaming={streaming}
+        duplicateImageSources={duplicateImageSources}
       />
     </Suspense>
     </MarkdownBoundary>

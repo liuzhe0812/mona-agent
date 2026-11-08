@@ -642,7 +642,7 @@ export function ThreadShell({
   const transcriptMessages = useMemo(
     () =>
       displayMessages.map((m) =>
-        m.deliveredFiles?.length ? { ...m, deliveredFiles: undefined } : m,
+        m.deliveredFiles?.length ? { ...m, inlineMediaFiles: m.deliveredFiles, deliveredFiles: undefined } : m,
       ),
     [displayMessages],
   );
