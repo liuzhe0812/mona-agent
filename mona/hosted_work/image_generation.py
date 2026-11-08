@@ -333,7 +333,11 @@ class HostedImageGenerationTool(Tool):
 
     @property
     def description(self) -> str:
-        return self._schema.description + " Reference images must be in the current /workspace."
+        description = self._schema.description + " Reference images must be in the current /workspace."
+        if self.config.provider == "openai_codex":
+            description += (" The current image service only supports 1K square (1:1) output and cannot edit "
+                            "reference images. Do not represent square output as a requested 16:9 image.")
+        return description
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -488,6 +492,9 @@ class HostedImageGenerationTool(Tool):
                             return _result("REFERENCE_IMAGE_UNSUPPORTED", "当前图片来源不支持所选参考图编辑。", artifacts)
                         if payload.get("code") == "IMAGE_PROVIDER_UNAVAILABLE" and not current_started:
                             return _result("IMAGE_GENERATION_UNAVAILABLE", "当前图片来源尚未完成工作台接入。", artifacts)
+                        if payload.get("code") == "UNSUPPORTED_IMAGE_SIZE" and not current_started:
+                            return _result("INVALID_IMAGE_SIZE", "当前图片来源仅支持 1K 方图（1:1），请调整尺寸或选择其他图片来源。",
+                                           artifacts, retry_safe=not artifacts)
                         if payload.get("retry_safe") is True and not current_started:
                             return _result("INVALID_IMAGE_SIZE", "图片尺寸或比例不受支持。", artifacts,
                                            retry_safe=not artifacts)

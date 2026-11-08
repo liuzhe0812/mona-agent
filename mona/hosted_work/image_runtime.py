@@ -176,6 +176,28 @@ class HostedImageRunner(AgentRunner):
         super().__init__(provider)
         self.image = image
 
+    async def run(self, spec):
+        from mona.providers.native_work_provider import NativeWorkProvider
+
+        if not isinstance(self.provider, NativeWorkProvider):
+            return await super().run(spec)
+        provider = self.provider.for_turn(spec.workspace)
+        provider.bind_runtime(spec.tools, spec.checkpoint_callback)
+        spec.context_usage_fallback = False
+        try:
+            # Keep the hosted tool-call identity and image delivery hooks when
+            # the shared native provider creates its isolated turn instance.
+            result = await HostedImageRunner(provider, self.image)._run(spec)
+            native_work = provider.native_work_snapshot()
+            if native_work.get("native_session_id"):
+                for message in reversed(result.messages):
+                    if message.get("role") == "assistant":
+                        message["native_work"] = native_work
+                        break
+            return result
+        finally:
+            await provider.aclose()
+
     async def _run_tool(self, spec, tool_call, *args, **kwargs):
         token = _CALL_ID.set(tool_call.id)
         try:
