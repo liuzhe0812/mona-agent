@@ -113,7 +113,7 @@ export type StreamError =
 
 type ErrorHandler = (error: StreamError) => void;
 export type MessageAdmission = "accepted" | "consumed" | "paused" | "rejected" | "unknown" | "cancelled";
-export type MessageAdmissionReason = "insufficient_balance" | "billing_unknown";
+export type MessageAdmissionReason = "insufficient_balance" | "billing_unknown" | "work_result_unknown";
 type AdmissionHandler = (state: MessageAdmission, reason?: MessageAdmissionReason) => void;
 
 export interface WorkTurnSnapshot {
@@ -1302,7 +1302,8 @@ export class MonaClient {
     if (parsed.event === "error" && parsed.message_rejected && parsed.chat_id && parsed.input_id) {
       const receipt = this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]));
       if (!receipt?.lifecycle || receipt.targetTurnId === parsed.target_turn_id) {
-        const reason = parsed.code === "insufficient_balance" || parsed.code === "billing_unknown" ? parsed.code : undefined;
+        const reason = parsed.code === "insufficient_balance" || parsed.code === "billing_unknown"
+          || parsed.code === "work_result_unknown" ? parsed.code : undefined;
         this.setMessageAdmission(parsed.chat_id, parsed.input_id, reason === "billing_unknown" ? "unknown" : "rejected", reason);
       }
     }

@@ -14,7 +14,7 @@ export function MessageRejectionDialog({
   rejection,
   onDismiss,
 }: {
-  rejection: { runActive: boolean; uncertain?: boolean; stopOutcome?: "unknown" | "unsupported"; reason?: "insufficient_balance" | "billing_unknown" } | null;
+  rejection: { runActive: boolean; uncertain?: boolean; stopOutcome?: "unknown" | "unsupported"; reason?: "insufficient_balance" | "billing_unknown" | "work_result_unknown" } | null;
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
@@ -23,7 +23,8 @@ export function MessageRejectionDialog({
     : rejection?.uncertain ? "errors.messageRejected.unknownTitle" : "errors.messageRejected.title";
   const body = rejection?.stopOutcome
     ? `errors.workStop.${rejection.stopOutcome}Body`
-    : rejection?.uncertain && rejection.reason === "billing_unknown" ? "errors.messageRejected.billingUnknown"
+    : rejection?.reason === "work_result_unknown" ? "errors.messageRejected.workResultUnknown"
+      : rejection?.uncertain && rejection.reason === "billing_unknown" ? "errors.messageRejected.billingUnknown"
       : rejection?.uncertain ? "errors.messageRejected.unknownBody"
       : rejection?.reason === "insufficient_balance" ? "errors.messageRejected.insufficientBalance"
         : rejection?.runActive ? "errors.messageRejected.runActiveBody" : "errors.messageRejected.body";

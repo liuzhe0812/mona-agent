@@ -1161,7 +1161,7 @@ export function useMonaStream(
           suppressStreamUntilTurnEndRef.current = false;
         }
         setMessageRejection({ runActive: activeRunStartedAt !== null,
-          ...(ev.code === "insufficient_balance" ? { reason: "insufficient_balance" as const } : {}) });
+          ...(ev.code === "insufficient_balance" || ev.code === "work_result_unknown" ? { reason: ev.code } : {}) });
         return;
       }
       if (ev.event === "context_usage") {
@@ -1921,7 +1921,7 @@ export function useMonaStream(
           setTaskPlan(client.getTaskPlan?.(chatId) ?? pending.previousTaskPlan);
         }
         if (state !== "cancelled" && state !== "paused") setMessageRejection({ runActive: started !== null, inputId: messageId,
-          ...(state === "rejected" && reason === "insufficient_balance" ? { reason } : {}) });
+          ...(state === "rejected" && (reason === "insufficient_balance" || reason === "work_result_unknown") ? { reason } : {}) });
       };
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
@@ -2022,7 +2022,7 @@ export function useMonaStream(
             isInjected: state === "consumed",
           } : message));
           if (state === "unknown" || state === "rejected") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId,
-            ...((state === "rejected" && reason === "insufficient_balance")
+            ...((state === "rejected" && (reason === "insufficient_balance" || reason === "work_result_unknown"))
               || (state === "unknown" && reason === "billing_unknown") ? { reason } : {}) });
           else setMessageRejection((current) => current?.inputId === inputId ? null : current);
         },

@@ -1123,6 +1123,7 @@
       "title": "Message not sent",
       "insufficientBalance": "Your balance is insufficient. Please top up and try again.",
       "billingUnknown": "Billing status is unconfirmed. Please do not resend.",
+      "workResultUnknown": "The previous task's result is unconfirmed, so this message was not accepted. Your text and attachments are preserved; check the previous task before continuing.",
       "body": "This message was not accepted. Your text and attachments are still in the chat. Please send it again.",
       "runActiveBody": "This message was not accepted. Your text and attachments are still in the chat. The current task is still running; send it again after that task ends."
     },

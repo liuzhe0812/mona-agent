@@ -648,6 +648,54 @@ describe("chat admission and runtime recovery", () => {
     expect(socket.messages).toHaveLength(1);
   });
 
+  it("explains a previously unconfirmed task without claiming it is still running or resending the new input", () => {
+    const { socket, wrapper, client } = setup();
+    let sender!: ReturnType<typeof useMonaStream>;
+    function Sender() {
+      sender = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={sender.messageRejection} onDismiss={sender.dismissMessageRejection} />;
+    }
+    render(<Sender />, { wrapper });
+    act(() => sender.send("keep the draft", undefined, { taskId: "mine", inputId: "input" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", message_rejected: true,
+      code: "work_result_unknown", detail: "DO_NOT_RENDER_SERVER_DETAIL" }));
+    expect(client.getMessageAdmission("chat", "input")).toBe("rejected");
+    expect(sender.messages.at(-1)).toMatchObject({ content: "keep the draft", sendState: "rejected" });
+    expect(sender.messageRejection).toMatchObject({ inputId: "input", reason: "work_result_unknown" });
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("previous task's result is unconfirmed");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("DO_NOT_RENDER_SERVER_DETAIL");
+    expect(i18n.t("errors.messageRejected.workResultUnknown", { lng: "zh-CN" }))
+      .toBe("上一任务的结果待核对，这条消息未被接收。输入和附件已保留；请核对上一任务后再继续。");
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("preserves an injected input rejected because its original task result is unknown", () => {
+    const { socket, wrapper, client } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_state: "unknown", turn_id: "turn-a" }));
+    act(() => result.current.inject("keep the follow-up", undefined, { inputId: "input", taskId: "task" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", target_turn_id: "turn-a",
+      message_rejected: true, code: "work_result_unknown" }));
+    expect(client.getMessageAdmission("chat", "input")).toBe("rejected");
+    expect(result.current.messageRejection).toMatchObject({ inputId: "input", reason: "work_result_unknown" });
+    expect(result.current.messages.at(-1)).toMatchObject({ content: "keep the follow-up", sendState: "rejected" });
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("shows the safe previous-result reason for a matching legacy rejection", () => {
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => result.current.send("keep draft", undefined, { inputId: "input", taskId: "task" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "other", message_rejected: true,
+      code: "work_result_unknown" }));
+    expect(result.current.messageRejection).toBeNull();
+    act(() => socket.emit({ event: "error", chat_id: "chat", task_id: "task", message_rejected: true,
+      code: "work_result_unknown" }));
+    expect(result.current.messageRejection).toEqual({ runActive: false, reason: "work_result_unknown" });
+    expect(result.current.messages.at(-1)).toMatchObject({ content: "keep draft", sendState: "rejected" });
+    expect(socket.messages).toHaveLength(1);
+  });
+
   it("keeps unrelated error codes and arbitrary detail on the existing generic rejection path", () => {
     const { socket, wrapper } = setup();
     let sender!: ReturnType<typeof useMonaStream>;
