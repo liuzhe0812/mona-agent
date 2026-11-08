@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useMonaStream } from "@/hooks/useMonaStream";
@@ -214,6 +214,61 @@ describe("useMonaStream", () => {
       }],
     });
   });
+
+  it("retains an inline image delivered between streamed answer segments", async () => {
+    const fake = fakeClient();
+    const Wrapper = wrap(fake.client);
+    const { result } = renderHook(() => useMonaStream("chat-image-stream", EMPTY_MESSAGES), {
+      wrapper: ({ children }: { children: ReactNode }) => <StrictMode><Wrapper>{children}</Wrapper></StrictMode>,
+    });
+    const file = { path: ".generated-previews/run/image.png", name: "image.png", size: 12,
+      size_human: "12 B", mime: "image/png" };
+    const media = { kind: "image" as const, url: "/api/work/desktop/generated-media/ticket", name: "image.png" };
+    act(() => {
+      fake.emit("chat-image-stream", { event: "goal_status", chat_id: "chat-image-stream", status: "running", started_at: 100 });
+      fake.emit("chat-image-stream", { event: "delta", chat_id: "chat-image-stream", stream_id: "run:1", text: "第一段" });
+    });
+    await flushStreamFrame();
+    act(() => {
+      fake.emit("chat-image-stream", { event: "deliver_files", chat_id: "chat-image-stream", inline_media: true,
+        files: [file], media_urls: [media] });
+      fake.emit("chat-image-stream", { event: "stream_end", chat_id: "chat-image-stream", stream_id: "run:1" });
+      fake.emit("chat-image-stream", { event: "message", chat_id: "chat-image-stream", text: "", kind: "progress" });
+      fake.emit("chat-image-stream", { event: "delta", chat_id: "chat-image-stream", stream_id: "run:2", text: "第二段" });
+    });
+    await flushStreamFrame();
+    act(() => {
+      fake.emit("chat-image-stream", { event: "stream_end", chat_id: "chat-image-stream", stream_id: "run:2" });
+      fake.emit("chat-image-stream", { event: "deliver_files", chat_id: "chat-image-stream", inline_media: false,
+        files: [{ ...file, path: "generated/image.png" }] });
+      fake.emit("chat-image-stream", { event: "turn_end", chat_id: "chat-image-stream" });
+    });
+    expect(result.current.messages.flatMap((message) => message.media ?? [])).toContainEqual(media);
+  });
+
+  it.each(["message", "user_questions"] as const)(
+    "retains early delivery when %s consumes the queue in strict mode",
+    (nextEvent) => {
+      const fake = fakeClient();
+      const Wrapper = wrap(fake.client);
+      const { result } = renderHook(() => useMonaStream("chat-image-early", EMPTY_MESSAGES), {
+        wrapper: ({ children }: { children: ReactNode }) => <StrictMode><Wrapper>{children}</Wrapper></StrictMode>,
+      });
+      const file = { path: "image.png", name: "image.png", size: 12, size_human: "12 B", mime: "image/png" };
+      const media = { kind: "image" as const, url: "/api/work/desktop/generated-media/ticket", name: "image.png" };
+      act(() => {
+        fake.emit("chat-image-early", { event: "deliver_files", chat_id: "chat-image-early", files: [file], media_urls: [media] });
+        if (nextEvent === "message") {
+          fake.emit("chat-image-early", { event: "message", chat_id: "chat-image-early", text: "完成" });
+        } else {
+          fake.emit("chat-image-early", { event: "user_questions", chat_id: "chat-image-early", requests: [{
+            request_id: "question", agent_id: "mona", questions: [{ id: "q", question: "请选择" }],
+          }] });
+        }
+      });
+      expect(result.current.messages.flatMap((message) => message.media ?? [])).toContainEqual(media);
+    },
+  );
 
   it("shows prepared previews while a question is waiting without ending the turn", () => {
     const fake = fakeClient();

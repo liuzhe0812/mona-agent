@@ -32,6 +32,6 @@ export function duplicateGeneratedImageSources(files: DeliveredFile[] | undefine
     if (!path || path !== workspacePath(file.path) || path.startsWith("/workspace/.generated-previews/")
         || typeof file.mime !== "string" || !file.mime.startsWith("image/") || !file.sha256 || !DIGEST.test(file.sha256)
         || !previewDigests.has(file.sha256)) return [];
-    return [`sandbox:${path}`];
+    return [`sandbox:${path}`, path];
   });
 }

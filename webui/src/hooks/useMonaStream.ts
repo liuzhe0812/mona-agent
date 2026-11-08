@@ -305,6 +305,21 @@ function mergeMedia(
   return next;
 }
 
+function pendingDeliveryOnce(
+  filesRef: { current: DeliveredFile[] },
+  mediaRef: { current: UIMediaAttachment[] },
+): () => { files: DeliveredFile[]; media: UIMediaAttachment[] } {
+  let captured: { files: DeliveredFile[]; media: UIMediaAttachment[] } | undefined;
+  return () => {
+    if (!captured) {
+      captured = { files: filesRef.current, media: mediaRef.current };
+      filesRef.current = [];
+      mediaRef.current = [];
+    }
+    return captured;
+  };
+}
+
 function appendDeliveredFilesToLastAssistant(
   prev: UIMessage[],
   files: DeliveredFile[],
@@ -1238,14 +1253,11 @@ export function useMonaStream(
       if (ev.event === "user_questions") {
         if (ev.requests.length > 0) {
           setIsAwaitingModelResponse(false);
+          const pendingDelivery = pendingDeliveryOnce(pendingDeliveredFilesRef, pendingDeliveredMediaRef);
           setMessages((previous) => {
             const visible = previous.map((message) => message.isStreaming ? { ...message, isStreaming: false } : message);
-            const next = appendDeliveredFilesToLastAssistant(
-              closeReasoningStream(visible), pendingDeliveredFilesRef.current, pendingDeliveredMediaRef.current,
-            );
-            pendingDeliveredFilesRef.current = [];
-            pendingDeliveredMediaRef.current = [];
-            return next;
+            const { files, media } = pendingDelivery();
+            return appendDeliveredFilesToLastAssistant(closeReasoningStream(visible), files, media);
           });
         }
         return;
@@ -1412,17 +1424,13 @@ export function useMonaStream(
         setIsCompacting(false);
         stoppingRef.current = false;
         setStopping(false);
+        const pendingDelivery = pendingDeliveryOnce(pendingDeliveredFilesRef, pendingDeliveredMediaRef);
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
           finalized = pruneReasoningOnlyPlaceholders(finalized);
-          if (pendingDeliveredFilesRef.current.length > 0) {
-            finalized = appendDeliveredFilesToLastAssistant(
-              finalized,
-              pendingDeliveredFilesRef.current,
-              pendingDeliveredMediaRef.current,
-            );
-            pendingDeliveredFilesRef.current = [];
-            pendingDeliveredMediaRef.current = [];
+          const { files, media } = pendingDelivery();
+          if (files.length > 0) {
+            finalized = appendDeliveredFilesToLastAssistant(finalized, files, media);
           }
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
@@ -1581,6 +1589,7 @@ export function useMonaStream(
         if (!isIndependentAgentMessage) {
           clearActivitySegment();
         }
+        const pendingDelivery = pendingDeliveryOnce(pendingDeliveredFilesRef, pendingDeliveredMediaRef);
         setMessages((prev) => {
           const identityKey = identity.messageId
             ? `message:${identity.messageId}`
@@ -1662,14 +1671,9 @@ export function useMonaStream(
               if (inserted?.role === "assistant") messageIdentityIdsRef.current.set(identityKey, inserted.id);
             }
           }
-          if (pendingDeliveredFilesRef.current.length > 0) {
-            next = appendDeliveredFilesToLastAssistant(
-              next,
-              pendingDeliveredFilesRef.current,
-              pendingDeliveredMediaRef.current,
-            );
-            pendingDeliveredFilesRef.current = [];
-            pendingDeliveredMediaRef.current = [];
+          const { files, media: pendingMedia } = pendingDelivery();
+          if (files.length > 0) {
+            next = appendDeliveredFilesToLastAssistant(next, files, pendingMedia);
           }
           return next;
         });
