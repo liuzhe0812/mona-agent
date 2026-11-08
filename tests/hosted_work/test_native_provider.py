@@ -203,8 +203,9 @@ async def test_hosted_start_uses_no_native_tools_and_prompt_matches_definitions(
         async def send(self, _binding, _identifier, _history):
             return SimpleNamespace(outcome="accepted", native_turn_id="private-turn")
 
-        async def interrupt(self, _binding):
-            pass
+        async def interrupt(self, _binding, *, native_turn_id=None):
+            assert native_turn_id == "private-turn"
+            return SimpleNamespace(outcome="confirmed")
 
         async def shutdown(self):
             captured["shutdown"] = True

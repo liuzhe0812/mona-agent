@@ -591,7 +591,7 @@ class DesktopWire:
             raise WorkError("request_conflict", "停止目标不属于当前会话。", 409)
         source = _scope(frame.get("request_id"), "请求标识")
         was_active = run["status"] in {"running", "cancelling"}
-        if was_active:
+        if was_active or run["status"] == "unknown":
             await self.service.stop(peer.owner, rid)
         task = self.service.tasks.get((peer.owner, rid))
         if task is not None and not task.done():

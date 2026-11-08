@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.contracts import NewSession, NewTurn, WorkError, identifier
+from mona.hosted_work.history_media import externalize_media, init_history_media, restore_media
 
 
 def encoded(value) -> str:
@@ -130,6 +131,17 @@ class WorkStore:
                 FOREIGN KEY(owner,session_id) REFERENCES sessions(owner,id)
             );
         """)
+        init_history_media(self.db)
+
+    def _pack_media(self, owner: str, value):
+        return externalize_media(self.db, owner, value, max_image_bytes=self.config.max_file_bytes,
+                                 max_storage_bytes=self.config.history_media_storage_bytes,
+                                 max_expanded_bytes=self.config.history_media_expand_bytes)
+
+    def _restore_media(self, owner: str, value):
+        return restore_media(self.db, owner, value, max_image_bytes=self.config.max_file_bytes,
+                             max_storage_bytes=self.config.history_media_storage_bytes,
+                             max_expanded_bytes=self.config.history_media_expand_bytes)
 
     def close(self):
         self.db.close()
@@ -246,6 +258,54 @@ class WorkStore:
             raise WorkError("not_found", "未找到该会话。", 404)
         return row
 
+    def history(self, owner: str, session_id: str) -> list:
+        """Return the exact account-scoped history, restoring any stored images."""
+        value = self._restore_media(owner, json.loads(self.session(owner, session_id)["history"]))
+        if not isinstance(value, list):
+            raise WorkError("invalid_history", "会话记录格式无效。", 409)
+        return value
+
+    def turn_state(self, owner: str, session_id: str, *, compact: bool = False) -> tuple[list, dict]:
+        """Bound the combined history and context expanded for one turn."""
+        history = json.loads(self.session(owner, session_id)["history"])
+        row = self.db.execute("SELECT state FROM conversation_context WHERE owner=? AND session_id=?",
+                              (owner, session_id)).fetchone()
+        context = json.loads(row[0]) if row else {}
+        result = self._restore_media(owner, {"history": history, "context": context})
+        if not isinstance(result["history"], list) or not isinstance(result["context"], dict):
+            raise WorkError("invalid_history", "会话记录格式无效。", 409)
+        return (history, context) if compact else (result["history"], result["context"])
+
+    def prune_history_media(self, owner: str, candidates: set[str]) -> int:
+        """Remove only this deleted session's now-unreferenced image blobs."""
+        if not self.db.in_transaction:
+            raise WorkError("invalid_state", "会话图片清理事务不可用。", 503)
+        if not candidates:
+            return 0
+        if (self.db.execute("SELECT 1 FROM runs WHERE owner=? AND status IN ('running','cancelling','unknown') LIMIT 1",
+                            (owner,)).fetchone()
+                or self.db.execute("SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown') LIMIT 1",
+                                   (owner,)).fetchone()):
+            return 0
+        image_journal = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_billing_journal'").fetchone()
+        if image_journal and self.db.execute(
+                "SELECT 1 FROM image_billing_journal WHERE owner=? AND stage NOT IN ('settled','released','rejected','free_completed') LIMIT 1",
+                (owner,)).fetchone():
+            return 0
+        from mona.hosted_work.history_media import media_references
+
+        retained: set[str] = set()
+        try:
+            for table, column in (("sessions", "history"), ("runs", "checkpoint"), ("conversation_context", "state")):
+                for row in self.db.execute(f"SELECT {column} FROM {table} WHERE owner=?", (owner,)):
+                    retained.update(media_references(json.loads(row[0])))
+        except (ValueError, TypeError, RecursionError):
+            raise WorkError("invalid_history_media", "会话图片无法核验，已有记录已保留。", 409) from None
+        removed = 0
+        for digest in candidates - retained:
+            removed += self.db.execute("DELETE FROM history_media WHERE owner=? AND digest=?", (owner, digest)).rowcount
+        return removed
+
     def create_session(self, owner: str, request: NewSession) -> dict:
         with self.transaction():
             old = self.db.execute("SELECT * FROM sessions WHERE owner=? AND id=?", (owner, request.request_id)).fetchone()
@@ -302,14 +362,31 @@ class WorkStore:
                 raise WorkError("resolution_conflict", "目标不是待核对的原任务，未改变任何状态。", 409)
             if kind == "run":
                 result = json.loads(row["result"])
+                original_message = result.get("message") or "上一轮未完成，已有进度已保留。结果未知的操作不会自动重做。"
+                history = self.history(owner, row["session_id"])
+                # finish() may already have merged this checkpoint and added a
+                # status notice. Remove only that exact final notice while
+                # matching the checkpoint suffix, then restore it unchanged.
+                notice = None
+                if (history and history[-1].get("role") == "assistant"
+                        and history[-1].get("content") == original_message):
+                    notice = history.pop()
+                from mona.session.checkpoint_recovery import restore_checkpoint_messages
+                from mona.session.manager import Session
+
+                projection = Session(key="websocket:" + row["session_id"], messages=history)
+                restore_checkpoint_messages(projection, self._restore_media(owner, json.loads(row["checkpoint"])))
+                history = projection.messages
+                if notice is not None:
+                    history.append(notice)
+                history.append({"role": "assistant", "content": "上一轮结果未知且已结束跟踪。仅处理新的用户请求；不得重放旧操作。"})
+                packed = self._pack_media(owner, history)
+                self._check_history(packed)
                 result.update(message="管理员核对执行环境后结束了本轮跟踪；原结果仍不确定，不会自动重跑。")
                 self.db.execute("UPDATE runs SET status='interrupted',result=?,updated=? WHERE owner=? AND id=?",
                                 (encoded(result), time.time(), owner, record_id))
-                history = json.loads(self.session(owner, row["session_id"])["history"])
-                history.append({"role": "assistant", "content": "上一轮结果未知且已结束跟踪。仅处理新的用户请求；不得重放旧操作。"})
-                if len(encoded(history).encode()) <= self.config.max_history_bytes:
-                    self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?",
-                                    (encoded(history), owner, row["session_id"]))
+                self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?",
+                                (encoded(packed), owner, row["session_id"]))
             else:
                 self.db.execute("UPDATE workspace_operations SET status='finished' WHERE owner=? AND id=?", (owner, record_id))
             self.db.execute("INSERT INTO resolutions VALUES(?,?,?,?,?)", (owner, kind, record_id, time.time(), note.strip()))
@@ -345,8 +422,10 @@ class WorkStore:
     def require_idle(self, owner: str):
         if self.db.execute("SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone():
             raise WorkError("workspace_pending", "已有文件操作的结果待核对，已暂停后续工作区操作。", 409)
-        if self.db.execute("SELECT 1 FROM runs WHERE owner=? AND status IN ('running','cancelling','unknown')", (owner,)).fetchone():
-            raise WorkError("user_busy", "已有任务正在执行或结果待核对，请先处理该任务。", 409)
+        if self.db.execute("SELECT 1 FROM runs WHERE owner=? AND status='unknown'", (owner,)).fetchone():
+            raise WorkError("work_result_unknown", "上一轮任务结果待核对，请保留当前会话。", 409)
+        if self.db.execute("SELECT 1 FROM runs WHERE owner=? AND status IN ('running','cancelling')", (owner,)).fetchone():
+            raise WorkError("user_busy", "已有任务正在执行，请等待当前任务结束。", 409)
 
     def begin_file_operation(self, owner: str, operation_id: str, kind: str):
         identifier(operation_id)
@@ -379,17 +458,18 @@ class WorkStore:
             for file_id in request.attachment_ids:
                 self.file(owner, session_id, file_id)
             now = time.time()
-            history = json.loads(session["history"])
+            history = self._restore_media(owner, json.loads(session["history"]))
             history.append({"role": "user", "content": request.text,
                             "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat()})
-            self._check_history(history)
+            packed_history = self._pack_media(owner, history)
+            self._check_history(packed_history)
             self.db.execute("INSERT INTO runs(owner,id,session_id,payload,status,created,updated) VALUES(?,?,?,?,?,?,?)",
                             (owner, request.request_id, session_id, payload, "running", now, now))
             title = session["title"]
             if title == "新任务" and len(history) == 1:
                 title = " ".join(request.text.split())[:40] or title
             self.db.execute("UPDATE sessions SET history=?,title=?,updated=? WHERE owner=? AND id=?",
-                            (encoded(history), title, now, owner, session_id))
+                            (encoded(packed_history), title, now, owner, session_id))
         return self.run(owner, request.request_id), True
 
     @staticmethod
@@ -416,21 +496,27 @@ class WorkStore:
             raise WorkError("history_limit", "会话内容过大，已有记录已保留，请新建会话继续。", 409)
 
     def save_history(self, owner: str, run_id: str, history: list):
-        self._check_history(history)
-        run = self.run(owner, run_id)
-        self.db.execute("UPDATE sessions SET history=?,updated=? WHERE owner=? AND id=?",
-                        (encoded(history), time.time(), owner, run["session_id"]))
+        if not isinstance(history, list):
+            raise WorkError("invalid_history", "会话记录格式无效。", 409)
+        with self.transaction():
+            run = self.run(owner, run_id)
+            packed = self._pack_media(owner, history)
+            self._check_history(packed)
+            self.db.execute("UPDATE sessions SET history=?,updated=? WHERE owner=? AND id=?",
+                            (encoded(packed), time.time(), owner, run["session_id"]))
 
     def save_checkpoint(self, owner: str, run_id: str, checkpoint: dict):
-        data = encoded(checkpoint)
-        if len(data.encode()) > self.config.max_history_bytes:
-            raise WorkError("checkpoint_limit", "本轮执行记录过大，已停止继续执行。", 409)
-        self.db.execute("UPDATE runs SET checkpoint=? WHERE owner=? AND id=?", (data, owner, run_id))
+        with self.transaction():
+            self.run(owner, run_id)
+            data = encoded(self._pack_media(owner, checkpoint))
+            if len(data.encode()) > self.config.max_history_bytes:
+                raise WorkError("checkpoint_limit", "本轮执行记录过大，已停止继续执行。", 409)
+            self.db.execute("UPDATE runs SET checkpoint=? WHERE owner=? AND id=?", (data, owner, run_id))
 
     def context_state(self, owner: str, sid: str) -> dict:
         self.session(owner, sid)
         row = self.db.execute("SELECT state FROM conversation_context WHERE owner=? AND session_id=?", (owner, sid)).fetchone()
-        return json.loads(row[0]) if row else {}
+        return self._restore_media(owner, json.loads(row[0])) if row else {}
 
     def save_context(self, owner: str, sid: str, value: dict):
         from mona.hosted_work.context import history_fingerprint
@@ -438,11 +524,8 @@ class WorkStore:
         if (not isinstance(state, dict) or state.get("owner") != owner or state.get("session_id") != sid
                 or state.get("format") != "mona-hosted-context-v1" or not isinstance(state.get("metadata"), dict)):
             raise WorkError("context_conflict", "会话上下文归属无效。", 409)
-        raw = encoded(state)
-        if len(raw.encode()) > self.config.max_history_bytes:
-            raise WorkError("context_limit", "会话上下文超过保存上限。", 413)
         with self.transaction():
-            history = json.loads(self.session(owner, sid)["history"])
+            history = self.history(owner, sid)
             cursor = state.get("last_consolidated")
             if (isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= len(history)
                     or value.get("source_history_length") != len(history)
@@ -452,6 +535,9 @@ class WorkStore:
             previous = self.context_state(owner, sid)
             if previous.get("last_consolidated", 0) > cursor:
                 raise WorkError("context_conflict", "会话整理游标不能回退。", 409)
+            raw = encoded(self._pack_media(owner, state))
+            if len(raw.encode()) > self.config.max_history_bytes:
+                raise WorkError("context_limit", "会话上下文超过保存上限。", 413)
             self.db.execute("INSERT INTO conversation_context VALUES(?,?,?) ON CONFLICT(owner,session_id) DO UPDATE SET state=excluded.state",
                             (owner, sid, raw))
 
@@ -489,17 +575,35 @@ class WorkStore:
                             (status, encoded(result), time.time(), owner, run_id))
             if status != "completed":
                 row = self.db.execute("SELECT checkpoint FROM runs WHERE owner=? AND id=?", (owner, run_id)).fetchone()
-                history = json.loads(self.session(owner, run["session_id"])["history"])
-                from mona.session.checkpoint_recovery import restore_checkpoint_messages
-                from mona.session.manager import Session
-                projection = Session(key="websocket:" + run["session_id"], messages=history)
-                restore_checkpoint_messages(projection, json.loads(row["checkpoint"]))
-                history = projection.messages
-                history.append({"role": "assistant", "content": result.get("message") or
-                                "上一轮未完成，已有进度已保留。结果未知的操作不会自动重做。"})
-                # Preserve oversized recovery evidence in the run rather than silently trimming it.
-                if len(encoded(history).encode()) <= self.config.max_history_bytes:
-                    self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?", (encoded(history), owner, run["session_id"]))
+                self.db.execute("SAVEPOINT hosted_finish_history")
+                try:
+                    history = self.history(owner, run["session_id"])
+                    from mona.session.checkpoint_recovery import restore_checkpoint_messages
+                    from mona.session.manager import Session
+
+                    projection = Session(key="websocket:" + run["session_id"], messages=history)
+                    restore_checkpoint_messages(projection, self._restore_media(owner, json.loads(row["checkpoint"])))
+                    history = projection.messages
+                    history.append({"role": "assistant", "content": result.get("message") or
+                                    "上一轮未完成，已有进度已保留。结果未知的操作不会自动重做。"})
+                    packed = self._pack_media(owner, history)
+                    self._check_history(packed)
+                    self.db.execute("UPDATE sessions SET history=? WHERE owner=? AND id=?", (encoded(packed), owner, run["session_id"]))
+                except WorkError as exc:
+                    self.db.execute("ROLLBACK TO SAVEPOINT hosted_finish_history")
+                    self.db.execute("RELEASE SAVEPOINT hosted_finish_history")
+                    # An unmerged checkpoint must not be silently treated as
+                    # a fully settled turn. Keep all evidence and block new
+                    # work until the retained history can be reconciled.
+                    diagnostic = result.get("diagnostic")
+                    diagnostic = dict(diagnostic) if isinstance(diagnostic, dict) else {}
+                    diagnostic.update(stop_reason="recovery_unconfirmed", recovery_error_code=exc.code)
+                    uncertain = {**result, "message": "本轮执行记录尚未完整保存，请先核对已有结果。",
+                                 "diagnostic": diagnostic}
+                    self.db.execute("UPDATE runs SET status='unknown',result=?,updated=? WHERE owner=? AND id=?",
+                                    (encoded(uncertain), time.time(), owner, run_id))
+                else:
+                    self.db.execute("RELEASE SAVEPOINT hosted_finish_history")
 
     def cancelling(self, owner: str, run_id: str):
         self.run(owner, run_id)

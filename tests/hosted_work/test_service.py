@@ -184,6 +184,27 @@ async def test_stop_is_owner_bound_and_retains_original_run(online):
 
 
 @pytest.mark.asyncio
+async def test_stop_cancels_only_the_owned_run_image_flights(online):
+    _, service, executor = online
+    service.store.create_session(OWNER, NewSession(request_id=SID))
+    cancelled = []
+
+    class Images:
+        def cancel_run(self, owner, run):
+            cancelled.append((owner, run))
+
+    service.image_coordinator = Images()
+    await service.submit(OWNER, "user-one", SID, NewTurn(request_id=RID, model_id="official", text="work"))
+    await asyncio.sleep(0)
+    with pytest.raises(WorkError):
+        await service.stop(owner_key("2"), RID)
+    assert cancelled == []
+    await service.stop(OWNER, RID)
+    await asyncio.gather(*list(service.tasks.values()))
+    assert cancelled == [(OWNER, RID)] and executor.cancelled == [(OWNER, RID)]
+
+
+@pytest.mark.asyncio
 async def test_unknown_execution_blocks_next_turn(online):
     _, service, executor = online
     service.store.create_session(OWNER, NewSession(request_id=SID))
@@ -191,9 +212,31 @@ async def test_unknown_execution_blocks_next_turn(online):
     await service.submit(OWNER, "user-one", SID, NewTurn(request_id=RID, model_id="official", text="work"))
     await asyncio.gather(*list(service.tasks.values()))
     assert service.store.run(OWNER, RID)["status"] == "unknown"
-    with pytest.raises(WorkError):
+    with pytest.raises(WorkError) as rejected:
         await service.submit(OWNER, "user-one", SID, NewTurn(request_id="c" * 32, model_id="official", text="more"))
+    assert rejected.value.code == "work_result_unknown"
     assert len(executor.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_work_error_keeps_safe_diagnostic_code_without_replaying(online):
+    _, service, executor = online
+    service.store.create_session(OWNER, NewSession(request_id=SID))
+
+    async def fail(_payload, _emit):
+        executor.calls.append(True)
+        raise WorkError("history_limit", "private diagnostic", 409)
+
+    executor.execute = fail
+    await service.submit(OWNER, "user-one", SID, NewTurn(request_id=RID, model_id="official", text="work"))
+    await asyncio.gather(*list(service.tasks.values()))
+    run = service.store.run(OWNER, RID)
+    assert run["status"] == "unknown"
+    assert run["result"]["diagnostic"]["exception_code"] == "history_limit"
+    assert "private diagnostic" not in str(run["result"])
+    with pytest.raises(WorkError) as rejected:
+        await service.submit(OWNER, "user-one", SID, NewTurn(request_id="c" * 32, model_id="official", text="more"))
+    assert rejected.value.code == "work_result_unknown" and len(executor.calls) == 1
 
 
 @pytest.mark.asyncio

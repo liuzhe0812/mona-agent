@@ -351,6 +351,32 @@ async def test_stop_and_reattach_wait_for_the_exact_run_cleanup(tmp_path, monkey
             wire.service.tasks.pop((ALICE, rid), None)
 
 
+async def test_stop_unknown_run_cancels_only_its_image_flight_without_changing_outcome(tmp_path):
+    client, wire, _, _ = await make_client(tmp_path)
+    async with client:
+        sid, rid = "a" * 32, "c" * 32
+        store = wire.service.store
+        store.create_session(ALICE, NewSession(request_id=sid))
+        store.create_run(ALICE, sid, NewTurn(request_id=rid, model_id="qwen", text="work"))
+        store.finish(ALICE, rid, "unknown", {"message": "结果待核对", "workspace_saved": False})
+        calls = []
+        wire.service.image_coordinator = SimpleNamespace(cancel_run=lambda owner, run: calls.append((owner, run)))
+
+        class Capture:
+            def __init__(self): self.frames = []
+            async def send_json(self, frame): self.frames.append(frame)
+
+        socket = Capture()
+        peer = SimpleNamespace(owner=ALICE, socket=socket, chats=set())
+        await wire._stop(peer, {"chat_id": sid, "expected_turn_id": rid, "request_id": "stop"})
+        assert calls == [(ALICE, rid)]
+        assert socket.frames[-1]["outcome"] == "unknown"
+        assert store.run(ALICE, rid)["status"] == "unknown"
+        with pytest.raises(WorkError):
+            await wire.service.stop(BOB, rid)
+        assert calls == [(ALICE, rid)]
+
+
 async def test_stop_waits_when_billing_is_unknown_but_the_run_is_still_finishing(tmp_path):
     client, wire, _, _ = await make_client(tmp_path)
     async with client:

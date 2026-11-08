@@ -938,6 +938,8 @@ class HostedWorkConfig(Base):
     workspace_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024, le=512 * 1024 * 1024)
     max_file_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=32 * 1024 * 1024)
     max_history_bytes: int = Field(default=4 * 1024 * 1024, ge=65536, le=16 * 1024 * 1024)
+    history_media_storage_bytes: int = Field(default=1024 * 1024 * 1024, ge=1024 * 1024, le=16 * 1024 * 1024 * 1024)
+    history_media_expand_bytes: int = Field(default=32 * 1024 * 1024, ge=1024 * 1024, le=256 * 1024 * 1024)
 
     @field_validator("models")
     @classmethod

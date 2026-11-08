@@ -305,9 +305,20 @@ class DesktopStore:
                 pending = db.execute(
                     "SELECT 1 FROM runs WHERE owner=? AND session_id=? AND status IN ('running','cancelling','unknown')",
                     (owner, sid)).fetchone()
+                run_ids = {row[0] for row in db.execute("SELECT id FROM runs WHERE owner=? AND session_id=?", (owner, sid))}
+                tasks = getattr(self.service, "tasks", {})
+                processes = getattr(getattr(self.service, "executor", None), "processes", {})
+                coordinator = getattr(self.service, "image_coordinator", None)
+                image_active = getattr(coordinator, "active_run", None)
+                cleanup_pending = any(
+                    ((owner, rid) in tasks and not tasks[owner, rid].done())
+                    or (owner, rid) in processes
+                    or (callable(image_active) and image_active(owner, rid))
+                    for rid in run_ids
+                )
                 file_pending = db.execute(
                     "SELECT 1 FROM workspace_operations WHERE owner=? AND status IN ('running','unknown')", (owner,)).fetchone()
-                if pending or file_pending:
+                if pending or file_pending or cleanup_pending:
                     raise WorkError("user_busy", "此会话还有任务在进行或结果待核对，请先停止并确认结果后再删除。", 409)
                 billing_pending = db.execute(
                     "SELECT 1 FROM billing_journal WHERE owner=? AND stage NOT IN ('settled','released','rejected') "
@@ -320,6 +331,14 @@ class DesktopStore:
                     "AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid)
                 ).fetchone():
                     raise WorkError("billing_pending", "此会话的图片计费尚未确认，请核对后再删除。", 409)
+                from mona.hosted_work.history_media import media_references
+
+                candidates: set[str] = set()
+                for table, column, identity in (("sessions", "history", "id"),
+                                                ("runs", "checkpoint", "session_id"),
+                                                ("conversation_context", "state", "session_id")):
+                    for row in db.execute(f"SELECT {column} FROM {table} WHERE owner=? AND {identity}=?", (owner, sid)):
+                        candidates.update(media_references(json.loads(row[0])))
                 # The authoritative charge and idempotency record remain in Auth.
                 db.execute("DELETE FROM billing_journal WHERE owner=? AND run_id IN "
                            "(SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid))
@@ -340,5 +359,9 @@ class DesktopStore:
                     if cleaned != sidebar:
                         cleaned["updated_at"] = timestamp(time.time())
                         db.execute("UPDATE hosted_delete_desktop.metadata SET data=? WHERE key='sidebar'", (encoded(cleaned),))
+                active = getattr(self.service, "active_users", set())
+                tasks = getattr(self.service, "tasks", {})
+                if owner not in active and all(key[0] != owner or task.done() for key, task in tasks.items()):
+                    self.service.store.prune_history_media(owner, candidates)
         finally:
             db.execute("DETACH DATABASE hosted_delete_desktop")

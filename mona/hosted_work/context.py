@@ -204,7 +204,13 @@ class HostedTurnContext:
             self._state_path = directory / (identifier(self.session_id) + ".json")
 
     def _validate_state(self, state):
-        if not isinstance(state, dict) or len(_encoded(state)) > self.config.max_history_bytes:
+        if not isinstance(state, dict):
+            raise WorkError("invalid_context", "会话上下文格式或大小无效。")
+        from mona.hosted_work.history_media import measure_media
+
+        size, _ = measure_media(state, max_image_bytes=self.config.max_file_bytes,
+                                max_expanded_bytes=self.config.history_media_expand_bytes)
+        if size > self.config.max_history_bytes:
             raise WorkError("invalid_context", "会话上下文格式或大小无效。")
         if not state:
             return {}
@@ -227,9 +233,14 @@ class HostedTurnContext:
                 "compaction_retry": {"route": self._route, "until": time.time() + remaining} if remaining else {}}
 
     def _write_state(self):
-        raw = _encoded(self.context_state)
-        if len(raw) > self.config.max_history_bytes:
+        from mona.hosted_work.history_media import measure_media
+
+        state = self.context_state
+        size, _ = measure_media(state, max_image_bytes=self.config.max_file_bytes,
+                                max_expanded_bytes=self.config.history_media_expand_bytes)
+        if size > self.config.max_history_bytes:
             raise WorkError("context_limit", "会话上下文记录超过保存上限。", 413)
+        raw = _encoded(state)
         if self._state_path is None:
             return
         if _is_link(self._state_path) or self._state_path.exists() and self._state_path.stat().st_nlink != 1:

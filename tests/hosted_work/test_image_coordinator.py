@@ -251,6 +251,73 @@ async def test_stop_after_claim_and_before_provider_prevents_dispatch(env, monke
 
 
 @pytest.mark.asyncio
+async def test_explicit_stop_cancels_only_matching_upstream_request_and_keeps_uncertain_charge(env):
+    await prepare(env)
+    env.provider.release.clear()
+    env.provider.request_started = True
+    closed = asyncio.Event()
+
+    async def close():
+        closed.set()
+
+    env.provider.aclose = close
+    pending = asyncio.create_task(request(env))
+    await asyncio.wait_for(env.provider.entered.wait(), 3)
+    env.coordinator.cancel_run(OTHER, RUN)
+    await asyncio.sleep(0)
+    assert not pending.done() and env.coordinator.active(OWNER, RUN, OP)
+    env.coordinator.cancel_run(OWNER, RUN)
+    env.coordinator.cancel_run(OWNER, RUN)  # Repeated stop does not cancel reconciliation twice.
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    await env.coordinator.wait_run(OWNER, RUN)
+    assert closed.is_set() and env.provider.calls == 1 and env.billing.debits == 0
+    assert env.control.journal.get(OWNER, OP)["stage"] == "uncertain"
+    assert env.billing.events == ["reserve", "dispatch", ("uncertain", "provider_outcome_unknown")]
+
+
+@pytest.mark.asyncio
+async def test_explicit_stop_before_flight_starts_releases_only_unstarted_reservation(env, monkeypatch):
+    await prepare(env)
+    original = env.coordinator._claim
+
+    def stop_before_start(*args):
+        result = original(*args)
+        asyncio.get_running_loop().call_soon(env.coordinator.cancel_run, OWNER, RUN)
+        return result
+
+    monkeypatch.setattr(env.coordinator, "_claim", stop_before_start)
+    with pytest.raises(asyncio.CancelledError):
+        await request(env)
+    assert env.provider.calls == 0 and env.billing.debits == 0
+    assert env.control.journal.get(OWNER, OP)["stage"] == "released"
+    assert env.billing.events == ["reserve", "dispatch", "release_not_started"]
+
+
+@pytest.mark.asyncio
+async def test_stop_after_provider_reply_allows_existing_settlement_to_finish(env, monkeypatch):
+    await prepare(env)
+    settling, release = asyncio.Event(), asyncio.Event()
+    original = env.billing.settle_image
+
+    async def settle(*args):
+        settling.set()
+        await release.wait()
+        return await original(*args)
+
+    monkeypatch.setattr(env.billing, "settle_image", settle)
+    pending = asyncio.create_task(request(env))
+    await asyncio.wait_for(settling.wait(), 3)
+    env.coordinator.cancel_run(OWNER, RUN)
+    await asyncio.sleep(0)
+    assert not pending.done()
+    release.set()
+    result = await asyncio.wait_for(pending, 3)
+    assert result["status"] == "settled" and env.provider.calls == 1 and env.billing.debits == 1
+    assert env.control.journal.get(OWNER, OP)["stage"] == "settled"
+
+
+@pytest.mark.asyncio
 async def test_inflight_result_is_saved_and_settled_after_run_stops(env):
     await prepare(env)
     env.provider.release.clear()

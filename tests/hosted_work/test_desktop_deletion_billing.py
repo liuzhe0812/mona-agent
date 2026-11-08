@@ -144,3 +144,36 @@ def test_delete_cleans_only_own_session_sidebar_atomically(state):
     assert after["tags_by_key"] == {other: ["kept"]}
     assert after["view"] == before["view"]
     assert state.sidebar(BOB) == bob and state.session(BOB, SID)
+
+
+@pytest.mark.parametrize("pending_kind", ["task", "process", "image"])
+def test_delete_waits_for_exact_session_cleanup_after_database_terminal(state, pending_kind):
+    make_chat(state, ALICE, CHARGE, "settled")
+    make_chat(state, BOB, OTHER_CHARGE, "settled")
+    other_sid = "5" * 32
+    state.service.store.create_session(ALICE, NewSession(request_id=other_sid))
+    state.service.tasks = {(ALICE, RID): SimpleNamespace(done=lambda: False)} if pending_kind == "task" else {}
+    state.service.executor = SimpleNamespace(processes={(ALICE, RID): object()} if pending_kind == "process" else {})
+    state.service.image_coordinator = SimpleNamespace(
+        active_run=lambda owner, run: pending_kind == "image" and (owner, run) == (ALICE, RID),
+    )
+
+    with pytest.raises(WorkError) as blocked:
+        state.delete(ALICE, SID)
+    assert blocked.value.code == "user_busy"
+    assert state.service.store.run(ALICE, RID)["status"] == "completed"
+    assert state.session(ALICE, SID) and state.records(ALICE, SID)
+    assert state.db(ALICE).execute("SELECT 1 FROM deleted_chats WHERE chat_id=?", (SID,)).fetchone() is None
+
+    # Neither another account's same IDs nor another session of this account
+    # may be blocked by this run's in-memory cleanup.
+    state.delete(BOB, SID)
+    state.delete(ALICE, other_sid)
+    assert state.session(ALICE, SID)
+
+    state.service.tasks.clear()
+    state.service.executor.processes.clear()
+    state.service.image_coordinator.active_run = lambda *_: False
+    state.delete(ALICE, SID)
+    with pytest.raises(WorkError):
+        state.session(ALICE, SID)

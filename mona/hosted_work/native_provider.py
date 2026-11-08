@@ -1,10 +1,12 @@
 """Keep native model execution separate from the hosted workspace sandbox."""
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from pathlib import Path
 
+from mona.development.contracts import ExecutorId
 from mona.development.executors.host_tools import WORK_TOOL
 from mona.development.executors.rpc import RpcError
 from mona.hosted_work.codex_usage import CodexUsage
@@ -12,6 +14,7 @@ from mona.providers.native_work_provider import NativeWorkProvider
 from mona.providers.native_work_tools import NATIVE_BASIC_TOOLS
 
 _PREFIX = "hosted_"
+_STOP_CONFIRM_TIMEOUT = 5.0
 
 
 def _hosted_definitions(definitions):
@@ -129,8 +132,70 @@ class HostedNativeWorkProvider(NativeWorkProvider):
 
     async def aclose(self) -> None:
         self._finish_billing(False, "unfinished_on_close")
+        binding = self._binding
+        host = self._host
+        unconfirmed = False
         try:
-            await super().aclose()
-        except BaseException:
-            self.billing_usage.invalidate("close_failed")
-            raise
+            if self.executor == ExecutorId.CODEX and host is not None and binding is not None and not self._done:
+                # Stop accepting new native operations before interrupting this turn.
+                # Keep the event reader alive until the exact turn has a terminal
+                # receipt; an interrupt acknowledgement alone is not completion.
+                self._closing = True
+                approvals = [task for _, task in self._native_permissions.values()]
+                for task in approvals:
+                    if not task.done():
+                        task.cancel()
+                for future in self._pending.values():
+                    if not future.done():
+                        future.cancel()
+                unconfirmed = not await self._confirm_codex_stop(host, binding)
+                if unconfirmed:
+                    self._native_status = "unknown"
+        finally:
+            # We already sent the precise interrupt above. Prevent the desktop
+            # cleanup from sending a second uncorrelated interrupt, but always
+            # keep its established host/process cleanup and credential cleanup.
+            if self.executor == ExecutorId.CODEX and host is not None and binding is not None and not self._done:
+                self._binding = None
+            try:
+                await super().aclose()
+            except BaseException:
+                self.billing_usage.invalidate("close_failed")
+                raise
+            finally:
+                self._binding = binding
+        if unconfirmed:
+            self.billing_usage.invalidate("native_stop_unconfirmed")
+            raise RpcError("native_stop_unconfirmed", "本轮模型停止状态尚未确认。", outcome_unknown=True)
+
+    async def _confirm_codex_stop(self, host, binding) -> bool:
+        turn_id = self._native_turn_id
+        if turn_id is None and self._request_stage in {"input", "initialization"}:
+            return True  # No model turn has been dispatched yet.
+        try:
+            async with asyncio.timeout(_STOP_CONFIRM_TIMEOUT):
+                receipt = await host.interrupt(binding, native_turn_id=turn_id)
+                # Without the dispatched turn identity, even an idle reply is
+                # not evidence that this particular request did not start.
+                if not isinstance(turn_id, str) or not turn_id:
+                    return False
+                if receipt.outcome in {"confirmed", "already_finished"}:
+                    return True
+                if receipt.outcome != "requested":
+                    return False
+                while self._event_task is not None and self._events is not None:
+                    event = await self._event_task
+                    self._event_task = asyncio.create_task(anext(self._events))
+                    if event.native_turn_id != turn_id:
+                        continue
+                    if event.type == "usage.updated":
+                        self._update_usage(event.payload)
+                    elif event.type in {"run.completed", "run.failed", "run.interrupted"}:
+                        return True
+                    elif event.type in {"run.unknown", "policy.violation"}:
+                        return False
+        except Exception:
+            # The host is still closed by aclose(); missing evidence must not be
+            # reported as a confirmed stop or cause the request to be retried.
+            return False
+        return False

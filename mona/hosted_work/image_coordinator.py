@@ -63,6 +63,9 @@ def _unknown() -> WorkError:
 class _Flight:
     fingerprint: str
     task: asyncio.Task
+    started: bool = False
+    cancellable: bool = True
+    stop_requested: bool = False
 
 
 class ImageCoordinator:
@@ -219,7 +222,11 @@ class ImageCoordinator:
                        aspect_ratio, image_size):
         provider = None
         provider_started = False
+        flight = self.flights[owner, run, operation]
+        flight.started = True
         try:
+            if flight.stop_requested:
+                raise asyncio.CancelledError
             if not callable(self.provider_factory):
                 raise WorkError("image_unavailable", "图片服务暂不可用。", 503)
             provider = self.provider_factory(self.config, binding.settings)
@@ -233,6 +240,10 @@ class ImageCoordinator:
                 provider_started = True
                 response = await provider.generate(prompt=prompt, model=model, reference_images=None,
                                                    aspect_ratio=aspect_ratio, image_size=image_size)
+            # Once the upstream reply has arrived, finishing local verification
+            # and settlement cannot consume more model tokens and must not be
+            # interrupted halfway through a billing write.
+            flight.cancellable = False
             if (not isinstance(response, GeneratedImageResponse) or len(response.images) != 1
                     or not isinstance(response.images[0], str)
                     or len(response.images[0]) > 4 * ((self.config.max_file_bytes + 2) // 3) + 128):
@@ -257,6 +268,7 @@ class ImageCoordinator:
                 return  # The durable receipt and hidden image remain for reconciliation.
             await self._broadcast_ready(owner, session, run, operation)
         except asyncio.CancelledError:
+            flight.cancellable = False
             if not provider_started or getattr(provider, "request_started", True) is False:
                 try:
                     await asyncio.shield(self.control.release_not_started(owner, session, run, capability, operation))
@@ -266,6 +278,7 @@ class ImageCoordinator:
                 await asyncio.shield(self._uncertain(owner, session, run, capability, operation))
             raise
         except Exception:
+            flight.cancellable = False
             if not provider_started or getattr(provider, "request_started", True) is False:
                 try:
                     await self.control.release_not_started(owner, session, run, capability, operation)
@@ -316,6 +329,18 @@ class ImageCoordinator:
                  if row_owner == owner and row_run == run]
         if tasks:
             await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
+
+    def cancel_run(self, owner: str, run: str) -> None:
+        """Stop only this run's in-flight provider requests, not settled work."""
+        identifier(run)
+        for key, flight in tuple(self.flights.items()):
+            if key[:2] != (owner, run) or flight.task.done() or not flight.cancellable:
+                continue
+            flight.stop_requested = True
+            # If the coroutine hasn't started, let its cancellation handler
+            # run so it can release a reservation known not to be dispatched.
+            if flight.started and flight.task.cancelling() == 0:
+                flight.task.cancel()
 
     def active(self, owner: str, run: str, operation: str) -> bool:
         flight = self.flights.get((owner, run, operation))

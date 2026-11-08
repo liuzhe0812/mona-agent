@@ -10,6 +10,7 @@ import json
 import os
 import re
 import signal
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,11 +134,46 @@ def failure_message(reason: str) -> str:
     }.get(reason, "模型调用未能完成，已有编辑进度已保留。请稍后继续或联系管理员。")
 
 
+def _restore_turn_media(config: HostedWorkConfig, payload: dict) -> dict:
+    """Restore compact history inside the trusted child with owner-bound reads."""
+    value = payload.get("history_media_database")
+    if value is None:
+        return payload
+    if not isinstance(value, str) or not value or not isinstance(payload.get("owner"), str):
+        raise WorkError("invalid_history_media", "会话图片无法核验，已有记录已保留。", 409)
+    try:
+        root = Path(config.state_dir).resolve(strict=True)
+        path = Path(value)
+        if (not path.is_absolute() or path.is_symlink() or not path.is_file()
+                or path.stat().st_nlink != 1 or path.resolve(strict=True) != root / "sessions.sqlite3"):
+            raise ValueError("invalid history database")
+        from mona.hosted_work.history_media import restore_media
+
+        with sqlite3.connect(path.resolve(strict=True).as_uri() + "?mode=ro", uri=True) as db:
+            restored = restore_media(db, payload["owner"],
+                {"history": payload.get("history"), "context": payload.get("context_state", {})},
+                max_image_bytes=config.max_file_bytes, max_storage_bytes=config.history_media_storage_bytes,
+                max_expanded_bytes=config.history_media_expand_bytes)
+    except (OSError, ValueError, sqlite3.Error):
+        raise WorkError("invalid_history_media", "会话图片无法核验，已有记录已保留。", 409) from None
+    if not isinstance(restored["history"], list) or not isinstance(restored["context"], dict):
+        raise WorkError("invalid_history_media", "会话图片无法核验，已有记录已保留。", 409)
+    safe_payload = {key: item for key, item in payload.items() if key != "history_media_database"}
+    return {**safe_payload, "history": restored["history"], "context_state": restored["context"]}
+
+
 async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, emit, authorize=None, editor_tools=()) -> dict:
     """External dependencies are supplied; production uses the real runner unchanged."""
+    payload = _restore_turn_media(config, payload)
     selection = config.models[payload["model_id"]]
     history = payload["history"]
-    if not isinstance(history, list) or len(json.dumps(history).encode()) > config.max_history_bytes:
+    if not isinstance(history, list):
+        raise WorkError("history_limit", "会话内容超出本轮限制。")
+    from mona.hosted_work.history_media import measure_media
+
+    history_bytes, _ = measure_media(history, max_image_bytes=config.max_file_bytes,
+                                     max_expanded_bytes=config.history_media_expand_bytes)
+    if history_bytes > config.max_history_bytes:
         raise WorkError("history_limit", "会话内容超出本轮限制。")
     tools = HostedTools(sandbox, emit, editor_tools,
                         session_id=payload.get("session_id") if payload.get("desktop_ui") else None,
@@ -462,8 +498,12 @@ def main():
     args = parser.parse_args()
     if sys.platform != "linux":
         raise SystemExit("Hosted Work execution requires Linux; no host fallback is available.")
-    raw = sys.stdin.buffer.read(48 * 1024 * 1024 + 1)
-    if len(raw) > 48 * 1024 * 1024:
+    # Parent sends compact history references, not expanded image bytes. This
+    # bound covers two maximum-size history/context records plus a maximum
+    # request, while remaining independent of the configurable image budget.
+    max_input_bytes = 80 * 1024 * 1024
+    raw = sys.stdin.buffer.read(max_input_bytes + 1)
+    if len(raw) > max_input_bytes:
         raise SystemExit("Hosted input exceeds the bounded protocol.")
     envelope = json.loads(raw)
     config = HostedWorkConfig.model_validate(envelope["config"])

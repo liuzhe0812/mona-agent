@@ -104,6 +104,11 @@ class WorkService:
                     != request.model_dump(exclude={"effective_reasoning_effort"}) or existing["session_id"] != session_id):
                 raise WorkError("request_conflict", "发送请求的内容已变化，未重复执行。", 409)
             return existing
+        # Distinguish this account's persisted unknown result before shared
+        # capacity/model checks can misreport it as another running task.
+        self.store.require_idle(owner)
+        # Verify the combined expansion bound before reserving a wallet charge.
+        self.store.turn_state(owner, session_id)
         engine = self._acquire(owner, request.model_id)
         billing = None
         model = self.config.models[request.model_id].model_copy(deep=True)
@@ -208,16 +213,22 @@ class WorkService:
             desktop_run = self.desktop.state.get(owner, "run:" + run_id, {}) if self.desktop else {}
             if self.desktop is not None and hasattr(self.desktop, "inputs"):
                 await self.desktop.inputs.start(owner, sid, run_id, task=asyncio.current_task())
+            database = self.store.db.execute("PRAGMA database_list").fetchone()[2]
+            # Pass compact references to the trusted child; image bytes are
+            # restored under the same owner with a read-only DB connection.
+            history, context_state = self.store.turn_state(owner, sid, compact=bool(database))
             payload = {"action": "turn", "owner": owner, "run_id": run_id,
                        "session_id": sid, "metadata": run["input"].get("metadata", {}),
                        "desktop_ui": bool(self.desktop and self.desktop.state.get(owner, "run:" + run_id)),
                        "model_id": run["input"]["model_id"], "account_token": token,
-                       "history": json.loads(self.store.session(owner, sid)["history"]),
-                       "context_state": self.store.context_state(owner, sid),
+                       "history": history,
+                       "context_state": context_state,
                        "task_id": desktop_run.get("frame", {}).get("task_id") or run_id,
                        "input_id": desktop_run.get("input_id"),
                        "title_user_edited": self._title_user_edited(owner, sid),
                        "attachments": [self.store.file(owner, sid, fid) for fid in run["input"]["attachment_ids"]]}
+            if database:
+                payload["history_media_database"] = database
             if model is not None and model.source == "codex":
                 payload["effective_reasoning_effort"] = run["input"].get("effective_reasoning_effort")
             if billing is not None:
@@ -292,7 +303,10 @@ class WorkService:
                     diagnostic.get("exception_type"))
             self.store.finish(owner, run_id, result["status"], public)
         except BaseException as exc:
-            logger.warning("Hosted Work run={} result_unconfirmed exception_type={}", run_id, type(exc).__name__)
+            exception_code = (exc.code if isinstance(exc, WorkError) and isinstance(exc.code, str)
+                              and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", exc.code) else None)
+            logger.warning("Hosted Work run={} result_unconfirmed exception_type={} exception_code={}",
+                           run_id, type(exc).__name__, exception_code)
             if billing is not None and not billing_finished:
                 try:
                     await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
@@ -301,7 +315,8 @@ class WorkService:
             try:
                 self.store.finish(owner, run_id, "unknown", {
                     "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False,
-                    "diagnostic": {"stop_reason": "execution_unknown", "stage": "child_transport", "exception_type": type(exc).__name__}})
+                    "diagnostic": {"stop_reason": "execution_unknown", "stage": "child_transport",
+                                   "exception_type": type(exc).__name__, "exception_code": exception_code}})
             except WorkError as exc:
                 if exc.status != 404:
                     raise
@@ -373,11 +388,18 @@ class WorkService:
         run = self.store.run(owner, run_id)
         if run["status"] in {"running", "cancelling"}:
             self.store.cancelling(owner, run_id)
+            if self.image_coordinator is not None:
+                self.image_coordinator.cancel_run(owner, run_id)
             if self.desktop is not None and hasattr(self.desktop, "questions"):
                 await self.desktop.questions.cancel_run(owner, run["session_id"], run_id)
             if self.desktop is not None and hasattr(self.desktop, "inputs"):
                 await self.desktop.inputs.pause(owner, run["session_id"], run_id)
             self.executor.cancel(owner, run_id)
+        elif run["status"] == "unknown" and self.image_coordinator is not None:
+            # A parent-owned image request may still be draining after the run
+            # was persisted as unknown. Stop only that exact run's flight;
+            # its execution and billing outcome remain unknown.
+            self.image_coordinator.cancel_run(owner, run_id)
         return self.store.run(owner, run_id)
 
     async def upload(self, owner: str, sid: str, file_id: str, name: str, content: bytes):
