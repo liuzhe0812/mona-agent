@@ -30,6 +30,23 @@ def timestamp(value: float) -> str:
     return datetime.fromtimestamp(value, timezone.utc).isoformat()
 
 
+def _without_sidebar_sessions(state: dict, deleted: set[str]) -> dict:
+    """Remove only keys for this owner's explicitly deleted conversations."""
+    if not deleted:
+        return dict(state)
+    keys = deleted | {"websocket:" + sid for sid in deleted}
+    result = dict(state)
+    for field in ("pinned_keys", "archived_keys"):
+        value = result.get(field)
+        if isinstance(value, list):
+            result[field] = [item for item in value if not isinstance(item, str) or item not in keys]
+    for field in ("title_overrides", "last_read_at_by_key", "tags_by_key"):
+        value = result.get(field)
+        if isinstance(value, dict):
+            result[field] = {key: item for key, item in value.items() if key not in keys}
+    return result
+
+
 class DesktopStore:
     def __init__(self, service, files):
         self.service, self.files = service, files
@@ -143,33 +160,66 @@ class DesktopStore:
                 "show_previews": False, "show_timestamps": False, "show_archived": False}})
 
     def update_sidebar(self, owner: str, values: dict):
-        if not isinstance(values, dict) or set(values) - set(self.sidebar(owner)):
+        if not isinstance(values, dict):
             raise WorkError("invalid_request", "会话列表设置无效。")
-        state = self.sidebar(owner)
-        for key, value in values.items():
-            if key in {"pinned_keys", "archived_keys"}:
-                if not isinstance(value, list) or len(value) > 1000:
+        db = self.db(owner)
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            state = self.sidebar(owner)
+            if not isinstance(state, dict) or set(values) - set(state):
+                raise WorkError("invalid_request", "会话列表设置无效。")
+            for key, value in values.items():
+                if key in {"pinned_keys", "archived_keys"} and (not isinstance(value, list) or len(value) > 1000):
                     raise WorkError("invalid_request", "会话列表设置无效。")
-                for item in value:
-                    self.session(owner, item)
-                state[key] = list(dict.fromkeys(value))
-            elif key in {"title_overrides", "last_read_at_by_key", "tags_by_key"}:
-                if not isinstance(value, dict) or len(value) > 1000:
+                if key in {"title_overrides", "last_read_at_by_key", "tags_by_key"} and (not isinstance(value, dict) or len(value) > 1000):
                     raise WorkError("invalid_request", "会话列表设置无效。")
-                for item, entry in value.items():
-                    self.session(owner, item)
-                    if key == "title_overrides" and (not isinstance(entry, str) or len(entry) > 200):
-                        raise WorkError("invalid_request", "会话名称无效。")
-                state[key] = value
-            elif key in {"view", "project_names", "collapsed_groups"}:
-                if not isinstance(value, dict) or len(encoded(value)) > 8192:
-                    raise WorkError("invalid_request", "会话列表设置无效。")
-                state[key] = value
-            elif key == "schema_version" and value != 5:
-                raise WorkError("invalid_request", "会话列表版本不兼容。")
-        state["updated_at"] = timestamp(time.time())
-        self.set(owner, "sidebar", state)
-        return state
+            deleted = {row[0] for row in db.execute("SELECT chat_id FROM deleted_chats")}
+            state = _without_sidebar_sessions(state, deleted)
+            values = _without_sidebar_sessions(values, deleted)
+            for key, value in values.items():
+                if key in {"pinned_keys", "archived_keys"}:
+                    for item in value:
+                        if not isinstance(item, str):
+                            raise WorkError("invalid_request", "会话列表设置无效。")
+                        self.session(owner, item)
+                    state[key] = list(dict.fromkeys(value))
+                elif key in {"title_overrides", "last_read_at_by_key", "tags_by_key"}:
+                    for item, entry in value.items():
+                        if not isinstance(item, str):
+                            raise WorkError("invalid_request", "会话列表设置无效。")
+                        self.session(owner, item)
+                        if key == "title_overrides" and (not isinstance(entry, str) or len(entry) > 200):
+                            raise WorkError("invalid_request", "会话名称无效。")
+                        if key == "last_read_at_by_key" and not isinstance(entry, str):
+                            raise WorkError("invalid_request", "会话已读状态无效。")
+                    if key == "last_read_at_by_key":
+                        existing = state.get(key)
+                        if not isinstance(existing, dict):
+                            raise WorkError("invalid_state", "会话列表设置无效。", 503)
+                        # Stale tabs may not erase or roll back another tab's marker.
+                        merged = dict(existing)
+                        for item, entry in value.items():
+                            previous = merged.get(item)
+                            if not isinstance(previous, str) or entry > previous:
+                                merged[item] = entry
+                        if len(merged) > 1000:
+                            raise WorkError("invalid_request", "会话列表设置无效。")
+                        state[key] = merged
+                    else:
+                        state[key] = value
+                elif key in {"view", "project_names", "collapsed_groups"}:
+                    if not isinstance(value, dict) or len(encoded(value)) > 8192:
+                        raise WorkError("invalid_request", "会话列表设置无效。")
+                    state[key] = value
+                elif key == "schema_version" and value != 5:
+                    raise WorkError("invalid_request", "会话列表版本不兼容。")
+            state["updated_at"] = timestamp(time.time())
+            self.set(owner, "sidebar", state)
+            db.execute("COMMIT")
+            return state
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
 
     def model(self, owner: str) -> str:
         value = self.get(owner, "model_id")
@@ -281,5 +331,14 @@ class DesktopStore:
                 db.execute("DELETE FROM sessions WHERE owner=? AND id=?", (owner, sid))
                 db.execute("INSERT OR IGNORE INTO hosted_delete_desktop.deleted_chats VALUES(?)", (sid,))
                 db.execute("DELETE FROM hosted_delete_desktop.transcript WHERE chat_id=?", (sid,))
+                sidebar_row = db.execute("SELECT data FROM hosted_delete_desktop.metadata WHERE key='sidebar'").fetchone()
+                if sidebar_row:
+                    sidebar = json.loads(sidebar_row[0])
+                    if not isinstance(sidebar, dict):
+                        raise WorkError("invalid_state", "会话列表设置无效。", 503)
+                    cleaned = _without_sidebar_sessions(sidebar, {sid})
+                    if cleaned != sidebar:
+                        cleaned["updated_at"] = timestamp(time.time())
+                        db.execute("UPDATE hosted_delete_desktop.metadata SET data=? WHERE key='sidebar'", (encoded(cleaned),))
         finally:
             db.execute("DETACH DATABASE hosted_delete_desktop")

@@ -110,3 +110,37 @@ def test_failed_delete_rolls_back_both_stores_and_can_be_retried(state, failure_
     with pytest.raises(WorkError) as missing:
         state.session(ALICE, SID)
     assert missing.value.status == 404
+
+
+def test_delete_cleans_only_own_session_sidebar_atomically(state):
+    make_chat(state, ALICE, CHARGE, "settled")
+    make_chat(state, BOB, OTHER_CHARGE, "settled")
+    other_sid = "5" * 32
+    state.service.store.create_session(ALICE, NewSession(request_id=other_sid))
+    key, other = "websocket:" + SID, "websocket:" + other_sid
+    before = state.sidebar(ALICE)
+    before.update(pinned_keys=[key, SID, other], archived_keys=[key, other],
+        title_overrides={key: "removed", other: "kept"},
+        last_read_at_by_key={key: "2026-11-08T08:00:00+00:00", other: "2026-11-08T09:00:00+00:00"},
+        tags_by_key={key: ["removed"], other: ["kept"]})
+    state.set(ALICE, "sidebar", before)
+    bob = state.sidebar(BOB)
+    bob["last_read_at_by_key"] = {key: "2026-11-08T10:00:00+00:00"}
+    state.set(BOB, "sidebar", bob)
+
+    desktop = state.db(ALICE)
+    desktop.execute("CREATE TRIGGER reject_sidebar BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'test'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        state.delete(ALICE, SID)
+    assert state.sidebar(ALICE) == before and state.session(ALICE, SID)
+    assert desktop.execute("SELECT 1 FROM deleted_chats WHERE chat_id=?", (SID,)).fetchone() is None
+
+    desktop.execute("DROP TRIGGER reject_sidebar")
+    state.delete(ALICE, SID)
+    after = state.sidebar(ALICE)
+    assert after["pinned_keys"] == [other] and after["archived_keys"] == [other]
+    assert after["title_overrides"] == {other: "kept"}
+    assert after["last_read_at_by_key"] == {other: "2026-11-08T09:00:00+00:00"}
+    assert after["tags_by_key"] == {other: ["kept"]}
+    assert after["view"] == before["view"]
+    assert state.sidebar(BOB) == bob and state.session(BOB, SID)

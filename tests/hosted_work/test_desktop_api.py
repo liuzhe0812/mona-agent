@@ -1,6 +1,7 @@
 """Real account-scoped HTTP state with external model/container execution isolated."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from dataclasses import replace
@@ -209,6 +210,52 @@ async def test_history_sidebar_and_files_reject_other_accounts(environment):
         params={"session_key": "websocket:" + SID_A, "path": "/workspace/../private.html"})
     assert denied.status == 400
     assert e.api.files.root(A) != e.api.files.root(B)
+
+
+async def test_sidebar_discards_only_this_accounts_deleted_session_keys(environment):
+    e = environment
+    deleted = "3" * 32
+    key, stale, foreign, missing = ("websocket:" + value for value in (SID_A, deleted, SID_B, "4" * 32))
+    e.api.state.db(A).execute("INSERT INTO deleted_chats VALUES(?)", (deleted,))
+    sidebar = e.api.state.sidebar(A)
+    sidebar.update(pinned_keys=[key, stale], archived_keys=[stale],
+        title_overrides={key: "kept", stale: "deleted"},
+        last_read_at_by_key={key: "2026-11-08T08:00:00+00:00", stale: "2026-11-08T08:00:00+00:00"},
+        tags_by_key={key: ["kept"], stale: ["deleted"]})
+    e.api.state.set(A, "sidebar", sidebar)
+
+    response = await e.client.post(PREFIX + "/api/webui/sidebar-state/update", headers=headers(), json=sidebar)
+    assert response.status == 200
+    current = await response.json()
+    assert current["pinned_keys"] == [key] and current["archived_keys"] == []
+    assert current["title_overrides"] == {key: "kept"}
+    assert current["last_read_at_by_key"] == {key: "2026-11-08T08:00:00+00:00"}
+    assert current["tags_by_key"] == {key: ["kept"]}
+
+    for forbidden in (foreign, missing):
+        response = await e.client.post(PREFIX + "/api/webui/sidebar-state/update", headers=headers(),
+            json={"last_read_at_by_key": {stale: "2026-11-08T08:00:00+00:00", forbidden: "2026-11-08T08:00:00+00:00"}})
+        assert response.status == 404
+        assert e.api.state.sidebar(A) == current
+    assert e.api.state.sidebar(B)["last_read_at_by_key"] == {}
+
+
+async def test_sidebar_stale_tabs_cannot_erase_or_roll_back_read_markers(environment):
+    e = environment
+    sid2 = "4" * 32
+    e.service.store.create_session(A, NewSession(request_id=sid2))
+    key1, key2 = "websocket:" + SID_A, "websocket:" + sid2
+    route = PREFIX + "/api/webui/sidebar-state/update"
+    old, new = "2026-11-08T08:00:00+00:00", "2026-11-08T09:00:00+00:00"
+    response = await e.client.post(route, headers=headers(), json={"last_read_at_by_key": {key1: new}})
+    assert response.status == 200
+    replies = await asyncio.gather(
+        e.client.post(route, headers=headers(), json={"last_read_at_by_key": {key1: old}}),
+        e.client.post(route, headers=headers(), json={"last_read_at_by_key": {key2: new}}),
+    )
+    assert all(reply.status == 200 for reply in replies)
+    current = await (await e.client.get(PREFIX + "/api/webui/sidebar-state", headers=headers())).json()
+    assert current["last_read_at_by_key"] == {key1: new, key2: new}
 
 
 async def test_bare_media_ticket_is_scoped_expiring_and_revocable(environment):
