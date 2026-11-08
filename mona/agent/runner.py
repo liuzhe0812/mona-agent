@@ -478,9 +478,14 @@ class AgentRunner:
 
         async def offload_images(request: list[dict]) -> bool:
             try:
-                replacements = await asyncio.to_thread(
-                    offload_tool_images, request, spec.workspace, spec.session_key,
-                )
+                hosted_offload = (getattr(spec.tools, "_mona_offload_tool_images", None)
+                                  if callable(getattr(type(spec.tools), "_mona_offload_tool_images", None)) else None)
+                if spec.workspace is None and callable(hosted_offload):
+                    replacements = await asyncio.to_thread(hosted_offload, request)
+                else:
+                    replacements = await asyncio.to_thread(
+                        offload_tool_images, request, spec.workspace, spec.session_key,
+                    )
             except Exception:
                 logger.exception("Failed to preserve historical tool images for {}", spec.session_key or "default")
                 return False
@@ -539,7 +544,10 @@ class AgentRunner:
                         messages_for_model,
                         snipped_prefix_count,
                     )
-                    messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
+                    if spec.workspace is None and callable(getattr(type(spec.tools), "_mona_normalize_tool_result", None)):
+                        messages_for_model = await asyncio.to_thread(self._apply_tool_result_budget, spec, messages_for_model)
+                    else:
+                        messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                     before_snip = messages_for_model
                     messages_for_model = self._snip_history(spec, before_snip)
                     snipped_prefix_count += self._snipped_prefix_delta(
@@ -659,7 +667,7 @@ class AgentRunner:
                 async def checkpoint_completed(call: ToolCallRequest, value: Any) -> None:
                     partial_results[call.id] = {
                         "role": "tool", "tool_call_id": call.id, "name": call.name,
-                        "content": self._normalize_tool_result(spec, call.id, call.name, value),
+                        "content": await self._normalize_tool_result_async(spec, call.id, call.name, value),
                     }
                     await self._emit_checkpoint(spec, {
                         "phase": "tools_partial", "iteration": iteration, "model": spec.model,
@@ -698,7 +706,7 @@ class AgentRunner:
                         for block in _extract_inline_chart_blocks(result):
                             if block not in inline_chart_blocks:
                                 inline_chart_blocks.append(block)
-                    normalized_result = self._normalize_tool_result(
+                    normalized_result = await self._normalize_tool_result_async(
                         spec,
                         tool_call.id,
                         tool_call.name,
@@ -2035,6 +2043,15 @@ class AgentRunner:
             return
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
+    async def _normalize_tool_result_async(
+        self, spec: AgentRunSpec, tool_call_id: str, tool_name: str, result: Any,
+    ) -> Any:
+        if spec.workspace is None and callable(getattr(type(spec.tools), "_mona_normalize_tool_result", None)):
+            # Hosted result persistence can wait for a database lock or disk.
+            # Keep the event loop responsive to streaming and user cancellation.
+            return await asyncio.to_thread(self._normalize_tool_result, spec, tool_call_id, tool_name, result)
+        return self._normalize_tool_result(spec, tool_call_id, tool_name, result)
+
     def _normalize_tool_result(
         self,
         spec: AgentRunSpec,
@@ -2045,6 +2062,16 @@ class AgentRunner:
         result = ensure_nonempty_tool_result(tool_name, result)
         if isinstance(result, str):
             result = compress_tool_result(result, tool_name=tool_name)
+        hosted_normalize = (getattr(spec.tools, "_mona_normalize_tool_result", None)
+                            if callable(getattr(type(spec.tools), "_mona_normalize_tool_result", None)) else None)
+        if spec.workspace is None and callable(hosted_normalize):
+            try:
+                return hosted_normalize(tool_call_id, result, spec.max_tool_result_chars)
+            except Exception as exc:
+                # Without a durable reference the unshortened result is the
+                # only safe copy; never silently discard it on storage failure.
+                logger.warning("Hosted tool result persistence failed: {}", type(exc).__name__)
+                return result
         try:
             content = maybe_persist_tool_result(
                 spec.workspace,

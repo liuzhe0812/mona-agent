@@ -177,6 +177,7 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         raise WorkError("history_limit", "会话内容超出本轮限制。")
     tools = HostedTools(sandbox, emit, editor_tools,
                         session_id=payload.get("session_id") if payload.get("desktop_ui") else None,
+                        result_session_id=payload.get("session_id"),
                         history=history, config=config, metadata=payload.get("metadata"), attachments=payload.get("attachments", []))
     def register(tool):
         tools.registry.register(tool)

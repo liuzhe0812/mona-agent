@@ -28,6 +28,13 @@ def restore_for_legacy(store: WorkStore) -> dict[str, int]:
         if (store.db.execute("SELECT 1 FROM runs WHERE status IN ('running','cancelling','unknown') LIMIT 1").fetchone()
                 or store.db.execute("SELECT 1 FROM workspace_operations WHERE status IN ('running','unknown') LIMIT 1").fetchone()):
             raise WorkError("work_busy", "仍有任务或文件操作待核对，不能回退。", 409)
+        result_table = store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hosted_tool_results'").fetchone()
+        referenced = any(store.db.execute(f"SELECT 1 FROM {table} WHERE {column} LIKE ? LIMIT 1",
+                                          ("%mona-tool-result://%",)).fetchone()
+                         for table, column in (("sessions", "history"), ("runs", "checkpoint"),
+                                               ("conversation_context", "state")))
+        if referenced or result_table and store.db.execute("SELECT 1 FROM hosted_tool_results LIMIT 1").fetchone():
+            raise WorkError("legacy_tool_results", "旧版本无法读取已保存的工具结果，不能自动回退。", 409)
         tables = (("sessions", "id", "history"), ("runs", "id", "checkpoint"),
                   ("conversation_context", "session_id", "state"))
         for table, identity, column in tables:

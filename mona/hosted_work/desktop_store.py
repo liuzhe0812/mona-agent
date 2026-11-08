@@ -331,9 +331,13 @@ class DesktopStore:
                     "AND run_id IN (SELECT id FROM runs WHERE owner=? AND session_id=?)", (owner, owner, sid)
                 ).fetchone():
                     raise WorkError("billing_pending", "此会话的图片计费尚未确认，请核对后再删除。", 409)
-                from mona.hosted_work.history_media import media_references
+                from mona.hosted_work.history_media import (
+                    media_references,
+                    tool_result_image_references,
+                )
 
-                candidates: set[str] = set()
+                # Include results saved before a child could emit its checkpoint.
+                candidates: set[str] = tool_result_image_references(db, owner, sid)
                 for table, column, identity in (("sessions", "history", "id"),
                                                 ("runs", "checkpoint", "session_id"),
                                                 ("conversation_context", "state", "session_id")):

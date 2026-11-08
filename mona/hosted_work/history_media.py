@@ -45,6 +45,31 @@ def init_history_media(db: sqlite3.Connection) -> None:
     """)
 
 
+def stored_history_bytes(db: sqlite3.Connection, owner: str) -> int:
+    """Account quota covers both conversation images and durable tool results."""
+    total = db.execute("SELECT COALESCE(SUM(length(data)),0) FROM history_media WHERE owner=?",
+                       (owner,)).fetchone()[0]
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hosted_tool_results'").fetchone():
+        total += db.execute("SELECT COALESCE(SUM(length(data)),0) FROM hosted_tool_results WHERE owner=?",
+                            (owner,)).fetchone()[0]
+    return total
+
+
+def tool_result_image_references(db: sqlite3.Connection, owner: str, session_id: str | None = None) -> set[str]:
+    """Retain image blobs referenced by this owner's durable tool results."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hosted_tool_results'").fetchone():
+        return set()
+    sql = "SELECT image_digest FROM hosted_tool_results WHERE owner=? AND image_digest IS NOT NULL"
+    values = (owner,)
+    if session_id is not None:
+        sql += " AND session_id=?"
+        values = (owner, session_id)
+    found = {row[0] for row in db.execute(sql, values)}
+    if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in found):
+        raise _invalid()
+    return found
+
+
 def _invalid() -> WorkError:
     return WorkError("invalid_history_media", "会话图片无法核验，已有记录已保留。", 409)
 
@@ -149,10 +174,7 @@ class _MediaTransform:
                 raise _invalid()
         else:
             if self.stored_bytes is None:
-                self.stored_bytes = self.db.execute(
-                    "SELECT COALESCE(SUM(length(data)),0) FROM history_media WHERE owner=?",
-                    (self.owner,),
-                ).fetchone()[0]
+                self.stored_bytes = stored_history_bytes(self.db, self.owner)
             if self.stored_bytes + len(raw) > self.max_storage_bytes:
                 raise _limit()
             self.db.execute("INSERT INTO history_media(owner,digest,data) VALUES(?,?,?)",

@@ -12,6 +12,7 @@ from typing import Any
 from mona.agent.tools.filesystem import ReadFileTool
 from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.sandbox_files import relative_path
+from mona.hosted_work.tool_results import RESULT_PREFIX
 
 FileOperation = Callable[..., Awaitable[dict]]
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -74,10 +75,11 @@ class HostedReadFileTool(ReadFileTool):
     deduplication state is never shared across accounts.
     """
 
-    def __init__(self, file_operation: FileOperation, *, max_file_bytes: int):
+    def __init__(self, file_operation: FileOperation, *, max_file_bytes: int, result_store=None):
         super().__init__()
         self._file_operation = file_operation
         self._max_file_bytes = max_file_bytes
+        self._result_store = result_store
         self._last_reads: dict[str, tuple[str, int, int | None]] = {}
 
     @property
@@ -119,33 +121,39 @@ class HostedReadFileTool(ReadFileTool):
         errors = self.validate_params(params)
         if errors:
             return "Error: Invalid parameters: " + "; ".join(errors)
-        try:
-            relative = relative_path(path)
-        except (TypeError, ValueError):
-            return "Error: File path is outside the workspace or invalid."
-        logical = "/workspace/" + relative
-        suffix = PurePosixPath(relative).suffix.lower()
-        if suffix in _DOCUMENTS:
-            # Validate ownership/existence in the sandbox, but never import or
-            # execute an untrusted document parser in the privileged host.
-            result = await self._file_operation("stat", path=relative)
-            _, digest = self._metadata(result, relative)
-            if expected_sha256 is not None and expected_sha256 != digest:
-                return f"Error: file changed; expected_sha256 does not match current SHA256 {digest}. Restart the read."
-            return ("Error: runtime_unavailable: PDF and Office parsing has not been configured "
-                    "or verified in the isolated runtime.")
+        if isinstance(path, str) and path.lower().startswith("mona-tool-result:"):
+            if not path.startswith(RESULT_PREFIX) or self._result_store is None:
+                return "Error: Tool result reference is unavailable."
+            raw, digest, extension = self._result_store.read(path)
+            logical, suffix = path, "." + extension
+        else:
+            try:
+                relative = relative_path(path)
+            except (TypeError, ValueError):
+                return "Error: File path is outside the workspace or invalid."
+            logical = "/workspace/" + relative
+            suffix = PurePosixPath(relative).suffix.lower()
+            if suffix in _DOCUMENTS:
+                # Validate ownership/existence in the sandbox, but never import or
+                # execute an untrusted document parser in the privileged host.
+                result = await self._file_operation("stat", path=relative)
+                _, digest = self._metadata(result, relative)
+                if expected_sha256 is not None and expected_sha256 != digest:
+                    return f"Error: file changed; expected_sha256 does not match current SHA256 {digest}. Restart the read."
+                return ("Error: runtime_unavailable: PDF and Office parsing has not been configured "
+                        "or verified in the isolated runtime.")
 
-        result = await self._file_operation("download", path=relative)
-        size, digest = self._metadata(result, relative)
-        encoded = result.get("data")
-        if not isinstance(encoded, str) or len(encoded) > 4 * ((self._max_file_bytes + 2) // 3):
-            raise WorkError("invalid_file_reply", "工作区文件结果未通过校验。", 503)
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise WorkError("invalid_file_reply", "工作区文件结果未通过校验。", 503) from exc
-        if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
-            raise WorkError("file_changed", "文件已发生变化，请重新读取后再操作。", 409)
+            result = await self._file_operation("download", path=relative)
+            size, digest = self._metadata(result, relative)
+            encoded = result.get("data")
+            if not isinstance(encoded, str) or len(encoded) > 4 * ((self._max_file_bytes + 2) // 3):
+                raise WorkError("invalid_file_reply", "工作区文件结果未通过校验。", 503)
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise WorkError("invalid_file_reply", "工作区文件结果未通过校验。", 503) from exc
+            if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+                raise WorkError("file_changed", "文件已发生变化，请重新读取后再操作。", 409)
         if expected_sha256 is not None and expected_sha256 != digest:
             return f"Error: file changed; expected_sha256 does not match current SHA256 {digest}. Restart the read."
 

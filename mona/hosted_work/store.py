@@ -368,9 +368,9 @@ class WorkStore:
                 "SELECT 1 FROM image_billing_journal WHERE owner=? AND stage NOT IN ('settled','released','rejected','free_completed') LIMIT 1",
                 (owner,)).fetchone():
             return 0
-        from mona.hosted_work.history_media import media_references
+        from mona.hosted_work.history_media import media_references, tool_result_image_references
 
-        retained: set[str] = set()
+        retained: set[str] = tool_result_image_references(self.db, owner)
         try:
             for table, column in (("sessions", "history"), ("runs", "checkpoint"), ("conversation_context", "state")):
                 for row in self.db.execute(f"SELECT {column} FROM {table} WHERE owner=?", (owner,)):

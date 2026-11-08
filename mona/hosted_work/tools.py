@@ -23,6 +23,7 @@ from mona.hosted_work.filesystem import HostedReadFileTool
 from mona.hosted_work.public_search import HostedWebSearchTool
 from mona.hosted_work.public_web import fetch_public_text
 from mona.hosted_work.sandbox import DockerSandbox, SandboxError
+from mona.hosted_work.tool_results import HostedResultRegistry, HostedToolResults
 
 
 class HostedTool(Tool):
@@ -54,7 +55,7 @@ class HostedTool(Tool):
 class HostedTools:
     def __init__(self, sandbox: DockerSandbox, emit: Callable[[str, dict], Awaitable[None]], editor_tools=(),
                  *, session_id: str | None = None, history=(), config: HostedWorkConfig | None = None,
-                 metadata: dict[str, Any] | None = None, attachments=()):
+                 metadata: dict[str, Any] | None = None, attachments=(), result_session_id: str | None = None):
         self.sandbox, self.emit = sandbox, emit
         self.config = config or getattr(sandbox, "config", HostedWorkConfig())
         self.fault: str | None = None
@@ -65,7 +66,10 @@ class HostedTools:
         editor_tools = tuple(tool for tool in editor_tools if tool.name not in excluded)
         self._document_delivery = next((tool.deliver_existing_file for tool in editor_tools
                                         if callable(getattr(tool, "deliver_existing_file", None))), None)
-        self.registry = ToolRegistry()
+        result_session_id = result_session_id or session_id
+        result_store = (HostedToolResults(self.config, sandbox.owner, result_session_id, sandbox.run_id)
+                        if result_session_id and isinstance(sandbox, DockerSandbox) else None)
+        self.registry = HostedResultRegistry(result_store) if result_store is not None else ToolRegistry()
         context = RequestContext(channel="websocket" if session_id else "hosted", chat_id=session_id or "direct",
                                  session_key="websocket:" + session_id if session_id else None,
                                  metadata=metadata if isinstance(metadata, dict) else {})
@@ -88,7 +92,8 @@ class HostedTools:
         ]
         for name, description, properties, required, callback in definitions:
             self.registry.register(HostedTool(name, description, properties, required, callback))
-        self.registry.register(HostedReadFileTool(self._file, max_file_bytes=self.config.max_file_bytes))
+        self.registry.register(HostedReadFileTool(self._file, max_file_bytes=self.config.max_file_bytes,
+                                                 result_store=result_store))
         self.registry.register(HostedWebSearchTool())
         for tool in editor_tools:
             self.registry.register(tool)
