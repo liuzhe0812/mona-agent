@@ -669,6 +669,50 @@ describe("chat admission and runtime recovery", () => {
     expect(socket.messages).toHaveLength(1);
   });
 
+  it.each([
+    ["history_media_limit", "This conversation contains too many images", "会话中的图片超过处理上限"],
+    ["invalid_history_media", "Images in this conversation cannot be read", "会话中的图片无法读取或已损坏"],
+    ["history_media_unavailable", "Images in this conversation are temporarily unavailable", "会话中的图片暂时无法读取或保存"],
+  ] as const)("explains %s without losing input or attachments", (code, english, chinese) => {
+    const { socket, wrapper, client } = setup();
+    let sender!: ReturnType<typeof useMonaStream>;
+    function Sender() {
+      sender = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={sender.messageRejection} onDismiss={sender.dismissMessageRejection} />;
+    }
+    render(<Sender />, { wrapper });
+    const image = { media: { data_url: "data:image/png;base64,YQ==", name: "image.png" },
+                    preview: { url: "blob:local", name: "image.png" } };
+    act(() => sender.send("keep the draft", [image], { taskId: "mine", inputId: "input" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", message_rejected: true,
+      code, detail: "DO_NOT_RENDER_SERVER_DETAIL" }));
+    expect(client.getMessageAdmission("chat", "input")).toBe("rejected");
+    expect(sender.messages.at(-1)).toMatchObject({ content: "keep the draft", sendState: "rejected",
+      images: [{ name: "image.png" }] });
+    expect(sender.messageRejection).toMatchObject({ inputId: "input", reason: code });
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(english);
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("DO_NOT_RENDER_SERVER_DETAIL");
+    const key = { history_media_limit: "historyMediaLimit", invalid_history_media: "invalidHistoryMedia",
+                  history_media_unavailable: "historyMediaUnavailable" }[code];
+    expect(i18n.t(`errors.messageRejected.${key}`, { lng: "zh-CN" })).toContain(chinese);
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it.each(["history_media_limit", "invalid_history_media", "history_media_unavailable"] as const)(
+    "keeps a task follow-up rejected with %s rather than claiming it is running", (code) => {
+      const { socket, wrapper, client } = setup();
+      const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+      act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a" }));
+      act(() => result.current.inject("keep follow-up", undefined, { inputId: "input", taskId: "task" }));
+      act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input", target_turn_id: "turn-a",
+        message_rejected: true, code }));
+      expect(client.getMessageAdmission("chat", "input")).toBe("rejected");
+      expect(result.current.messageRejection).toMatchObject({ inputId: "input", reason: code });
+      expect(result.current.messages.at(-1)).toMatchObject({ content: "keep follow-up", sendState: "rejected" });
+      expect(socket.messages).toHaveLength(1);
+    },
+  );
+
   it("preserves an injected input rejected because its original task result is unknown", () => {
     const { socket, wrapper, client } = setup();
     const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });

@@ -4,6 +4,7 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
+import { isMessageAdmissionRejectionReason } from "@/lib/mona-client";
 import type { MessageAdmission, MessageAdmissionReason, MonaClient, StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
@@ -1161,7 +1162,7 @@ export function useMonaStream(
           suppressStreamUntilTurnEndRef.current = false;
         }
         setMessageRejection({ runActive: activeRunStartedAt !== null,
-          ...(ev.code === "insufficient_balance" || ev.code === "work_result_unknown" ? { reason: ev.code } : {}) });
+          ...(isMessageAdmissionRejectionReason(ev.code) ? { reason: ev.code } : {}) });
         return;
       }
       if (ev.event === "context_usage") {
@@ -1921,7 +1922,7 @@ export function useMonaStream(
           setTaskPlan(client.getTaskPlan?.(chatId) ?? pending.previousTaskPlan);
         }
         if (state !== "cancelled" && state !== "paused") setMessageRejection({ runActive: started !== null, inputId: messageId,
-          ...(state === "rejected" && (reason === "insufficient_balance" || reason === "work_result_unknown") ? { reason } : {}) });
+          ...(state === "rejected" && isMessageAdmissionRejectionReason(reason) ? { reason } : {}) });
       };
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
@@ -2022,7 +2023,7 @@ export function useMonaStream(
             isInjected: state === "consumed",
           } : message));
           if (state === "unknown" || state === "rejected") setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null, uncertain: state === "unknown", inputId,
-            ...((state === "rejected" && (reason === "insufficient_balance" || reason === "work_result_unknown"))
+            ...((state === "rejected" && isMessageAdmissionRejectionReason(reason))
               || (state === "unknown" && reason === "billing_unknown") ? { reason } : {}) });
           else setMessageRejection((current) => current?.inputId === inputId ? null : current);
         },

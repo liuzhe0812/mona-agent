@@ -113,7 +113,12 @@ export type StreamError =
 
 type ErrorHandler = (error: StreamError) => void;
 export type MessageAdmission = "accepted" | "consumed" | "paused" | "rejected" | "unknown" | "cancelled";
-export type MessageAdmissionReason = "insufficient_balance" | "billing_unknown" | "work_result_unknown";
+export type MessageAdmissionReason = "insufficient_balance" | "billing_unknown" | "work_result_unknown"
+  | "history_media_limit" | "invalid_history_media" | "history_media_unavailable";
+export function isMessageAdmissionRejectionReason(code: string | undefined): code is Exclude<MessageAdmissionReason, "billing_unknown"> {
+  return code === "insufficient_balance" || code === "work_result_unknown" || code === "history_media_limit"
+    || code === "invalid_history_media" || code === "history_media_unavailable";
+}
 type AdmissionHandler = (state: MessageAdmission, reason?: MessageAdmissionReason) => void;
 
 export interface WorkTurnSnapshot {
@@ -1302,8 +1307,8 @@ export class MonaClient {
     if (parsed.event === "error" && parsed.message_rejected && parsed.chat_id && parsed.input_id) {
       const receipt = this.messageAdmissions.get(JSON.stringify([parsed.chat_id, parsed.input_id]));
       if (!receipt?.lifecycle || receipt.targetTurnId === parsed.target_turn_id) {
-        const reason = parsed.code === "insufficient_balance" || parsed.code === "billing_unknown"
-          || parsed.code === "work_result_unknown" ? parsed.code : undefined;
+        const reason = parsed.code === "billing_unknown" || isMessageAdmissionRejectionReason(parsed.code)
+          ? parsed.code : undefined;
         this.setMessageAdmission(parsed.chat_id, parsed.input_id, reason === "billing_unknown" ? "unknown" : "rejected", reason);
       }
     }

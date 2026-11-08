@@ -1124,6 +1124,9 @@
       "insufficientBalance": "Your balance is insufficient. Please top up and try again.",
       "billingUnknown": "Billing status is unconfirmed. Please do not resend.",
       "workResultUnknown": "The previous task's result is unconfirmed, so this message was not accepted. Your text and attachments are preserved; check the previous task before continuing.",
+      "historyMediaLimit": "This conversation contains too many images to process, so the message was not sent. Your text and attachments are preserved; start a new conversation to continue.",
+      "invalidHistoryMedia": "Images in this conversation cannot be read or are damaged, so the message was not sent. Your text and attachments are preserved; check the images or start a new conversation.",
+      "historyMediaUnavailable": "Images in this conversation are temporarily unavailable for reading or saving, so the message was not sent. Your text and attachments are preserved; please try again later.",
       "body": "This message was not accepted. Your text and attachments are still in the chat. Please send it again.",
       "runActiveBody": "This message was not accepted. Your text and attachments are still in the chat. The current task is still running; send it again after that task ends."
     },
