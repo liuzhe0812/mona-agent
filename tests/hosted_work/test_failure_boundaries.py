@@ -111,6 +111,20 @@ async def test_success_requires_saved_workspace_and_verified_cleanup(lifecycle):
 
 
 @pytest.mark.asyncio
+async def test_reexport_checks_only_the_latest_offered_file(lifecycle, monkeypatch):
+    async def runner(config, payload, sandbox, provider, emit, authorize):
+        metadata = {"path": "result.txt", "name": "result.txt", "size": 3}
+        await emit("artifact", {**metadata, "sha256": "b" * 64})
+        await emit("artifact", {**metadata, "sha256": "a" * 64})
+        return {"status": "completed", "content": "done", "message": ""}
+
+    monkeypatch.setattr(turn, "run_turn", runner)
+    result = await drive(lifecycle)
+    assert result["status"] == "completed" and result["workspace_saved"] is True
+    assert len(result["artifacts"]) == 1 and result["artifacts"][0]["sha256"] == "a" * 64
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["save_failure", "artifact_changed"])
 async def test_unsaved_or_changed_artifacts_cannot_be_published_as_success(lifecycle, failure):
     lifecycle[2][failure] = True

@@ -366,7 +366,7 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
     offered: list[dict] = []
     async def track_event(kind: str, value: dict):
         if kind == "artifact":
-            offered.append(value)
+            offered[:] = [item for item in offered if item["path"] != value["path"]] + [value]
         await emit(kind, value)
     stage = "sandbox_start"
     try:

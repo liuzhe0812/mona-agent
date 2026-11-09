@@ -187,6 +187,54 @@ async def test_original_office_ui_and_delivery_events_are_bound_and_logicalized(
 
 
 @pytest.mark.asyncio
+async def test_office_export_copies_verified_bytes_to_workspace_before_delivery(editors):
+    _, _, _, office, events, _, _ = editors
+    exported = office.scope.root / "exports" / "result.pptx"
+    exported.parent.mkdir()
+    exported.write_bytes(b"exported pptx")
+    files = {}
+
+    async def file(request):
+        path = request["path"]
+        if request["action"] == "stat":
+            if path not in files:
+                raise WorkError("file_not_found", "missing", 404)
+            return sandbox_image(files[path], path)
+        assert request["action"] == "upload"
+        if path in files:
+            assert request["expected_sha256"] == hashlib.sha256(files[path]).hexdigest()
+        files[path] = base64.b64decode(request["data"], validate=True)
+        reply = sandbox_image(files[path], path)
+        return {key: value for key, value in reply.items() if key != "data"}
+
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN, file=AsyncMock(side_effect=file))
+    await office._publish_export(exported)
+    assert files["exports/result.pptx"] == exported.read_bytes()
+    assert events[0] == ("artifact", {"path": "exports/result.pptx", "name": "result.pptx",
+        "size": len(b"exported pptx"), "sha256": hashlib.sha256(b"exported pptx").hexdigest()})
+    assert events[1][0] == "desktop" and events[1][1]["event"] == "deliver_files"
+    # A subsequent export updates the same workspace path using its observed identity.
+    exported.write_bytes(b"updated pptx")
+    await office._publish_export(exported)
+    assert files["exports/result.pptx"] == b"updated pptx"
+
+
+@pytest.mark.asyncio
+async def test_office_export_never_reports_delivery_if_workspace_copy_is_unconfirmed(editors):
+    _, _, _, office, events, _, _ = editors
+    exported = office.scope.root / "result.pptx"
+    exported.write_bytes(b"exported pptx")
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN, file=AsyncMock(side_effect=[
+        WorkError("file_not_found", "missing", 404),
+        {"path": "result.pptx", "name": "result.pptx", "size": 13, "sha256": "0" * 64},
+    ]))
+    with pytest.raises(OfficeError) as error:
+        await office._publish_export(exported)
+    assert error.value.code == "CHECKPOINT_FAILED"
+    assert not events and exported.read_bytes() == b"exported pptx"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["batch", "query", "get", "validate"])
 async def test_hosted_office_refuses_legacy_cli_actions_before_any_client_call(editors, action, monkeypatch):
     _, _, _, office, _, requests, _ = editors

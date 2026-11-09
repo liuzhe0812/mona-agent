@@ -315,6 +315,36 @@ class _HostedOfficeTool(OfficeTool):
         super().set_context(context)
         self._delivery.set_context(context)
 
+    async def _publish_export(self, path: Path) -> None:
+        if self.sandbox is not None:
+            target = self.scope.host_path(str(path))
+            relative = relative_path(self.scope.logical_path(str(target)))
+            try:
+                data = TenantFiles._read_bytes(target, self.scope.file_limit)
+                digest = hashlib.sha256(data).hexdigest()
+                request = {"action": "upload", "path": relative, "data": base64.b64encode(data).decode("ascii")}
+                try:
+                    existing = await self.sandbox.file({"action": "stat", "path": relative})
+                except WorkError as error:
+                    if error.code != "file_not_found":
+                        raise
+                else:
+                    if not isinstance(existing, dict) or not re.fullmatch(r"[a-f0-9]{64}", str(existing.get("sha256", ""))):
+                        raise ValueError("invalid workspace file identity")
+                    request["expected_sha256"] = existing["sha256"]
+                stored = await self.sandbox.file(request)
+                if (not isinstance(stored, dict) or stored.get("path") != relative
+                        or stored.get("name") != target.name or stored.get("size") != len(data)
+                        or stored.get("sha256") != digest):
+                    raise ValueError("exported workspace file could not be verified")
+            except (OSError, WorkError, ValueError, TypeError, KeyError):
+                raise OfficeError(OfficeErrorCode.CHECKPOINT_FAILED,
+                                  "导出文件已保留在文档区，但写入工作区未确认，请核对后继续。") from None
+            # The normal turn lifecycle saves the sandbox snapshot and checks
+            # this exact file before publishing its durable download identity.
+            await self._delivery_bus.emit("artifact", stored)
+        await super()._publish_export(path)
+
     async def deliver_existing_file(self, path: str) -> str | None:
         """Reuse desktop delivery for an existing document; sandbox files keep their own lifecycle."""
         try:
