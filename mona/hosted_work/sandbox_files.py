@@ -7,6 +7,7 @@ bytes on the host and are only extracted inside a fresh sandbox.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -16,12 +17,16 @@ import stat
 import sys
 import tempfile
 import time
+import types
 import zipfile
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 ROOT = Path("/workspace")
 TRASH = ".mona-trash"
+_DOCUMENT_RUNTIME = Path("/opt/mona/runtime/hosted-documents")
+_DOCUMENT_MODULES = frozenset({"fitz", "pymupdf", "docx", "openpyxl", "pptx", "lxml", "PIL",
+                              "loguru", "defusedxml", "et_xmlfile", "typing_extensions", "xlsxwriter"})
 
 
 class FileOperationError(ValueError):
@@ -220,8 +225,129 @@ def _mutate(request: dict, file_limit: int) -> dict:
         raise FileOperationError("file_operation_failed") from None
 
 
+def _document_bytes(relative: str, limit: int) -> bytes:
+    """Read one regular file beneath the workspace without following links."""
+    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
+        raise FileOperationError("runtime_unavailable")
+    parts = PurePosixPath(relative_path(relative)).parts
+    descriptors: list[int] = []
+    try:
+        directory = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(directory)
+        for part in parts[:-1]:
+            directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            descriptors.append(directory)
+        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+            raise FileOperationError("invalid_file_operation")
+        data = bytearray()
+        while len(data) <= limit:
+            chunk = os.read(descriptor, min(65536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(descriptor)
+        if (len(data) > limit or len(data) != before.st_size
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+            raise FileOperationError("file_changed")
+        return bytes(data)
+    except FileOperationError:
+        raise
+    except FileNotFoundError:
+        raise FileOperationError("file_not_found") from None
+    except (OSError, ValueError):
+        raise FileOperationError("invalid_file_operation") from None
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _read_document(request: dict, limit: int) -> dict:
+    """Run the shared desktop readers on a verified snapshot inside gVisor."""
+    import importlib
+    import importlib.util
+
+    expected_fields = {"action", "path", "pages", "expected_sha256", "_sources"}
+    if set(request) != expected_fields or not isinstance(request["_sources"], dict):
+        raise FileOperationError("invalid_file_operation")
+    relative = relative_path(request["path"])
+    suffix = PurePosixPath(relative).suffix.lower()
+    modules = {".pdf": "fitz", ".docx": "docx", ".xlsx": "openpyxl", ".pptx": "pptx"}
+    if suffix not in modules or request["pages"] is not None and not isinstance(request["pages"], str):
+        raise FileOperationError("invalid_file_operation")
+    if set(request["_sources"]) != {"document", "document_reader"} or any(
+        not isinstance(value, str) or len(value) > 512 * 1024 for value in request["_sources"].values()
+    ):
+        raise FileOperationError("invalid_file_operation")
+    data = _document_bytes(relative, limit)
+    digest = hashlib.sha256(data).hexdigest()
+    expected = request["expected_sha256"]
+    if expected is not None and expected != digest:
+        raise FileOperationError("file_changed")
+    try:
+        runtime = _DOCUMENT_RUNTIME
+        if (sys.version_info[:2] != (3, 11) or not runtime.is_absolute() or not runtime.is_dir()
+                or any(parent.is_symlink() for parent in (runtime, *runtime.parents))
+                or runtime.resolve(strict=True) != runtime):
+            raise ValueError("invalid document runtime")
+    except (OSError, ValueError):
+        raise FileOperationError("runtime_unavailable") from None
+    sys.path.insert(0, str(runtime))
+    logical = Path("/workspace") / relative
+    class _Discard(io.TextIOBase):
+        def write(self, value):
+            return len(value)
+
+    # Some libraries write diagnostics to stdout during import or parsing;
+    # the helper's stdout must remain a single structured reply.
+    with contextlib.redirect_stdout(_Discard()):
+        try:
+            for name in ("loguru", modules[suffix]):
+                spec = importlib.util.find_spec(name)
+                if spec is None or not spec.origin or not Path(spec.origin).resolve(strict=True).is_relative_to(runtime):
+                    raise ImportError("document module is outside the verified runtime")
+                importlib.import_module(name)
+        except (ImportError, OSError):
+            raise FileOperationError("runtime_unavailable") from None
+
+        # Only trusted source from the active release is supplied by the parent.
+        # Namespace modules avoid importing desktop startup or platform credentials.
+        for name in ("mona", "mona.utils"):
+            module = types.ModuleType(name)
+            module.__path__ = []
+            sys.modules[name] = module
+        for name, source in (("mona.utils.document", request["_sources"]["document"]),
+                             ("mona.utils.document_reader", request["_sources"]["document_reader"])):
+            module = types.ModuleType(name)
+            sys.modules[name] = module
+            exec(compile(source, name + ".py", "exec"), module.__dict__)
+        reader = sys.modules["mona.utils.document_reader"]
+        if suffix == ".pdf":
+            content = reader.read_pdf(logical, request["pages"], max_pages=20, max_chars=128_000, data=data)
+        else:
+            content = reader.read_office(logical, max_chars=128_000, data=data)
+        # Never fall back to a similarly named package in the base image. The
+        # document interpreter is short lived, so these module checks are local
+        # to this read and cannot change any other Skill's Python environment.
+        for name, module in tuple(sys.modules.items()):
+            if name.partition(".")[0] not in _DOCUMENT_MODULES:
+                continue
+            origin = getattr(module, "__file__", None)
+            try:
+                if not origin or not Path(origin).resolve(strict=True).is_relative_to(runtime):
+                    raise ValueError("unverified document module")
+            except (OSError, ValueError):
+                raise FileOperationError("runtime_unavailable") from None
+    return {"path": relative, "name": logical.name, "size": len(data), "sha256": digest, "content": content}
+
+
 def operate(request: dict, file_limit: int):
     action = request["action"]
+    if action == "read_document":
+        return _read_document(request, file_limit)
     if action in {"rename", "trash"}:
         return _mutate(request, file_limit)
     if action == "list":

@@ -80,6 +80,21 @@
       ]
     }
   },
+  "hostedDocumentPacks": {
+    "linux-x64-cp311": [
+      "pymupdf-1.26.4-cp39-abi3-manylinux_2_28_x86_64.whl",
+      "lxml-6.1.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "defusedxml-0.7.1-py2.py3-none-any.whl",
+      "loguru-0.7.3-py3-none-any.whl",
+      "python_docx-1.2.0-py3-none-any.whl",
+      "openpyxl-3.1.5-py2.py3-none-any.whl",
+      "python_pptx-1.0.2-py3-none-any.whl",
+      "et_xmlfile-2.0.0-py3-none-any.whl",
+      "typing_extensions-4.15.0-py3-none-any.whl",
+      "xlsxwriter-3.2.5-py3-none-any.whl"
+    ]
+  },
   "wheels": {
     "defusedxml-0.7.1-py2.py3-none-any.whl": {
       "size": 25604,
@@ -150,6 +165,56 @@
       "size": 214947,
       "sha256": "fd8f47dbf2e8adb15c847215f83436de3fdb120b51fdae0fbbdf69fd97a3ad80",
       "urls": ["https://files.pythonhosted.org/packages/46/69/66e5b7d01445e0eeb1d4ab419c30315f2c90cf7a8a8cd4ecc47f894dba54/websockets-17.1-cp313-cp313-macosx_11_0_arm64.whl"]
+    },
+    "pymupdf-1.26.4-cp39-abi3-manylinux_2_28_x86_64.whl": {
+      "size": 24060686,
+      "sha256": "973a6dda61ebd34040e4df3753bf004b669017663fbbfdaa294d44eceba98de0",
+      "urls": ["https://files.pythonhosted.org/packages/4e/c6/d3cfafc75d383603884edeabe4821a549345df954a88d79e6764e2c87601/pymupdf-1.26.4-cp39-abi3-manylinux_2_28_x86_64.whl"]
+    },
+    "lxml-6.1.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl": {
+      "size": 5211283,
+      "sha256": "12ecfea07d767f6accbf30b014e1c477b5eabb13eb4e8c748215efb52c0e314a",
+      "urls": ["https://files.pythonhosted.org/packages/06/42/89a2760cd2f2cda28ef5b9591ec775a6a5183d193e7b62ddb936b1565167/lxml-6.1.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl"]
+    },
+    "pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl": {
+      "size": 6934408,
+      "sha256": "23d27a3e0307ec2244cc51e7287b919aa68d097504ebe19df4e76a98a3eea5bd",
+      "urls": ["https://files.pythonhosted.org/packages/3b/2d/ede717bc1144f63886c21fd349bb95860b0d1a21149ff16f2bb362b612b6/pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"]
+    },
+    "loguru-0.7.3-py3-none-any.whl": {
+      "size": 61595,
+      "sha256": "31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c",
+      "urls": ["https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl"]
+    },
+    "python_docx-1.2.0-py3-none-any.whl": {
+      "size": 252987,
+      "sha256": "3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7",
+      "urls": ["https://files.pythonhosted.org/packages/d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/python_docx-1.2.0-py3-none-any.whl"]
+    },
+    "openpyxl-3.1.5-py2.py3-none-any.whl": {
+      "size": 250910,
+      "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2",
+      "urls": ["https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl"]
+    },
+    "python_pptx-1.0.2-py3-none-any.whl": {
+      "size": 472788,
+      "sha256": "160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba",
+      "urls": ["https://files.pythonhosted.org/packages/d9/4f/00be2196329ebbff56ce564aa94efb0fbc828d00de250b1980de1a34ab49/python_pptx-1.0.2-py3-none-any.whl"]
+    },
+    "et_xmlfile-2.0.0-py3-none-any.whl": {
+      "size": 18059,
+      "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa",
+      "urls": ["https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl"]
+    },
+    "typing_extensions-4.15.0-py3-none-any.whl": {
+      "size": 44614,
+      "sha256": "f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548",
+      "urls": ["https://files.pythonhosted.org/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl"]
+    },
+    "xlsxwriter-3.2.5-py3-none-any.whl": {
+      "size": 172347,
+      "sha256": "4f4824234e1eaf9d95df9a8fe974585ff91d0f5e3d3f12ace5b71e443c1c6abd",
+      "urls": ["https://files.pythonhosted.org/packages/fa/34/a22e6664211f0c8879521328000bdcae9bf6dbafa94a923e531f6d5b3f73/xlsxwriter-3.2.5-py3-none-any.whl"]
     },
     "websockets-17.1-cp313-cp313-macosx_10_13_x86_64.whl": {
       "size": 214690,

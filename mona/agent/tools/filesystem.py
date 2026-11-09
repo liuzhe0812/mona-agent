@@ -21,6 +21,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from mona.utils.document_reader import parse_page_range as _parse_page_range  # noqa: F401
 from mona.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
@@ -127,17 +128,6 @@ def _is_blocked_device(path: str | Path) -> bool:
     if resolved.startswith("/dev/"):
         return True
     return False
-
-
-def _parse_page_range(pages: str, total: int) -> tuple[int, int]:
-    """Parse a page range like '2-5' into 0-based (start, end) inclusive."""
-    parts = pages.strip().split("-")
-    if len(parts) == 1:
-        p = int(parts[0])
-        return max(0, p - 1), min(p - 1, total - 1)
-    start = int(parts[0])
-    end = int(parts[1])
-    return max(0, start - 1), min(end - 1, total - 1)
 
 
 @tool_parameters(
@@ -378,69 +368,14 @@ class ReadFileTool(_FsTool):
             return f"Error reading file: {e}"
 
     def _read_pdf(self, fp: Path, pages: str | None) -> str:
-        try:
-            import fitz  # pymupdf
-        except ImportError:
-            return "Error: PDF reading requires pymupdf. Install with: pip install pymupdf"
+        from mona.utils.document_reader import read_pdf
 
-        try:
-            doc = fitz.open(str(fp))
-        except Exception as e:
-            return f"Error reading PDF: {e}"
-
-        total_pages = len(doc)
-        if pages:
-            try:
-                start, end = _parse_page_range(pages, total_pages)
-            except (ValueError, IndexError):
-                doc.close()
-                return f"Error: Invalid page range '{pages}'. Use format like '1-5'."
-            if start > end or start >= total_pages:
-                doc.close()
-                return f"Error: Page range '{pages}' is out of bounds (document has {total_pages} pages)."
-        else:
-            start = 0
-            end = min(total_pages - 1, self._MAX_PDF_PAGES - 1)
-
-        if end - start + 1 > self._MAX_PDF_PAGES:
-            end = start + self._MAX_PDF_PAGES - 1
-
-        parts: list[str] = []
-        for i in range(start, end + 1):
-            page = doc[i]
-            text = page.get_text().strip()
-            if text:
-                parts.append(f"--- Page {i + 1} ---\n{text}")
-        doc.close()
-
-        if not parts:
-            return f"(PDF has no extractable text: {fp})"
-
-        result = "\n\n".join(parts)
-        if end < total_pages - 1:
-            result += f"\n\n(Showing pages {start + 1}-{end + 1} of {total_pages}. Use pages='{end + 2}-{min(end + 1 + self._MAX_PDF_PAGES, total_pages)}' to continue.)"
-        if len(result) > self._MAX_CHARS:
-            result = result[:self._MAX_CHARS] + "\n\n(PDF text truncated at ~128K chars)"
-        return result
+        return read_pdf(fp, pages, max_pages=self._MAX_PDF_PAGES, max_chars=self._MAX_CHARS)
 
     def _read_office_doc(self, fp: Path) -> str:
-        from mona.utils.document import extract_text
+        from mona.utils.document_reader import read_office
 
-        result = extract_text(fp)
-
-        if result is None:
-            return f"Error: Unsupported file format: {fp.suffix}"
-
-        if result.startswith("[error:"):
-            return f"Error reading {fp.suffix.upper()} file: {result}"
-
-        if not result:
-            return f"({fp.suffix.upper().lstrip('.')} has no extractable text: {fp})"
-
-        if len(result) > self._MAX_CHARS:
-            result = result[:self._MAX_CHARS] + "\n\n(Document text truncated at ~128K chars)"
-
-        return result
+        return read_office(fp, max_chars=self._MAX_CHARS)
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,20 @@ COMMON_REQUIREMENTS = {
     "pyyaml": "6.0.3",
     "websockets": "17.1",
 }
+HOSTED_DOCUMENT_REQUIREMENTS = {
+    "defusedxml": "0.7.1",
+    "et-xmlfile": "2.0.0",
+    "loguru": "0.7.3",
+    "lxml": "6.1.2",
+    "openpyxl": "3.1.5",
+    "pillow": "12.3.0",
+    "pymupdf": "1.26.4",
+    "python-docx": "1.2.0",
+    "python-pptx": "1.0.2",
+    "typing-extensions": "4.15.0",
+    "xlsxwriter": "3.2.5",
+}
+HOSTED_DOCUMENT_VERSION = "1.0.0+linux.x64.cp311"
 _MAX_FILES = 20_000
 _MAX_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -182,6 +196,25 @@ def _wheel_versions(platform: str, architecture: str, files: list[str]) -> dict[
     return versions
 
 
+def _hosted_document_wheel_versions(files: list[str]) -> dict[str, str]:
+    # The current Work image uses CPython 3.11 on Linux x64. The minimum
+    # supported libc for this pack is glibc 2.28; it is not a macOS/Windows pack.
+    platforms = [f"manylinux_2_{version}_x86_64" for version in range(28, 16, -1)]
+    platforms += ["manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"]
+    compatible = set(cpython_tags((3, 11), abis=["cp311"], platforms=platforms))
+    compatible.update(compatible_tags((3, 11), interpreter="cp311", platforms=platforms))
+    versions: dict[str, str] = {}
+    for filename in files:
+        name, version, _build, tags = parse_wheel_filename(filename)
+        normalized = canonicalize_name(name)
+        if normalized in versions or not compatible.intersection(tags):
+            raise ValueError(f"wheel is duplicated or incompatible with hosted Linux CPython 3.11: {filename}")
+        versions[normalized] = str(version)
+    if versions != HOSTED_DOCUMENT_REQUIREMENTS:
+        raise ValueError("hosted document dependencies do not match the required locked set")
+    return versions
+
+
 def _zip_info(name: str, mode: int = 0o644) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
     info.create_system = 3
@@ -190,8 +223,8 @@ def _zip_info(name: str, mode: int = 0o644) -> zipfile.ZipInfo:
     return info
 
 
-def _build_common(path: Path, wheels: dict[str, Path], sources: dict[str, dict[str, Any]]) -> None:
-    manifest = _manifest("python-common", "win32")
+def _build_wheel_pack(path: Path, wheels: dict[str, Path], sources: dict[str, dict[str, Any]],
+                      manifest: RuntimeComponentManifest) -> None:
     requirements = []
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for filename in sorted(wheels):
@@ -202,6 +235,54 @@ def _build_common(path: Path, wheels: dict[str, Path], sources: dict[str, dict[s
         archive.writestr(_zip_info("requirements.lock"), "\n".join(sorted(requirements)) + "\n")
         archive.writestr(_zip_info("runtime-manifest.json"), _json_bytes(manifest.model_dump(mode="json", by_alias=True)))
     _verify_component(path, manifest)
+
+
+def _build_common(path: Path, wheels: dict[str, Path], sources: dict[str, dict[str, Any]]) -> None:
+    _build_wheel_pack(path, wheels, sources, _manifest("python-common", "win32"))
+
+
+async def prepare_hosted_document_pack(*, output: Path, cache: Path, wheelhouse: Path | None = None,
+                                       offline: bool = False, sources_file: Path = SOURCES) -> dict[str, Any]:
+    """Build an immutable standard runtime wheel pack for an offline Work image build."""
+    sources = json.loads(sources_file.read_text(encoding="utf-8"))
+    if sources.get("schemaVersion") != 1:
+        raise ValueError("unsupported bundled runtime sources schema")
+    wheel_names = sources["hostedDocumentPacks"]["linux-x64-cp311"]
+    _hosted_document_wheel_versions(wheel_names)
+    sources_by_wheel = {name: {"filename": name, **sources["wheels"][name]} for name in wheel_names}
+    downloader = VerifiedDownloader()
+    cache = cache.resolve()
+    local = wheelhouse.resolve() if wheelhouse else None
+    inputs = await asyncio.gather(*(
+        _obtain(source, cache, local / name if local else None, downloader, offline=offline)
+        for name, source in sources_by_wheel.items()
+    ))
+    manifest = RuntimeComponentManifest(
+        id="python-hosted-documents", version=HOSTED_DOCUMENT_VERSION, kind="python-pack",
+        pythonEnvironment="hosted-work", pythonRequirements="requirements.lock", pythonWheelhouse="wheels",
+        healthImports=["fitz", "docx", "openpyxl", "pptx"],
+    )
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / f"python-hosted-documents-{HOSTED_DOCUMENT_VERSION}.zip"
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError("refusing to replace an existing hosted runtime pack")
+    with tempfile.TemporaryDirectory(prefix="mona-hosted-wheel-pack-") as temporary:
+        archive = Path(temporary) / destination.name
+        _build_wheel_pack(archive, dict(zip(wheel_names, inputs, strict=True)), sources_by_wheel, manifest)
+        record = {"archive": destination.name, "size": archive.stat().st_size, "sha256": _sha256(archive),
+                  "platform": "linux", "architecture": "x64", "pythonVersion": "3.11", "glibcMinimum": "2.28",
+                  "manifest": manifest.model_dump(mode="json", by_alias=True)}
+        # Stage in the same output directory before atomic publication.
+        with tempfile.NamedTemporaryFile(dir=output, prefix=".hosted-pack-", delete=False) as staged:
+            stage = Path(staged.name)
+        try:
+            shutil.copyfile(archive, stage)
+            # Do not replace a concurrently created artifact.
+            os.link(stage, destination)
+        finally:
+            stage.unlink(missing_ok=True)
+    return record
 
 
 def _link_target(path: PurePosixPath, member: tarfile.TarInfo, root: str) -> PurePosixPath:
@@ -419,19 +500,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     machine = host_platform.machine().lower()
     default_arch = "arm64" if machine in {"arm64", "aarch64"} else "x64"
-    parser.add_argument("--platform", choices=["win32", "darwin"], default=sys.platform)
+    parser.add_argument("--platform", choices=["win32", "darwin", "linux"], default=sys.platform)
     parser.add_argument("--architecture", choices=["x64", "arm64"], default=default_arch)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--components-dir", type=Path)
     parser.add_argument("--wheelhouse", type=Path)
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--hosted-document-pack", action="store_true",
+                        help="build the locked Linux CPython 3.11 Work wheel pack only")
     args = parser.parse_args()
-    result = asyncio.run(prepare(
-        platform=args.platform, architecture=args.architecture, output=args.output,
-        cache=args.cache, components_dir=args.components_dir, wheelhouse=args.wheelhouse,
-        offline=args.offline,
-    ))
+    if args.hosted_document_pack:
+        if args.output == DEFAULT_OUTPUT:
+            parser.error("--hosted-document-pack requires an explicit --output directory")
+        if args.architecture != "x64":
+            parser.error("--hosted-document-pack currently supports Linux x64 only")
+        result = asyncio.run(prepare_hosted_document_pack(
+            output=args.output, cache=args.cache, wheelhouse=args.wheelhouse, offline=args.offline,
+        ))
+    else:
+        result = asyncio.run(prepare(
+            platform=args.platform, architecture=args.architecture, output=args.output,
+            cache=args.cache, components_dir=args.components_dir, wheelhouse=args.wheelhouse,
+            offline=args.offline,
+        ))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

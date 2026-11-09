@@ -23,6 +23,14 @@ v8 的 Qwen 共享工作台发布验收已完成：真实生产验收 `output/ho
 本目录仅提供人工审核的部署材料，不会被桌面端自动使用、安装或启动。
 完整边界、验证命令和上线准入见 `docs/architecture/hosted-work.md`。
 
+### PDF 和 Office 的隔离读取运行时
+
+工作台的 `read_file` 在用户自己的 gVisor 容器内复用桌面的 PDF、DOCX、XLSX 和 PPTX 读取代码。旧镜像没有相应依赖时返回 `runtime_unavailable`，不在宿主解析文件或自动下载依赖。
+
+在受信构建环境运行统一打包器的 `--hosted-document-pack`，显式提供构建输出和缓存目录。它按 `runtime-library/bundled-sources.json` 固定版本、大小及 SHA-256 下载并校验 wheel，产生 `python-hosted-documents` 标准运行时组件归档；目标仅为 Linux x64、CPython 3.11 和 glibc 2.28 以上。使用已有 `RuntimeComponentStore.install_archive()` 把已核验归档导入统一运行时仓库；以组件目录中的 `requirements.lock` 和 `wheels/` 为 `Dockerfile.verified-python-pack` 的构建上下文，传入现有固定摘要的 `BASE_IMAGE` 和锁文件 SHA-256（`WORK_RUNTIME_LOCK_SHA256`），以 `docker build --network=none --pull=false` 离线构建新镜像。pip 使用 `--no-index --require-hashes`，镜像构建时核验四个解析库。
+
+解析库安装到镜像只读系统层的独立目录，文档读取子进程以 `python -I -S` 显式加载该目录；不覆盖基础镜像的全局 Python 包，也不改变其他 Skill 的运行环境。依赖不需要在每个用户容器的 `/tmp` 或工作区解压；当前锁定 wheel 解包约 94 MB，用户的 `/tmp` 仍为 64 MiB，工作区及单文件仍受各自配置限制。用户文件在容器内读取为有界内存快照，不挂载宿主或凭据。上线前必须用新镜像的实际摘要运行四种格式读取、跨账号路径隔离和执行中停止验收；只有全部通过后才切换 `hosted_work.sandbox_image`。本仓库构建和本机测试不代表该镜像已生产部署。
+
 2026-11-01 最新需求：Qwen 免费且不限制个人账号；Codex 使用平台专用账号，按官方 Token 单价扣网站与客户端共用余额。当前发布包仍只接入认证，计费尚未实现；不得先将 Codex 加入公开模型表冒充收费完成。Ubuntu 连接与登录步骤见 `docs/guides/hosted-work-two-providers.md`，专用目录初始化及登录辅助入口为 `codex-login.sh`。
 
 - `config.example.json` 默认关闭、没有开放模型，也不包含凭据或假定可用的镜像。

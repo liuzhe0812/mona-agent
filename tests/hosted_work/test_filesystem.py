@@ -24,10 +24,12 @@ class SandboxFiles:
         self.files = files
         self.calls = []
 
-    async def file(self, action, *, path):
+    async def file(self, action, *, path, **_kwargs):
         self.calls.append((action, path))
         if path not in self.files:
             raise WorkError("file_not_found", "文件不存在。", 404)
+        if action == "read_document":
+            raise WorkError("runtime_unavailable", "文档读取运行环境尚未配置。", 503)
         data = self.files[path]
         result = {"path": path, "name": PurePosixPath(path).name, "size": len(data),
                   "sha256": hashlib.sha256(data).hexdigest()}
@@ -165,8 +167,8 @@ async def test_documents_fail_closed_without_host_parser(monkeypatch):
     monkeypatch.setattr(ReadFileTool, "_read_office_doc", lambda *_: pytest.fail("host Office parser ran"))
     for path in ("report.pdf", "slides.pptx"):
         result = await tool.execute(path=path)
-        assert "runtime_unavailable" in result and "not been configured or verified" in result
-    assert sandbox.calls == [("stat", "report.pdf"), ("stat", "slides.pptx")]
+        assert "runtime_unavailable" in result
+    assert sandbox.calls == [("read_document", "report.pdf"), ("read_document", "slides.pptx")]
     with pytest.raises(WorkError) as error:
         await tool.execute(path="absent.docx")
     assert error.value.code == "file_not_found"

@@ -128,6 +128,45 @@ def test_wheels_must_match_platform_and_exact_common_dependencies() -> None:
         prepare._wheel_versions("win32", "x64", windows[:-1])
 
 
+def test_hosted_linux_document_pack_is_verified_deterministic_and_platform_scoped(tmp_path: Path) -> None:
+    source = json.loads(prepare.SOURCES.read_text(encoding="utf-8"))
+    names = source["hostedDocumentPacks"]["linux-x64-cp311"]
+    assert prepare._hosted_document_wheel_versions(names) == prepare.HOSTED_DOCUMENT_REQUIREMENTS
+    with pytest.raises(ValueError, match="incompatible"):
+        prepare._hosted_document_wheel_versions([*names[:-1], "pymupdf-1.26.4-cp39-abi3-win_amd64.whl"])
+
+    wheelhouse = tmp_path / "wheels"
+    wheelhouse.mkdir()
+    entries = {}
+    for name in names:
+        path = wheelhouse / name
+        path.write_bytes(name.encode())
+        entries[name] = {key: value for key, value in _source(path).items() if key != "filename"}
+    spec = tmp_path / "sources.json"
+    spec.write_text(json.dumps({"schemaVersion": 1, "hostedDocumentPacks": {"linux-x64-cp311": names},
+                                "wheels": entries}), encoding="utf-8")
+    outputs = [tmp_path / "first", tmp_path / "second"]
+    records = [asyncio.run(prepare.prepare_hosted_document_pack(
+        output=output, cache=tmp_path / "cache", wheelhouse=wheelhouse, offline=True, sources_file=spec,
+    )) for output in outputs]
+    assert records[0] == records[1]
+    assert records[0]["pythonVersion"] == "3.11" and records[0]["glibcMinimum"] == "2.28"
+    package = outputs[0] / records[0]["archive"]
+    assert hashlib.sha256(package.read_bytes()).hexdigest() == records[0]["sha256"]
+    store = RuntimeComponentStore(tmp_path / "runtime-store")
+    manifest = store.install_archive(package)
+    assert manifest.id == "python-hosted-documents" and manifest.python_environment == "hosted-work"
+    with zipfile.ZipFile(package) as archive:
+        lock = archive.read("requirements.lock").decode()
+        assert "pymupdf==1.26.4 --hash=sha256:" in lock
+        assert "python-docx==1.2.0 --hash=sha256:" in lock
+        assert len([name for name in archive.namelist() if name.startswith("wheels/")]) == len(names)
+    with pytest.raises(FileExistsError):
+        asyncio.run(prepare.prepare_hosted_document_pack(
+            output=outputs[0], cache=tmp_path / "cache", wheelhouse=wheelhouse, offline=True, sources_file=spec,
+        ))
+
+
 def _tar_file(archive: tarfile.TarFile, name: str, content: bytes, mode: int = 0o644) -> None:
     info = tarfile.TarInfo(name)
     info.size = len(content)

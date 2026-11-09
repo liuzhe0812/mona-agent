@@ -1,0 +1,17 @@
+# Build from the existing reviewed Work image and a verified runtime component.
+# Build context is the installed python-hosted-documents component directory.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER 0
+ARG WORK_RUNTIME_LOCK_SHA256
+COPY requirements.lock /tmp/mona-runtime/requirements.lock
+COPY wheels/ /tmp/mona-runtime/wheels/
+RUN test -n "$WORK_RUNTIME_LOCK_SHA256" \
+    && python3 -I -c 'import hashlib,platform,sys; libc,version=platform.libc_ver(); assert sys.version_info[:2] == (3,11); assert platform.machine() in ("x86_64","amd64"); assert libc == "glibc" and tuple(map(int,version.split("."))) >= (2,28); assert hashlib.sha256(open("/tmp/mona-runtime/requirements.lock","rb").read()).hexdigest() == sys.argv[1]' "$WORK_RUNTIME_LOCK_SHA256" \
+    && test ! -L /opt && test ! -L /opt/mona && test ! -L /opt/mona/runtime \
+    && test ! -e /opt/mona/runtime/hosted-documents && test ! -L /opt/mona/runtime/hosted-documents \
+    && python3 -I -m pip --isolated install --no-index --no-cache-dir --ignore-installed --only-binary=:all: --require-hashes --target /opt/mona/runtime/hosted-documents --find-links /tmp/mona-runtime/wheels -r /tmp/mona-runtime/requirements.lock \
+    && chmod -R a-w /opt/mona/runtime/hosted-documents \
+    && python3 -I -c 'import importlib,pathlib,sys; root=pathlib.Path("/opt/mona/runtime/hosted-documents").resolve(strict=True); sys.path.insert(0,str(root)); names=("fitz","docx","openpyxl","pptx","loguru","defusedxml"); assert all(pathlib.Path(importlib.import_module(name).__file__).resolve(strict=True).is_relative_to(root) for name in names)' \
+    && rm -rf /tmp/mona-runtime
+USER 1000:1000

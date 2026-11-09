@@ -8,8 +8,6 @@ from typing import Any
 
 from loguru import logger
 
-from mona.utils.helpers import detect_image_mime
-
 # 提取器输出版本：frontmatter 中记录，版本不一致时 reconciliation 重新提取
 EXTRACTOR_VERSION = 4
 
@@ -276,6 +274,7 @@ def extract_documents(
     """
     image_paths: list[str] = []
     doc_texts: list[str] = []
+    from mona.utils.helpers import detect_image_mime
     from mona.utils.pdf_visual import MAX_VISUAL_PAGES, render_pdf_previews
 
     preview_budget = MAX_VISUAL_PAGES

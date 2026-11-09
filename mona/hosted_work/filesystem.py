@@ -134,14 +134,20 @@ class HostedReadFileTool(ReadFileTool):
             logical = "/workspace/" + relative
             suffix = PurePosixPath(relative).suffix.lower()
             if suffix in _DOCUMENTS:
-                # Validate ownership/existence in the sandbox, but never import or
-                # execute an untrusted document parser in the privileged host.
-                result = await self._file_operation("stat", path=relative)
+                try:
+                    result = await self._file_operation("read_document", path=relative, pages=pages,
+                                                        expected_sha256=expected_sha256)
+                except WorkError as exc:
+                    if exc.code == "runtime_unavailable":
+                        return "Error: runtime_unavailable: PDF and Office parsing is unavailable in the isolated runtime."
+                    if exc.code == "file_changed":
+                        return "Error: file changed; expected_sha256 does not match current file. Restart the read."
+                    raise
                 _, digest = self._metadata(result, relative)
-                if expected_sha256 is not None and expected_sha256 != digest:
-                    return f"Error: file changed; expected_sha256 does not match current SHA256 {digest}. Restart the read."
-                return ("Error: runtime_unavailable: PDF and Office parsing has not been configured "
-                        "or verified in the isolated runtime.")
+                content = result.get("content")
+                if not isinstance(content, str):
+                    raise WorkError("invalid_file_reply", "工作区文件结果未通过校验。", 503)
+                return content if content.startswith("Error") else content + f"\n[SHA256={digest}]"
 
             result = await self._file_operation("download", path=relative)
             size, digest = self._metadata(result, relative)

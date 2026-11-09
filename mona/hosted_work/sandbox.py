@@ -153,16 +153,31 @@ class DockerSandbox:
                 raise SandboxError("invalid_snapshot", "已保存的工作区无法安全恢复，原数据保留。")
             await self._helper("restore", self.config.workspace_bytes, self.snapshot.read_bytes())
 
-    async def _helper(self, mode: str, maximum: int, data: bytes | None = None, limit: int = 65536):
+    async def _helper(self, mode: str, maximum: int, data: bytes | None = None, limit: int = 65536,
+                      *, no_site: bool = False):
         if not self.started:
             raise SandboxError()
-        _, output = await self._invoke(["exec", "-i", self.name, "python3", "-I", "-c", self._source, mode, str(maximum)],
+        arguments = ["exec", "-i", self.name, "python3", "-I"]
+        if no_site:
+            arguments.append("-S")
+        arguments.extend(["-c", self._source, mode, str(maximum)])
+        _, output = await self._invoke(arguments,
                                        data=data, limit=limit, timeout=self.config.tool_timeout_seconds)
         return output
 
     async def file(self, request: dict) -> dict:
+        if request.get("action") == "read_document":
+            utils = Path(__file__).resolve().parents[1] / "utils"
+            request = {**request, "_sources": {
+                "document": (utils / "document.py").read_text(encoding="utf-8"),
+                "document_reader": (utils / "document_reader.py").read_text(encoding="utf-8"),
+            }}
         data = json.dumps(request, ensure_ascii=False, allow_nan=False).encode()
-        raw = await self._helper("file", self.config.max_file_bytes, data, limit=2 * self.config.max_file_bytes + 65536)
+        limit = 2 * self.config.max_file_bytes + 65536
+        if request.get("action") == "read_document":
+            limit = max(limit, 1024 * 1024)
+        raw = await self._helper("file", self.config.max_file_bytes, data, limit=limit,
+                                 no_site=request.get("action") == "read_document")
         result = json.loads(raw)
         if not isinstance(result, dict):
             raise SandboxError("invalid_file_reply", "工作区文件操作未返回有效结果。")
@@ -174,6 +189,7 @@ class DockerSandbox:
                 "file_changed": (409, "文件已发生变化，请重新读取后再操作。"),
                 "file_operation_failed": (503, "文件操作未能完成，请核对后重试原请求。"),
                 "file_operation_unknown": (503, "文件操作结果待核对，请检查当前文件，不会自动重复执行。"),
+                "runtime_unavailable": (503, "文档读取运行环境尚未配置。"),
             }
             code = result["error"]
             if set(result) != {"error"} or not isinstance(code, str) or code not in errors:
