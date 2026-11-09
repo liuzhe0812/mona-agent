@@ -99,3 +99,89 @@ async def test_missing_editor_reports_uncertain_apply_and_active_history_is_kept
     assert deleted.status == 200
     missing = await client.get(BASE + f"/api/sessions/websocket:{SID}/webui-thread", headers=HEADERS)
     assert missing.status == 404
+
+
+async def test_delete_waits_for_own_completed_run_cleanup(integrated):
+    client, service, _saved = integrated
+    service.store.finish(OWNER, RID, "completed", {"workspace_saved": True})
+    # An unrelated account may have the same session and run IDs.
+    service.store.create_session(OTHER, NewSession(request_id=SID))
+    service.store.create_run(OTHER, SID, NewTurn(request_id=RID, model_id="local", text="other account"))
+    own_done, other_done = asyncio.Event(), asyncio.Event()
+    own_task = asyncio.create_task(own_done.wait())
+    other_task = asyncio.create_task(other_done.wait())
+    service.tasks.update({(OWNER, RID): own_task, (OTHER, RID): other_task})
+    request = asyncio.create_task(client.get(BASE + f"/api/sessions/websocket:{SID}/delete", headers=HEADERS))
+    try:
+        # The request must wait for the exact completed run's cleanup.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(request), 0.05)
+        assert not own_task.done() and not other_task.done()
+        own_done.set()
+        response = await asyncio.wait_for(request, 1)
+        assert response.status == 200
+        assert (await client.get(BASE + f"/api/sessions/websocket:{SID}/webui-thread", headers=HEADERS)).status == 404
+        assert service.store.run(OTHER, RID)["status"] == "running" and not other_task.done()
+    finally:
+        own_done.set()
+        other_done.set()
+        request.cancel()
+        await asyncio.gather(request, own_task, other_task, return_exceptions=True)
+        service.tasks.pop((OWNER, RID), None)
+        service.tasks.pop((OTHER, RID), None)
+
+
+@pytest.mark.parametrize("status", ["running", "cancelling", "unknown"])
+async def test_delete_rejects_active_or_unknown_run_without_waiting(integrated, status):
+    client, service, _saved = integrated
+    if status == "cancelling":
+        service.store.cancelling(OWNER, RID)
+    elif status == "unknown":
+        service.store.finish(OWNER, RID, "unknown", {"workspace_saved": False})
+    cleanup = asyncio.create_task(asyncio.Event().wait())
+    service.tasks[(OWNER, RID)] = cleanup
+    try:
+        response = await asyncio.wait_for(
+            client.get(BASE + f"/api/sessions/websocket:{SID}/delete", headers=HEADERS), 0.5,
+        )
+        assert response.status == 409 and (await response.json())["code"] == "user_busy"
+        assert not cleanup.done() and service.desktop.state.session(OWNER, SID)
+    finally:
+        cleanup.cancel()
+        await asyncio.gather(cleanup, return_exceptions=True)
+        service.tasks.pop((OWNER, RID), None)
+
+
+async def test_delete_cleanup_timeout_does_not_cancel_task(integrated, monkeypatch):
+    client, service, _saved = integrated
+    service.store.finish(OWNER, RID, "completed", {"workspace_saved": True})
+    monkeypatch.setattr("mona.hosted_work.desktop_api._DELETE_CLEANUP_WAIT_SECONDS", 0.02)
+    cleanup = asyncio.create_task(asyncio.Event().wait())
+    service.tasks[(OWNER, RID)] = cleanup
+    try:
+        response = await client.get(BASE + f"/api/sessions/websocket:{SID}/delete", headers=HEADERS)
+        assert response.status == 409 and (await response.json())["code"] == "user_busy"
+        assert not cleanup.done() and service.desktop.state.session(OWNER, SID)
+    finally:
+        cleanup.cancel()
+        await asyncio.gather(cleanup, return_exceptions=True)
+        service.tasks.pop((OWNER, RID), None)
+
+
+async def test_delete_after_cleanup_still_blocks_unconfirmed_billing(integrated):
+    client, service, _saved = integrated
+    service.store.billing_begin(OWNER, RID, "3" * 32)
+    service.store.billing_update(OWNER, RID, "uncertain")
+    service.store.finish(OWNER, RID, "completed", {"workspace_saved": True})
+    cleanup = asyncio.create_task(asyncio.sleep(0))
+    service.tasks[(OWNER, RID)] = cleanup
+    try:
+        response = await client.get(BASE + f"/api/sessions/websocket:{SID}/delete", headers=HEADERS)
+        assert response.status == 409 and (await response.json())["code"] == "billing_pending"
+        assert service.desktop.state.session(OWNER, SID)
+        assert service.store.db.execute("SELECT stage FROM billing_journal WHERE owner=? AND run_id=?",
+                                        (OWNER, RID)).fetchone()[0] == "uncertain"
+    finally:
+        cleanup.cancel()
+        await asyncio.gather(cleanup, return_exceptions=True)
+        service.tasks.pop((OWNER, RID), None)

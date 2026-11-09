@@ -1,6 +1,7 @@
 """Authenticated HTTP adapters for the unchanged desktop conversation components."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -33,6 +34,7 @@ _GENERATED_IMAGE = re.compile(r"^/workspace/\.generated-previews/([a-f0-9]{32})/
                               r"([a-f0-9]{32})/([a-f0-9]{64})\.(?:png|jpg|webp)$")
 _LEGACY_GENERATED_IMAGE = re.compile(r"^/workspace/\.generated-previews/[a-f0-9]{32}/[a-f0-9]{64}\.(?:png|jpg|webp)$")
 _SESSION = re.compile(r"^/api/sessions/([^/]+)/(webui-thread|delete|clear-workspace|set-workspace)$")
+_DELETE_CLEANUP_WAIT_SECONDS = 2.0
 
 
 def _mime(name: str) -> str:
@@ -550,6 +552,20 @@ class DesktopAPI:
                     augment_user_media=lambda paths: self.history_media(owner, request["account_token"], sid, paths))
                 return web.json_response(self._visible_image_history(owner, sid, history))
             if action == "delete" and method == "GET":
+                rows = self.service.store.db.execute(
+                    "SELECT id,status FROM runs WHERE owner=? AND session_id=?", (owner, sid),
+                ).fetchall()
+                # turn_end may arrive just before the owning task completes its
+                # final notifications. Only wait for this session's terminal
+                # tasks; running or unknown work retains the normal rejection.
+                if all(row["status"] not in {"running", "cancelling", "unknown"} for row in rows):
+                    tasks = getattr(self.service, "tasks", {})
+                    pending = [task for row in rows if (task := tasks.get((owner, row["id"]))) is not None
+                               and asyncio.isfuture(task) and not task.done()]
+                    if pending:
+                        # asyncio.wait does not cancel pending tasks on timeout
+                        # or if the HTTP request is cancelled.
+                        await asyncio.wait(pending, timeout=_DELETE_CLEANUP_WAIT_SECONDS)
                 self.state.delete(owner, sid)
                 return web.json_response({"deleted": True})
             if action == "clear-workspace" and method == "POST":
