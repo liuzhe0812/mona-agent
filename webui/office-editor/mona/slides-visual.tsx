@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
+import Konva from 'konva'
 
 import type { DocumentVersion } from './bridge'
 import { VisualVersionConflict } from './visual'
@@ -106,6 +107,21 @@ function captureRegion(slide: RenderSlide, options?: SlideCaptureOptions): Pixel
 }
 
 const METAFILE_RE = /^data:(image\/x-(?:emf|wmf)|image\/(?:emf|wmf));base64,/
+const CAPTURE_TIMEOUT_MS = 25_000
+
+async function withinDeadline<T>(promise: PromiseLike<T>, deadline: number, message: string): Promise<T> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) throw new Error(message)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), remaining) }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 async function normalizedImageUrl(url: string): Promise<string> {
   const match = METAFILE_RE.exec(url)
@@ -119,28 +135,59 @@ async function normalizedImageUrl(url: string): Promise<string> {
   return converted
 }
 
-async function loadImage(url: string): Promise<HTMLImageElement> {
-  const source = await normalizedImageUrl(url)
+async function loadImage(url: string, deadline = Date.now() + CAPTURE_TIMEOUT_MS): Promise<HTMLImageElement> {
+  const source = await withinDeadline(normalizedImageUrl(url), deadline, '幻灯片图片准备超时。')
   return new Promise((resolve, reject) => {
     const image = new Image()
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      reject(new Error('幻灯片图片加载超时。'))
+      return
+    }
+    const timer = setTimeout(() => {
+      image.onload = null
+      image.onerror = null
+      image.src = ''
+      reject(new Error('幻灯片图片加载超时。'))
+    }, remaining)
     image.decoding = 'async'
-    image.onload = () => resolve(image)
-    image.onerror = () => reject(new Error(`幻灯片图片加载失败：${url.slice(0, 80)}`))
+    image.onload = () => { clearTimeout(timer); resolve(image) }
+    image.onerror = () => { clearTimeout(timer); reject(new Error(`幻灯片图片加载失败：${url.slice(0, 80)}`)) }
     image.src = source
   })
 }
 
-async function preloadImages(slide: RenderSlide): Promise<Map<string, HTMLImageElement>> {
+async function preloadImages(slide: RenderSlide, deadline: number): Promise<Map<string, HTMLImageElement>> {
   const entries = await Promise.all(
-    [...imageUrls(slide)].map(async (url) => [url, await loadImage(url)] as const),
+    [...imageUrls(slide)].map(async (url) => [url, await loadImage(url, deadline)] as const),
   )
   return new Map(entries)
 }
 
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
-    else setTimeout(resolve, 0)
+function waitForStage(host: HTMLElement, deadline: number): Promise<Konva.Stage> {
+  return new Promise((resolve, reject) => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      reject(new Error('幻灯片画布准备超时。'))
+      return
+    }
+    const observer = new MutationObserver(check)
+    const timer = setTimeout(() => {
+      observer.disconnect()
+      reject(new Error('幻灯片画布准备超时。'))
+    }, remaining)
+    function check() {
+      // Wait for the actual SlideCanvas to finish mounting, rather than a
+      // browser animation frame that may never run in a background tab.
+      const stage = Konva.stages.find((item) => host.contains(item.container())
+        && item.getLayers().length > 0 && item.find('.slide-bg').length >= 2)
+      if (!stage) return
+      observer.disconnect()
+      clearTimeout(timer)
+      resolve(stage)
+    }
+    observer.observe(host, { childList: true, subtree: true })
+    check()
   })
 }
 
@@ -187,13 +234,16 @@ export async function captureSlide(
   getVersion: () => DocumentVersion | null,
   options?: SlideCaptureOptions,
 ): Promise<CapturedSlide> {
-  const { CANVAS_BLEED, SlideCanvas } = await import('../vendor/genoffice/apps/slides/src/renderer/SlideCanvas')
+  const deadline = Date.now() + CAPTURE_TIMEOUT_MS
+  const { CANVAS_BLEED, SlideCanvas } = await withinDeadline(
+    import('../vendor/genoffice/apps/slides/src/renderer/SlideCanvas'), deadline, '幻灯片渲染组件加载超时。',
+  )
   const before = getVersion()
   if (!before || !sameDocumentVersion(version, before)) {
     throw new VisualVersionConflict('文档已变化，请重新读取后检查画面。')
   }
   const region = captureRegion(slide, options)
-  const images = await preloadImages(slide)
+  const images = await preloadImages(slide, deadline)
   const host = document.createElement('div')
   const hostWidth = slide.widthPx + CANVAS_BLEED * 2
   const hostHeight = slide.heightPx + CANVAS_BLEED * 2
@@ -240,9 +290,12 @@ export async function captureSlide(
         height: hostHeight,
       },
     }, canvas))
-    await nextFrame()
-    await nextFrame()
-    await document.fonts.ready
+    const stage = await waitForStage(host, deadline)
+    await withinDeadline(document.fonts.ready, deadline, '幻灯片字体加载超时。')
+    // Konva's normal batchDraw also depends on requestAnimationFrame. Draw the
+    // mounted stage now so a paused background frame cannot produce a blank
+    // screenshot or prevent visual inspection from completing.
+    stage.draw()
     const captured = captureCanvases(host, slide, CANVAS_BLEED, region)
     const after = getVersion()
     if (!after || !sameDocumentVersion(version, after)) {
