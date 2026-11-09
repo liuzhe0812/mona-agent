@@ -1,8 +1,11 @@
 """Editor DI and account/transport contracts; no real renderer or model is simulated as production."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -243,3 +246,115 @@ def test_builder_rejects_invalid_owner_before_creating_workspaces(tmp_path):
     with pytest.raises(WorkError):
         editor_tools.build_editor_tools(config, {"owner": "../foreign"}, AsyncMock())
     assert list(tmp_path.iterdir()) == []
+
+
+def sandbox_image(data: bytes, path="generated/picture.png"):
+    return {"path": path, "name": Path(path).name, "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(), "data": base64.b64encode(data).decode()}
+
+
+@pytest.mark.asyncio
+async def test_office_converts_sandbox_images_in_shared_slide_operations(editors):
+    _, _, _, office, _, _, _ = editors
+    raw = b"image fixture"
+    (office.scope.root / "generated").mkdir()
+    (office.scope.root / "generated" / "picture.png").write_bytes(b"different document image")
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN, file=AsyncMock(return_value=sandbox_image(raw)))
+    result = Mock()
+    result.model_dump.return_value = {"ok": True}
+    office._service_client.apply = AsyncMock(return_value=result)
+    path = "/workspace/generated/picture.png"
+    operations = [
+        {"op": "slide_add_image", "payload": {"slideId": "s1", "assetPath": path}},
+        {"op": "slide_compose", "payload": {"slideId": "s1", "items": [
+            {"type": "image", "assetPath": path}, {"type": "text", "assetPath": "keep.txt"}]}},
+        {"op": "slide_add", "payload": {"slideId": "s1", "content": {"items": [
+            {"type": "image", "assetPath": path}]}}},
+        {"op": "slide_add_preset", "payload": {"slideId": "s1", "content": {"image": {"assetPath": path}}}},
+        {"op": "slide_add_design", "payload": {"slideId": "s1", "content": {"images": [{"assetPath": path}]}}},
+    ]
+    before = json.loads(json.dumps(operations))
+
+    response = json.loads(await office.execute("apply", session_id="office_one",
+        expected_version={"editorEpoch": "epoch", "modelRevision": 0}, operations=operations))
+
+    assert response["ok"] and operations == before
+    command = office._service_client.apply.await_args.args[0]
+    payloads = [item.payload for item in command.operations]
+    expected = "data:image/png;base64," + base64.b64encode(raw).decode()
+    images = [payloads[0], payloads[1]["items"][0], payloads[2]["content"]["items"][0],
+              payloads[3]["content"]["image"], payloads[4]["content"]["images"][0]]
+    assert all(item.get("dataUrl") == expected and "assetPath" not in item for item in images)
+    # A non-image field must keep the shared tool's existing behavior.
+    assert payloads[1]["items"][1]["assetPath"] == str(office.scope.root / "keep.txt")
+    assert all(call.args[0] == {"action": "download", "path": "generated/picture.png"}
+               for call in office.sandbox.file.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_office_rejects_unverified_or_outside_sandbox_images_before_apply(editors):
+    _, _, _, office, _, _, _ = editors
+    image = sandbox_image(b"image fixture")
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN, file=AsyncMock(return_value={**image, "sha256": "0" * 64}))
+    office._service_client.apply = AsyncMock()
+    version = {"editorEpoch": "epoch", "modelRevision": 0}
+    operation = {"op": "slide_add_image", "payload": {"slideId": "s1", "assetPath": "/workspace/generated/picture.png"}}
+    response = json.loads(await office.execute("apply", session_id="office_one", expected_version=version, operations=[operation]))
+    assert response["error"]["code"] == "INVALID_OPERATION"
+    office._service_client.apply.assert_not_awaited()
+
+    office.sandbox.file.reset_mock()
+    operation["payload"]["assetPath"] = "/workspace/../../other/picture.png"
+    response = json.loads(await office.execute("apply", session_id="office_one", expected_version=version, operations=[operation]))
+    assert response["error"]["code"] == "INVALID_OPERATION"
+    office.sandbox.file.assert_not_awaited()
+    office._service_client.apply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_office_retains_account_document_image_fallback(editors):
+    _, _, _, office, _, _, _ = editors
+    path = office.scope.root / "picture.png"
+    path.write_bytes(b"document image")
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN,
+        file=AsyncMock(side_effect=WorkError("file_not_found", "missing", 404)))
+    result = Mock()
+    result.model_dump.return_value = {"ok": True}
+    office._service_client.apply = AsyncMock(return_value=result)
+    response = json.loads(await office.execute("apply", session_id="office_one",
+        expected_version={"editorEpoch": "epoch", "modelRevision": 0},
+        operations=[{"op": "slide_add_image", "payload": {"slideId": "s1", "assetPath": "/workspace/picture.png"}}]))
+    assert response["ok"]
+    payload = office._service_client.apply.await_args.args[0].operations[0].payload
+    assert payload["dataUrl"] == "data:image/png;base64," + base64.b64encode(b"document image").decode()
+
+    office.sandbox.file.reset_mock()
+    key, explicit = await office._asset(str(path))
+    assert key == "assetPath" and explicit == str(path)
+    office.sandbox.file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_office_preset_preview_reads_image_from_same_sandbox(editors):
+    _, _, _, office, _, _, _ = editors
+    raw = b"preview image"
+    office.sandbox = SimpleNamespace(owner=OWNER, run_id=RUN, file=AsyncMock(return_value=sandbox_image(raw)))
+    result = Mock(ok=False)
+    result.model_dump.return_value = {"ok": False, "error": {"code": "EDITOR_UNAVAILABLE"}}
+    office._service_client.inspect = AsyncMock(return_value=result)
+    query = {"mode": "visual", "presetId": "dark-product-hero",
+             "presetContent": {"image": {"assetPath": "/workspace/generated/picture.png"}}}
+    await office.execute("inspect", session_id="office_one", query=query)
+    request = office._service_client.inspect.await_args.args[0]
+    assert request.query.preset_content["image"]["dataUrl"] == "data:image/png;base64," + base64.b64encode(raw).decode()
+    assert query["presetContent"]["image"]["assetPath"] == "/workspace/generated/picture.png"
+
+
+def test_builder_rejects_sandbox_from_another_owner_or_run(tmp_path):
+    config = HostedWorkConfig(state_dir=str(tmp_path / "state"))
+    payload = {"owner": OWNER, "session_id": SESSION, "run_id": RUN, "account_token": TOKEN}
+    for sandbox in (SimpleNamespace(owner=OTHER, run_id=RUN), SimpleNamespace(owner=OWNER, run_id="c" * 32)):
+        with pytest.raises(WorkError) as error:
+            editor_tools.build_editor_tools(config, payload, AsyncMock(), sandbox=sandbox)
+        assert error.value.code == "invalid_identity"
+    assert not (tmp_path / "state").exists()

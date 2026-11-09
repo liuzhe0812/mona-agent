@@ -1,11 +1,15 @@
 """Bind the shared Office and canvas tools to one hosted account and live renderer."""
 from __future__ import annotations
 
+import base64
+import binascii
+import copy
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -14,12 +18,18 @@ import httpx
 from mona.agent.tools.canvas import CanvasTool
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.deliver_file import DeliverFileTool
-from mona.agent.tools.office import OfficeTool, OfficeToolConfig
+from mona.agent.tools.office import (
+    _IMAGE_EXT_TO_MIME,
+    _MAX_IMAGE_BYTES,
+    OfficeTool,
+    OfficeToolConfig,
+)
 from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.config.schema import HostedWorkConfig
 from mona.hosted_work.access import private_listener, website_origin
 from mona.hosted_work.contracts import WorkError, identifier, private_directory
+from mona.hosted_work.sandbox_files import relative_path
 from mona.hosted_work.tenant_files import TenantFiles
 from mona.office.client import OfficeServiceClient
 from mona.office.errors import OfficeError, OfficeErrorCode
@@ -286,8 +296,8 @@ class _HostedCanvasTool(CanvasTool):
 
 
 class _HostedOfficeTool(OfficeTool):
-    def __init__(self, scope: _EditorScope, emit: Emit):
-        self.scope = scope
+    def __init__(self, scope: _EditorScope, emit: Emit, sandbox=None):
+        self.scope, self.sandbox = scope, sandbox
         bus = _EditorBus(scope, emit)
         self._delivery_bus = bus
         self._delivery = DeliverFileTool(send_callback=bus.publish_outbound, workspace=scope.root,
@@ -327,12 +337,98 @@ class _HostedOfficeTool(OfficeTool):
         except (OSError, WorkError):
             return _failure(OfficeError(OfficeErrorCode.INVALID_OPERATION, "已交付文件无法读取，请核对后重新导出。"))
 
+    async def _asset(self, value: object) -> tuple[str, str]:
+        """Read a workspace image from this run's sandbox or the existing document workspace."""
+        target = self.scope.host_path(value)
+        if self.sandbox is None:
+            return "assetPath", str(target)
+        if isinstance(value, str) and not value.startswith("/workspace/") and Path(value).is_absolute():
+            return "assetPath", str(target)
+        logical = self.scope.logical_path(value)
+        try:
+            path = relative_path(logical)
+        except (TypeError, ValueError):
+            raise _invalid_path() from None
+        mime = _IMAGE_EXT_TO_MIME.get(PurePosixPath(path).suffix.lower())
+        if mime is None:
+            raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "图片格式不受支持。")
+        try:
+            image = await self.sandbox.file({"action": "download", "path": path})
+        except WorkError as error:
+            if error.code == "file_not_found":
+                # Files already managed by Office live in the account's
+                # documents directory, and keep the existing desktop handling.
+                return "assetPath", str(target)
+            raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "图片无法读取，请核对工作区文件。") from None
+        try:
+            if (not isinstance(image, dict) or image.get("path") != path
+                    or image.get("name") != PurePosixPath(path).name
+                    or type(image.get("size")) is not int or image["size"] < 0
+                    or image["size"] > min(self.scope.file_limit, _MAX_IMAGE_BYTES)
+                    or not isinstance(image.get("sha256"), str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", image["sha256"])
+                    or not isinstance(image.get("data"), str)
+                    or len(image["data"]) > 4 * ((min(self.scope.file_limit, _MAX_IMAGE_BYTES) + 2) // 3)):
+                raise ValueError("invalid sandbox image")
+            raw = base64.b64decode(image["data"], validate=True)
+            if len(raw) != image["size"] or hashlib.sha256(raw).hexdigest() != image["sha256"]:
+                raise ValueError("sandbox image changed")
+        except (ValueError, TypeError, binascii.Error):
+            raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "图片未通过校验，请检查后重试。") from None
+        return "dataUrl", f"data:{mime};base64,{image['data']}"
+
     def _assets(self, value):
         if isinstance(value, dict):
             return {key: str(self.scope.host_path(item)) if key == "assetPath" else self._assets(item)
                     for key, item in value.items()}
         if isinstance(value, list):
             return [self._assets(item) for item in value]
+        return value
+
+    async def _sandbox_assets(self, value: dict) -> dict:
+        """Translate the same slide image slots handled by the shared Office tool."""
+        value = copy.deepcopy(value)
+        total = 0
+
+        async def convert(item):
+            nonlocal total
+            if not isinstance(item, dict) or "assetPath" not in item:
+                return
+            key, result = await self._asset(item["assetPath"])
+            if key == "dataUrl":
+                total += len(result)
+                if total > self.scope.limit:
+                    raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "图片总大小超过文档操作上限。")
+                item.pop("assetPath")
+            item[key] = result
+
+        async def preset(content):
+            if not isinstance(content, dict):
+                return
+            await convert(content.get("image"))
+            if isinstance(content.get("images"), list):
+                for item in content["images"]:
+                    await convert(item)
+
+        operations = value.get("operations")
+        if isinstance(operations, list):
+            for operation in operations:
+                if not isinstance(operation, dict) or not isinstance(operation.get("payload"), dict):
+                    continue
+                op, payload = operation.get("op"), operation["payload"]
+                if op == "slide_add_image":
+                    await convert(payload)
+                elif op in {"slide_compose", "slide_add"}:
+                    content = payload if op == "slide_compose" else payload.get("content")
+                    if isinstance(content, dict) and isinstance(content.get("items"), list):
+                        for item in content["items"]:
+                            if isinstance(item, dict) and item.get("type") == "image":
+                                await convert(item)
+                elif op in {"slide_add_preset", "slide_add_design"}:
+                    await preset(payload.get("content"))
+        query = value.get("query")
+        if isinstance(query, dict):
+            await preset(query.get("presetContent"))
         return value
 
     async def execute(self, action: str, **kwargs):
@@ -350,6 +446,8 @@ class _HostedOfficeTool(OfficeTool):
             for key in ("path", "output"):
                 if kwargs.get(key) is not None:
                     kwargs[key] = str(self.scope.host_path(kwargs[key]))
+            if self.sandbox is not None:
+                kwargs = await self._sandbox_assets(kwargs)
             kwargs = self._assets(kwargs)
             return self.scope.tool_result(await super().execute(action, **kwargs))
         except OfficeError as error:
@@ -359,11 +457,13 @@ class _HostedOfficeTool(OfficeTool):
                                        "文档操作未能确认，请核对原文档后重试。", retryable=True))
 
 
-def build_editor_tools(config: HostedWorkConfig, payload: dict, emit: Emit) -> tuple[CanvasTool, OfficeTool]:
+def build_editor_tools(config: HostedWorkConfig, payload: dict, emit: Emit, *, sandbox=None) -> tuple[CanvasTool, OfficeTool]:
     owner = payload.get("owner")
     if not isinstance(owner, str) or not _OWNER.fullmatch(owner):
         raise WorkError("invalid_identity", "登录身份无效，请重新登录。", 401)
     session_id, run_id = identifier(payload.get("session_id")), identifier(payload.get("run_id"))
+    if sandbox is not None and (getattr(sandbox, "owner", None), getattr(sandbox, "run_id", None)) != (owner, run_id):
+        raise WorkError("invalid_identity", "工作区不属于当前任务。", 403)
     token = payload.get("account_token")
     if not isinstance(token, str) or not token or len(token) > 8192 or not re.fullmatch(r"[\x21-\x7e]+", token):
         raise WorkError("login_required", "请重新登录后执行文档操作。", 401)
@@ -380,7 +480,7 @@ def build_editor_tools(config: HostedWorkConfig, payload: dict, emit: Emit) -> t
     scope = _EditorScope(root, state.resolve() / "users" / owner / "office" / session_id / "sessions",
                          owner, run_id, session_id, f"http://{'[' + host + ']' if ':' in host else host}:{config.port}",
                          website_origin(config), 2 * config.max_file_bytes + 65536, config.max_file_bytes, token)
-    tools = (_HostedCanvasTool(scope), _HostedOfficeTool(scope, emit))
+    tools = (_HostedCanvasTool(scope), _HostedOfficeTool(scope, emit, sandbox))
     context = RequestContext(channel="websocket", chat_id=session_id, session_key=scope.session_key,
                              metadata=payload.get("metadata") or {})
     for tool in tools:

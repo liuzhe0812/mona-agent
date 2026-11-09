@@ -393,7 +393,7 @@ async def _execute_payload(config: HostedWorkConfig, payload: dict, emit):
                                            billing_authorized=payload.get("billing_authorized") is True)
             else:
                 provider = create_provider(config, selection, empty_cwd)
-            editor_tools = build_editor_tools(config, payload, track_event) if payload.get("desktop_ui") else ()
+            editor_tools = build_editor_tools(config, payload, track_event, sandbox=sandbox) if payload.get("desktop_ui") else ()
             stage = "model_run"
             async with asyncio.timeout(config.run_timeout_seconds):
                 if editor_tools:

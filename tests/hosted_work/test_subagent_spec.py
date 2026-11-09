@@ -157,13 +157,15 @@ async def test_authorization_failure_propagates_before_tool_execution(tmp_path):
 @pytest.mark.asyncio
 async def test_production_editors_are_fresh_but_parent_can_deliver_verified_child_export(tmp_path):
     ctx, payload, sandbox, emit, origin = _fixture(tmp_path, owner=owner_key("101"))
-    parent_editors = build_editor_tools(ctx.config, payload, emit)
+    sandbox.owner, sandbox.run_id = ctx.owner, RUN
+    parent_editors = build_editor_tools(ctx.config, payload, emit, sandbox=sandbox)
     parent = HostedTools(sandbox, emit, parent_editors, session_id=SID, config=ctx.config)
     factory, children = build_subagent_factory(ctx, payload, sandbox, None, emit, None, parent_editors)
     first = await factory("child-1", "Export deck", origin, AgentHook(), AsyncMock())
     second = await factory("child-2", "Review deck", origin, AgentHook(), AsyncMock())
     main_office, child_office, other_office = parent_editors[1], first.tools.get("office"), second.tools.get("office")
     assert child_office is not main_office and child_office is not other_office
+    assert child_office.sandbox is main_office.sandbox is sandbox
     assert child_office._delivery_bus is not main_office._delivery_bus
     assert child_office._delivery_bus.delivered is main_office._delivery_bus.delivered
     assert child_office._working_copies is not main_office._working_copies

@@ -68,7 +68,9 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
                     for name in ("owner", "session_id", "run_id")
                 ):
                     raise WorkError("session_scope", "子任务文档服务不属于当前会话。", 403)
-                editors = build_editor_tools(ctx.config, editor_payload, emit)
+                if parent_office.sandbox is not None and parent_office.sandbox is not sandbox:
+                    raise WorkError("session_scope", "子任务工作区不属于当前会话。", 403)
+                editors = build_editor_tools(ctx.config, editor_payload, emit, sandbox=parent_office.sandbox)
                 child_office = next(tool for tool in editors if isinstance(tool, _HostedOfficeTool))
                 # Share only this run's verified document identities. Office
                 # sessions, working copies and expected_delivery stay local so
