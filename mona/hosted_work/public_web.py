@@ -81,7 +81,11 @@ class PageText(HTMLParser):
             self.parts.append(data.strip())
 
 
-async def fetch_public_text(url: str) -> dict:
+async def fetch_public_text(url: str, *, max_chars: int | None = None) -> dict:
+    # Match the desktop web_fetch default and its user-specified maxChars.
+    max_chars = 15_000 if max_chars is None else max_chars
+    if type(max_chars) is not int or max_chars < 100:
+        raise WorkError("invalid_request", "网页读取长度无效，请使用至少 100 的整数。")
     resolver = PublicResolver()
     try:
         connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False, limit=4, family=socket.AF_UNSPEC)
@@ -114,7 +118,7 @@ async def fetch_public_text(url: str) -> dict:
                         parser = PageText()
                         parser.feed(text)
                         text = "\n".join(parser.parts)
-                    return {"url": str(response.url), "content": text[:24000], "truncated": len(text) > 24000}
+                    return {"url": str(response.url), "content": text[:max_chars], "truncated": len(text) > max_chars}
     except (aiohttp.ClientError, OSError, TimeoutError, LookupError) as exc:
         raise WorkError("web_unavailable", "网页无法安全访问，请换一个公共网页地址。") from exc
     finally:
