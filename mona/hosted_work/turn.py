@@ -175,6 +175,10 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
                                      max_expanded_bytes=config.history_media_expand_bytes)
     if history_bytes > config.max_history_bytes:
         raise WorkError("history_limit", "会话内容超出本轮限制。")
+    if isinstance(sandbox, DockerSandbox):
+        from mona.hosted_work.skills import discover_project_skills
+
+        sandbox.project_skills = await discover_project_skills(sandbox)
     tools = HostedTools(sandbox, emit, editor_tools,
                         session_id=payload.get("session_id") if payload.get("desktop_ui") else None,
                         result_session_id=payload.get("session_id"),

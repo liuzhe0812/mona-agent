@@ -26,8 +26,12 @@ class HostedLoadCapabilityTool(LoadCapabilityTool):
         if (any(isinstance(name, str) and name.strip() == "image" for name in capabilities)
                 and self._registry is not None and self._registry.is_permitted("generate_image")):
             try:
-                self._hosted_skills.file("image-generation", "SKILL.md", loaded=False)
-                content = self._hosted_skills.loader.load_skills_for_context(["image-generation"], track_usage=False)
+                if "image-generation" in self._hosted_skills.project:
+                    source = self._hosted_skills.project["image-generation"]["content"]
+                    content = "### Skill: image-generation\n\n" + self._hosted_skills.loader._strip_frontmatter(source)
+                else:
+                    self._hosted_skills.file("image-generation", "SKILL.md", loaded=False)
+                    content = self._hosted_skills.loader.load_skills_for_context(["image-generation"], track_usage=False)
                 if not content:
                     raise ValueError("missing builtin image skill")
             except (OSError, ValueError, TypeError):

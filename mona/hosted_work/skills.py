@@ -1,4 +1,4 @@
-"""Read-only builtins and sandbox-only skill resources for hosted Work."""
+"""Builtin and workspace Skill resources for hosted Work."""
 from __future__ import annotations
 
 import asyncio
@@ -12,13 +12,19 @@ import stat
 import tarfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+import yaml
+
 from mona.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 from mona.agent.tools.skill_tools import SkillAssetCopyTool, SkillReadTool, SkillReferenceReadTool
+from mona.config.schema import DevelopmentConfig
+from mona.hosted_work.contracts import WorkError
 from mona.hosted_work.sandbox import SandboxError
 from mona.hosted_work.sandbox_files import relative_path
 from mona.utils.prompt_templates import render_template
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_PROJECT_ROOT = ".agents/skills"
+_FRONTMATTER = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
 _NEEDS = {
     "mona-docx": {"office"}, "mona-xlsx": {"office"}, "mona-pptx": {"office"},
     "mona-canvas": {"canvas"}, "pdf": {"pdf"}, "image-generation": {"generate_image"},
@@ -53,6 +59,79 @@ def _relative(value: str) -> PurePosixPath:
         raise ValueError("资源路径必须是技能包内的相对路径。")
     return relative
 
+
+async def discover_project_skills(sandbox) -> dict[str, dict]:
+    """Read project Skill metadata only through this turn's owned sandbox."""
+    # Read the declared limits without constructing the desktop configuration:
+    # its optional tool types may not be initialized in the hosted process.
+    fields = DevelopmentConfig.model_fields
+    max_skills = fields["max_project_skills"].default
+    max_bytes = fields["max_skill_bytes"].default
+    try:
+        listing = await sandbox.file({"action": "list", "path": _PROJECT_ROOT})
+    except WorkError as error:
+        if error.code == "file_not_found":
+            return {}
+        raise
+    if not isinstance(listing, dict) or not isinstance(listing.get("entries"), list) or listing.get("truncated"):
+        raise WorkError("invalid_skills", "项目技能目录无法完整读取。", 409)
+    directories = [item for item in listing["entries"] if isinstance(item, dict)
+                   and item.get("kind") == "directory" and isinstance(item.get("name"), str)
+                   and _NAME.fullmatch(item["name"])]
+    if len(directories) > max_skills:
+        raise WorkError("too_many_skills", "项目技能数量超过允许范围。", 409)
+    result = {}
+    for item in sorted(directories, key=lambda value: value["name"]):
+        name = item["name"]
+        path = f"{_PROJECT_ROOT}/{name}/SKILL.md"
+        try:
+            entry = await sandbox.file({"action": "download", "path": path})
+        except WorkError as error:
+            if error.code == "file_not_found":
+                continue
+            raise
+        if (not isinstance(entry, dict) or entry.get("path") != path or type(entry.get("size")) is not int
+                or entry["size"] > max_bytes or not isinstance(entry.get("data"), str)):
+            raise WorkError("invalid_skills", "项目技能内容无法确认。", 409)
+        try:
+            raw = base64.b64decode(entry["data"], validate=True)
+            if len(raw) != entry["size"] or hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
+                raise ValueError("project Skill changed")
+            content = raw.decode("utf-8")
+            match = _FRONTMATTER.match(content)
+            metadata = yaml.safe_load(match.group(1)) if match else None
+            if not isinstance(metadata, dict):
+                continue
+            description = metadata.get("short_description") or metadata.get("description")
+            if not isinstance(description, str) or not description.strip() or len(description) > 2000:
+                continue
+        except (ValueError, TypeError, UnicodeError, yaml.YAMLError, RecursionError):
+            continue
+        nested = metadata.get("metadata")
+        if isinstance(nested, str):
+            try:
+                nested = json.loads(nested)
+            except ValueError:
+                # An unrecognized declaration is not evidence that its runtime exists.
+                nested = {"unverified": True}
+        if isinstance(nested, dict):
+            nested = nested.get("mona", nested.get("openclaw", nested))
+        declared = bool(metadata.get("requires")) or bool(
+            isinstance(nested, dict) and any(nested.get(key) for key in ("requires", "os", "runtime", "unverified")))
+        try:
+            await sandbox.file({"action": "stat", "path": f"{_PROJECT_ROOT}/{name}/pyproject.toml"})
+        except WorkError as error:
+            if error.code in {"invalid_file_operation", "file_changed"}:
+                declared = True
+            elif error.code != "file_not_found":
+                raise
+        else:
+            declared = True
+        result[name] = {"content": content, "description": description, "sha256": entry["sha256"],
+                        "metadata": metadata, "path": f"{_PROJECT_ROOT}/{name}", "available": True,
+                        **({"limitations": "技能说明可读取；脚本依赖尚未验证，运行时以实际结果为准。"} if declared else {})}
+    return result
+
 # This trusted installer runs inside gVisor. It never extracts user archives on the host.
 _INSTALL = r'''
 import hashlib,io,json,os,pathlib,sys,tarfile
@@ -82,8 +161,9 @@ class HostedSkills:
             raise ValueError("invalid builtin skill directory")
         self.loader = SkillsLoader(Path("/workspace"), builtin_skills_dir=self.root,
                                    include_private_skills=False)
-        self.names = {item["name"] for item in self.loader.list_skills(filter_unavailable=False)
-                      if _NAME.fullmatch(item["name"])}
+        self.project = getattr(tools.sandbox, "project_skills", {})
+        self.names = ({item["name"] for item in self.loader.list_skills(filter_unavailable=False)
+                       if _NAME.fullmatch(item["name"])} | set(self.project))
         self.allowed_names = set(allowed_names)
         self.loaded: set[str] = set()
         self.restored_read_ids: set[str] = set()
@@ -114,6 +194,7 @@ class HostedSkills:
                 if isinstance(content, list):
                     texts = [block.get("text", "") for block in content if isinstance(block, dict)]
                 if (isinstance(args, dict) and isinstance(args.get("name"), str) and args["name"] in self.names
+                        and args["name"] not in self.project
                         and any(text.startswith("Skill: ") for text in texts if isinstance(text, str))):
                     self.loaded.add(args["name"])
                     self.restored_read_ids.add(message["tool_call_id"])
@@ -147,9 +228,22 @@ class HostedSkills:
             return {key: self._public(item) for key, item in value.items()}
         return value
 
+    async def _check_project(self, name: str) -> None:
+        """Keep the turn's discovered instructions consistent with the workspace."""
+        current = await self.tools._file("stat", path=self.project[name]["path"] + "/SKILL.md")
+        if not isinstance(current, dict) or current.get("sha256") != self.project[name]["sha256"]:
+            self.loaded.discard(name)
+            raise ValueError("project Skill changed")
+
     def catalog(self):
         rows = []
         for name in sorted(self.names):
+            if name in self.project:
+                item = self.project[name]
+                rows.append({"name": name, "description": item["description"],
+                             "available": item["available"], "missing_tools": [],
+                             **({"limitations": item["limitations"]} if item.get("limitations") else {})})
+                continue
             self.file(name, "SKILL.md", loaded=False)
             metadata = self.loader.get_skill_metadata(name) or {}
             missing = sorted(_NEEDS.get(name, set()) - self.allowed_names)
@@ -169,6 +263,16 @@ class HostedSkills:
 
     async def read(self, name: str):
         try:
+            if name in self.project:
+                from mona.agent.tools.capabilities import activate_capabilities
+
+                await self._check_project(name)
+                self.loaded.add(name)
+                self._allow_resources()
+                activate_capabilities({"skill_resources"})
+                info = next(item for item in self.catalog() if item["name"] == name)
+                await self.tools.emit("progress", {"message": "已读取技能：" + name})
+                return "Skill: " + json.dumps(info, ensure_ascii=False) + "\n\n" + self.project[name]["content"]
             self.file(name, "SKILL.md", loaded=False)
             content = self._public(await self.reader.execute(name=name))
             self.loaded.add(name)
@@ -179,24 +283,50 @@ class HostedSkills:
             if isinstance(content, list):
                 return [{"type": "text", "text": header}, *content]
             return header + "\n\n" + content
-        except (OSError, ValueError, TypeError):
-            return "Error: 内置 Skill 读取失败，请核对技能名称。未读取私人技能或其他目录。"
+        except (OSError, ValueError, TypeError, WorkError):
+            return "Error: Skill 读取失败，请核对名称或文件是否已变化。"
 
     async def reference(self, skill: str, ref_path: str, offset: int = 0, limit: int = 16000):
         try:
             _relative(ref_path)
+            if skill in self.project:
+                if skill not in self.loaded:
+                    raise ValueError("Skill has not been read")
+                await self._check_project(skill)
+                relative = "references/" + ref_path.removeprefix("references/")
+                path = self.project[skill]["path"] + "/" + relative
+                reader = self.tools.registry.get("read_file")
+                if reader is None:
+                    raise ValueError("file reader unavailable")
+                return await reader.execute(path=path, char_offset=offset, char_limit=min(limit, 8000), force=True)
             relative = ref_path if skill == "mona-design" and ref_path.startswith(("assets/", "demos/", "references/")) else "references/" + ref_path.removeprefix("references/")
             # Referenced builtins are public, read-only dependencies, just as in
             # the desktop reader. Public assets use the same source boundary;
             # running a script still requires loading that specific Skill.
             self.file(skill, relative, loaded=False, allow_directory=skill == "mona-design")
             return self._public(await self.reference_reader.execute(skill=skill, ref_path=ref_path, offset=offset, limit=limit))
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, WorkError):
             return "Error: 技能资料读取失败，请先读取 Skill 并核对包内相对路径。"
 
     async def asset(self, skill: str, asset: str, dest: str):
         try:
             _relative(asset)
+            if skill in self.project:
+                if skill not in self.loaded:
+                    raise ValueError("Skill has not been read")
+                await self._check_project(skill)
+                source = self.project[skill]["path"] + "/assets/" + asset.removeprefix("assets/")
+                entry = await self.tools._file("download", path=source)
+                destination = relative_path(dest)
+                data = entry.get("data") if isinstance(entry, dict) else None
+                if not isinstance(data, str):
+                    raise ValueError("invalid asset")
+                raw = base64.b64decode(data, validate=True)
+                if len(raw) != entry.get("size") or hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
+                    raise ValueError("asset changed")
+                result = await self.tools._file("upload", path=destination, data=data)
+                return json.dumps({"ok": True, "path": "/workspace/" + destination,
+                                   "sha256": result.get("sha256")}, ensure_ascii=False)
             # Desktop asset copying accepts public builtin dependencies without
             # another skill_read. Script execution still requires its own load.
             source = self.file(skill, "assets/" + asset.removeprefix("assets/"), loaded=False)
@@ -205,13 +335,22 @@ class HostedSkills:
             result = await self.tools._file("upload", path=destination, data=base64.b64encode(raw).decode("ascii"))
             return json.dumps({"ok": True, "path": "/workspace/" + destination,
                                "sha256": result.get("sha256")}, ensure_ascii=False)
-        except (OSError, ValueError, TypeError):
-            return "Error: 未找到该内置素材或目标路径不可用；请读取素材目录并使用实际文件名，asset 路径相对 assets/。"
+        except (OSError, ValueError, TypeError, WorkError):
+            return "Error: 未找到技能素材或目标路径不可用；请核对 assets/ 内的文件名。"
 
     async def script(self, skill: str, script: str, args: str = "", timeout_seconds: int = 120):
         try:
             if "/" in script or "\\" in script or ".." in script:
                 raise ValueError("invalid script")
+            if skill in self.project:
+                if skill not in self.loaded or not script.endswith(".py"):
+                    raise ValueError("invalid project Skill script")
+                await self._check_project(skill)
+                source = self.project[skill]["path"] + "/scripts/" + script
+                await self.tools._file("stat", path=source)
+                command = shlex.join(["env", "MONA_ACTIVE_WORKSPACE=/workspace", "PYTHONUTF8=1", "python3",
+                                      "/workspace/" + source, *shlex.split(args)])
+                return await self.tools.execute(command, timeout=timeout_seconds)
             source = self.file(skill, "scripts/" + script)
             if source.suffix != ".py":
                 return json.dumps({"ok": False, "code": "runtime_unavailable", "message": "该脚本的隔离运行环境尚未就绪。"}, ensure_ascii=False)
@@ -257,7 +396,7 @@ class HostedSkills:
         except (SandboxError, TimeoutError) as error:
             self.tools.fault = "技能脚本结果尚未确认，已停止本轮；请先核对已有文件，不要自动重跑。"
             raise asyncio.CancelledError(self.tools.fault) from error
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, WorkError):
             return "Error: 技能脚本未能执行，请核对脚本名称、参数或所需运行环境。"
 
     def register(self):
@@ -267,8 +406,8 @@ class HostedSkills:
         async def listing():
             return json.dumps({"skills": self.catalog()}, ensure_ascii=False)
         definitions = [
-            ("skill_list", "列出内置 Skill 及当前可执行范围；不会加载私人技能或桌面配置。", {}, [], listing),
-            ("skill_read", "按名称读取内置 Skill；任务匹配时先读取，再使用现有授权工具。", {"name": name}, ["name"], self.read),
+            ("skill_list", "列出内置和当前工作区的 Skill。", {}, [], listing),
+            ("skill_read", "按名称读取内置或当前工作区的 Skill。", {"name": name}, ["name"], self.read),
             ("skill_reference_read", "读取已加载 Skill 的参考资料或真实设计样张。", {"skill": name, "ref_path": path, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 24000}}, ["skill", "ref_path"], self.reference),
             ("skill_asset_copy", "把已加载 Skill 的素材复制到当前工作区新路径。", {"skill": name, "asset": path, "dest": path}, ["skill", "asset", "dest"], self.asset),
             ("skill_script_run", "在当前隔离工作区运行已加载 Skill 的配套脚本；缺少运行时会明确拒绝。", {"skill": name, "script": path, "args": {"type": "string", "maxLength": 16000}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1800}}, ["skill", "script"], self.script),

@@ -88,12 +88,25 @@ class _SkillCatalog:
 
     def get_always_skills(self):
         ready = {row["name"] for row in self.hosted.catalog() if row["available"]}
-        return [name for name in self.hosted.loader.get_always_skills() if name in ready]
+        builtin = [name for name in self.hosted.loader.get_always_skills()
+                   if name in ready and name not in self.hosted.project]
+        project = [name for name, item in self.hosted.project.items() if name in ready and (
+            item["metadata"].get("always")
+            or self.hosted.loader._parse_mona_metadata(item["metadata"].get("metadata")).get("always"))]
+        return builtin + project
 
     def load_skills_for_context(self, names):
+        pieces = []
         for name in names:
-            self.hosted.file(name, "SKILL.md", loaded=False)
-        content = self.hosted._public(self.hosted.loader.load_skills_for_context(names, track_usage=False))
+            if name in self.hosted.project:
+                value = self.hosted.loader._strip_frontmatter(self.hosted.project[name]["content"])
+                pieces.append(f"### Skill: {name}\n\n{value}")
+            else:
+                self.hosted.file(name, "SKILL.md", loaded=False)
+                value = self.hosted.loader.load_skills_for_context([name], track_usage=False)
+                if value:
+                    pieces.append(value)
+        content = self.hosted._public("\n\n---\n\n".join(pieces))
         if content:
             self.hosted.loaded.update(names)
             self.hosted._allow_resources()
