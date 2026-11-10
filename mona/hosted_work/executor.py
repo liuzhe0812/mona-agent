@@ -16,7 +16,7 @@ from mona.hosted_work.sandbox import DockerSandbox
 
 _PIDFD_PROCESS_GROUP = 1 << 2  # Linux PIDFD_SIGNAL_PROCESS_GROUP (6.9+).
 _GROUP_EXIT_TIMEOUT = 3.0
-_STOP_GRACE_TIMEOUT = 15.0
+_STOP_GRACE_TIMEOUT = 2.0
 
 
 def _owned_group_handle(process, nonce: str) -> int | None:
@@ -146,7 +146,7 @@ class ProcessExecutor:
                 was_running = process.returncode is None
                 try:
                     if was_running:
-                        signal.pidfd_send_signal(handle, signal.SIGTERM)
+                        signal.pidfd_send_signal(handle, signal.SIGTERM, None, _PIDFD_PROCESS_GROUP)
                     else:
                         # The leader may have exited while a descendant still
                         # holds the stream or continues an upstream request.
@@ -160,6 +160,24 @@ class ProcessExecutor:
                     self.stop_watchdogs[key] = asyncio.create_task(self._watch_cancelled_group(key, process, handle))
             elif os.name != "posix" and process.returncode is None:
                 process.send_signal(signal.SIGTERM)
+
+    async def finish_stop(self, owner: str, run_id: str) -> None:
+        """Retry termination using retained identities, including a finished host."""
+        key = owner, run_id
+        process = self.processes.get(key)
+        handle = self.group_handles.get(key)
+        if process is not None:
+            await _stop_remaining_group(process, handle)
+        cleanup = DockerSandbox(self.config, owner, run_id,
+                                Path(self.config.state_dir) / "users" / owner / "workspace.zip")
+        cleanup.created = True
+        await cleanup.close()
+        self.processes.pop(key, None)
+        self.group_handles.pop(key, None)
+        self.forced_groups.discard(key)
+        self.cancelled.discard(key)
+        if handle is not None:
+            os.close(handle)
 
     async def file(self, owner: str, operation_id: str, request: dict, on_event) -> dict:
         if (not isinstance(request, dict) or not isinstance(request.get("action"), str)
@@ -177,7 +195,8 @@ class ProcessExecutor:
             raise WorkError("duplicate_execution", "此任务已在执行，未重复派发。", 409)
 
         def stopped_before_dispatch():
-            result = {"status": "cancelled", "message": "任务在派发前已停止。", "workspace_saved": True}
+            result = {"status": "cancelled", "message": "任务在派发前已停止。", "workspace_saved": True,
+                      "diagnostic": {"stop_reason": "cancelled"}}
             selected = self.config.models.get(payload.get("model_id", ""))
             if selected is not None and selected.source == "codex":
                 result["billing_usage"] = {"prompt_tokens": 0, "cached_tokens": 0,
@@ -209,7 +228,7 @@ class ProcessExecutor:
             try:
                 await asyncio.wait_for(process.wait(), _GROUP_EXIT_TIMEOUT)
             except TimeoutError:
-                pass
+                self.processes[key] = process
             self.cancelled.discard(key)
             raise WorkError("execution_cleanup_unknown", "无法确认任务进程可安全停止，本次未开始执行。", 503)
         self.processes[key] = process
@@ -217,6 +236,7 @@ class ProcessExecutor:
         if handle is not None:
             self.group_handles[key] = handle
         result = None
+        retain_resources = False
 
         async def stdout():
             nonlocal result
@@ -233,7 +253,7 @@ class ProcessExecutor:
                     if value.get("status") not in {"completed", "failed", "cancelled", "unknown"}:
                         raise WorkError("protocol_error", "任务执行状态无法确认。", 503)
                     result = value
-                elif kind in {"delta", "progress", "artifact", "history", "checkpoint", "context", "title", "desktop", "widget"}:
+                elif kind in {"delta", "stream_end", "progress", "artifact", "history", "checkpoint", "context", "title", "desktop", "widget"}:
                     await on_event(kind, value)
                 else:
                     raise WorkError("protocol_error", "任务执行状态无法确认。", 503)
@@ -264,8 +284,12 @@ class ProcessExecutor:
                 await _stop_remaining_group(process, handle)
                 return stopped_before_dispatch()
             if process.returncode != 0 or result is None:
+                if key in self.cancelled:
+                    raise asyncio.CancelledError
                 raise WorkError("execution_unknown", "执行结果待核对，不会自动重新执行。", 503)
             if await _stop_remaining_group(process, handle) or key in self.forced_groups:
+                if key in self.cancelled:
+                    raise asyncio.CancelledError
                 raise WorkError("execution_cleanup_unknown", "任务的后台进程未正常结束，请核对结果。", 503)
             return result
         except BaseException as error:
@@ -280,7 +304,7 @@ class ProcessExecutor:
                     else:
                         process.send_signal(signal.SIGTERM)
                     try:
-                        await asyncio.wait_for(process.wait(), 20)
+                        await asyncio.wait_for(process.wait(), _STOP_GRACE_TIMEOUT if key in self.cancelled else 20)
                     except TimeoutError:
                         # The pinned pidfd targets the original group even if
                         # its numeric PID/PGID is later reused.
@@ -295,10 +319,20 @@ class ProcessExecutor:
             cleanup.created = True
             try:
                 await asyncio.shield(cleanup.close())
-            except Exception:
-                pass  # The caller records unknown and keeps the user blocked.
+            except Exception as exc:
+                cleanup_error = exc
             if cleanup_error is not None:
+                retain_resources = True
                 raise WorkError("execution_cleanup_unknown", "任务进程的结束状态尚未确认。", 503) from error
+            if key in self.cancelled:
+                # The pinned process group and this run's labelled container
+                # are gone. Missing usage or an interrupted snapshot is not a
+                # reason to pretend the stopped executor is still running.
+                cancelled = {**(result or {}), "status": "cancelled", "content": "",
+                             "message": "本轮已停止，已保存的内容保留。",
+                             "workspace_saved": bool(result and result.get("workspace_saved")),
+                             "diagnostic": {"stop_reason": "cancelled", "stage": "forced_stop"}}
+                return cancelled
             raise
         finally:
             for reader in readers:
@@ -308,10 +342,11 @@ class ProcessExecutor:
             if watchdog is not None:
                 watchdog.cancel()
                 await asyncio.gather(watchdog, return_exceptions=True)
-            self.processes.pop(key, None)
             self.execution_tasks.pop(key, None)
-            self.group_handles.pop(key, None)
-            if handle is not None:
-                os.close(handle)
-            self.forced_groups.discard(key)
-            self.cancelled.discard(key)
+            if not retain_resources:
+                self.processes.pop(key, None)
+                self.group_handles.pop(key, None)
+                if handle is not None:
+                    os.close(handle)
+                self.forced_groups.discard(key)
+                self.cancelled.discard(key)

@@ -605,6 +605,8 @@ class DesktopWire:
             except Exception:
                 pass  # A failed cleanup cannot confirm that the task stopped.
         current = self.service.store.run(peer.owner, rid)
+        if current["status"] == "unknown" and task is not None and task.done():
+            current = await self.service.stop(peer.owner, rid)
         if task is not None and not task.done():
             outcome = "pending"
         elif not self._finished_recorded(peer.owner, current) or task is not None and not self._task_finished(task):
@@ -640,7 +642,7 @@ class DesktopWire:
             await self._on_run_event(owner, run, kind, data)
 
     async def _on_run_event(self, owner: str, run: dict, kind: str, data: dict):
-        if kind not in {"delta", "progress", "desktop", "widget"}:
+        if kind not in {"delta", "stream_end", "progress", "desktop", "widget"}:
             return
         sid, rid = run["session_id"], run["id"]
         self.state.session(owner, sid)
@@ -670,6 +672,15 @@ class DesktopWire:
             self._stream_text[key].append(text)
             record = {"event": "delta", "text": text, "stream_id": rid + ":" + str(index), **identity}
             active = True
+        elif kind == "stream_end":
+            if type(data.get("resuming")) is not bool:
+                raise WorkError("protocol_error", "输出分段格式无效。", 503)
+            if not active:
+                self.state.set(owner, "wire_seq:" + rid, row["seq"])
+                return
+            record = {"event": "stream_end", "stream_id": rid + ":" + str(index),
+                      "resuming": data["resuming"], **identity}
+            active = False
         elif kind == "widget":
             from mona.agent.tools.visualizer import _validate_widget
 
@@ -859,6 +870,12 @@ class DesktopWire:
             self._platform_done.setdefault((owner, rid), (sid, ""))
             while len(self._platform_done) > 256:
                 self._platform_done.pop(next(iter(self._platform_done)))
+
+    def cancel_platform_requests(self, owner: str, sid: str) -> None:
+        """End waits for this stopped chat; late edits are never replayed."""
+        for key, future in tuple(self._platform.items()):
+            if key[:2] == (owner, sid) and not future.done():
+                future.cancel()
 
     def platform_pending(self, owner: str, request: str) -> bool:
         matching = [(key, future) for key, future in self._platform.items()

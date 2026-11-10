@@ -40,7 +40,8 @@ class WorkHook(AgentProgressHook):
         self.max_context_tokens = 0
         self.progress = build_bus_progress_callback(SimpleNamespace(publish_outbound=self._outbound),
             InboundMessage("websocket", "user", self.payload.get("session_id", "direct"), ""))
-        super().__init__(on_progress=self.progress, on_stream=self.delta, channel="websocket")
+        super().__init__(on_progress=self.progress, on_stream=self.delta,
+                         on_stream_end=self.stream_end, channel="websocket")
 
     async def _outbound(self, message):
         meta = message.metadata
@@ -52,6 +53,9 @@ class WorkHook(AgentProgressHook):
 
     async def delta(self, text):
         await self.emit("delta", {"text": text})
+
+    async def stream_end(self, *, resuming):
+        await self.emit("stream_end", {"resuming": resuming})
 
     async def _transport_progress(self, content, *, tool_hint=False, tool_events=None, reasoning=False, reasoning_end=False,
                                   widget_events=None, file_edit_events=None, token_usage=None, context_compacting=None):

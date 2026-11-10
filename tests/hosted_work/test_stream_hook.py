@@ -36,7 +36,7 @@ async def test_hook_reuses_desktop_reasoning_and_streams_short_answers_immediate
         ("delta", None, "好的"),
     ]
     await hook.on_stream_end(context, resuming=False)
-    assert len(events) == 3
+    assert events[-1] == ("stream_end", {"resuming": False})
 
 
 @pytest.mark.asyncio

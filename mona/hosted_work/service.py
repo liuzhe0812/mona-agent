@@ -239,9 +239,6 @@ class WorkService:
         run_id, sid = run["id"], run["session_id"]
         billing_finished = False
         image_bound = False
-        cancelled_with_pending_billing = False
-        completed_with_pending_billing = False
-        cleanup_confirmed = True
         title_before = self.store.session(owner, sid)["title"]
         async def event(kind: str, value: dict):
             if kind == "history":
@@ -312,19 +309,16 @@ class WorkService:
                     image_bound = True
                     payload["hosted_image"] = {"settings": image.model_dump(), "capability": capability}
             result = await self.executor.execute(payload, event)
-            execution_completed = (result.get("status") == "completed" and result.get("workspace_saved") is True
-                                   and (result.get("diagnostic") or {}).get("stop_reason") == "completed")
-            execution_cancelled = (result.get("status") == "cancelled" and result.get("workspace_saved") is True
-                                   and (result.get("diagnostic") or {}).get("stop_reason") == "cancelled")
             if billing is not None:
                 try:
                     usage = settlement_usage(result.get("billing_usage"))
                     if usage is None:
                         self.store.billing_update(owner, run_id, "uncertain")
-                        await billing.uncertain(billing_id, "usage_unavailable")
                         raise BillingError("billing_unknown", "用量待核对。", 503)
                     expected = actual_units(model, usage)
                     self.store.billing_update(owner, run_id, "usage_ready", usage=usage, expected_units=expected)
+                    if result.get("status") == "cancelled":
+                        raise BillingError("billing_unknown", "停止后的用量由后台结算。", 503)
                     settlement = await billing.settle(billing_id, usage)
                     if settlement["status"] == "uncertain":
                         self.store.billing_update(owner, run_id, "uncertain")
@@ -332,11 +326,12 @@ class WorkService:
                         raise BillingError("billing_unknown", "结算结果待核对。", 503)
                     self.store.billing_update(owner, run_id, "settled")
                     billing_finished = True
-                except BillingError:
-                    cancelled_with_pending_billing = execution_cancelled
-                    completed_with_pending_billing = execution_completed
-                    result.update(status="unknown", message="本轮已执行，计费状态待核对；请勿重复发送。")
-                    result["diagnostic"] = {"stop_reason": "billing_unknown",
+                except BillingError as exc:
+                    # Accounting never replaces an executor's outcome, answer,
+                    # or failure. The independent journal owns reconciliation.
+                    self.store.billing_update(owner, run_id, "uncertain")
+                    result["diagnostic"] = {**(result.get("diagnostic") or {}),
+                                            "billing_status": "pending", "billing_code": exc.code,
                                             "billing_reasons": result.get("billing_issue_codes", [])}
             if result.get("workspace_saved"):
                 for artifact in result.get("artifacts", []):
@@ -368,10 +363,7 @@ class WorkService:
             logger.warning("Hosted Work run={} result_unconfirmed exception_type={} exception_code={}",
                            run_id, type(exc).__name__, exception_code)
             if billing is not None and not billing_finished:
-                try:
-                    await asyncio.shield(billing.uncertain(billing_id, "provider_outcome_unknown"))
-                except Exception:
-                    pass
+                self.store.billing_update(owner, run_id, "uncertain")
             try:
                 self.store.finish(owner, run_id, "unknown", {
                     "message": "任务结果待核对，不会自动重新执行。请保留此会话并联系管理员。", "workspace_saved": False,
@@ -403,37 +395,17 @@ class WorkService:
 
                             cleanup_image_staging(self.config.state_dir, owner, run_id, executor_stopped=True)
                 except Exception as exc:
-                    cleanup_confirmed = False
                     logger.warning("Hosted image cleanup unconfirmed exception_type={}", type(exc).__name__)
                 finally:
                     if image_bound:
                         self.image_control.unbind(owner, run_id)
                     self._release(owner, engine)
-        if cancelled_with_pending_billing and cleanup_confirmed:
-            wire = getattr(self.desktop, "_wire", None) if self.desktop is not None else None
-            platform = getattr(wire, "_platform", None) if wire is not None else {}
-            pending_editor = not isinstance(platform, dict) or any(key[0] == owner for key in platform)
-            pending_image = bool(image_bound and any(item["run_id"] == run_id
-                                 for item in self.image_control.journal.pending(owner)))
-            if not pending_editor and not pending_image:
-                try:
-                    self.store.confirm_cancelled_with_pending_billing(owner, run_id)
-                except (WorkError, ValueError, TypeError) as exc:
-                    logger.warning("Hosted Work cancellation confirmation failed exception_type={}", type(exc).__name__)
         if self.desktop is not None:
             try:
                 await self.desktop.wire.on_run_finish(owner, run, {})
             except WorkError as exc:
                 if exc.status != 404:
                     raise
-        if completed_with_pending_billing and cleanup_confirmed:
-            wire = getattr(self.desktop, "_wire", None) if self.desktop is not None else None
-            platform = getattr(wire, "_platform", None) if wire is not None else {}
-            pending_editor = not isinstance(platform, dict) or any(key[0] == owner for key in platform)
-            pending_image = bool(image_bound and any(item["run_id"] == run_id
-                                 for item in self.image_control.journal.pending(owner)))
-            processes = getattr(self.executor, "processes", {})
-            return not pending_editor and not pending_image and (owner, run_id) not in processes
         return False
 
     @staticmethod
@@ -455,21 +427,31 @@ class WorkService:
 
     async def stop(self, owner: str, run_id: str):
         run = self.store.run(owner, run_id)
-        if run["status"] in {"running", "cancelling"}:
-            self.store.cancelling(owner, run_id)
+        if run["status"] in {"running", "cancelling", "unknown"}:
+            if run["status"] != "unknown":
+                self.store.cancelling(owner, run_id)
             if self.image_coordinator is not None:
                 self.image_coordinator.cancel_run(owner, run_id)
             # Stop this run before waiting on any question or input cleanup.
             self.executor.cancel(owner, run_id)
+            if self.desktop is not None:
+                wire = getattr(self.desktop, "_wire", None)
+                if wire is not None:
+                    wire.cancel_platform_requests(owner, run["session_id"])
             if self.desktop is not None and hasattr(self.desktop, "questions"):
                 await self.desktop.questions.cancel_run(owner, run["session_id"], run_id)
             if self.desktop is not None and hasattr(self.desktop, "inputs"):
                 await self.desktop.inputs.pause(owner, run["session_id"], run_id)
-        elif run["status"] == "unknown" and self.image_coordinator is not None:
-            # A parent-owned image request may still be draining after the run
-            # was persisted as unknown. Stop only that exact run's flight;
-            # its execution and billing outcome remain unknown.
-            self.image_coordinator.cancel_run(owner, run_id)
+            task = self.tasks.get((owner, run_id))
+            finisher = getattr(self.executor, "finish_stop", None)
+            if run["status"] == "unknown" and (task is None or task.done()) and finisher is not None:
+                await finisher(owner, run_id)
+                result = {**run["result"], "message": "本轮已停止，已保存的内容保留。",
+                          "diagnostic": {**run["result"].get("diagnostic", {}), "stop_reason": "cancelled",
+                                         "previous_stop_reason": run["result"].get("diagnostic", {}).get("stop_reason")}}
+                self.store.finish(owner, run_id, "cancelled", result)
+                if self.desktop is not None:
+                    await self.desktop.wire.on_run_finish(owner, run, {})
         return self.store.run(owner, run_id)
 
     async def upload(self, owner: str, sid: str, file_id: str, name: str, content: bytes):
@@ -611,7 +593,7 @@ class WorkService:
                         result = await billing.release(billing_id)
                     if result["status"] == "released":
                         self.store.billing_update(owner, run_id, "released")
-                elif stage in {"dispatching", "running"}:
+                elif stage in {"dispatching", "running", "uncertain"}:
                     result = await billing.uncertain(billing_id, "provider_outcome_unknown")
                     if result["status"] == "uncertain":
                         self.store.billing_update(owner, run_id, "uncertain")

@@ -685,10 +685,13 @@ class WorkStore:
             raise ValueError("invalid terminal state")
         with self.transaction():
             run = self.run(owner, run_id)
-            if run["status"] not in {"running", "cancelling"}:
+            stopped_unknown = run["status"] == "unknown" and status == "cancelled"
+            if run["status"] not in {"running", "cancelling"} and not stopped_unknown:
                 return
             self.db.execute("UPDATE runs SET status=?,result=?,updated=? WHERE owner=? AND id=?",
                             (status, encoded(result), time.time(), owner, run_id))
+            if stopped_unknown:
+                return  # Its retained checkpoint/history must not be replayed or appended again.
             if status != "completed":
                 row = self.db.execute("SELECT checkpoint FROM runs WHERE owner=? AND id=?", (owner, run_id)).fetchone()
                 self.db.execute("SAVEPOINT hosted_finish_history")

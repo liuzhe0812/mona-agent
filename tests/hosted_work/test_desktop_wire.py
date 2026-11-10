@@ -216,6 +216,38 @@ async def test_structured_stream_matches_desktop_and_failure_keeps_partial_outpu
         assert len(executor.calls) == 1
 
 
+async def test_explicit_stream_boundaries_keep_separate_answers_and_preserve_final_output(tmp_path):
+    client, wire, executor, _state = await make_client(tmp_path)
+
+    async def scripted(payload, emit):
+        executor.calls.append(payload)
+        owner, rid = payload["owner"], payload["run_id"]
+        for kind, data in [("delta", {"text": "先检查文件。"}),
+                           ("stream_end", {"resuming": True}),
+                           ("progress", {"kind": "reasoning_delta", "text": "文件已确认。"}),
+                           ("delta", {"text": "已经完成。"}),
+                           ("stream_end", {"resuming": False})]:
+            await emit(kind, data)
+            await wire.on_run_event(owner, wire.service.store.run(owner, rid), kind, data)
+        return {"status": "completed", "content": "已经完成。", "workspace_saved": True}
+
+    executor.execute = scripted
+    async with client:
+        socket, _ = await connect(client, wire)
+        sid = await new_chat(socket)
+        await socket.send_json({"type": "message", "chat_id": sid, "input_id": "boundary-input", "content": "fixture"})
+        first = await receive(socket, "delta")
+        first_end = await receive(socket, "stream_end")
+        await receive(socket, "reasoning_delta")
+        second = await receive(socket, "delta")
+        second_end = await receive(socket, "stream_end")
+        await receive(socket, "turn_end")
+        assert first["stream_id"] != second["stream_id"]
+        assert first_end["stream_id"] == first["stream_id"] and first_end["resuming"] is True
+        assert second_end["stream_id"] == second["stream_id"] and second_end["resuming"] is False
+        assert len(executor.calls) == 1
+
+
 async def test_failed_turn_closes_unfinished_reasoning_without_fabricating_progress(tmp_path):
     client, wire, executor, state = await make_client(tmp_path)
 

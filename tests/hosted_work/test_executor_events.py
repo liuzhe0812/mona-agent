@@ -214,7 +214,7 @@ async def test_child_frame_can_transport_bounded_multi_image_history(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_stop_after_leader_exit_signals_only_pinned_group_and_cannot_report_success(monkeypatch, child_fixture):
+async def test_stop_after_leader_exit_cancels_only_pinned_group_and_cleans_container(monkeypatch, child_fixture):
     config, cleanup = child_fixture
     monkeypatch.setattr(executor_module.signal, "SIGKILL", 9, raising=False)
     process = FakeProcess([{"kind": "result", "data": {"status": "completed", "workspace_saved": True}}],
@@ -232,9 +232,9 @@ async def test_stop_after_leader_exit_signals_only_pinned_group_and_cannot_repor
         return False
 
     monkeypatch.setattr(executor_module, "_stop_remaining_group", stop_during_cleanup)
-    with pytest.raises(WorkError) as error:
-        await executor.execute({"action": "turn", "owner": OWNER, "run_id": RUN, "model_id": "qwen"}, AsyncMock())
-    assert error.value.code == "execution_cleanup_unknown"
+    result = await executor.execute({"action": "turn", "owner": OWNER, "run_id": RUN, "model_id": "qwen"}, AsyncMock())
+    assert result["status"] == "cancelled" and result["content"] == ""
+    assert result["diagnostic"] == {"stop_reason": "cancelled", "stage": "forced_stop"}
     assert process.signals == [signal.SIGKILL]
     assert len(cleanup) == 1 and cleanup[0].closed
     assert not executor.processes and not executor.group_handles and not executor.forced_groups
@@ -267,8 +267,10 @@ async def test_stop_watchdog_kills_pinned_group_after_leader_exits(monkeypatch, 
     monkeypatch.setattr(executor_module, "_group_present", lambda _process, _fd: group_alive)
     try:
         executor.cancel(OWNER, RUN)
+        assert signals == [(signal.SIGTERM, (None, executor_module._PIDFD_PROCESS_GROUP))]
         await asyncio.wait_for(executor.stop_watchdogs[key], 2)
-        assert signals == [(signal.SIGTERM, ()), (signal.SIGKILL, (None, executor_module._PIDFD_PROCESS_GROUP))]
+        assert signals == [(signal.SIGTERM, (None, executor_module._PIDFD_PROCESS_GROUP)),
+                           (signal.SIGKILL, (None, executor_module._PIDFD_PROCESS_GROUP))]
         assert key in executor.forced_groups
     finally:
         os.close(fd)
@@ -293,6 +295,64 @@ async def test_stop_watchdog_unblocks_cleanup_if_the_group_cannot_be_killed(monk
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert key in executor.forced_groups
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["process_group", "container"])
+async def test_forced_stop_with_unconfirmed_cleanup_remains_unknown(monkeypatch, child_fixture, failure):
+    config, cleanup = child_fixture
+    process = FakeProcess([], exit_on_close=False)
+    executor = executor_module.ProcessExecutor(config)
+    key = (OWNER, RUN)
+    failing = True
+    group_attempts = []
+    monkeypatch.setattr(executor_module.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+
+    async def stop_group(_process, _handle):
+        group_attempts.append((_process, _handle))
+        if failure == "process_group" and failing:
+            raise WorkError("execution_cleanup_unknown", "无法确认进程组已停止。", 503)
+        return False
+
+    monkeypatch.setattr(executor_module, "_stop_remaining_group", stop_group)
+    if failure == "container":
+        async def fail_close(_self):
+            if failing:
+                raise OSError("container cleanup could not be confirmed")
+            _self.closed = True
+        monkeypatch.setattr(executor_module.DockerSandbox, "close", fail_close)
+
+    task = asyncio.create_task(executor.execute(
+        {"action": "turn", "owner": OWNER, "run_id": RUN, "model_id": "qwen"}, AsyncMock()))
+    async def wait_until_dispatched():
+        while not process.stdin.closed:
+            await asyncio.sleep(0)
+    await asyncio.wait_for(wait_until_dispatched(), 2)
+    executor.cancel(OWNER, RUN)
+    with pytest.raises(WorkError) as error:
+        await asyncio.wait_for(task, 2)
+    assert error.value.code == "execution_cleanup_unknown"
+    assert len(cleanup) == 1 and cleanup[0].owner == OWNER and cleanup[0].run_id == RUN
+    assert executor.processes[key] is process and key in executor.cancelled
+    handle = executor.group_handles[key]
+    os.fstat(handle)
+    try:
+        with pytest.raises((WorkError, OSError)):
+            await executor.finish_stop(OWNER, RUN)
+        assert executor.processes[key] is process and executor.group_handles[key] == handle
+        assert key in executor.cancelled
+        os.fstat(handle)
+        failing = False
+        await executor.finish_stop(OWNER, RUN)
+        assert group_attempts[-1] == (process, handle)
+        assert cleanup[-1].owner == OWNER and cleanup[-1].run_id == RUN and cleanup[-1].closed
+        assert not executor.processes and not executor.group_handles and not executor.cancelled
+        with pytest.raises(OSError):
+            os.fstat(handle)
+    finally:
+        failing = False
+        if key in executor.processes:
+            await executor.finish_stop(OWNER, RUN)
 
 
 @pytest.mark.asyncio
