@@ -4,6 +4,7 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
+import { getHostedPlatform } from "@/lib/hosted-platform";
 import { isMessageAdmissionRejectionReason } from "@/lib/mona-client";
 import type { MessageAdmission, MessageAdmissionReason, MonaClient, StreamError } from "@/lib/mona-client";
 import type {
@@ -693,6 +694,8 @@ export function useMonaStream(
   const [isAwaitingModelResponse, setIsAwaitingModelResponse] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const hostedRef = useRef(Boolean(getHostedPlatform()));
+  hostedRef.current ||= Boolean(getHostedPlatform());
   const stoppingRef = useRef(false);
   const stopRequestRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
   const unresolvedStopRef = useRef<{ turnId?: string; inputId?: string } | null>(null);
@@ -1316,7 +1319,9 @@ export function useMonaStream(
             stoppingRef.current = false;
             setStopping(false);
             suppressStreamUntilTurnEndRef.current = false;
-            setMessageRejection({ runActive: true, stopOutcome: "unknown", stopTurnId: ev.turn_id });
+            if (!hostedRef.current) {
+              setMessageRejection({ runActive: true, stopOutcome: "unknown", stopTurnId: ev.turn_id });
+            }
           }
           setIsStreaming(true);
           if (!stoppingRef.current) setStopping(false);
@@ -2110,9 +2115,11 @@ export function useMonaStream(
         onTurnEnd?.();
       } else {
         if (!request.turnId && !request.inputId) unresolvedStopRef.current = null;
-        setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null,
-          stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown",
-          ...(request.turnId ? { stopTurnId: request.turnId } : {}) });
+        if (!hostedRef.current) {
+          setMessageRejection({ runActive: client.getRunStartedAt(chatId) !== null,
+            stopOutcome: outcome === "unsupported" ? "unsupported" : "unknown",
+            ...(request.turnId ? { stopTurnId: request.turnId } : {}) });
+        }
       }
     })();
   }, [chatId, clearActivitySegment, client, flushPendingStreamEvents, isStreaming, onTurnEnd]);

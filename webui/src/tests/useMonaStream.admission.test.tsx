@@ -7,6 +7,7 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { reconcileHistoryMessages } from "@/hooks/useSessions";
 import i18n from "@/i18n";
+import { configureHostedPlatform } from "@/lib/hosted-platform";
 import { MonaClient } from "@/lib/mona-client";
 import type { InboundEvent, UIMessage } from "@/lib/types";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -24,6 +25,7 @@ class Socket {
 }
 
 const clients: MonaClient[] = [];
+const hostedReleases: (() => void)[] = [];
 const empty: UIMessage[] = [];
 const trace: UIMessage = { id: "old-trace", role: "tool", kind: "trace", content: "Using tools", createdAt: 1, historyPosition: 1 };
 
@@ -39,7 +41,10 @@ function setup() {
   return { client, socket, wrapper };
 }
 
-afterEach(() => clients.splice(0).forEach((client) => client.close()));
+afterEach(() => {
+  clients.splice(0).forEach((client) => client.close());
+  hostedReleases.splice(0).forEach((release) => release());
+});
 
 describe("chat admission and runtime recovery", () => {
 
@@ -336,6 +341,67 @@ describe("chat admission and runtime recovery", () => {
     expect(result.current.stopping).toBe(false);
     expect(result.current.messageRejection).toBeNull();
     expect(result.current.isStreaming).toBe(false);
+  });
+
+  it.each(["unknown", "unsupported"] as const)("does not show a hosted stop dialog for %s", async (outcome) => {
+    hostedReleases.push(configureHostedPlatform({ apiBase: "/api/work/desktop", token: "test-account" }));
+    const { socket, wrapper } = setup();
+    let stream!: ReturnType<typeof useMonaStream>;
+    function View() {
+      stream = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={stream.messageRejection} onDismiss={stream.dismissMessageRejection} />;
+    }
+    render(<View />, { wrapper });
+    act(() => stream.send("original input", undefined, { inputId: "input-one" }));
+    act(() => {
+      socket.emit({ event: "message_accepted", chat_id: "chat", input_id: "input-one" });
+      socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10,
+        turn_id: "turn-a", input_id: "input-one" });
+    });
+    act(() => stream.stop());
+    const requests = socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn");
+    expect(requests).toHaveLength(1);
+    expect(requests[0].expected_turn_id).toBe("turn-a");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: requests[0].request_id,
+      ok: true, chat_id: "chat", turn_id: "turn-a", outcome }));
+    expect(stream.stopping).toBe(false);
+    expect(stream.messageRejection).toBeNull();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(socket.messages).toHaveLength(1);
+  });
+
+  it("does not show a hosted stop dialog when pending cleanup becomes unknown", async () => {
+    hostedReleases.push(configureHostedPlatform({ apiBase: "/api/work/desktop", token: "test-account" }));
+    const { socket, wrapper } = setup();
+    const { result } = renderHook(() => useMonaStream("chat", empty), { wrapper });
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", started_at: 10, turn_id: "turn-a" }));
+    act(() => result.current.stop());
+    const stop = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "stop_work_turn");
+    await act(async () => socket.emit({ event: "work_turn_stop_result", request_id: stop.request_id, ok: true,
+      chat_id: "chat", turn_id: "turn-a", outcome: "pending" }));
+    expect(result.current.stopping).toBe(true);
+    act(() => socket.emit({ event: "goal_status", chat_id: "chat", status: "running", turn_id: "turn-a",
+      turn_state: "unknown", started_at: 10 }));
+    expect(result.current.stopping).toBe(false);
+    expect(result.current.messageRejection).toBeNull();
+    expect(socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "stop_work_turn")).toHaveLength(1);
+  });
+
+  it("still shows hosted message admission failures", () => {
+    hostedReleases.push(configureHostedPlatform({ apiBase: "/api/work/desktop", token: "test-account" }));
+    const { socket, wrapper } = setup();
+    let stream!: ReturnType<typeof useMonaStream>;
+    function View() {
+      stream = useMonaStream("chat", empty);
+      return <MessageRejectionDialog rejection={stream.messageRejection} onDismiss={stream.dismissMessageRejection} />;
+    }
+    render(<View />, { wrapper });
+    act(() => stream.send("keep draft", undefined, { inputId: "input-one" }));
+    act(() => socket.emit({ event: "error", chat_id: "chat", input_id: "input-one", message_rejected: true,
+      code: "insufficient_balance" }));
+    expect(stream.messageRejection?.reason).toBe("insufficient_balance");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(socket.messages).toHaveLength(1);
   });
 
   it("shows the unknown result once cleanup actually ends without confirmation", async () => {
