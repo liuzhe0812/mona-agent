@@ -78,6 +78,33 @@ def definition(name, *, flat=False):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("binding_created", [False, True])
+async def test_setup_rejection_is_zero_usage_only_before_any_model_can_be_dispatched(tmp_path, monkeypatch, binding_created):
+    hosted = provider(tmp_path)
+
+    async def start(instance, *_args):
+        if binding_created:
+            instance._binding = SimpleNamespace(native_session_id="test-thread")
+        raise RpcError("native_request_rejected", "test rejection")
+
+    async def chat(instance, messages, tools, model, effort, *_callbacks):
+        try:
+            await instance._start(messages, tools, model, effort)
+        except RpcError:
+            return LLMResponse(content="test rejection", finish_reason="error", usage={})
+        raise AssertionError("fixture must reject initialization")
+
+    monkeypatch.setattr(NativeWorkProvider, "_start", start)
+    monkeypatch.setattr(NativeWorkProvider, "_chat", chat)
+    response = await hosted._chat([], [], "model", None)
+    assert response.finish_reason == "error"
+    receipt = hosted.billing_usage.snapshot()
+    assert receipt["complete"] is (not binding_created)
+    assert receipt["prompt_tokens"] == receipt["cached_tokens"] == receipt["completion_tokens"] == 0
+    assert not hosted._billing_active
+
+
+@pytest.mark.asyncio
 async def test_basic_tool_aliases_round_trip_without_mutating_schemas(tmp_path, monkeypatch):
     hosted = provider(tmp_path)
     tools = [definition("read_file"), definition("write_file", flat=True), definition("skill_read")]

@@ -46,6 +46,7 @@ class HostedNativeWorkProvider(NativeWorkProvider):
         super().__init__(config, workspace, native_home=native_home)
         self.billing_usage = billing_usage if billing_usage is not None else CodexUsage()
         self._billing_active = False
+        self._billing_not_dispatched = False
         self._billing_fields: set[str] = set()
         self._billing_previous: tuple[int, int, int] | None = None
         self._billing_receipt_serial = 0
@@ -76,6 +77,7 @@ class HostedNativeWorkProvider(NativeWorkProvider):
             self._initial_definitions = definitions
         self.billing_usage.begin()
         self._billing_active = True
+        self._billing_not_dispatched = False
         self._billing_fields.clear()
         self._billing_previous = None
         self._billing_receipt_serial = 0
@@ -84,7 +86,11 @@ class HostedNativeWorkProvider(NativeWorkProvider):
         try:
             await super()._start(messages, tools, model, reasoning_effort)
         except BaseException:
-            self._finish_billing(False, "start_failed")
+            # create_session only prepares the native thread. The first model
+            # request is sent after its binding exists; setup rejection is zero
+            # model usage, rather than an unknown charge that keeps a hold.
+            self._billing_not_dispatched = self._binding is None
+            self._finish_billing(self._billing_not_dispatched, "start_failed")
             raise
 
     def _finish_billing(self, complete: bool, reason: str = "incomplete_receipt") -> None:
@@ -115,8 +121,9 @@ class HostedNativeWorkProvider(NativeWorkProvider):
             raise
         self._billing_fields.update(self.billing_usage.add(response.usage))
         if response.finish_reason == "error":
-            self.billing_usage.invalidate("native_response_error")
-            self._finish_billing(False, "native_response_error")
+            if not self._billing_not_dispatched:
+                self.billing_usage.invalidate("native_response_error")
+                self._finish_billing(False, "native_response_error")
         elif response.finish_reason == "tool_calls":
             self._billing_tool_serial = self._billing_receipt_serial
             self._billing_tool_snapshot = self._billing_previous

@@ -88,6 +88,7 @@ _ERROR_MESSAGES = {
 def _native_history_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep message boundaries and image pixels; history never replays operations."""
     blocks = []
+    images: dict[str, int] = {}
     text = ["以下是 Mona 已保存的会话。历史工具调用及结果仅供参考，不要重新执行。继续处理最后的用户请求。"]
 
     def flush_text():
@@ -106,6 +107,12 @@ def _native_history_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any
                 if block.get("type") == "text":
                     text.append(block["text"])
                 elif block.get("type") == "image_url":
+                    digest = hashlib.sha256(json.dumps(block, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                    if digest in images:
+                        text.append(f"[此处图片与前文图像 {images[digest]} 完全相同，请参照该图像。]")
+                        continue
+                    images[digest] = len(images) + 1
+                    text.append(f"[图像 {images[digest]}]")
                     flush_text()
                     blocks.append(block)
         else:

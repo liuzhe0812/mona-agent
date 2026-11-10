@@ -327,6 +327,9 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
         if fault:
             status = "failed"
             result.stop_reason = "workspace_operation_failed"
+        provider_error_code = getattr(hook.last_response, "error_code", None)
+        if not isinstance(provider_error_code, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider_error_code) is None:
+            provider_error_code = None
         return {"status": status, "content": (result.final_content or "") if status == "completed" else "",
                 "message": "" if status == "completed" else fault or failure_message(result.stop_reason),
                 "usage": result.usage,
@@ -335,7 +338,8 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
                 "diagnostic": {"stop_reason": result.stop_reason, "iterations": hook.iteration + 1,
                                "context_window_tokens": window.tokens, "context_window_source": window.source,
                                "max_context_tokens": hook.max_context_tokens,
-                               "provider_status": getattr(hook.last_response, "error_status_code", None)}}
+                               "provider_status": getattr(hook.last_response, "error_status_code", None),
+                               "provider_error_code": provider_error_code}}
     except asyncio.CancelledError:
         await hook.flush()
         await flush_deliveries()
