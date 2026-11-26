@@ -1,6 +1,6 @@
 [package]
 name = "mona-desktop"
-version = "1.8.5"
+version = "1.8.6"
 description = "Mona Desktop Client"
 authors = ["Mona Team"]
 edition = "2021"
