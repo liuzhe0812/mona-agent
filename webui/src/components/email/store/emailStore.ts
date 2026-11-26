@@ -19,6 +19,16 @@ function calcTotalUnread(foldersByAccount: Record<string, EmailFolder[]>): numbe
   return total;
 }
 
+function sameImapConnection(left: EmailAccount, right: EmailAccount): boolean {
+  return left.id === right.id && left.imapHost === right.imapHost &&
+    left.imapUsername === right.imapUsername && left.imapPort === right.imapPort &&
+    left.imapUseSsl === right.imapUseSsl;
+}
+
+function withoutAccountCache<T>(cache: Record<string, T>, accountId: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(cache).filter(([key]) => key.split(":", 2)[1] !== accountId));
+}
+
 async function setTrayUnreadCount(count: number): Promise<void> {
   try {
     await invoke("set_tray_unread_count", { count });
@@ -233,9 +243,9 @@ void (async () => {
       const p = event.payload;
       if (!p || p.stage !== "network") return;
       const cacheKey = `${p.uid}:${p.accountId}:${p.mailbox}`;
-      useEmailStore.setState((state) => ({
-        bodyLoadingStage: { ...state.bodyLoadingStage, [cacheKey]: "network" },
-      }));
+      useEmailStore.setState((state) => state.accounts.some((account) => account.id === p.accountId)
+        ? { bodyLoadingStage: { ...state.bodyLoadingStage, [cacheKey]: "network" } }
+        : state);
     });
   } catch {
     // 非桌面环境无 listen API，静默忽略
@@ -390,14 +400,91 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   updateAccount: async (account, newPassword) => {
     set({ error: null });
+    const previous = get().accounts.find((item) => item.id === account.id);
+    let saved: EmailAccount;
     try {
       // 调用 updateAccountSettings：未传 newPassword 时保留原密码，避免双重加密
-      await api.updateAccountSettings(account, newPassword ?? null);
-      const accounts = get().accounts.map((a) => (a.id === account.id ? account : a));
-      set({ accounts });
+      saved = await api.updateAccountSettings(account, newPassword ?? null);
     } catch (e) {
       set({ error: String(e) });
       throw e;
+    }
+    const identityChanged = saved.id !== account.id;
+    const connectionChanged = !previous || !sameImapConnection(previous, saved) || !!newPassword;
+    set((state) => {
+      const accounts = state.accounts.map((item) => item.id === account.id ? saved : item);
+      if (!identityChanged) return { accounts };
+      const foldersByAccount = { ...state.foldersByAccount };
+      delete foldersByAccount[account.id];
+      const wasSelected = state.selectedAccountId === account.id;
+      const selectedUids = new Set([...state.selectedUids].filter((key) => key.split(":", 2)[1] !== account.id));
+      return {
+        accounts,
+        foldersByAccount,
+        folders: wasSelected ? [] : state.folders,
+        foldersLoading: wasSelected ? false : state.foldersLoading,
+        foldersError: wasSelected ? null : state.foldersError,
+        selectedAccountId: wasSelected ? saved.id : state.selectedAccountId,
+        selectedFolder: wasSelected ? "INBOX" : state.selectedFolder,
+        messages: wasSelected ? [] : state.messages.filter((item) => item.accountId !== account.id),
+        selectedMessage: wasSelected || state.selectedMessage?.accountId === account.id ? null : state.selectedMessage,
+        selectedUids: wasSelected ? new Set<string>() : selectedUids,
+        anchorUid: wasSelected || state.anchorUid?.split(":", 2)[1] === account.id ? null : state.anchorUid,
+        bodyCache: withoutAccountCache(state.bodyCache, account.id),
+        bodyLoadingStage: withoutAccountCache(state.bodyLoadingStage, account.id),
+        analysisCache: withoutAccountCache(state.analysisCache, account.id),
+        analysisError: wasSelected ? null : state.analysisError,
+        hasMore: wasSelected ? false : state.hasMore,
+        totalUnreadCount: calcTotalUnread(foldersByAccount),
+      };
+    });
+    if (identityChanged) void setTrayUnreadCount(get().totalUnreadCount);
+
+    if (!connectionChanged) return;
+    const gatewayUrl = get().gatewayUrl;
+    const isCurrent = () => get().accounts.some((item) => sameImapConnection(item, saved));
+    const failures: string[] = [];
+    if (!gatewayUrl) {
+      failures.push(identityChanged ? "文件夹刷新和实时收信暂不可用" : "实时收信暂不可用");
+    } else {
+      await Promise.all([
+        (async () => {
+          if (!identityChanged) return;
+          try {
+            const folders = await api.syncFolders(gatewayUrl, saved);
+            if (!isCurrent()) return;
+            const merged = sortFolders(folders);
+            set((state) => {
+              if (!state.accounts.some((item) => sameImapConnection(item, saved))) return state;
+              const foldersByAccount = { ...state.foldersByAccount, [saved.id]: merged };
+              return {
+                foldersByAccount,
+                folders: state.selectedAccountId === saved.id ? merged : state.folders,
+                totalUnreadCount: calcTotalUnread(foldersByAccount),
+              };
+            });
+          } catch {
+            if (isCurrent()) failures.push("文件夹刷新失败");
+          }
+        })(),
+        (async () => {
+          try {
+            if (identityChanged) await api.stopIdle(gatewayUrl, account.id);
+            if (isCurrent()) await api.startIdle(gatewayUrl, saved, "INBOX");
+          } catch {
+            if (isCurrent()) failures.push("实时收信未能更新");
+          }
+        })(),
+      ]);
+    }
+    if (failures.length && isCurrent()) {
+      const message = `邮箱设置已保存，但${failures.join("、")}。请检查邮箱连接与授权后重试。`;
+      try {
+        const { message: showMessage } = await import("@tauri-apps/plugin-dialog");
+        await showMessage(message, { title: "邮箱设置", kind: "warning" });
+      } catch {
+        set({ error: message });
+      }
     }
   },
 
@@ -464,6 +551,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           return {} as Record<string, number>;
         }
       })();
+      if (!get().accounts.some((item) => sameImapConnection(item, account))) return;
       const merged = sortFolders(
         localFolders.map((f) => ({
           ...f,
@@ -476,7 +564,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           [accountId]: merged,
         };
         return {
-          folders: merged,
+          folders: state.selectedAccountId === accountId ? merged : state.folders,
           foldersByAccount: nextFoldersByAccount,
           foldersLoading: false,
           foldersError: null,
@@ -487,7 +575,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("[email] getFolders failed", e);
-      if (!hasCache) {
+      if (!hasCache && get().accounts.some((item) => sameImapConnection(item, account))) {
         set({ foldersLoading: false, foldersError: String(e) });
       }
     }
@@ -495,7 +583,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     // 2. 后台连接 IMAP 同步最新文件夹列表，fire-and-forget 不阻塞首屏
     //    本地 SQLite 结果已在 step 1 立即渲染，IMAP 同步完成后静默更新缓存
     //    localOnly 模式跳过 IMAP 同步，仅用本地缓存（用于新建文件夹后避免锁竞争）
-    if (!gatewayUrl || localOnly) return;
+    if (!gatewayUrl || localOnly || !get().accounts.some((item) => sameImapConnection(item, account))) return;
     // 不 await：让 IMAP LIST 在后台执行，不阻塞当前调用
     void (async () => {
       try {
@@ -507,6 +595,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             return {} as Record<string, number>;
           }
         })();
+        if (!get().accounts.some((item) => sameImapConnection(item, account))) return;
         const merged = sortFolders(
           synced.map((f) => ({
             ...f,
@@ -1096,6 +1185,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   fetchBody: async (message) => {
     const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
     const messageKey = emailMessageKey(message);
+    const accountWasActive = get().accounts.some((account) => account.id === message.accountId);
     let identityChangedDuringLoad = false;
     // 邮件服务 URL（用于本地 .eml 失败时回退到 HTTP 拉取，变量名历史遗留叫 gatewayUrl）
     const serviceUrl = get().gatewayUrl;
@@ -1157,6 +1247,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         serviceUrl,
       );
       const current = get();
+      if (accountWasActive && !current.accounts.some((account) => account.id === message.accountId)) return;
       const currentMessage = current.messages.find((item) => emailMessageKey(item) === messageKey)
         ?? (current.selectedMessage && emailMessageKey(current.selectedMessage) === messageKey
           ? current.selectedMessage
@@ -1234,6 +1325,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       console.error("fetchBody failed:", errMsg);
       // 记录错误到 UI 状态，避免永远 loading；用户可重新点击邮件触发重试
       const current = get();
+      if (accountWasActive && !current.accounts.some((account) => account.id === message.accountId)) return;
       const currentMessage = current.messages.find((item) => emailMessageKey(item) === messageKey)
         ?? (current.selectedMessage && emailMessageKey(current.selectedMessage) === messageKey
           ? current.selectedMessage
@@ -1433,13 +1525,14 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     const key = `${message.uid}:${message.accountId}:${message.folder}`;
     const cached = get().analysisCache[key];
     if (cached) return cached;
+    const accountWasActive = get().accounts.some((account) => account.id === message.accountId);
     try {
       const analysis = await api.getEmailAnalysis(
         message.uid,
         message.accountId,
         message.folder,
       );
-      if (analysis) {
+      if (analysis && (!accountWasActive || get().accounts.some((account) => account.id === message.accountId))) {
         set((state) => ({
           analysisCache: { ...state.analysisCache, [key]: analysis },
         }));
@@ -1452,6 +1545,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   runAnalysis: async (gatewayUrl, message) => {
     set({ analysisLoading: true, analysisError: null });
+    const accountWasActive = get().accounts.some((account) => account.id === message.accountId);
     try {
       // 提取邮件图片（内嵌 + 附件），用于多模态分析
       const account = get().accounts.find((a) => a.id === message.accountId) ?? null;
@@ -1477,7 +1571,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       }
       const key = `${message.uid}:${message.accountId}:${message.folder}`;
       set((state) => ({
-        analysisCache: { ...state.analysisCache, [key]: analysis },
+        analysisCache: accountWasActive && !state.accounts.some((account) => account.id === message.accountId)
+          ? state.analysisCache
+          : { ...state.analysisCache, [key]: analysis },
         analysisLoading: false,
       }));
       return analysis;

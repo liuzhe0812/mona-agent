@@ -47,9 +47,10 @@ function toComposeBaseMessage(message: EmailMessage): EmailMessage {
   };
 }
 
-export function EmailClientView({ onOpenEmailExtraction }: {
+export function EmailClientView({ onOpenEmailExtraction, onOpenSettings }: {
   onOpenSubscribe?: () => void;
   onOpenEmailExtraction?: () => void;
+  onOpenSettings?: (section?: string) => void;
 }) {
   const loadAccounts = useEmailStore((s) => s.loadAccounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
@@ -431,7 +432,7 @@ export function EmailClientView({ onOpenEmailExtraction }: {
             </div>
             {agentPanelVisible && (
               <div className="w-[320px] shrink-0 border-l border-border bg-card">
-                <MailAgentPanel />
+                <MailAgentPanel onOpenSettings={onOpenSettings} />
               </div>
             )}
           </>

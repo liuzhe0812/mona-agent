@@ -10,10 +10,56 @@ from pydantic import ValidationError
 
 from mona.api import server as api
 from mona.config.schema import EmailOfflineSyncSettings
+from mona.email.imap_pool import ImapPoolManager
 
 
 def test_offline_sync_defaults_to_ninety_days():
     assert EmailOfflineSyncSettings().model_dump(by_alias=True) == {"offlineSyncDays": 90}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [110, 995])
+@pytest.mark.parametrize("handler_name", ["handle_email_sync", "handle_email_test_connection"])
+async def test_pop3_port_returns_configuration_error_without_connecting(monkeypatch, port, handler_name):
+    monkeypatch.setattr(api, "_IMAP_LOCKS", {})
+    monkeypatch.setattr(api, "_IMAP_FOREGROUND_WAITERS", {})
+    monkeypatch.setattr(api, "imap_pool_manager", ImapPoolManager())
+    monkeypatch.setattr(api, "_validate_mail_host", lambda _host: None)
+
+    def connect(*_args, **_kwargs):
+        pytest.fail("POP3 settings must be rejected before connecting")
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", connect)
+    monkeypatch.setattr(imaplib.IMAP4, "open", connect)
+
+    class Request:
+        async def json(self):
+            return {"imapHost": "pop.example.invalid", "imapPort": port,
+                    "imapUsername": "reader", "useSsl": port == 995}
+
+    response = await getattr(api, handler_name)(Request())
+
+    assert response.status == 422
+    message = json.loads(response.body)["error"]
+    assert "POP3" in message and "IMAP" in message and "993" in message
+
+
+@pytest.mark.asyncio
+async def test_sync_explains_an_empty_protocol_greeting_error(monkeypatch):
+    def fetch(_body):
+        raise imaplib.IMAP4.error(None)
+
+    class Request:
+        async def json(self):
+            return {}
+
+    monkeypatch.setattr(api, "_imap_fetch_recent", fetch)
+    response = await api.handle_email_sync(Request())
+
+    assert response.status == 500
+    assert json.loads(response.body) == {
+        "error": "收件服务器未返回有效的 IMAP 响应，请检查收件地址、端口和加密方式。",
+    }
 
 
 @pytest.mark.parametrize("days", [0, 90, 365])
@@ -449,6 +495,170 @@ def test_flag_rejection_is_not_reported_as_success(monkeypatch, stage):
     with pytest.raises(RuntimeError):
         api._imap_set_flag({**body, "uid": "1", "flag": "\\Seen", "add": False})
     assert client.select_readonly == [False]
+
+
+class FlagMailbox:
+    def __init__(self, *, select_result=("OK", []), list_result=("OK", []), validity=b"8", select_error=None, list_error=None):
+        self.select_result = select_result
+        self.list_result = list_result
+        self.validity = validity
+        self.select_error = select_error
+        self.list_error = list_error
+        self.calls = []
+
+    def select(self, mailbox):
+        self.calls.append(("SELECT", mailbox))
+        if self.select_error:
+            raise self.select_error
+        return self.select_result
+
+    def list(self):
+        self.calls.append(("LIST",))
+        if self.list_error:
+            raise self.list_error
+        return self.list_result
+
+    def response(self, name):
+        return name, [self.validity]
+
+    def uid(self, command, *args):
+        self.calls.append((command, *args))
+        return "OK", []
+
+
+async def flag_response(monkeypatch, client, *, mailbox="Junk", uid_validity="8"):
+    monkeypatch.setattr(api, "_validate_mail_host", lambda _host: None)
+    monkeypatch.setattr(api.imap_pool_manager, "run", lambda _body, operation: operation(client))
+
+    async def run(_body, operation):
+        return operation(_body)
+
+    monkeypatch.setattr(api, "_run_imap_locked", run)
+
+    class Request:
+        async def json(self):
+            return {
+                "imapHost": "mail.example.invalid", "imapUsername": "reader", "mailbox": mailbox,
+                "uid": "42", "flag": "\\Seen", "add": True, "uidValidity": uid_validity,
+            }
+
+    response = await api.handle_email_set_flag(Request())
+    return response.status, json.loads(response.body)
+
+
+@pytest.mark.parametrize("list_result", [("NO", [b"not allowed"]), ("OK", []), ("OK", [None])])
+def test_folder_list_failure_is_not_reported_as_empty_success(monkeypatch, list_result):
+    client = FlagMailbox(list_result=list_result)
+    body = mailbox(monkeypatch, client)
+    monkeypatch.setattr(api.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="文件夹列表"):
+        api._imap_list_folders(body)
+
+
+def test_folder_list_requires_every_entry_and_preserves_folder_metadata(monkeypatch):
+    encoded_name = api._encode_imap_utf7("垃圾邮件").encode("ascii")
+    rows = [
+        b'(\\HasChildren \\Noselect) "." "INBOX"',
+        b'(\\HasNoChildren) "/" "' + encoded_name + b'"',
+        b'(\\HasNoChildren) nil [Gmail]',
+    ]
+    client = FlagMailbox(list_result=("OK", rows))
+    body = mailbox(monkeypatch, client)
+
+    assert api._imap_list_folders(body) == [
+        {"name": "INBOX", "delimiter": ".", "hasChildren": True,
+         "flags": "\\haschildren \\noselect", "unreadCount": 0},
+        {"name": "垃圾邮件", "delimiter": "/", "hasChildren": False,
+         "flags": "\\hasnochildren", "unreadCount": 0},
+        {"name": "[Gmail]", "delimiter": "", "hasChildren": False,
+         "flags": "\\hasnochildren", "unreadCount": 0},
+    ]
+    client.list_result = ("OK", [*rows, b"invalid LIST entry"])
+    with pytest.raises(RuntimeError, match="文件夹列表"):
+        api._imap_list_folders(body)
+
+
+@pytest.mark.asyncio
+async def test_flag_reports_missing_mailbox_only_after_a_complete_list(monkeypatch):
+    encoded_name = api._encode_imap_utf7("垃圾邮件").encode("ascii")
+    client = FlagMailbox(
+        select_result=("NO", [b"mailbox not found"]),
+        list_result=("OK", [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren) "/" "' + encoded_name + b'"']),
+    )
+
+    status, payload = await flag_response(monkeypatch, client)
+
+    assert status == 500
+    assert payload["mailboxMissing"] is True
+    assert payload["uidValidityChanged"] is False
+    assert payload["error"] == "该邮件文件夹当前不可用，请刷新文件夹后核对。"
+    assert [call[0] for call in client.calls] == ["SELECT", "LIST"]
+
+
+def test_flag_mailbox_list_only_ignores_case_for_inbox():
+    client = FlagMailbox(list_result=("OK", [
+        b'(\\HasNoChildren) "/" "inbox"', b'(\\HasNoChildren) "/" "junk"',
+    ]))
+
+    assert api._imap_flag_mailbox_missing(client, "INBOX") is False
+    assert api._imap_flag_mailbox_missing(client, "Junk") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["present", "permission", "readonly", "list_failure", "list_exception", "empty", "malformed", "bad_utf7", "control_char"])
+async def test_flag_does_not_claim_mailbox_missing_without_complete_evidence(monkeypatch, case):
+    listing = [b'(\\HasNoChildren) "/" "INBOX"']
+    if case == "present":
+        listing.append(b'(\\HasNoChildren) "/" "Junk"')
+    if case == "malformed":
+        listing.append(b"unparseable list response")
+    if case == "bad_utf7":
+        listing.append(b'(\\HasNoChildren) "/" "broken&bad"')
+    if case == "control_char":
+        listing.append(b'(\\HasNoChildren) "/" "bad\x01name"')
+    if case == "empty":
+        listing = [None]
+    client = FlagMailbox(
+        select_result=("NO", [b"permission denied"] if case == "permission" else [b"select failed"]),
+        select_error=imaplib.IMAP4.readonly("read only") if case == "readonly" else None,
+        list_result=("NO" if case == "list_failure" else "OK", listing),
+        list_error=imaplib.IMAP4.error("LIST failed") if case == "list_exception" else None,
+    )
+
+    status, payload = await flag_response(monkeypatch, client)
+
+    assert status == 500
+    assert payload["mailboxMissing"] is False
+    assert payload["uidValidityChanged"] is False
+    assert not any(call[0] == "STORE" for call in client.calls)
+    if case in {"permission", "readonly"}:
+        assert [call[0] for call in client.calls] == ["SELECT"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("current", "changed"), [(None, False), (b"9", True)])
+async def test_flag_requires_confirmed_uid_validity_before_store(monkeypatch, current, changed):
+    client = FlagMailbox(validity=current)
+
+    status, payload = await flag_response(monkeypatch, client)
+
+    assert status == 500
+    assert payload["mailboxMissing"] is False
+    assert payload["uidValidityChanged"] is changed
+    assert "版本" in payload["error"]
+    assert not any(call[0] == "STORE" for call in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_flag_stores_when_uid_validity_matches(monkeypatch):
+    client = FlagMailbox(validity=b"8")
+
+    status, payload = await flag_response(monkeypatch, client)
+
+    assert status == 200
+    assert payload == {"status": "ok"}
+    assert [call[0] for call in client.calls] == ["SELECT", "STORE"]
 
 
 async def test_unknown_smtp_attempt_is_not_retried(monkeypatch):

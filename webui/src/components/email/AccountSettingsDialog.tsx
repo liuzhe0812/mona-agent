@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -59,7 +60,6 @@ export function AccountSettingsDialog({
   const gatewayUrl = useEmailStore((s) => s.gatewayUrl);
   const foldersByAccount = useEmailStore((s) => s.foldersByAccount);
   const [displayName, setDisplayName] = useState("");
-  const [fromName, setFromName] = useState("");
   const [emailAddress, setEmailAddress] = useState("");
   const [imapUsername, setImapUsername] = useState("");
   const [imapHost, setImapHost] = useState("");
@@ -70,6 +70,7 @@ export function AccountSettingsDialog({
   const [smtpSsl, setSmtpSsl] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [offlineSyncDays, setOfflineSyncDays] = useState<EmailOfflineSyncDays>(90);
+  const [activeTab, setActiveTab] = useState("basic");
   const [signatures, setSignatures] = useState<EmailSignature[]>([]);
   const [editingSigId, setEditingSigId] = useState<string | null>(null);
   const [sigDraft, setSigDraft] = useState<EmailSignature | null>(null);
@@ -85,7 +86,6 @@ export function AccountSettingsDialog({
   useEffect(() => {
     if (!open || !account) return;
     setDisplayName(account.displayName);
-    setFromName(account.fromName ?? "");
     setEmailAddress(account.fromAddress);
     setImapUsername(account.imapUsername);
     setImapHost(account.imapHost);
@@ -96,6 +96,7 @@ export function AccountSettingsDialog({
     setSmtpSsl(account.smtpUseSsl);
     setNewPassword("");
     setOfflineSyncDays(account.offlineSyncDays ?? 90);
+    setActiveTab("basic");
     setSignatures(account.signatures ?? []);
     setEditingSigId(null);
     setSigDraft(null);
@@ -110,6 +111,9 @@ export function AccountSettingsDialog({
   // 跳过关闭动画和 body 样式清理，导致 pointer-events:none 残留在 body 上，
   // 界面完全无法响应点击（100% 卡死）。始终渲染 Dialog，让 Radix 管理 open/close。
   if (!account) return null;
+
+  const parsedImapPort = parseInt(imapPort, 10);
+  const isPop3Port = parsedImapPort === 110 || parsedImapPort === 995;
 
   const handleImapSslChange = (checked: boolean) => {
     setImapSsl(checked);
@@ -278,8 +282,13 @@ export function AccountSettingsDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!account) return;
-    if (!emailAddress.trim() || !displayName.trim()) {
-      setError("邮箱地址和显示名称不能为空");
+    if (isPop3Port) {
+      setError(null);
+      setActiveTab("basic");
+      return;
+    }
+    if (!emailAddress.trim()) {
+      setError("邮件账号不能为空");
       return;
     }
     if (!imapHost.trim() || !smtpHost.trim()) {
@@ -289,14 +298,16 @@ export function AccountSettingsDialog({
     setSubmitting(true);
     setError(null);
     try {
+      const username = imapUsername.trim() || emailAddress.trim();
       const updated: EmailAccount = {
         ...account,
-        displayName: displayName.trim(),
-        fromName: fromName.trim() || null,
+        displayName: displayName.trim() || emailAddress.trim(),
         fromAddress: emailAddress.trim(),
-        imapUsername: imapUsername.trim() || emailAddress.trim(),
+        imapUsername: username,
+        smtpUsername: !account.smtpUsername || account.smtpUsername === account.imapUsername
+          ? username : account.smtpUsername,
         imapHost: imapHost.trim(),
-        imapPort: parseInt(imapPort, 10) || 993,
+        imapPort: parsedImapPort || 993,
         imapUseSsl: imapSsl,
         smtpHost: smtpHost.trim(),
         smtpPort: parseInt(smtpPort, 10) || 587,
@@ -304,7 +315,7 @@ export function AccountSettingsDialog({
         signatures,
         offlineSyncDays,
       };
-      await updateAccount(updated, newPassword.trim() || null);
+      await updateAccount(updated, newPassword || null);
       onOpenChange(false);
     } catch (err) {
       setError(String(err));
@@ -322,185 +333,159 @@ export function AccountSettingsDialog({
       }}
     >
       <DialogContent
-        className="max-w-lg"
+        className="max-w-xl"
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>邮箱设置</DialogTitle>
+          <DialogDescription className="sr-only">配置邮箱账号、密码及收发服务器。</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
-          <Tabs defaultValue="basic" className="w-full">
-            <TabsList className="grid w-full grid-cols-5">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="basic" className="text-caption">基础</TabsTrigger>
-              <TabsTrigger value="password" className="text-caption">密码</TabsTrigger>
               <TabsTrigger value="signatures" className="text-caption">签名</TabsTrigger>
               <TabsTrigger value="rules" className="text-caption">规则</TabsTrigger>
               <TabsTrigger value="schedule" className="text-caption">邮件提取</TabsTrigger>
             </TabsList>
-            <TabsContent value="basic" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
-          {/* 基础 */}
-          <section className="space-y-3">
-            <h3 className="text-caption font-medium text-muted-foreground">基础</h3>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <Label htmlFor="acct-email" className="text-caption">
-                  邮箱地址
-                </Label>
+            <TabsContent value="basic" className="mt-4 max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+              <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                <Label htmlFor="acct-email" className="text-caption sm:text-right">邮件账号</Label>
                 <Input
                   id="acct-email"
+                  type="email"
                   value={emailAddress}
-                  onChange={(e) => setEmailAddress(e.target.value)}
-                  className="h-8 text-ui"
+                  onChange={(e) => {
+                    if (!imapUsername || imapUsername === emailAddress) setImapUsername(e.target.value);
+                    setEmailAddress(e.target.value);
+                  }}
+                  className="text-ui"
                   disabled={submitting}
+                  autoComplete="username"
                 />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="acct-display" className="text-caption">
-                  显示名称（前端显示）
-                </Label>
-                <Input
-                  id="acct-display"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="邮箱树中显示的名字"
-                  className="h-8 text-ui"
-                  disabled={submitting}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="acct-from-name" className="text-caption">
-                  发信名称
-                </Label>
-                <Input
-                  id="acct-from-name"
-                  value={fromName}
-                  onChange={(e) => setFromName(e.target.value)}
-                  placeholder="发邮件时收件人看到的发件人名字（留空则用邮箱地址）"
-                  className="h-8 text-ui"
-                  disabled={submitting}
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="space-y-1">
-            <Label className="text-caption">历史正文离线保存</Label>
-            <Select
-              aria-label="历史正文离线保存"
-              value={String(offlineSyncDays)}
-              onValueChange={(value) => setOfflineSyncDays(Number(value) as EmailOfflineSyncDays)}
-              options={EMAIL_OFFLINE_SYNC_OPTIONS}
-              className="h-8 text-ui"
-              disabled={submitting}
-            />
-            <p className="text-caption text-muted-foreground">
-              新邮件自动后台收取。历史邮件保留在列表中，范围外未下载的正文打开时需联网；已下载邮件会保留。正文搜索覆盖已下载的邮件。
-            </p>
-            {offlineSyncDays === 0 && (
-              <p className="text-caption text-muted-foreground">保存全部历史正文需要更多时间和磁盘空间。</p>
-            )}
-          </section>
-
-          {/* 服务器 */}
-          <section className="space-y-3">
-            <h3 className="text-caption font-medium text-muted-foreground">服务器</h3>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <Label htmlFor="acct-username" className="text-caption">
-                  账号
-                </Label>
-                <Input
-                  id="acct-username"
-                  value={imapUsername}
-                  onChange={(e) => setImapUsername(e.target.value)}
-                  placeholder="IMAP/SMTP 登录用户名，留空则用邮箱地址"
-                  className="h-8 text-ui"
-                  disabled={submitting}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-caption">收件服务器（IMAP）</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={imapHost}
-                    onChange={(e) => setImapHost(e.target.value)}
-                    placeholder="imap.example.com"
-                    className="h-8 text-ui"
-                    disabled={submitting}
-                  />
-                  <Input
-                    value={imapPort}
-                    onChange={(e) => setImapPort(e.target.value)}
-                    className="h-8 w-20 text-ui"
-                    disabled={submitting}
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-caption text-muted-foreground">
-                  <Checkbox
-                    checked={imapSsl}
-                    onCheckedChange={(v) => handleImapSslChange(v === true)}
-                    disabled={submitting}
-                  />
-                  SSL
-                </label>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-caption">发件服务器（SMTP）</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={smtpHost}
-                    onChange={(e) => setSmtpHost(e.target.value)}
-                    placeholder="smtp.example.com"
-                    className="h-8 text-ui"
-                    disabled={submitting}
-                  />
-                  <Input
-                    value={smtpPort}
-                    onChange={(e) => setSmtpPort(e.target.value)}
-                    className="h-8 w-20 text-ui"
-                    disabled={submitting}
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-caption text-muted-foreground">
-                  <Checkbox
-                    checked={smtpSsl}
-                    onCheckedChange={(v) => handleSmtpSslChange(v === true)}
-                    disabled={submitting}
-                  />
-                  SSL
-                </label>
-              </div>
-            </div>
-          </section>
-            </TabsContent>
-            <TabsContent value="password" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
-          {/* 密码 */}
-          <section className="space-y-3">
-            <h3 className="text-caption font-medium text-muted-foreground">登录密码</h3>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <Label htmlFor="acct-password" className="text-caption">
-                  修改密码（留空表示不修改）
-                </Label>
+                <Label htmlFor="acct-password" className="text-caption sm:text-right">密码/授权码</Label>
                 <Input
                   id="acct-password"
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="留空保留原密码；腾讯企业邮需填客户端专用密码"
-                  className="h-8 text-ui"
+                  placeholder="留空保留原密码"
+                  className="text-ui"
                   disabled={submitting}
                   autoComplete="new-password"
                 />
-                <p className="text-micro text-muted-foreground">
-                  腾讯企业邮需在网页版「设置 → 客户端专用密码」生成密码，IMAP/SMTP 共用
-                </p>
+                <Label htmlFor="acct-imap-host" className="text-caption sm:text-right">IMAP 服务器</Label>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="acct-imap-host"
+                      aria-label="收件服务器（IMAP）"
+                      value={imapHost}
+                      onChange={(e) => setImapHost(e.target.value)}
+                      placeholder="imap.example.com"
+                      className="min-w-0 flex-1 text-ui"
+                      disabled={submitting}
+                    />
+                    <label className="flex shrink-0 items-center gap-1.5 text-caption">
+                      <Checkbox
+                        checked={imapSsl}
+                        onCheckedChange={(v) => handleImapSslChange(v === true)}
+                        disabled={submitting}
+                        aria-label="收件服务器 SSL"
+                      />
+                      SSL
+                    </label>
+                    <Label htmlFor="acct-imap-port" className="text-caption">端口</Label>
+                    <Input
+                      id="acct-imap-port"
+                      aria-label="收件端口（IMAP）"
+                      aria-invalid={isPop3Port}
+                      aria-describedby={isPop3Port ? "acct-imap-port-error" : undefined}
+                      inputMode="numeric"
+                      value={imapPort}
+                      onChange={(e) => setImapPort(e.target.value)}
+                      className={cn("w-20 shrink-0 text-ui", isPop3Port && "border-destructive")}
+                      disabled={submitting}
+                    />
+                  </div>
+                  {isPop3Port && (
+                    <p id="acct-imap-port-error" role="alert" className="text-caption text-destructive">
+                      这是 POP3 端口，Mona 收信需要 IMAP。请使用邮箱服务商提供的 IMAP 地址和端口（SSL 通常为 993）。
+                    </p>
+                  )}
+                </div>
+                <Label htmlFor="acct-smtp-host" className="text-caption sm:text-right">SMTP 服务器</Label>
+                <div className="flex min-w-0 items-center gap-2">
+                  <Input
+                    id="acct-smtp-host"
+                    aria-label="发件服务器（SMTP）"
+                    value={smtpHost}
+                    onChange={(e) => setSmtpHost(e.target.value)}
+                    placeholder="smtp.example.com"
+                    className="min-w-0 flex-1 text-ui"
+                    disabled={submitting}
+                  />
+                  <label className="flex shrink-0 items-center gap-1.5 text-caption">
+                    <Checkbox
+                      checked={smtpSsl}
+                      onCheckedChange={(v) => handleSmtpSslChange(v === true)}
+                      disabled={submitting}
+                      aria-label="发件服务器 SSL"
+                    />
+                    SSL
+                  </label>
+                  <Label htmlFor="acct-smtp-port" className="text-caption">端口</Label>
+                  <Input
+                    id="acct-smtp-port"
+                    aria-label="发件端口（SMTP）"
+                    inputMode="numeric"
+                    value={smtpPort}
+                    onChange={(e) => setSmtpPort(e.target.value)}
+                    className="w-20 shrink-0 text-ui"
+                    disabled={submitting}
+                  />
+                </div>
               </div>
-            </div>
-          </section>
+
+              <details className="space-y-3">
+                <summary className="cursor-pointer text-caption text-muted-foreground hover:text-foreground">更多设置</summary>
+                <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                  <Label htmlFor="acct-display" className="text-caption sm:text-right">邮箱名称</Label>
+                  <Input
+                    id="acct-display"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="邮箱列表中显示的名称"
+                    className="text-ui"
+                    disabled={submitting}
+                  />
+                  <Label htmlFor="acct-username" className="text-caption sm:text-right">登录账号</Label>
+                  <Input
+                    id="acct-username"
+                    value={imapUsername}
+                    onChange={(e) => setImapUsername(e.target.value)}
+                    placeholder="与邮件账号不同时填写"
+                    className="text-ui"
+                    disabled={submitting}
+                  />
+                  <Label className="text-caption sm:text-right">历史正文离线保存</Label>
+                  <Select
+                    aria-label="历史正文离线保存"
+                    value={String(offlineSyncDays)}
+                    onValueChange={(value) => setOfflineSyncDays(Number(value) as EmailOfflineSyncDays)}
+                    options={EMAIL_OFFLINE_SYNC_OPTIONS}
+                    className="text-ui"
+                    disabled={submitting}
+                  />
+                </div>
+                <p className="text-micro text-muted-foreground">
+                  新邮件自动收取，已下载邮件始终保留。正文搜索覆盖已下载的邮件。
+                </p>
+                {offlineSyncDays === 0 && (
+                  <p className="text-caption text-muted-foreground">保存全部历史正文需要更多时间和磁盘空间。</p>
+                )}
+              </details>
             </TabsContent>
             <TabsContent value="signatures" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* 签名管理 */}

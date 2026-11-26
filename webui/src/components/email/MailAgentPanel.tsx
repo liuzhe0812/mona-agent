@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Send, Square, RotateCcw, Zap, MessagesSquare, Sparkles, FolderInput, X } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -85,7 +86,7 @@ function extractActionSuggestion(messages: UIMessage[]): ActionSuggestion | null
   return null;
 }
 
-export function MailAgentPanel() {
+export function MailAgentPanel({ onOpenSettings }: { onOpenSettings?: (section?: string) => void }) {
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
@@ -487,6 +488,9 @@ export function MailAgentPanel() {
               <Send className="h-3 w-3" />
             )}
           </Button>
+        </div>
+        <div className="flex justify-end pt-1">
+          <WorkModelSelector disabled={isStreaming || creatingChat} onOpenSettings={onOpenSettings} />
         </div>
       </div>
 

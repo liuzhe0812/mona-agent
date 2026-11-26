@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 type LockKey = (PathBuf, String, String, String);
+type PendingFlag = (String, String, String, String, bool, i64, Option<String>, String);
 type MailLocks = Mutex<HashMap<LockKey, Weak<tokio::sync::Mutex<()>>>>;
 static MAIL_LOCKS: OnceLock<MailLocks> = OnceLock::new();
 static FLAG_FLUSH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -31,6 +32,7 @@ pub(super) fn init_schema(conn: &Connection) -> Result<(), String> {
         uid_validity TEXT NOT NULL DEFAULT '', PRIMARY KEY(account_id, folder, uid, flag));").map_err(|e| e.to_string())?;
     let has_version: bool = conn.query_row("SELECT COUNT(*)>0 FROM pragma_table_info('email_pending_flags') WHERE name='uid_validity'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if !has_version { conn.execute("ALTER TABLE email_pending_flags ADD COLUMN uid_validity TEXT NOT NULL DEFAULT ''", []).map_err(|e| e.to_string())?; }
+    conn.execute("DELETE FROM email_pending_flags WHERE last_error='stale'", []).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -40,13 +42,16 @@ pub(super) fn queue_flag(state: &EmailState, req: &SetFlagRequest) -> Result<(),
     };
     let mut conn = state.conn()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
+    super::account_settings::require_active(&tx, &req.account_id)?;
     let updated = tx.execute(&format!("UPDATE messages SET {column} = ?1 WHERE account_id = ?2 AND folder = ?3 AND uid = ?4"),
         params![req.add, req.account_id, req.mailbox, req.uid]).map_err(|e| e.to_string())?;
     if updated == 0 { return Err("这封邮件已不存在，请刷新列表。".into()); }
     let uid_validity = tx.query_row("SELECT COALESCE(uid_validity,'') FROM folders WHERE account_id=?1 AND name=?2", params![req.account_id, req.mailbox], |r| r.get::<_, String>(0)).optional().map_err(|e| e.to_string())?.unwrap_or_default();
     tx.execute("INSERT INTO email_pending_flags(account_id, folder, uid, flag, add_value, uid_validity) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT(account_id, folder, uid, flag) DO UPDATE SET add_value = excluded.add_value,
-        revision = email_pending_flags.revision + 1, uid_validity = excluded.uid_validity, last_error = NULL",
+        revision = email_pending_flags.revision + 1,
+        last_error = CASE WHEN email_pending_flags.uid_validity=excluded.uid_validity THEN email_pending_flags.last_error ELSE NULL END,
+        uid_validity = excluded.uid_validity",
         params![req.account_id, req.mailbox, req.uid, req.flag, req.add, uid_validity]).map_err(|e| e.to_string())?;
     let original_meta = read_meta_json(&req.account_id, &req.mailbox, &req.uid);
     if let Some(mut meta) = original_meta.clone() {
@@ -144,20 +149,47 @@ pub(super) fn apply_flags(state: &EmailState, account: &str, folder: &str, flags
     Ok(())
 }
 
-pub(super) async fn flush_flags(state: &EmailState, service_url: &str) -> Result<bool, String> {
-    if service_url.is_empty() { return Ok(false); }
-    let Ok(_guard) = FLAG_FLUSH.try_lock() else { return Ok(false); };
-    let changes: Vec<(String, String, String, String, bool, i64, Option<String>, String)> = {
+fn record_flag_failure(conn: &Connection, change: &PendingFlag, kind: &str) -> Result<bool, String> {
+    let (account, folder, uid, flag, _, revision, previous_error, validity) = change;
+    let updated = if kind == "stale" {
+        conn.execute("DELETE FROM email_pending_flags WHERE account_id=?1 AND folder=?2 AND uid_validity=?3",
+            params![account, folder, validity])
+    } else if kind == "unavailable" {
+        // 目录或版本问题影响整个旧目标；新版本及其他目录的修改继续保留。
+        conn.execute("UPDATE email_pending_flags SET last_error=?1 WHERE account_id=?2 AND folder=?3 AND uid_validity=?4 AND COALESCE(last_error,'') NOT IN ('stale','unavailable')",
+            params![kind, account, folder, validity])
+    } else {
+        conn.execute("UPDATE email_pending_flags SET last_error=CASE WHEN ?1='network' THEN COALESCE(last_error,?1) ELSE ?1 END
+            WHERE account_id=?2 AND folder=?3 AND uid=?4 AND flag=?5 AND revision=?6 AND uid_validity=?7
+            AND COALESCE(last_error,'') NOT IN ('stale','unavailable')",
+            params![kind, account, folder, uid, flag, revision, validity])
+    }.map_err(|e| e.to_string())?;
+    Ok(updated > 0 && kind != "network" && previous_error.as_deref() != Some(kind))
+}
+
+pub(super) fn resume_folder_flags(conn: &Connection, account: &str, folder: &str) -> Result<(), String> {
+    conn.execute("UPDATE email_pending_flags SET last_error=NULL WHERE account_id=?1 AND folder=?2 AND last_error='unavailable'",
+        params![account, folder]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn flush_flags(state: &EmailState, service_url: &str) -> Result<Option<String>, String> {
+    if service_url.is_empty() { return Ok(None); }
+    let Ok(_guard) = FLAG_FLUSH.try_lock() else { return Ok(None); };
+    let changes: Vec<PendingFlag> = {
         let conn = state.conn()?;
-        let mut stmt = conn.prepare("SELECT account_id, folder, uid, flag, add_value, revision, last_error, uid_validity FROM email_pending_flags p WHERE COALESCE(last_error,'') != 'stale' AND EXISTS(SELECT 1 FROM accounts a WHERE a.id=p.account_id) ORDER BY account_id, folder, uid").map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare("SELECT account_id, folder, uid, flag, add_value, revision, last_error, uid_validity FROM email_pending_flags p WHERE COALESCE(last_error,'') NOT IN ('stale','unavailable') AND EXISTS(SELECT 1 FROM accounts a WHERE a.id=p.account_id) ORDER BY account_id, folder, uid").map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))).map_err(|e| e.to_string())?;
         rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
     };
     let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
     let mut failed_accounts = HashSet::new();
-    let mut needs_attention = false;
-    for (account_id, folder, uid, flag, add, revision, previous_error, uid_validity) in changes {
-        if failed_accounts.contains(&account_id) { continue; }
+    let mut blocked_targets = HashSet::new();
+    let mut notices = Vec::new();
+    for change in changes {
+        let (account_id, folder, uid, flag, add, revision, _, uid_validity) = &change;
+        let target = (account_id.clone(), folder.clone(), uid_validity.clone());
+        if failed_accounts.contains(account_id) || blocked_targets.contains(&target) { continue; }
         let request = (|| -> Result<Value, String> {
             let conn = state.conn()?;
             let account = get_imap_credentials(&conn, &account_id)?;
@@ -170,7 +202,8 @@ pub(super) async fn flush_flags(state: &EmailState, service_url: &str) -> Result
                 Ok(response) if response.status().is_success() => None,
                 Ok(response) => {
                     let payload: Value = response.json().await.unwrap_or_default();
-                    Some(if payload["uidValidityChanged"] == true { "stale" } else { "server" })
+                    Some(if payload["uidValidityChanged"] == true { "stale" }
+                        else if payload["mailboxMissing"] == true { "unavailable" } else { "server" })
                 }
                 Err(_) => Some("network"),
             },
@@ -181,21 +214,28 @@ pub(super) async fn flush_flags(state: &EmailState, service_url: &str) -> Result
         };
         let conn = state.conn()?;
         if let Some(kind) = error {
-            conn.execute("UPDATE email_pending_flags SET last_error=?1 WHERE account_id=?2 AND folder=?3 AND uid=?4 AND flag=?5 AND revision=?6",
-                params![kind, account_id, folder, uid, flag, revision]).map_err(|e| e.to_string())?;
-            needs_attention |= kind != "network" && previous_error.as_deref() != Some(kind);
-            failed_accounts.insert(account_id);
+            if record_flag_failure(&conn, &change, kind)? {
+                let message = match kind {
+                    "stale" => "部分邮件的标识已经变化，旧标记已停止同步。请刷新相关文件夹，核对已读和星标状态。",
+                    "unavailable" => "部分邮件的原文件夹当前不可用，相关标记已暂停同步。请刷新邮件文件夹后核对。",
+                    _ => "部分已读或星标修改尚未同步，本地修改已保留。请检查邮箱权限、账号或客户端授权码。",
+                };
+                if !notices.contains(&message) { notices.push(message); }
+            }
+            if matches!(kind, "stale" | "unavailable") { blocked_targets.insert(target); }
+            else { failed_accounts.insert(account_id.clone()); }
         } else {
             conn.execute("DELETE FROM email_pending_flags WHERE account_id=?1 AND folder=?2 AND uid=?3 AND flag=?4 AND revision=?5",
                 params![account_id, folder, uid, flag, revision]).map_err(|e| e.to_string())?;
         }
     }
-    Ok(needs_attention)
+    Ok((!notices.is_empty()).then(|| notices.join("\n\n")))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_flags, complete_mark_all_read, init_schema, pending_keys, queue_flag, seen_revisions};
+    use super::{apply_flags, complete_mark_all_read, init_schema, pending_keys, queue_flag,
+        record_flag_failure, resume_folder_flags, seen_revisions, PendingFlag};
     use crate::email::{read_meta_json_under, write_meta_json_under, EmlMeta, EmailState, SetFlagRequest};
     use rusqlite::{params, Connection};
     use serde_json::json;
@@ -219,6 +259,8 @@ mod tests {
         );
         let conn = state.conn().unwrap();
         init_schema(&conn).unwrap();
+        conn.execute("INSERT INTO accounts(id,display_name,imap_host,imap_port,imap_username,imap_password,smtp_host,smtp_port,smtp_username,smtp_password,from_address)
+            VALUES(?1,'test','',993,'','','',465,'','','reader@example.invalid')", [&account]).unwrap();
         (state, account)
     }
 
@@ -300,6 +342,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pending, (false, 2));
+    }
+
+    #[test]
+    fn requeued_intent_preserves_an_unresolved_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, account) = isolated_state(&temp);
+        let conn = state.conn().unwrap();
+        insert_message(&conn, &account, "42", false, false);
+        queue_flag(&state, &request(&account, "42", "\\Seen", true)).unwrap();
+        conn.execute("UPDATE email_pending_flags SET last_error='unavailable'", []).unwrap();
+
+        queue_flag(&state, &request(&account, "42", "\\Seen", false)).unwrap();
+
+        let pending: (bool, i64, String) = conn.query_row(
+            "SELECT add_value,revision,last_error FROM email_pending_flags",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(pending, (false, 2, "unavailable".into()));
+        assert!(pending_keys(&state, &account, FOLDER).unwrap().contains(&("42".into(), "\\Seen".into())));
+        assert_eq!(message_flags(&state, &account, "42"), (false, false));
+    }
+
+    #[test]
+    fn a_late_mark_from_a_replaced_mailbox_cannot_recreate_its_queue() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, account) = isolated_state(&temp);
+        let conn = state.conn().unwrap();
+        insert_message(&conn, &account, "42", false, false);
+        conn.execute("DELETE FROM accounts WHERE id=?1", [&account]).unwrap();
+        assert!(queue_flag(&state, &request(&account, "42", "\\Seen", true)).is_err());
+        assert_eq!(message_flags(&state, &account, "42"), (false, false));
+        assert!(pending_keys(&state, &account, FOLDER).unwrap().is_empty());
+    }
+
+    #[test]
+    fn target_failure_is_grouped_without_affecting_other_versions_or_folders() {
+        for kind in ["unavailable", "stale"] {
+            let conn = Connection::open_in_memory().unwrap();
+            init_schema(&conn).unwrap();
+            for (account, folder, uid, validity) in [
+                ("a", "Junk", "1", "old"), ("a", "Junk", "2", "old"),
+                ("a", "Junk", "3", "new"), ("a", "Junk", "4", ""),
+                ("a", "INBOX", "1", "old"), ("b", "Junk", "1", "old"),
+            ] {
+                conn.execute("INSERT INTO email_pending_flags(account_id,folder,uid,flag,add_value,uid_validity) VALUES(?1,?2,?3,'\\Seen',1,?4)",
+                    params![account, folder, uid, validity]).unwrap();
+            }
+            let change: PendingFlag = ("a".into(), "Junk".into(), "1".into(), "\\Seen".into(), true, 1, None, "old".into());
+
+            assert!(record_flag_failure(&conn, &change, kind).unwrap());
+            assert!(!record_flag_failure(&conn, &change, kind).unwrap());
+            let blocked: i64 = conn.query_row("SELECT COUNT(*) FROM email_pending_flags WHERE last_error=?1", [kind], |r| r.get(0)).unwrap();
+            let unchanged: i64 = conn.query_row("SELECT COUNT(*) FROM email_pending_flags WHERE last_error IS NULL", [], |r| r.get(0)).unwrap();
+            assert_eq!((blocked, unchanged), (if kind == "stale" { 0 } else { 2 }, 4));
+
+            resume_folder_flags(&conn, "a", "Junk").unwrap();
+            let blocked: i64 = conn.query_row("SELECT COUNT(*) FROM email_pending_flags WHERE last_error=?1", [kind], |r| r.get(0)).unwrap();
+            assert_eq!(blocked, 0);
+        }
+    }
+
+    #[test]
+    fn a_network_interruption_does_not_repeat_a_server_notice_or_overwrite_newer_intent() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute("INSERT INTO email_pending_flags(account_id,folder,uid,flag,add_value) VALUES('a','INBOX','1','\\Seen',1)", []).unwrap();
+        let mut change: PendingFlag = ("a".into(), "INBOX".into(), "1".into(), "\\Seen".into(), true, 1, None, "".into());
+        assert!(record_flag_failure(&conn, &change, "server").unwrap());
+        change.6 = Some("server".into());
+
+        assert!(!record_flag_failure(&conn, &change, "network").unwrap());
+        let error: String = conn.query_row("SELECT last_error FROM email_pending_flags", [], |r| r.get(0)).unwrap();
+        assert_eq!(error, "server");
+        assert!(!record_flag_failure(&conn, &change, "server").unwrap());
+
+        conn.execute("UPDATE email_pending_flags SET revision=2,last_error=NULL,add_value=0", []).unwrap();
+        change.6 = None;
+        assert!(!record_flag_failure(&conn, &change, "server").unwrap());
+        let latest: (bool, i64, Option<String>) = conn.query_row("SELECT add_value,revision,last_error FROM email_pending_flags", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(latest, (false, 2, None));
+
+        conn.execute("UPDATE email_pending_flags SET revision=1,last_error='stale'", []).unwrap();
+        assert!(!record_flag_failure(&conn, &change, "server").unwrap());
+        let error: String = conn.query_row("SELECT last_error FROM email_pending_flags", [], |r| r.get(0)).unwrap();
+        assert_eq!(error, "stale");
     }
 
     #[test]

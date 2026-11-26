@@ -45,6 +45,14 @@ class ImapOutcomeUnknown(RuntimeError):  # noqa: N818
     """A write lost its reply and must not be replayed by either retry layer."""
 
 
+def validate_imap_port(port: int) -> None:
+    if port in (110, 995):
+        raise ValueError(
+            "收件端口属于 POP3，Mona 收信需要 IMAP。"
+            "请使用邮箱服务商提供的 IMAP 地址和端口（SSL 通常为 993）。"
+        )
+
+
 # 腾讯邮箱（exmail.qq.com / imap.qq.com）在 IMAP 响应中插入 X-QQ-FEAT 行
 # 作为 feature 广告，不以 * / + / tag 开头，imaplib 的 _get_response 无法解析，
 # 直接抛 abort 异常，导致 FETCH 失败、连接被废弃。
@@ -338,6 +346,7 @@ class _AccountImapPool:
         if not host or not username:
             raise ValueError("imapHost and imapUsername are required")
 
+        validate_imap_port(port)
         if use_ssl:
             ctx = ssl.create_default_context()
             client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=30)

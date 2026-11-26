@@ -9,6 +9,7 @@ import {
   fetchAttachment,
   getUnifiedInbox,
   saveDraft,
+  updateAccountSettings,
 } from "./emailApi";
 import type { EmailAccount } from "./types";
 
@@ -16,6 +17,20 @@ beforeEach(() => {
   mocks.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === "email_get_decrypted_password") return "";
     return { draftUid: "92", draftFolder: "Drafts" };
+  });
+});
+
+describe("updateAccountSettings", () => {
+  it("returns the saved identity and preserves a supplied password", async () => {
+    const previous = { id: "old-id" } as EmailAccount;
+    const saved = { ...previous, id: "new-id" };
+    mocks.invoke.mockResolvedValue(saved);
+
+    await expect(updateAccountSettings(previous, "  password  ")).resolves.toEqual(saved);
+    expect(mocks.invoke).toHaveBeenCalledWith("email_update_account_settings", {
+      account: previous,
+      newPassword: "  password  ",
+    });
   });
 });
 

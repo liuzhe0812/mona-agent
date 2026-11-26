@@ -621,6 +621,8 @@ pub(super) fn search_messages(
     if let Some(value) = &req.account_id {
         conditions.push(format!("m.account_id = ?{}", params.len() + 1));
         params.push(Box::new(value.clone()));
+    } else {
+        conditions.push("EXISTS(SELECT 1 FROM accounts WHERE id=m.account_id)".into());
     }
     if let Some(value) = &req.folder {
         conditions.push(format!("m.folder = ?{}", params.len() + 1));
@@ -719,7 +721,8 @@ mod tests {
     fn database(temp: &TempDir) -> Connection {
         let conn = Connection::open(temp.path().join("email.sqlite3")).unwrap();
         conn.execute_batch(
-            "CREATE TABLE messages (
+            "CREATE TABLE accounts(id TEXT PRIMARY KEY);
+            CREATE TABLE messages (
                 uid TEXT NOT NULL,
                 account_id TEXT NOT NULL,
                 folder TEXT NOT NULL,
@@ -778,6 +781,7 @@ mod tests {
             "From: Sender <sender@example.com>\r\nSubject: Header for {uid}\r\nDate: {date}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{body}"
         );
         std::fs::write(&abs_path, eml.as_bytes()).unwrap();
+        conn.execute("INSERT OR IGNORE INTO accounts(id) VALUES(?1)", [account]).unwrap();
         conn.execute(
             "INSERT INTO messages
              (uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
@@ -806,6 +810,20 @@ mod tests {
         chrono::DateTime::<chrono::Utc>::from_timestamp(days * 86_400, 0)
             .unwrap()
             .to_rfc2822()
+    }
+
+    #[test]
+    fn global_search_excludes_the_preserved_previous_mailbox() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut conn = database(&temp);
+        for account in ["previous", "current"] {
+            add_message(&conn, temp.path(), "42", account, "INBOX", &rfc_date(20_000), true, (true, false, false), "同步身份隔离");
+        }
+        conn.execute("DELETE FROM accounts WHERE id='previous'", []).unwrap();
+        let result = search_messages(&mut conn, temp.path(), &request("同步身份", 0, 10)).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].account_id, "current");
+        assert!(temp.path().join("previous/INBOX/42.eml").is_file());
     }
 
     #[test]

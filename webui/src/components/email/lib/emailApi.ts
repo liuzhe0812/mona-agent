@@ -191,10 +191,10 @@ export async function reorderAccounts(accountIds: string[]): Promise<void> {
 export async function updateAccountSettings(
   account: EmailAccount,
   newPassword?: string | null,
-): Promise<void> {
-  return invoke("email_update_account_settings", {
+): Promise<EmailAccount> {
+  return invoke<EmailAccount>("email_update_account_settings", {
     account,
-    newPassword: newPassword && newPassword.trim() ? newPassword : null,
+    newPassword: newPassword || null,
   });
 }
 

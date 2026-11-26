@@ -5,6 +5,7 @@
 
 mod search;
 mod offline;
+mod account_settings;
 
 use crate::settings::app_data_dir;
 mod outbox;
@@ -2216,59 +2217,10 @@ pub async fn email_update_account_settings(
     state: tauri::State<'_, EmailState>,
     account: EmailAccount,
     new_password: Option<String>,
-) -> Result<(), String> {
+) -> Result<EmailAccount, String> {
     offline::validate_days(account.offline_sync_days)?;
-    let conn = state.conn()?;
-    // 密码：仅在显式传入非空新密码时才更新（避免双重加密 / 误清空）
-    let (imap_pwd, smtp_pwd) = match new_password.as_deref() {
-        Some(p) if !p.is_empty() => {
-            let enc = encrypt_password(p)?;
-            (enc.clone(), enc)
-        }
-        _ => {
-            // 保留数据库原密码
-            let row: (String, String) = conn
-                .query_row(
-                    "SELECT imap_password, smtp_password FROM accounts WHERE id = ?1",
-                    params![&account.id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .map_err(|e| e.to_string())?;
-            row
-        }
-    };
-    conn.execute(
-        "UPDATE accounts SET
-            display_name = ?2, imap_host = ?3, imap_port = ?4, imap_username = ?5,
-            imap_password = ?6, smtp_host = ?7, smtp_port = ?8, smtp_username = ?9,
-            smtp_password = ?10, from_address = ?11, from_name = ?12,
-            last_synced_uid = ?13, carddav_url = ?14, eas_url = ?15,
-            imap_use_ssl = ?16, smtp_use_ssl = ?17, signatures = ?18, offline_sync_days = ?19
-         WHERE id = ?1",
-        params![
-            account.id,
-            account.display_name,
-            account.imap_host,
-            account.imap_port,
-            account.imap_username,
-            imap_pwd,
-            account.smtp_host,
-            account.smtp_port,
-            account.smtp_username,
-            smtp_pwd,
-            account.from_address,
-            account.from_name,
-            account.last_synced_uid,
-            account.carddav_url,
-            account.eas_url,
-            account.imap_use_ssl as i32,
-            account.smtp_use_ssl as i32,
-            serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
-            account.offline_sync_days,
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    let encrypted = new_password.as_deref().filter(|p| !p.is_empty()).map(encrypt_password).transpose()?;
+    account_settings::save(&mut state.conn()?, account, encrypted)
 }
 
 #[tauri::command]
@@ -3085,7 +3037,7 @@ fn unified_inbox_page(
         return Ok(Vec::new());
     }
     let mut stmt = conn
-        .prepare("SELECT rowid, date, account_id, uid FROM messages WHERE folder = 'INBOX'")
+        .prepare("SELECT rowid, date, account_id, uid FROM messages WHERE folder = 'INBOX' AND EXISTS(SELECT 1 FROM accounts WHERE id=messages.account_id)")
         .map_err(|e| e.to_string())?;
     let mut candidates = stmt
         .query_map([], |row| {
@@ -3224,6 +3176,8 @@ mod unified_inbox_tests {
     }
 
     fn insert_message(conn: &Connection, account_id: &str, uid: &str, date: &str) {
+        conn.execute("INSERT OR IGNORE INTO accounts(id,display_name,imap_host,imap_port,imap_username,imap_password,smtp_host,smtp_port,smtp_username,smtp_password,from_address)
+            VALUES(?1,'test','imap.example.invalid',993,'reader','', 'smtp.example.invalid',465,'reader','','reader@example.invalid')", [account_id]).unwrap();
         conn.execute(
             "INSERT INTO messages
              (uid, account_id, folder, subject, from_address, to_addresses, date)
@@ -3247,6 +3201,19 @@ mod unified_inbox_tests {
             page.iter().map(|message| message.uid.as_str()).collect::<Vec<_>>(),
             vec!["late", "middle", "early"]
         );
+    }
+
+    #[test]
+    fn unified_inbox_excludes_preserved_cache_of_a_replaced_mailbox() {
+        let (_temp, state) = isolated_state();
+        let conn = state.conn().unwrap();
+        insert_message(&conn, "old-mailbox", "42", "2026-11-24T08:00:00Z");
+        insert_message(&conn, "current-mailbox", "42", "2026-11-24T08:00:00Z");
+        conn.execute("DELETE FROM accounts WHERE id='old-mailbox'", []).unwrap();
+        let page = unified_inbox_page(&conn, None, None, None, 50).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].account_id, "current-mailbox");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]
@@ -3302,12 +3269,12 @@ mod unified_inbox_tests {
 fn flush_flags_in_background(state: EmailState, app: AppHandle, service_url: String) {
     tokio::spawn(async move {
         match sync::flush_flags(&state, &service_url).await {
-            Ok(true) => {
+            Ok(Some(message)) => {
                 let _ = app.emit_to("main", "email-action-required", serde_json::json!({
-                    "message": "邮箱尚未接受部分已读或星标修改，本地修改已保留，请检查邮箱账号设置。"
+                    "message": message
                 }));
             }
-            Ok(false) => {}
+            Ok(None) => {}
             Err(_) => log::warn!("[email] pending flag synchronization could not finish"),
         }
     });
@@ -3835,6 +3802,7 @@ pub async fn email_sync_folders(
     // 瞬态未返回也保留，避免新建后立即被后台同步清掉
     let recent_threshold = (now - chrono::Duration::seconds(60)).to_rfc3339();
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    account_settings::require_active(&tx, &account_id)?;
     // 只删除"旧"文件夹，保留 60 秒内创建的（IMAP 可能尚未同步）
     tx.execute(
         "DELETE FROM folders WHERE account_id = ?1 AND updated_at <= ?2",
@@ -3859,6 +3827,9 @@ pub async fn email_sync_folders(
             ],
         )
         .map_err(|e| e.to_string())?;
+        if is_selectable_folder(&folder.flags) {
+            sync::resume_folder_flags(&tx, &account_id, &folder.name)?;
+        }
     }
     tx.commit().map_err(|e| e.to_string())?;
 
@@ -4020,6 +3991,54 @@ pub async fn email_sync(
     Ok(result)
 }
 
+fn sync_response_error(status: reqwest::StatusCode, text: &str) -> String {
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        if let Ok(body) = serde_json::from_str::<Value>(text) {
+            if let Some(message) = body.get("error").and_then(Value::as_str) {
+                if !message.trim().is_empty() && message.trim() != "None" {
+                    return message.to_string();
+                }
+            }
+        }
+    }
+    if is_permanent_auth_error(text) {
+        return "邮箱登录失败，请检查账号、密码或客户端授权码，并确认已开启 IMAP 服务。".into();
+    }
+    "收取邮件失败，请检查收件服务器的地址、端口和加密方式后重试。".into()
+}
+
+#[cfg(test)]
+mod sync_error_tests {
+    use super::sync_response_error;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn configuration_error_preserves_the_actionable_message() {
+        assert_eq!(
+            sync_response_error(StatusCode::UNPROCESSABLE_ENTITY, r#"{"error":"收件端口属于 POP3，请使用 IMAP。"}"#),
+            "收件端口属于 POP3，请使用 IMAP。",
+        );
+    }
+
+    #[test]
+    fn unknown_errors_do_not_expose_server_details_or_restart_advice() {
+        for body in [r#"{"error":"None"}"#, r#"{"error":""}"#, "Internal Server Error"] {
+            assert_eq!(
+                sync_response_error(StatusCode::INTERNAL_SERVER_ERROR, body),
+                "收取邮件失败，请检查收件服务器的地址、端口和加密方式后重试。",
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_error_explains_what_to_check() {
+        assert_eq!(
+            sync_response_error(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"Login fail."}"#),
+            "邮箱登录失败，请检查账号、密码或客户端授权码，并确认已开启 IMAP 服务。",
+        );
+    }
+}
+
 /// 邮件同步核心逻辑：调用 gateway /email/sync，UPSERT 到 SQLite，应用规则。
 ///
 /// 此函数与 #[tauri::command] 解耦，可被命令和后台同步任务复用。
@@ -4128,9 +4147,8 @@ async fn sync_folder_internal(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "gateway 返回 {status} ({url}): {text}\n若刚更新代码，请重启 Mona 使新路由生效"
-        ));
+        log::warn!("[email] sync request failed: status={}", status);
+        return Err(sync_response_error(status, &text));
     }
     let resp_value: Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
     // 兼容两种返回格式：新版 dict（含 uidValidity/messages）或旧版 list
@@ -4822,13 +4840,13 @@ pub fn start_background_sync(app_handle: AppHandle, services_port: u16) {
         loop {
             let state = sender_app.state::<EmailState>();
             match sync::flush_flags(state.inner(), &sender_url).await {
-                Ok(true) => {
+                Ok(Some(message)) => {
                     let _ = sender_app.emit_to("main", "email-action-required", serde_json::json!({
-                        "message": "邮箱尚未接受部分已读或星标修改，本地修改已保留，请检查邮箱账号设置。"
+                        "message": message
                     }));
                 }
                 Err(error) => log::warn!("[email] pending flags could not be synchronized: {}", error),
-                Ok(false) => {}
+                Ok(None) => {}
             }
             if email_outbox_process(state, sender_app.clone(), sender_url.clone()).await.is_err() {
                 log::warn!("[email] scheduled mail state needs attention");
