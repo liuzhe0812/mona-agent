@@ -116,6 +116,9 @@ native_catalog = Path("mona/runtime/native-tools.json")
 if not native_catalog.is_file():
     raise FileNotFoundError("Built-in runtime catalog is missing")
 datas.append((str(native_catalog), "mona/runtime"))
+datas.append(("mona/providers/catalog/model-capabilities.json", "mona/providers/catalog"))
+for notice in ("CINDY-LICENSE", "CINDY-NOTICE"):
+    datas.append((f"mona/development/{notice}", "mona/development"))
 
 # The legacy updater replaces the whole gateway tree. Keep desktop resources
 # inside it so both existing installations and fresh installers receive them.
@@ -150,6 +153,10 @@ hiddenimports += [
     "pydantic_settings",
     "anthropic.types",
     "openai",
+    "google.auth.transport.requests",
+    "google.oauth2.service_account",
+    "google.oauth2.credentials",
+    "google.auth.compute_engine",
     "httpx._transports.default",
     "anyio._backends._asyncio",
     "aiohttp.web",

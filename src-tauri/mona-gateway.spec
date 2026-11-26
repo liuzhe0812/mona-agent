@@ -156,6 +156,10 @@ hidden_imports_third_party = [
     # AWS
     "boto3",
     "botocore",
+    "google.auth.transport.requests",
+    "google.oauth2.service_account",
+    "google.oauth2.credentials",
+    "google.auth.compute_engine",
     "urllib3",
     "requests",
     "requests.adapters",
@@ -289,6 +293,9 @@ native_catalog = MONA_PKG / "runtime/native-tools.json"
 if not native_catalog.is_file():
     raise FileNotFoundError("Built-in runtime catalog is missing")
 datas.append((str(native_catalog), "mona/runtime"))
+datas.append((str(MONA_PKG / "providers/catalog/model-capabilities.json"), "mona/providers/catalog"))
+for notice in ("CINDY-LICENSE", "CINDY-NOTICE"):
+    datas.append((str(MONA_PKG / "development" / notice), "mona/development"))
 
 # Keep desktop resources within the tree copied by legacy hot updaters.
 office_resources = PROJECT_ROOT / "src-tauri" / "resources" / "office-editor"

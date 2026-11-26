@@ -1,5 +1,9 @@
 """Official models follow the server catalog rather than local visibility choices."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from types import SimpleNamespace
+
 import pytest
 
 from mona.config.schema import Config, ProviderConfig
@@ -71,3 +75,78 @@ def test_custom_provider_visibility_is_preserved(monkeypatch):
     custom = next(row for row in settings_api._chat_provider_rows(config) if row["name"] == "custom-example")
 
     assert [(model["id"], model["enabled"]) for model in custom["models"]] == [("shown", True), ("hidden", False)]
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_catalog_cache_lifetime_starts_when_slow_fetch_finishes(monkeypatch, available):
+    from mona.agent.tools import tauri_ipc
+    from mona.providers import managed_catalog
+
+    clock = SimpleNamespace(now=100.0)
+    calls = []
+
+    def slow_fetch(_command):
+        calls.append(clock.now)
+        clock.now += 30.0
+        if not available:
+            raise TimeoutError("offline fixture")
+        return {"available": True, "models": [{"id": "official-current"}]}
+
+    monkeypatch.setattr(managed_catalog, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(managed_catalog, "_cache", {"available": False, "models": []})
+    monkeypatch.setattr(managed_catalog, "_cached_at", 0.0)
+    monkeypatch.setattr(tauri_ipc, "tauri_invoke", slow_fetch)
+
+    assert managed_catalog.managed_model_catalog()["available"] is available
+    assert managed_catalog.managed_model_catalog()["available"] is available
+    assert len(calls) == 1
+    clock.now += 30.01 if available else 3.01
+    assert managed_catalog.managed_model_catalog()["available"] is available
+    assert len(calls) == 2
+
+
+def test_older_catalog_failure_cannot_replace_newer_success(monkeypatch):
+    from mona.agent.tools import tauri_ipc
+    from mona.providers import managed_catalog
+
+    started, release = Event(), Event()
+    calls = []
+    newer = {"available": True, "models": [{"id": "official-current"}]}
+
+    def fetch(_command):
+        calls.append(len(calls))
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(5)
+            raise TimeoutError("older request failed")
+        return newer
+
+    monkeypatch.setattr(managed_catalog, "_cache", {"available": False, "models": []})
+    monkeypatch.setattr(managed_catalog, "_cached_at", 0.0)
+    monkeypatch.setattr(managed_catalog, "_next_request", 0)
+    monkeypatch.setattr(managed_catalog, "_committed_request", 0)
+    monkeypatch.setattr(tauri_ipc, "tauri_invoke", fetch)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(managed_catalog.managed_model_catalog)
+        try:
+            assert started.wait(3)
+            assert pool.submit(managed_catalog.managed_model_catalog).result(timeout=3) == newer
+        finally:
+            release.set()
+        assert first.result(timeout=3) == newer
+    assert managed_catalog.managed_model_catalog() == newer
+
+
+def test_model_selection_snapshot_does_not_hide_catalog_updates_from_other_requests(monkeypatch):
+    from mona.providers import managed_catalog
+
+    older = {"available": True, "models": [{"id": "official-old"}]}
+    newer = {"available": True, "models": [{"id": "official-current"}]}
+    monkeypatch.setattr(managed_catalog, "_cache", older)
+    monkeypatch.setattr(managed_catalog, "_cached_at", managed_catalog.time.monotonic())
+    with managed_catalog.use_cached_managed_catalog():
+        monkeypatch.setattr(managed_catalog, "_cache", newer)
+        assert managed_catalog.managed_model_catalog() == older
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(managed_catalog.managed_model_catalog).result(timeout=3) == newer
+    assert managed_catalog.managed_model_catalog() == newer

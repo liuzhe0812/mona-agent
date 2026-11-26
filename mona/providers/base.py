@@ -22,6 +22,36 @@ if TYPE_CHECKING:
     from mona.providers.registry import ProviderSpec
 
 
+def read_reported_token_count(usage: Any, *path: str) -> int | None:
+    """Read a token count from raw JSON or SDK usage, preserving explicit zero."""
+    value = usage
+    for key in path:
+        value = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    return None
+
+
+def read_cache_write_tokens(usage: Any, details_field: str) -> int | None:
+    """Read one explicit cache-write counter from compatible usage formats."""
+    for prefix in ((details_field,), ()):
+        for key in ("cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens"):
+            count = read_reported_token_count(usage, *prefix, key)
+            if count is not None:
+                return count
+    return None
+
+
+def validate_declared_effort(requested: str | None, levels: list[str] | None) -> None:
+    if requested is None or requested.lower() == "none" or levels is None:
+        return
+    normalized = "minimal" if requested.lower() == "minimum" else requested.lower()
+    if normalized not in {"minimal" if level == "minimum" else level for level in levels}:
+        raise ValueError("当前模型不支持所选的思考设置，请从该模型提供的档位中选择。")
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
@@ -181,6 +211,11 @@ class LLMProvider(ABC):
 
     async def aclose(self) -> None:
         """Release owned transport resources after active requests have finished."""
+
+    def request_model_name(self, model: str | None) -> str:
+        """Resolve this connection's selected display ID only at the wire boundary."""
+        selected = model or self.get_default_model()
+        return getattr(self, "wire_model_ids", {}).get(selected, selected)
 
     def get_capabilities(self, model: str) -> ModelCapabilities:
         """Return what this (provider, model) pair can do.

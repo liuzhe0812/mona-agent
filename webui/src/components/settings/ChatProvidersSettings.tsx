@@ -67,12 +67,16 @@ import { useLicense } from "@/hooks/useLicense";
 import { formatBalanceAmount } from "@/lib/money";
 import { isTauri, openExternalUrl } from "@/lib/tauri";
 import {
+  cancelGitHubCopilotLogin,
+  fetchGitHubCopilotLogin,
   fetchProviderModels,
   fetchSettings,
+  startGitHubCopilotLogin,
   updateProviderSettings,
   updateSettings,
+  type GitHubCopilotLoginStatus,
 } from "@/lib/api";
-import type { SettingsPayload } from "@/lib/types";
+import type { CustomProviderWireApi, ProviderModelMetadata, ProviderModelOverride, SettingsPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type ChatProvider = NonNullable<SettingsPayload["chat_providers"]>[number];
@@ -90,6 +94,59 @@ function isPositiveContextWindow(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function isConcreteApiBase(value: string): boolean {
+  const base = value.trim();
+  if (!base || /\s|[{}]|%7[bd]/i.test(base)) return false;
+  try {
+    const url = new URL(base);
+    return ["http:", "https:"].includes(url.protocol) && !!url.hostname && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function trustedGitHubDeviceUrl(value?: string): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "github.com" && !url.port
+      && !url.username && !url.password && /^\/login\/device\/?$/.test(url.pathname) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function githubLoginFailure(message?: string): string {
+  const known = ["登录已过期，请重新登录。", "GitHub 授权被拒绝，请重新登录。", "GitHub 返回的登录信息无效，请重试。", "GitHub 登录失败，请检查网络后重试。"];
+  return message && known.includes(message) ? message : "GitHub 登录失败，请重试。";
+}
+
+function customRouteKey(value: string): string {
+  const raw = value.trim();
+  if (!raw || /\s|\\/.test(raw)) return raw;
+  const parts = raw.match(/^(https?):\/\/(\[[^\]]+\]|[^:/?#@]+)(?::(\d+))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i);
+  if (!parts || parts[5] || parts[6]) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) return raw;
+    const scheme = parts[1].toLowerCase();
+    const port = parts[3] ? Number(parts[3]) : null;
+    if (port !== null && (!Number.isInteger(port) || port > 65535)) return raw;
+    const portSuffix = port !== null && port !== (scheme === "https" ? 443 : 80) ? `:${port}` : "";
+    return `${scheme}://${parts[2].toLowerCase()}${portSuffix}${parts[4].replace(/\/+$/, "")}`;
+  } catch {
+    return raw;
+  }
+}
+
+function customWireApi(value?: string | null): CustomProviderWireApi {
+  return value === "openai-completions" || value === "openai-responses" || value === "anthropic-messages" ? value : "auto";
+}
+
+function customConnectionKey(base: string, wireApi: CustomProviderWireApi): string {
+  return JSON.stringify([customRouteKey(base), wireApi]);
+}
+
 function reasoningMetadataFor(
   model: ModelReasoningMetadata,
 ): ModelReasoningMetadata | undefined {
@@ -104,6 +161,158 @@ function reasoningMetadataFor(
     metadata.supports_adaptive_thinking = model.supports_adaptive_thinking;
   }
   return Object.keys(metadata).length ? metadata : undefined;
+}
+
+function mergeModelNames(current: Record<string, string>, models: Array<{ id: string; name?: string }>) {
+  const names = { ...current };
+  for (const model of models) {
+    const name = model.name?.trim();
+    if (name && (!names[model.id] || names[model.id] === model.id)) names[model.id] = name;
+  }
+  return names;
+}
+
+function mergeModelReasoning(
+  current: Record<string, ModelReasoningMetadata>,
+  models: Array<ModelReasoningMetadata & { id: string }>,
+) {
+  const result = { ...current };
+  for (const model of models) {
+    const incoming = reasoningMetadataFor(model);
+    if (!incoming) continue;
+    const merged = { ...result[model.id], ...incoming };
+    if (incoming.reasoning_efforts && !Object.prototype.hasOwnProperty.call(incoming, "default_reasoning_effort")
+      && merged.default_reasoning_effort != null && !incoming.reasoning_efforts.includes(merged.default_reasoning_effort)) {
+      merged.default_reasoning_effort = null;
+    }
+    result[model.id] = merged;
+  }
+  return result;
+}
+
+function rawMetadataFor(model: ChatModel): ProviderModelMetadata {
+  if (model.discovered_metadata !== undefined) return model.discovered_metadata;
+  return {
+    name: model.name, type: model.type, context_window: model.context_window,
+    input_modalities: model.input_modalities, ...reasoningMetadataFor(model),
+  };
+}
+
+function observedDiscovery(model: ProviderModelMetadata & { id: string; discovered_metadata?: ProviderModelMetadata }) {
+  return model.discovered_metadata !== undefined ? { id: model.id, ...model.discovered_metadata } : model;
+}
+
+function mergeDiscoveredMetadata(
+  current: Record<string, ProviderModelMetadata>,
+  models: Array<ProviderModelMetadata & { id: string }>,
+) {
+  const result = { ...current };
+  for (const model of models) {
+    const previous = result[model.id] ?? {};
+    const reasoning = reasoningMetadataFor(mergeModelReasoning({ [model.id]: previous }, [model])[model.id]) ?? {};
+    const name = model.name?.trim();
+    result[model.id] = {
+      ...previous,
+      ...(name && (!previous.name || previous.name === model.id) ? { name } : {}),
+      ...(model.type && !previous.type ? { type: model.type } : {}),
+      ...(isPositiveContextWindow(model.context_window) ? { context_window: model.context_window } : {}),
+      ...(isPositiveContextWindow(model.context_window_max) ? { context_window_max: model.context_window_max } : {}),
+      ...(model.opaque_model_id === true ? { opaque_model_id: true } : {}),
+      ...(model.input_modalities ? { input_modalities: model.input_modalities } : {}),
+      ...reasoning,
+    };
+  }
+  return result;
+}
+
+function discoveredUpdate(id: string, metadata: ProviderModelMetadata = {}) {
+  return {
+    id,
+    name: metadata.name || id,
+    ...(metadata.type ? { type: metadata.type } : {}),
+    ...(isPositiveContextWindow(metadata.context_window) ? { contextWindow: metadata.context_window } : {}),
+    ...(isPositiveContextWindow(metadata.context_window_max) ? { contextWindowMax: metadata.context_window_max } : {}),
+    ...(metadata.opaque_model_id === true ? { opaque_model_id: true } : {}),
+    ...(metadata.input_modalities ? { inputModalities: metadata.input_modalities } : {}),
+    ...(metadata.reasoning_efforts !== undefined ? { reasoningEfforts: metadata.reasoning_efforts } : {}),
+    ...(Object.prototype.hasOwnProperty.call(metadata, "default_reasoning_effort")
+      ? { defaultReasoningEffort: metadata.default_reasoning_effort } : {}),
+    ...(metadata.supports_adaptive_thinking !== undefined ? { supportsAdaptiveThinking: metadata.supports_adaptive_thinking } : {}),
+  };
+}
+
+type ModelOverrideDraft = {
+  contextWindow: string;
+  efforts: string;
+  defaultEffort: string;
+  noEfforts: boolean;
+};
+type ModelOverrideErrors = Partial<Record<"contextWindow" | "efforts" | "defaultEffort", string>>;
+
+function modelOverrideDraft(value?: ProviderModelOverride): ModelOverrideDraft {
+  return {
+    contextWindow: value?.context_window?.toString() ?? "",
+    efforts: value?.reasoning_efforts?.join(", ") ?? "",
+    defaultEffort: value?.default_reasoning_effort ?? "",
+    noEfforts: Array.isArray(value?.reasoning_efforts) && value.reasoning_efforts.length === 0,
+  };
+}
+
+function parseModelOverride(draft: ModelOverrideDraft, knownEfforts?: string[]) {
+  const errors: ModelOverrideErrors = {};
+  const windowText = draft.contextWindow.trim();
+  const window = Number(windowText);
+  if (windowText && (!/^\d+$/.test(windowText) || !Number.isSafeInteger(window) || window <= 0)) {
+    errors.contextWindow = "请输入正整数";
+  }
+  const effortText = draft.efforts.trim();
+  const efforts = [...new Set(effortText.split(/[,，]/).map((value) => value.trim().toLowerCase()).filter(Boolean))];
+  const validEffort = (value: string) => /^[a-z][a-z0-9_-]{0,31}$/.test(value) && value !== "none";
+  if (!draft.noEfforts && effortText && (!efforts.length || efforts.length > 16 || efforts.some((value) => !validEffort(value)))) {
+    errors.efforts = "请输入不超过 16 个有效英文档位，用逗号分隔";
+  }
+  const defaultEffort = draft.defaultEffort.trim().toLowerCase();
+  const supported = effortText ? efforts : knownEfforts;
+  if (!draft.noEfforts && defaultEffort && (!validEffort(defaultEffort) || supported && !supported.includes(defaultEffort))) {
+    errors.defaultEffort = "默认档位必须属于支持列表";
+  }
+  const value: ProviderModelOverride = {
+    ...(windowText && !errors.contextWindow ? { context_window: window } : {}),
+    ...(draft.noEfforts ? { reasoning_efforts: [] } : effortText && !errors.efforts ? { reasoning_efforts: efforts } : {}),
+    ...(!draft.noEfforts && defaultEffort && !errors.defaultEffort ? { default_reasoning_effort: defaultEffort } : {}),
+  };
+  return { value: Object.keys(value).length ? value : null, errors };
+}
+
+function ModelOverrideEditor({ name, draft, errors, onChange }: {
+  name: string;
+  draft: ModelOverrideDraft;
+  errors: ModelOverrideErrors;
+  onChange: (draft: ModelOverrideDraft) => void;
+}) {
+  return <div className="space-y-3 px-2 pb-3 pt-1 text-caption">
+    <p className="text-muted-foreground">留空时使用模型提供的信息。</p>
+    <label className="grid gap-1">上下文窗口（Token）
+      <Input aria-label={`${name} 上下文窗口`} aria-invalid={!!errors.contextWindow} inputMode="numeric"
+        value={draft.contextWindow} onChange={(event) => onChange({ ...draft, contextWindow: event.target.value })} placeholder="自动识别" />
+      {errors.contextWindow && <span className="text-destructive">{errors.contextWindow}</span>}
+    </label>
+    <label className="flex items-center gap-2"><input type="checkbox" checked={draft.noEfforts}
+      onChange={(event) => onChange({ ...draft, noEfforts: event.target.checked })} />不支持思考强度</label>
+    {!draft.noEfforts && <>
+      <label className="grid gap-1">支持的思考档位
+        <Input aria-label={`${name} 支持的思考档位`} aria-invalid={!!errors.efforts} value={draft.efforts}
+          onChange={(event) => onChange({ ...draft, efforts: event.target.value })} placeholder="例如 low,medium,high" />
+        {errors.efforts && <span className="text-destructive">{errors.efforts}</span>}
+      </label>
+      <label className="grid gap-1">默认思考档位
+        <Input aria-label={`${name} 默认思考档位`} aria-invalid={!!errors.defaultEffort} value={draft.defaultEffort}
+          onChange={(event) => onChange({ ...draft, defaultEffort: event.target.value })} placeholder="自动识别" />
+        {errors.defaultEffort && <span className="text-destructive">{errors.defaultEffort}</span>}
+      </label>
+    </>}
+    <Button type="button" variant="ghost" size="sm" onClick={() => onChange(modelOverrideDraft())}>恢复自动识别</Button>
+  </div>;
 }
 
 function isLanguageModel(modelType?: string | null, allowUnknown = true): boolean {
@@ -203,7 +412,7 @@ const PROVIDER_ICON_BY_ID: Record<string, string> = {
 
 function ProviderIcon({ provider, size }: { provider: ChatProvider; size: number }) {
   const icon = provider.is_builtin ? MONA_PROVIDER_ICON : PROVIDER_ICON_BY_ID[provider.name];
-  if (!icon) return <span className="text-xs font-semibold">{providerInitials(provider.label)}</span>;
+  if (!icon) return <span aria-hidden className="text-xs font-semibold">{providerInitials(provider.label)}</span>;
   return <img src={icon} alt="" width={size} height={size} className="object-contain" />;
 }
 
@@ -289,7 +498,7 @@ export function ChatProvidersSettings({
   const builtinProvider = providers.find((provider) => provider.is_builtin) ?? null;
   const [managedBalance, setManagedBalance] = useState<string | null>(null);
   const manageableProviders = useMemo(
-    () => providers.filter((provider) => !provider.is_builtin && !["openai", "anthropic"].includes(provider.name)),
+    () => providers.filter((provider) => !provider.is_builtin),
     [providers],
   );
   const configured = useMemo(() => {
@@ -369,27 +578,46 @@ export function ChatProvidersSettings({
     }
   }, [builtinProvider?.name, configured, selectedId, codebuddy]);
   const [customApiBase, setCustomApiBase] = useState("");
+  const [customProtocol, setCustomProtocol] = useState<CustomProviderWireApi>("auto");
+  const [customBaseError, setCustomBaseError] = useState("");
+  const customCurrentRoute = useRef("");
+  const customDataRoute = useRef("");
+  const customProbeRevision = useRef(0);
   const [customApiKey, setCustomApiKey] = useState("");
   const [customModels, setCustomModels] = useState<string[]>([]);
+  const [customModelNames, setCustomModelNames] = useState<Record<string, string>>({});
+  const [customDiscoveredMetadata, setCustomDiscoveredMetadata] = useState<Record<string, ProviderModelMetadata>>({});
   const [customModelTypes, setCustomModelTypes] = useState<Record<string, string>>({});
-  const [customModelModalities, setCustomModelModalities] = useState<Record<string, string[]>>({});
-  const [customModelContextWindows, setCustomModelContextWindows] = useState<Record<string, number>>({});
-  const [customModelReasoning, setCustomModelReasoning] = useState<Record<string, ModelReasoningMetadata>>({});
+  const [customOverrideDrafts, setCustomOverrideDrafts] = useState<Record<string, ModelOverrideDraft>>({});
+  const [customOverrideTouched, setCustomOverrideTouched] = useState<string[]>([]);
+  const [customOverrideErrors, setCustomOverrideErrors] = useState<Record<string, ModelOverrideErrors>>({});
+  const [customExpandedModel, setCustomExpandedModel] = useState<string | null>(null);
   const [customSelectedModels, setCustomSelectedModels] = useState<string[]>([]);
   const [customManualModel, setCustomManualModel] = useState("");
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
   const [wizardProviderId, setWizardProviderId] = useState<string | null>(null);
   const [wizardApiKey, setWizardApiKey] = useState("");
   const [wizardApiBase, setWizardApiBase] = useState("");
+  const wizardCurrentRoute = useRef("");
+  const wizardDataRoute = useRef("");
+  const wizardProbeRevision = useRef(0);
+  const [wizardBaseError, setWizardBaseError] = useState("");
   const [wizardModels, setWizardModels] = useState<string[]>([]);
+  const [wizardManualModels, setWizardManualModels] = useState<string[]>([]);
+  const [wizardModelNames, setWizardModelNames] = useState<Record<string, string>>({});
+  const [wizardDiscoveredMetadata, setWizardDiscoveredMetadata] = useState<Record<string, ProviderModelMetadata>>({});
   const [wizardModelTypes, setWizardModelTypes] = useState<Record<string, string>>({});
-  const [wizardModelModalities, setWizardModelModalities] = useState<Record<string, string[]>>({});
-  const [wizardModelContextWindows, setWizardModelContextWindows] = useState<Record<string, number>>({});
-  const [wizardModelReasoning, setWizardModelReasoning] = useState<Record<string, ModelReasoningMetadata>>({});
   const [wizardSelectedModels, setWizardSelectedModels] = useState<string[]>([]);
   const [wizardManualModel, setWizardManualModel] = useState("");
   const [wizardLoading, setWizardLoading] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
+  const [githubLogin, setGithubLogin] = useState<GitHubCopilotLoginStatus>({ status: "idle" });
+  const [githubChecking, setGithubChecking] = useState(false);
+  const [githubActionPending, setGithubActionPending] = useState(false);
+  const [githubPollVersion, setGithubPollVersion] = useState(0);
+  const [githubError, setGithubError] = useState("");
+  const githubEpoch = useRef(0);
+  const githubBusy = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -423,7 +651,7 @@ export function ChatProvidersSettings({
     : filteredConfigured.some((provider) => provider.name === id));
   const apiSourceIds = visibleSourceIds.filter((id) => !isAccountSource(id));
   const accountSourceIds = visibleSourceIds.filter(isAccountSource);
-  const isSuggestedSource = (id: string) => id === "anthropic" ? !nativeConnected(id)
+  const isSuggestedSource = (id: string) => id === "anthropic" ? !nativeConnected(id) && !configured.find((provider) => provider.name === id)?.configured
     : id === "native:codebuddy" && codebuddy?.probe?.authentication !== "ready";
   const sortableSourceIds = allSourceIds.filter((id) => !isSuggestedSource(id));
   const [orderAnnouncement, setOrderAnnouncement] = useState("");
@@ -434,39 +662,152 @@ export function ChatProvidersSettings({
     setOrderAnnouncement(`已移到第 ${index + 1} 项，共 ${sortableSourceIds.length} 项`);
   };
   const wizardProvider = manageableProviders.find((provider) => provider.name === wizardProviderId);
+  const githubStepActive = wizardOpen && wizardStep === 2 && wizardProvider?.auth_method === "github-copilot";
+  useEffect(() => {
+    if (!githubStepActive) return;
+    const epoch = ++githubEpoch.current;
+    let cancelled = false;
+    let timer: number | undefined;
+    setGithubChecking(true);
+    const poll = async () => {
+      try {
+        const status = await fetchGitHubCopilotLogin(token);
+        if (cancelled || epoch !== githubEpoch.current) return;
+        setGithubLogin(status);
+        setGithubChecking(false);
+        if (status.status === "authorized") setWizardError((current) => current === "请先登录 GitHub。" ? null : current);
+        if (status.status === "failed") setGithubError(githubLoginFailure(status.message));
+        if (status.status === "starting" || status.status === "waiting") timer = window.setTimeout(poll, 1000);
+      } catch {
+        if (cancelled || epoch !== githubEpoch.current) return;
+        setGithubChecking(false);
+        setGithubLogin({ status: "failed" });
+        setGithubError("无法读取 GitHub 登录状态，请重试。");
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      githubEpoch.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [githubStepActive, githubPollVersion, token]);
   const wizardCandidates = useMemo(() => {
     if (!wizardProvider) return [];
-    const discovered = modelRowsFromIds(wizardProvider, wizardModels);
-    return [...wizardProvider.models.map((model) => ({
+    const originalRoute = customRouteKey(wizardApiBase) === customRouteKey(wizardProvider.api_base || wizardProvider.default_api_base);
+    const models = originalRoute || wizardEditing ? wizardProvider.models : [];
+    const discovered = modelRowsFromIds({ ...wizardProvider, models }, wizardModels);
+    const known = new Set([...models, ...discovered].map((model) => model.id));
+    const catalog = (!wizardEditing || originalRoute ? wizardProvider.catalog_candidates ?? [] : [])
+      .filter((candidate) => {
+        if (!candidate.id || known.has(candidate.id)) return false;
+        known.add(candidate.id);
+        return true;
+      })
+      .map((candidate) => ({ ...candidate, enabled: false, recommended: false }));
+    return [...models.map((model) => ({
       ...model,
+      name: wizardModelNames[model.id] ?? (originalRoute ? model.name : model.id),
       type: wizardModelTypes[model.id] ?? model.type,
-      context_window: wizardModelContextWindows[model.id] ?? model.context_window,
-      ...(wizardModelReasoning[model.id] ?? {}),
     })), ...discovered.map((model) => ({
       ...model,
+      name: wizardModelNames[model.id] ?? model.name,
       type: wizardModelTypes[model.id],
-      input_modalities: wizardModelModalities[model.id],
-      ...(isPositiveContextWindow(wizardModelContextWindows[model.id])
-        ? { context_window: wizardModelContextWindows[model.id] }
-        : {}),
-      ...(wizardModelReasoning[model.id] ?? {}),
-    }))];
-  }, [wizardModelContextWindows, wizardModelModalities, wizardModelReasoning, wizardModelTypes, wizardModels, wizardProvider]);
+    })), ...catalog];
+  }, [wizardApiBase, wizardEditing, wizardModelNames, wizardModelTypes, wizardModels, wizardProvider]);
   const customCandidates = useMemo<ChatModel[]>(
     () => customModels.map((id) => ({
       id,
-      name: id,
+      name: customModelNames[id] ?? id,
       type: customModelTypes[id],
-      input_modalities: customModelModalities[id],
-      ...(isPositiveContextWindow(customModelContextWindows[id])
-        ? { context_window: customModelContextWindows[id] }
-        : {}),
-      ...(customModelReasoning[id] ?? {}),
       enabled: customSelectedModels.includes(id),
       recommended: false,
     })),
-    [customModelContextWindows, customModelModalities, customModelReasoning, customModelTypes, customModels, customSelectedModels],
+    [customModelNames, customModelTypes, customModels, customSelectedModels],
   );
+
+  const startCustomRoute = (value: string, wireApi: CustomProviderWireApi = "auto") => {
+    customProbeRevision.current += 1;
+    customCurrentRoute.current = customConnectionKey(value, wireApi);
+    customDataRoute.current = customCurrentRoute.current;
+    setCustomApiBase(value);
+    setCustomProtocol(wireApi);
+    setCustomBaseError("");
+  };
+
+  const changeCustomRoute = (value: string) => {
+    const route = customConnectionKey(value, customProtocol);
+    if (route !== customCurrentRoute.current) {
+      customProbeRevision.current += 1;
+      setWizardLoading(false);
+    }
+    customCurrentRoute.current = route;
+    setCustomApiBase(value);
+    setCustomBaseError("");
+  };
+
+  const changeCustomProtocol = (value: string) => {
+    const wireApi = customWireApi(value);
+    const route = customConnectionKey(customApiBase, wireApi);
+    if (route !== customCurrentRoute.current) {
+      customProbeRevision.current += 1;
+      setWizardLoading(false);
+    }
+    customCurrentRoute.current = route;
+    setCustomProtocol(wireApi);
+  };
+
+  const startWizardRoute = (value: string) => {
+    const base = isConcreteApiBase(value) ? value : "";
+    wizardProbeRevision.current += 1;
+    wizardCurrentRoute.current = customRouteKey(base);
+    wizardDataRoute.current = wizardCurrentRoute.current;
+    setWizardApiBase(base);
+    setWizardBaseError("");
+    setWizardLoading(false);
+  };
+
+  const changeWizardRoute = (value: string) => {
+    const route = customRouteKey(value);
+    if (route !== wizardCurrentRoute.current) {
+      wizardProbeRevision.current += 1;
+      setWizardLoading(false);
+    }
+    wizardCurrentRoute.current = route;
+    setWizardApiBase(value);
+    setWizardBaseError("");
+  };
+
+  const changeGitHubLogin = async (action: "start" | "cancel") => {
+    if (githubBusy.current) return;
+    githubBusy.current = true;
+    setGithubActionPending(true);
+    const epoch = ++githubEpoch.current;
+    if (action === "start") setGithubLogin({ status: "starting" });
+    try {
+      const status = await (action === "start" ? startGitHubCopilotLogin(token) : cancelGitHubCopilotLogin(token));
+      if (epoch !== githubEpoch.current) return;
+      setGithubLogin(status);
+      setGithubPollVersion((value) => value + 1);
+    } catch {
+      if (epoch !== githubEpoch.current) return;
+      setGithubLogin({ status: "failed" });
+      setGithubError(action === "start" ? "GitHub 登录未能开始，请重试。" : "取消 GitHub 登录失败，请重试。");
+    } finally {
+      githubBusy.current = false;
+      setGithubActionPending(false);
+    }
+  };
+
+  const openGitHubDevicePage = async () => {
+    const url = trustedGitHubDeviceUrl(githubLogin.verification_url);
+    if (!url) return;
+    try {
+      await openExternalUrl(url);
+    } catch {
+      setGithubError("无法打开 GitHub 授权页面，请重试。");
+    }
+  };
 
   const openWizard = () => {
     setWizardOpen(true);
@@ -477,23 +818,27 @@ export function ChatProvidersSettings({
     setWizardProviderId(null);
     setWizardQuery("");
     setWizardApiKey("");
-    setWizardApiBase("");
+    startWizardRoute("");
     setWizardModels([]);
+    setWizardManualModels([]);
+    setWizardModelNames({});
+    setWizardDiscoveredMetadata({});
     setWizardModelTypes({});
-    setWizardModelModalities({});
-    setWizardModelContextWindows({});
-    setWizardModelReasoning({});
     setWizardSelectedModels([]);
     setWizardManualModel("");
     setWizardError(null);
+    setGithubLogin({ status: "idle" });
     setCustomName("");
-    setCustomApiBase("");
+    startCustomRoute("");
     setCustomApiKey("");
     setCustomModels([]);
+    setCustomModelNames({});
+    setCustomDiscoveredMetadata({});
     setCustomModelTypes({});
-    setCustomModelModalities({});
-    setCustomModelContextWindows({});
-    setCustomModelReasoning({});
+    setCustomOverrideDrafts({});
+    setCustomOverrideTouched([]);
+    setCustomOverrideErrors({});
+    setCustomExpandedModel(null);
     setCustomSelectedModels([]);
     setCustomManualModel("");
   };
@@ -506,19 +851,22 @@ export function ChatProvidersSettings({
     setWizardStep(2);
     setWizardError(null);
     setCustomName("");
-    setCustomApiBase("");
+    startCustomRoute("");
     setCustomApiKey("");
     setCustomModels([]);
+    setCustomModelNames({});
+    setCustomDiscoveredMetadata({});
     setCustomModelTypes({});
-    setCustomModelModalities({});
-    setCustomModelContextWindows({});
-    setCustomModelReasoning({});
+    setCustomOverrideDrafts({});
+    setCustomOverrideTouched([]);
+    setCustomOverrideErrors({});
+    setCustomExpandedModel(null);
     setCustomSelectedModels([]);
     setCustomManualModel("");
   };
 
   const openEditWizard = () => {
-    if (!selected || selected.is_builtin || ["openai", "anthropic"].includes(selected.name)) return;
+    if (!selected || selected.is_builtin) return;
     if (selected.is_custom) {
       setWizardOpen(true);
       setWizardEditing(true);
@@ -526,19 +874,17 @@ export function ChatProvidersSettings({
       setCustomProviderId(selected.name);
       setWizardStep(2);
       setCustomName(selected.label);
-      setCustomApiBase(selected.api_base || "");
+      startCustomRoute(selected.api_base || "", customWireApi(selected.wire_api));
       setCustomApiKey("");
       const ids = selected.models.map((model) => model.id);
       setCustomModels(ids);
+      setCustomModelNames(mergeModelNames({}, selected.models));
+      setCustomDiscoveredMetadata(Object.fromEntries(selected.models.map((model) => [model.id, rawMetadataFor(model)])));
       setCustomModelTypes(Object.fromEntries(selected.models.flatMap((model) => model.type ? [[model.id, model.type]] : [])));
-      setCustomModelModalities(Object.fromEntries(selected.models.flatMap((model) => model.input_modalities ? [[model.id, model.input_modalities]] : [])));
-      setCustomModelContextWindows(Object.fromEntries(selected.models.flatMap((model) =>
-        isPositiveContextWindow(model.context_window) ? [[model.id, model.context_window] as const] : [],
-      )));
-      setCustomModelReasoning(Object.fromEntries(selected.models.flatMap((model) => {
-        const metadata = reasoningMetadataFor(model);
-        return metadata ? [[model.id, metadata]] : [];
-      })));
+      setCustomOverrideDrafts(Object.fromEntries(Object.entries(selected.model_overrides ?? {}).map(([id, value]) => [id, modelOverrideDraft(value)])));
+      setCustomOverrideTouched([]);
+      setCustomOverrideErrors({});
+      setCustomExpandedModel(null);
       setCustomSelectedModels(selected.models.filter((model) => model.enabled).map((model) => model.id));
       setCustomManualModel("");
       setWizardError(null);
@@ -551,24 +897,20 @@ export function ChatProvidersSettings({
     setWizardProviderId(selected.name);
     setWizardQuery("");
     setWizardApiKey("");
-    setWizardApiBase(selected.api_base || selected.default_api_base);
+    startWizardRoute(selected.api_base || selected.default_api_base);
     setWizardModels([]);
+    setWizardManualModels([]);
+    setWizardModelNames(mergeModelNames({}, selected.models));
+    setWizardDiscoveredMetadata(Object.fromEntries(selected.models.map((model) => [model.id, rawMetadataFor(model)])));
     setWizardModelTypes(Object.fromEntries(selected.models.flatMap((model) =>
       model.type ? [[model.id, model.type] as const] : [],
     )));
-    setWizardModelModalities({});
-    setWizardModelContextWindows(Object.fromEntries(selected.models.flatMap((model) =>
-      isPositiveContextWindow(model.context_window) ? [[model.id, model.context_window] as const] : [],
-    )));
-    setWizardModelReasoning(Object.fromEntries(selected.models.flatMap((model) => {
-      const metadata = reasoningMetadataFor(model);
-      return metadata ? [[model.id, metadata]] : [];
-    })));
-    setWizardSelectedModels(
-      selected.models.filter((model) => model.enabled).map((model) => model.id),
-    );
+    setWizardSelectedModels(selected.configured
+      ? selected.models.filter((model) => model.enabled).map((model) => model.id)
+      : selected.models[0] ? [selected.models[0].id] : []);
     setWizardManualModel("");
     setWizardError(null);
+    setGithubLogin({ status: "idle" });
   };
 
   const chooseWizardProvider = (provider: ChatProvider) => {
@@ -576,30 +918,66 @@ export function ChatProvidersSettings({
     setWizardEditing(false);
     setWizardCustom(false);
     setWizardProviderId(provider.name);
-    setWizardApiBase(provider.api_base || provider.default_api_base);
+    startWizardRoute(provider.api_base || provider.default_api_base);
     setWizardApiKey("");
     setWizardModels([]);
+    setWizardManualModels([]);
+    setWizardModelNames(mergeModelNames({}, provider.models));
+    setWizardDiscoveredMetadata(Object.fromEntries(provider.models.map((model) => [model.id, rawMetadataFor(model)])));
     setWizardModelTypes({});
-    setWizardModelModalities({});
-    setWizardModelContextWindows({});
-    setWizardModelReasoning({});
     setWizardSelectedModels(provider.models[0] ? [provider.models[0].id] : []);
     setWizardManualModel("");
     setWizardError(null);
+    setGithubLogin({ status: "idle" });
     setWizardStep(2);
   };
 
-  const loadCustomModels = async () => {
-    const name = customName.trim();
-    const base = customApiBase.trim();
-    if (!name) {
+  const prepareCustomRoute = (route: string) => {
+    if (route === customDataRoute.current) return;
+    const original = wizardEditing && selected?.name === customProviderId
+      && customConnectionKey(selected.api_base, customWireApi(selected.wire_api)) === route ? selected : undefined;
+    const oldMetadata = customDiscoveredMetadata;
+    setCustomModelNames(original ? mergeModelNames({}, original.models) : {});
+    setCustomDiscoveredMetadata(Object.fromEntries(customModels.map((id) => {
+      const restored = original?.models.find((model) => model.id === id);
+      const type = customModelTypes[id] ?? oldMetadata[id]?.type;
+      const raw = restored ? rawMetadataFor(restored) : {};
+      return [id, type && (!restored || type !== restored.type) ? { ...raw, type } : raw];
+    })));
+    setCustomOverrideDrafts(Object.fromEntries(Object.entries(original?.model_overrides ?? {}).map(([id, value]) => [id, modelOverrideDraft(value)])));
+    setCustomOverrideTouched([]);
+    setCustomOverrideErrors({});
+    setCustomExpandedModel(null);
+    customDataRoute.current = route;
+  };
+
+  const canOpenCustomModels = () => {
+    if (!customName.trim()) {
       setWizardError("请输入显示名称");
-      return;
+      return false;
     }
-    if (!/^https?:\/\/[^\s]+$/i.test(base)) {
-      setWizardError("API Base 必须是合法的 http/https 地址");
-      return;
+    if (!isConcreteApiBase(customApiBase)) {
+      setCustomBaseError("请输入有效的 http/https API Base");
+      return false;
     }
+    return true;
+  };
+
+  const openCustomModelsManually = () => {
+    if (!canOpenCustomModels()) return;
+    customProbeRevision.current += 1;
+    prepareCustomRoute(customConnectionKey(customApiBase, customProtocol));
+    setWizardLoading(false);
+    setWizardError(null);
+    setWizardStep(3);
+  };
+
+  const loadCustomModels = async () => {
+    if (!canOpenCustomModels()) return;
+    const base = customApiBase.trim();
+    const route = customConnectionKey(base, customProtocol);
+    const revision = ++customProbeRevision.current;
+    prepareCustomRoute(route);
     setWizardLoading(true);
     setWizardError(null);
     try {
@@ -607,10 +985,14 @@ export function ChatProvidersSettings({
         provider: customProviderId ?? "custom",
         apiKey: customApiKey.trim() || undefined,
         apiBase: base,
+        wireApi: customProtocol,
       });
+      if (revision !== customProbeRevision.current || route !== customCurrentRoute.current) return;
       const fetched = result.models ?? [];
       const candidates = [...new Set([...customModels, ...fetched.map((id) => id.trim()).filter(Boolean)])];
       setCustomModels(candidates);
+      setCustomModelNames((current) => mergeModelNames(current, result.model_details ?? []));
+      setCustomDiscoveredMetadata((current) => mergeDiscoveredMetadata(current, (result.model_details ?? []).map(observedDiscovery)));
       setCustomModelTypes((current) => ({
         ...Object.fromEntries(
           (result.model_details ?? [])
@@ -618,37 +1000,17 @@ export function ChatProvidersSettings({
         ),
         ...current,
       }));
-      setCustomModelModalities((current) => ({
-        ...current,
-        ...Object.fromEntries(
-          (result.model_details ?? []).flatMap((model) =>
-            model.input_modalities ? [[model.id, model.input_modalities] as const] : []),
-        ),
-      }));
-      setCustomModelContextWindows((current) => ({
-        ...current,
-        ...Object.fromEntries(
-          (result.model_details ?? []).flatMap((model) =>
-            isPositiveContextWindow(model.context_window)
-              ? [[model.id, model.context_window] as const]
-              : [],
-          ),
-        ),
-      }));
-      setCustomModelReasoning((current) => ({
-        ...current,
-        ...Object.fromEntries((result.model_details ?? []).flatMap((model) => {
-          const metadata = reasoningMetadataFor(model);
-          return metadata ? [[model.id, metadata] as const] : [];
-        })),
-      }));
       setCustomSelectedModels((current) => current.filter((id) => candidates.includes(id)));
       if (result.error) setWizardError("暂时无法获取模型，请检查连接设置后重试。");
     } catch (err) {
-      setWizardError("暂时无法获取模型，请检查连接设置后重试。");
+      if (revision === customProbeRevision.current && route === customCurrentRoute.current) {
+        setWizardError("暂时无法获取模型，请检查连接设置后重试。");
+      }
     } finally {
-      setWizardLoading(false);
-      setWizardStep(3);
+      if (revision === customProbeRevision.current && route === customCurrentRoute.current) {
+        setWizardLoading(false);
+        setWizardStep(3);
+      }
     }
   };
 
@@ -656,11 +1018,31 @@ export function ChatProvidersSettings({
     const ids = customManualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean);
     if (!ids.length) return;
     setCustomModels((current) => [...new Set([...current, ...ids])]);
+    setCustomSelectedModels((current) => [...new Set([...current, ...ids])]);
+    setCustomDiscoveredMetadata((current) => ({
+      ...current,
+      ...Object.fromEntries(ids.map((id) => [id, { ...current[id], type: "chat" }])),
+    }));
     setCustomModelTypes((current) => ({
       ...current,
       ...Object.fromEntries(ids.map((id) => [id, "chat"])),
     }));
     setCustomManualModel("");
+  };
+
+  const knownCustomEfforts = (id: string) => {
+    const raw = customDiscoveredMetadata[id]?.reasoning_efforts;
+    if (raw !== undefined) return raw;
+    if (!wizardEditing || selected?.name !== customProviderId
+      || customDataRoute.current !== customConnectionKey(selected.api_base, customWireApi(selected.wire_api))
+      || selected.model_overrides?.[id]?.reasoning_efforts !== undefined) return undefined;
+    return selected.models.find((model) => model.id === id)?.reasoning_efforts;
+  };
+
+  const changeCustomOverride = (id: string, draft: ModelOverrideDraft) => {
+    setCustomOverrideDrafts((current) => ({ ...current, [id]: draft }));
+    setCustomOverrideTouched((current) => current.includes(id) ? current : [...current, id]);
+    setCustomOverrideErrors((current) => ({ ...current, [id]: {} }));
   };
 
   const finishCustomWizard = async () => {
@@ -672,13 +1054,26 @@ export function ChatProvidersSettings({
       setWizardStep(2);
       return;
     }
-    if (!/^https?:\/\/[^\s]+$/i.test(base)) {
-      setWizardError("API Base 必须是合法的 http/https 地址");
+    if (!isConcreteApiBase(base)) {
+      setCustomBaseError("请输入有效的 http/https API Base");
       setWizardStep(2);
       return;
     }
     if (!customModels.length) {
       setWizardError("请至少添加一个模型");
+      return;
+    }
+    const modelOverrides: Record<string, ProviderModelOverride | null> = {};
+    const fieldErrors: Record<string, ModelOverrideErrors> = {};
+    for (const id of customOverrideTouched.filter((item) => customModels.includes(item))) {
+      const parsed = parseModelOverride(customOverrideDrafts[id] ?? modelOverrideDraft(), knownCustomEfforts(id));
+      if (Object.keys(parsed.errors).length) fieldErrors[id] = parsed.errors;
+      else modelOverrides[id] = parsed.value;
+    }
+    const firstInvalid = Object.keys(fieldErrors)[0];
+    if (firstInvalid) {
+      setCustomOverrideErrors(fieldErrors);
+      setCustomExpandedModel(firstInvalid);
       return;
     }
     setWizardLoading(true);
@@ -689,26 +1084,11 @@ export function ChatProvidersSettings({
         provider: customProviderId ?? "custom",
         customName: name,
         apiBase: base,
+        wireApi: customProtocol,
         ...(selectedModels[0] ? { model: selectedModels[0] } : {}),
         enabledModels: selectedModels,
-        discoveredModels: customModels.map((id) => ({
-          id,
-          name: id,
-          type: customModelTypes[id],
-          inputModalities: customModelModalities[id],
-          ...(isPositiveContextWindow(customModelContextWindows[id])
-            ? { contextWindow: customModelContextWindows[id] }
-            : {}),
-          ...(customModelReasoning[id]?.reasoning_efforts !== undefined
-            ? { reasoningEfforts: customModelReasoning[id].reasoning_efforts }
-            : {}),
-          ...(customModelReasoning[id] && Object.prototype.hasOwnProperty.call(customModelReasoning[id], "default_reasoning_effort")
-            ? { defaultReasoningEffort: customModelReasoning[id].default_reasoning_effort }
-            : {}),
-          ...(customModelReasoning[id]?.supports_adaptive_thinking !== undefined
-            ? { supportsAdaptiveThinking: customModelReasoning[id].supports_adaptive_thinking }
-            : {}),
-        })),
+        discoveredModels: customModels.map((id) => discoveredUpdate(id, customDiscoveredMetadata[id])),
+        ...(Object.keys(modelOverrides).length ? { modelOverrides } : {}),
         ...(apiKey ? { apiKey } : {}),
       });
       onSettingsChanged(payload);
@@ -721,14 +1101,78 @@ export function ChatProvidersSettings({
       setSelectedId(nextId);
       setWizardOpen(false);
     } catch (err) {
-      setWizardError("保存失败，请检查设置后重试。");
+      const message = err instanceof Error ? err.message : "";
+      let field: { id: string; name: keyof ModelOverrideErrors; text: string } | undefined;
+      for (const id of customOverrideTouched) {
+        if (message === `模型 ${id} 的上下文窗口必须是正整数`) field = { id, name: "contextWindow", text: "请输入正整数" };
+        if (message === `模型 ${id} 的思考档位格式无效`) field = { id, name: "efforts", text: "请输入有效的思考档位" };
+        if (message === `模型 ${id} 的默认思考档位必须属于支持列表`) field = { id, name: "defaultEffort", text: "默认档位必须属于支持列表" };
+        if (field) break;
+      }
+      if (field) {
+        setCustomOverrideErrors({ [field.id]: { [field.name]: field.text } });
+        setCustomExpandedModel(field.id);
+      } else {
+        setWizardError("保存失败，请检查设置后重试。");
+      }
     } finally {
       setWizardLoading(false);
     }
   };
 
+  const prepareWizardRoute = (route: string) => {
+    if (!wizardProvider || route === wizardDataRoute.current) return;
+    const original = wizardEditing && customRouteKey(wizardProvider.api_base) === route ? wizardProvider : undefined;
+    const models = wizardEditing ? wizardProvider.models : [];
+    const ids = [...new Set([...models.map((model) => model.id), ...wizardManualModels])];
+    setWizardModelNames(original ? mergeModelNames({}, original.models) : {});
+    setWizardDiscoveredMetadata(Object.fromEntries(ids.map((id) => {
+      const previous = models.find((model) => model.id === id);
+      const restored = original?.models.find((model) => model.id === id);
+      const type = wizardModelTypes[id] ?? previous?.type ?? wizardDiscoveredMetadata[id]?.type;
+      const raw = restored ? rawMetadataFor(restored) : {};
+      return [id, type && (!restored || type !== restored.type) ? { ...raw, type } : raw];
+    })));
+    setWizardModels(wizardManualModels);
+    wizardDataRoute.current = route;
+  };
+
+  const canOpenWizardModels = () => {
+    if (!wizardProvider) return false;
+    if (wizardProvider.auth_method === "github-copilot" && (githubChecking || githubLogin.status !== "authorized")) {
+      setWizardError("请先登录 GitHub。");
+      return false;
+    }
+    if (!isConcreteApiBase(wizardApiBase)) {
+      setWizardBaseError("请输入有效的 http/https API Base");
+      return false;
+    }
+    if (wizardProvider.api_key_required && !wizardApiKey.trim() && !(wizardEditing && wizardProvider.api_key_hint)) {
+      setWizardError("请输入 API Key");
+      return false;
+    }
+    return true;
+  };
+
+  const openWizardModelsManually = () => {
+    if (!canOpenWizardModels()) return;
+    wizardProbeRevision.current += 1;
+    prepareWizardRoute(customRouteKey(wizardApiBase));
+    setWizardLoading(false);
+    setWizardError(null);
+    setWizardStep(3);
+  };
+
   const loadWizardModels = async () => {
+    if (!canOpenWizardModels()) return;
     if (!wizardProvider) return;
+    const route = customRouteKey(wizardApiBase);
+    const revision = ++wizardProbeRevision.current;
+    const errorMessage = wizardProvider.auth_method === "aws" ? "无法拉取模型，请检查 AWS 凭据、区域和模型权限。"
+      : wizardProvider.auth_method === "google-adc" ? "无法拉取模型，请检查 Google 凭据、项目地址和模型权限。"
+      : wizardProvider.auth_method === "github-copilot" ? "无法拉取模型，请检查 GitHub 授权和订阅权限。"
+      : "无法拉取模型，请检查 API Base 和 API Key 后重试。";
+    prepareWizardRoute(route);
     setWizardLoading(true);
     setWizardError(null);
     try {
@@ -737,8 +1181,11 @@ export function ChatProvidersSettings({
         apiKey: wizardApiKey.trim() || undefined,
         apiBase: wizardApiBase.trim() || undefined,
       });
-      const fetched = result.models ?? [];
+      if (revision !== wizardProbeRevision.current || route !== wizardCurrentRoute.current) return;
+      const fetched = [...new Set([...wizardManualModels, ...(result.models ?? []).map((id) => id.trim()).filter(Boolean)])];
       setWizardModels(fetched);
+      setWizardModelNames((current) => mergeModelNames(current, result.model_details ?? []));
+      setWizardDiscoveredMetadata((current) => mergeDiscoveredMetadata(current, (result.model_details ?? []).map(observedDiscovery)));
       setWizardModelTypes((current) => ({
         ...Object.fromEntries(
           (result.model_details ?? [])
@@ -746,41 +1193,22 @@ export function ChatProvidersSettings({
         ),
         ...current,
       }));
-      setWizardModelModalities((current) => ({
-        ...current,
-        ...Object.fromEntries(
-          (result.model_details ?? []).flatMap((model) =>
-            model.input_modalities ? [[model.id, model.input_modalities] as const] : []),
-        ),
-      }));
-      setWizardModelContextWindows((current) => ({
-        ...current,
-        ...Object.fromEntries(
-          (result.model_details ?? []).flatMap((model) =>
-            isPositiveContextWindow(model.context_window)
-              ? [[model.id, model.context_window] as const]
-              : [],
-          ),
-        ),
-      }));
-      setWizardModelReasoning((current) => ({
-        ...current,
-        ...Object.fromEntries((result.model_details ?? []).flatMap((model) => {
-          const metadata = reasoningMetadataFor(model);
-          return metadata ? [[model.id, metadata] as const] : [];
-        })),
-      }));
-      const candidates = [...wizardProvider.models.map((model) => model.id), ...fetched];
+      const originalRoute = customRouteKey(wizardProvider.api_base || wizardProvider.default_api_base) === route;
+      const candidates = [...(wizardEditing || originalRoute ? wizardProvider.models.map((model) => model.id) : []), ...fetched];
       setWizardSelectedModels((current) => {
         const valid = current.filter((id) => candidates.includes(id));
         return valid.length > 0 ? valid : candidates.slice(0, 1);
       });
-      if (result.error) setWizardError("暂时无法获取模型，请检查连接设置后重试。");
+      if (result.error) setWizardError(errorMessage);
     } catch (err) {
-      setWizardError("暂时无法获取模型，请检查连接设置后重试。");
+      if (revision === wizardProbeRevision.current && route === wizardCurrentRoute.current) {
+        setWizardError(errorMessage);
+      }
     } finally {
-      setWizardLoading(false);
-      setWizardStep(3);
+      if (revision === wizardProbeRevision.current && route === wizardCurrentRoute.current) {
+        setWizardLoading(false);
+        setWizardStep(3);
+      }
     }
   };
 
@@ -788,6 +1216,11 @@ export function ChatProvidersSettings({
     const ids = wizardManualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean);
     if (!ids.length) return;
     setWizardModels((current) => [...new Set([...current, ...ids])]);
+    setWizardManualModels((current) => [...new Set([...current, ...ids])]);
+    setWizardDiscoveredMetadata((current) => ({
+      ...current,
+      ...Object.fromEntries(ids.map((id) => [id, { ...current[id], type: "chat" }])),
+    }));
     setWizardModelTypes((current) => ({
       ...current,
       ...Object.fromEntries(ids.map((id) => [id, "chat"])),
@@ -798,6 +1231,10 @@ export function ChatProvidersSettings({
 
   const finishWizard = async () => {
     if (!wizardProvider) return;
+    if (!canOpenWizardModels()) {
+      setWizardStep(2);
+      return;
+    }
     const selectedModels = wizardSelectedModels.filter(Boolean);
     if (!selectedModels.length) {
       setWizardError("请至少选择一个模型");
@@ -816,23 +1253,15 @@ export function ChatProvidersSettings({
     setWizardError(null);
     try {
       const apiKey = wizardApiKey.trim();
+      const candidatesToSave = wizardCandidates.filter((candidate) => wizardProvider.models.some((model) => model.id === candidate.id)
+        || wizardModels.includes(candidate.id) || wizardSelectedModels.includes(candidate.id));
       const payload = await updateProviderSettings(token, {
         provider: wizardProvider.name,
         apiBase: wizardApiBase.trim(),
         model: selectedModels[0],
         enabledModels: selectedModels,
-        discoveredModels: wizardCandidates.map((candidate) => ({
-          id: candidate.id,
-          name: candidate.name,
-          type: candidate.type,
-          inputModalities: candidate.input_modalities,
-          ...(isPositiveContextWindow(wizardModelContextWindows[candidate.id])
-            ? { contextWindow: wizardModelContextWindows[candidate.id] }
-            : {}),
-          reasoningEfforts: candidate.reasoning_efforts,
-          defaultReasoningEffort: candidate.default_reasoning_effort,
-          supportsAdaptiveThinking: candidate.supports_adaptive_thinking,
-        })),
+        discoveredModels: candidatesToSave.map((candidate) => discoveredUpdate(candidate.id,
+          wizardDiscoveredMetadata[candidate.id] ?? (wizardSelectedModels.includes(candidate.id) ? { type: candidate.type || "chat" } : undefined))),
         ...(apiKey ? { apiKey } : {}),
       });
       onSettingsChanged(payload);
@@ -879,14 +1308,18 @@ export function ChatProvidersSettings({
     if (!selected || selected.is_builtin || saving) return;
     setSaving(true);
     try {
+      const raw = rawMetadataFor(model);
       const payload = await updateProviderSettings(token, {
         provider: selected.name,
         discoveredModels: [{
           id: model.id,
-          name: model.name,
+          name: raw.name || model.id,
           type,
-          ...(isPositiveContextWindow(model.context_window)
-            ? { contextWindow: model.context_window }
+          ...(isPositiveContextWindow(raw.context_window)
+            ? { contextWindow: raw.context_window }
+            : {}),
+          ...(isPositiveContextWindow(raw.context_window_max)
+            ? { contextWindowMax: raw.context_window_max }
             : {}),
         }],
       });
@@ -902,18 +1335,15 @@ export function ChatProvidersSettings({
   const toggleAllModels = async (action: "show" | "hide" | "reset") => {
     if (!selected || isMonaManaged || saving) return;
     const native = nativeFor(selected.name);
-    if (native) {
-      const keys = native.models.filter((model) => model.id).map((model) =>
+    const nativeKeys = native && nativeProgramAvailable(native) && nativeConnected(selected.name)
+      ? native.models.filter((model) => model.id).map((model) =>
         modelKey({ provider: `native:${native.id}`, model: model.id, executor: native.id }),
-      );
-      if (keys.length) {
-        setNativeVisible(keys, action !== "hide");
-        return;
-      }
+      ) : [];
+    const chatModels = selected.configured ? selected.models.filter((model) => isLanguageModel(model.type, !selected.is_custom)) : [];
+    if (!chatModels.length) {
+      if (nativeKeys.length) setNativeVisible(nativeKeys, action !== "hide");
+      return;
     }
-    if (["openai", "anthropic"].includes(selected.name)) return;
-    const chatModels = selected.models.filter((model) => isLanguageModel(model.type, !selected.is_custom));
-    if (!chatModels.length) return;
     const next = action === "reset" ? null : action === "hide" ? [] : chatModels.map((model) => model.id);
     const anotherProviderHasEnabledModel = providers.some((provider) =>
       provider.name !== selected.name
@@ -930,6 +1360,7 @@ export function ChatProvidersSettings({
         provider: selected.name,
         enabledModels: next,
       });
+      if (nativeKeys.length) setNativeVisible(nativeKeys, action !== "hide");
       onSettingsChanged(payload);
       setError(null);
     } catch (err) {
@@ -957,24 +1388,34 @@ export function ChatProvidersSettings({
           setError("暂时无法刷新模型，请稍后重试。");
         }
       }
-      if (["openai", "anthropic"].includes(selected.name) || !selected.configured) return;
+      if (!selected.configured || selected.model_discovery_supported === false) return;
+      if (!isConcreteApiBase(selected.api_base)) {
+        setError("请先填写有效的 API Base。");
+        return;
+      }
       const result = await fetchProviderModels(token, {
         provider: selected.name,
         apiBase: selected.api_base,
+        ...(selected.is_custom ? { wireApi: customWireApi(selected.wire_api) } : {}),
       });
       if (result.error) throw new Error(result.error);
-      const existingTypes = new Map(selected.models.map((model) => [model.id, model.type]));
+      const existingTypes = new Map(selected.models.map((model) => [model.id, rawMetadataFor(model).type]));
       const discovered: Array<{
         id: string;
         name?: string;
         type?: string | null;
         input_modalities?: string[] | null;
         context_window?: number | null;
+        context_window_max?: number | null;
+        opaque_model_id?: boolean;
         reasoning_efforts?: string[];
         default_reasoning_effort?: string | null;
         supports_adaptive_thinking?: boolean;
       }> = (result.model_details ?? (result.models ?? []).map((id) => ({ id, name: id, type: null })))
-        .map((model) => ({ ...model, type: existingTypes.get(model.id) ?? model.type }));
+        .map((model) => {
+          const raw = observedDiscovery(model);
+          return { ...raw, type: existingTypes.get(model.id) ?? raw.type };
+        });
       if (!discovered.length) return;
       const existingEnabled = selected.models.filter((model) => model.enabled).map((model) => model.id);
       const knownIds = new Set(selected.models.map((model) => model.id));
@@ -983,18 +1424,7 @@ export function ChatProvidersSettings({
         .map((model) => model.id);
       const payload = await updateProviderSettings(token, {
         provider: selected.name,
-        discoveredModels: discovered.map((model) => ({
-          id: model.id,
-          name: model.name,
-          type: model.type,
-          inputModalities: model.input_modalities,
-          ...(isPositiveContextWindow(model.context_window)
-            ? { contextWindow: model.context_window }
-            : {}),
-          reasoningEfforts: model.reasoning_efforts,
-          defaultReasoningEffort: model.default_reasoning_effort,
-          supportsAdaptiveThinking: model.supports_adaptive_thinking,
-        })),
+        discoveredModels: discovered.map((model) => discoveredUpdate(model.id, model)),
         enabledModels: [...new Set([...existingEnabled, ...newChatModels])],
       });
       onSettingsChanged(payload);
@@ -1079,11 +1509,12 @@ export function ChatProvidersSettings({
   const selectedImageProvider = settings.image_generation?.providers.find((provider) => provider.name === selected?.name);
   const selectedVideoProvider = settings.video_generation?.providers.find((provider) => provider.name === selected?.name);
   const chatModelIds = new Set(selected?.models.map((model) => model.id) ?? []);
-  const unifiedModels = selected && !["openai", "anthropic"].includes(selected.name) ? [
-    ...selected.models,
+  const isOfficial = selected ? ["openai", "anthropic"].includes(selected.name) : false;
+  const unifiedModels = selected ? [
+    ...(isOfficial && !selected.configured ? [] : selected.models),
     ...modelRowsFromIds(selected, [
-      ...(selected.name === "openai" ? [] : selectedImageProvider?.image_models ?? []),
-      ...(selected.name === "openai" ? [] : selectedVideoProvider?.video_models ?? []),
+      ...(isOfficial ? [] : selectedImageProvider?.image_models ?? []),
+      ...(isOfficial ? [] : selectedVideoProvider?.video_models ?? []),
     ]).map((model) => ({ ...model, enabled: false,
       type: selectedImageProvider?.image_models?.includes(model.id) && !selectedVideoProvider?.video_models?.includes(model.id) ? "image"
         : selectedVideoProvider?.video_models?.includes(model.id) && !selectedImageProvider?.image_models?.includes(model.id) ? "video" : "other",
@@ -1115,26 +1546,27 @@ export function ChatProvidersSettings({
   const kindOrder = [...MODEL_TYPE_OPTIONS.map((option) => option.value), "hidden"];
   const orderedModelGroups = [...modelGroups].sort(([, a], [, b]) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind));
   const nativeSource = nativeFor(selected?.name ?? "");
-  const selectedModelCount = (selected?.configured && !["openai", "anthropic"].includes(selected.name) ? selected.models.filter((model) => (isMonaManaged || model.enabled) && isLanguageModel(model.type, !selected.is_custom)).length : 0)
-    + (nativeConnected(selected?.name ?? "") ? nativeSource?.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: `native:${nativeSource.id}`, model: model.id, executor: nativeSource.id }))).length ?? 0 : 0);
+  const nativeSelectable = !!nativeSource && nativeProgramAvailable(nativeSource) && !!nativeConnected(selected?.name ?? "");
+  const selectedModelCount = (selected?.configured ? selected.models.filter((model) => (isMonaManaged || model.enabled) && isLanguageModel(model.type, !selected.is_custom)).length : 0)
+    + (nativeSelectable ? nativeSource?.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: `native:${nativeSource.id}`, model: model.id, executor: nativeSource.id }))).length ?? 0 : 0);
   const presentCapabilities = new Set(unifiedModels.map((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)
     ? "chat" : modelTypeInfo(model.type).capability));
   if (nativeSource?.models.some((model) => model.id)) presentCapabilities.add("chat");
-  const selectableModelCount = nativeSource ? nativeSource.models.filter((model) => model.id).length
-    : unifiedModels.filter((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)).length;
+  const selectableModelCount = (nativeSelectable ? nativeSource?.models.filter((model) => model.id).length ?? 0 : 0)
+    + unifiedModels.filter((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)).length;
   const modelFilters = [["all", "全部"], ...MODEL_TYPE_OPTIONS.filter((option) => presentCapabilities.has(option.value))
     .map((option) => [option.value, option.value === "image" ? "图像" : option.label])];
   useEffect(() => {
     if (!modelFilters.some(([value]) => value === modelFilter)) setModelFilter("all");
   }, [modelFilters.map(([value]) => value).join(","), modelFilter]);
-  const selectionAvailable = Boolean((selected?.configured && !["openai", "anthropic"].includes(selected.name)) || nativeConnected(selected?.name ?? ""));
+  const selectionAvailable = Boolean(selected?.configured || nativeSelectable);
   const selectedImageModel = selected && settings.image_generation?.provider === selected.name ? settings.image_generation.model : null;
   const selectedVideoModel = selected && settings.video_generation?.provider === selected.name ? settings.video_generation.model : null;
   const hasVisibleModels = visibleModels.length > 0;
   const visibleNative = !!nativeSource && nativeProgramAvailable(nativeSource) && nativeConnected(selected?.name ?? "")
     && (modelFilter === "all" || modelFilter === "chat") && nativeSource.models.some((model) => model.id && `${model.label} ${model.id}`.toLowerCase().includes(normalizedModelQuery));
   const availableToAdd = manageableProviders
-    .filter((provider) => !provider.configured)
+    .filter((provider) => !provider.configured && !["openai", "anthropic"].includes(provider.name))
     .slice()
     .sort((a, b) => Number(primary(b.name)) - Number(primary(a.name)) || Number(b.region === "cn") - Number(a.region === "cn"))
     .filter((provider) => `${provider.label} ${provider.name}`.toLowerCase().includes(wizardQuery.trim().toLowerCase()));
@@ -1296,7 +1728,7 @@ export function ChatProvidersSettings({
                     {selected.is_builtin ? <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">内置</span> : null}
                     {selected.name === "openai" ? <Badge variant="outline" className="min-w-0 max-w-[65%] truncate" title={formatNativePlan(accountUsage.usage?.planType)}>{formatNativePlan(accountUsage.usage?.planType)}</Badge> : null}
                   </div>
-                  <p className="truncate text-caption text-muted-foreground">{selected.is_builtin ? (selected.configured ? "全部模型 · 按实际 Token 从 Mona AI 余额扣费" : "暂无可用模型") : selected.name === "openai" ? (accountUsage.usage?.email ? `ChatGPT 订阅 · Codex · ${accountUsage.usage.email}` : "ChatGPT 订阅 · Codex") : selected.name === "anthropic" ? "Claude Code 账号 · Anthropic 模型" : selected.api_base}</p>
+                  <p className="truncate text-caption text-muted-foreground">{selected.is_builtin ? (selected.configured ? "全部模型 · 按实际 Token 从 Mona AI 余额扣费" : "暂无可用模型") : selected.name === "openai" ? (accountUsage.usage?.email ? `ChatGPT 订阅 · Codex · ${accountUsage.usage.email}` : "ChatGPT 订阅 · Codex") : selected.name === "anthropic" ? "Claude Code 账号 · Anthropic 模型" : isConcreteApiBase(selected.api_base) ? selected.api_base : "请填写 API Base"}</p>
                 </div>
                 {!["openai", "anthropic"].includes(selected.name) && <span className={cn("flex shrink-0 items-center gap-1.5 text-caption", selected.configured || nativeConnected(selected.name) ? "text-success" : "text-muted-foreground")}><span className={cn("h-1.5 w-1.5 rounded-full", selected.configured || nativeConnected(selected.name) ? "bg-success" : "bg-muted-foreground/30")} />{nativeConnected(selected.name) ? "已连接" : selected.is_builtin ? selected.configured ? "可用" : "暂无模型" : selected.configured ? "已配置" : "未配置"}</span>}
                 {!["openai", "anthropic"].includes(selected.name) && !selected.is_builtin ? <>
@@ -1305,6 +1737,11 @@ export function ChatProvidersSettings({
                 </> : null}
               </header>
               {renderNativeSetup(nativeSource)}
+              {isOfficial && <div className="flex flex-wrap items-center gap-3 border-b border-border/60 px-5 py-3">
+                <div className="min-w-0 flex-1"><p className="text-ui font-medium">API 接入</p><p className="text-caption text-muted-foreground">使用 API Key 的模型由 Mona 调用。</p></div>
+                <span className="text-caption text-muted-foreground">{selected.configured ? "已配置" : "未配置"}</span>
+                <Button type="button" variant="outline" size="sm" onClick={openEditWizard} disabled={saving}>{selected.configured ? "编辑 API 配置" : "配置 API"}</Button>
+              </div>}
               <div data-testid="model-list-scroll" className={nativeSource ? "min-w-0" : "scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto"}>
               {selected.name === "openai" && accountUsage.usage?.connected && <NativeAccountQuota usage={accountUsage.usage} />}
               {selected.is_builtin && selected.configured ? (
@@ -1318,11 +1755,11 @@ export function ChatProvidersSettings({
                 </div>
               ) : null}
               <div className={cn("z-10 flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-2.5", !nativeSource && "sticky top-0 bg-card")}>
-                <span className="shrink-0 text-caption text-muted-foreground">{nativeSource ? `可用模型 ${(nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) ? nativeSource.models.filter((model) => model.id).length : 0) + selected.models.length}` : isMonaManaged ? `可用模型 ${unifiedModels.length}` : `已选 ${selectedModelCount} 个模型`}</span>
+                <span className="shrink-0 text-caption text-muted-foreground">{nativeSource ? `可用模型 ${(nativeProgramAvailable(nativeSource) && nativeConnected(selected.name) ? nativeSource.models.filter((model) => model.id).length : 0) + unifiedModels.length}` : isMonaManaged ? `可用模型 ${unifiedModels.length}` : `已选 ${selectedModelCount} 个模型`}</span>
                 <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving || (!selected.configured && (!nativeSource || !nativeProgramAvailable(nativeSource)))} title="刷新模型" aria-label="刷新模型">
+                  {(selected.model_discovery_supported !== false || nativeSource) && <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving || (!selected.configured && (!nativeSource || !nativeProgramAvailable(nativeSource)))} title="刷新模型" aria-label="刷新模型">
                     {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  </Button>
+                  </Button>}
                   <DropdownMenu>
                       <DropdownMenuTrigger asChild><TooltipButton type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" title="筛选模型" aria-label="筛选模型"><Filter className="h-4 w-4" /></TooltipButton></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -1339,7 +1776,7 @@ export function ChatProvidersSettings({
                           <DropdownMenuItem onSelect={() => void toggleAllModels("reset")} disabled={saving || !selectionAvailable || !selectableModelCount}>重置显示偏好</DropdownMenuItem>
                           <DropdownMenuSeparator />
                         </>}
-                        {!nativeSource && <DropdownMenuItem onSelect={() => setAdjustModels((value) => !value)}>分别调整{adjustModels && <Check className="ml-auto h-4 w-4" />}</DropdownMenuItem>}
+                        {(!nativeSource || unifiedModels.length > 0) && <DropdownMenuItem onSelect={() => setAdjustModels((value) => !value)}>分别调整{adjustModels && <Check className="ml-auto h-4 w-4" />}</DropdownMenuItem>}
                       </DropdownMenuContent>
                   </DropdownMenu>
                   {modelFilters.length > 2 && <Tabs value={modelFilter} onValueChange={setModelFilter}>
@@ -1358,7 +1795,7 @@ export function ChatProvidersSettings({
                 {nativeError && ["openai", "anthropic"].includes(selected.name) && <p role="status" className="px-3 py-2 text-caption text-muted-foreground">{nativeError}</p>}
                 {hasVisibleModels ? (
                   <section>
-                    {nativeFor(selected.name)?.models.some((model) => model.id) && <p className="px-3 pb-2 pt-4 text-caption text-muted-foreground">API 模型</p>}
+                    {(isOfficial || nativeFor(selected.name)?.models.some((model) => model.id)) && <p className="px-3 pb-2 pt-4 text-caption text-muted-foreground">API 模型</p>}
                     {orderedModelGroups.map(([brandId, group]) => <div key={brandId} className="mb-4">
                       {group.label && <button type="button" className="flex h-8 w-full items-center gap-1.5 text-left text-caption text-muted-foreground hover:text-foreground" aria-expanded={!collapsedBrands.includes(brandId) || !!normalizedModelQuery} onClick={() => setCollapsedBrands((current) => current.includes(brandId) ? current.filter((id) => id !== brandId) : [...current, brandId])}>
                         <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsedBrands.includes(brandId) && !normalizedModelQuery && "-rotate-90")} />{group.label}<span className="tabular-nums">{group.models.length}</span>
@@ -1378,7 +1815,7 @@ export function ChatProvidersSettings({
                       const isDefaultVideo = selectedVideoModel === model.id;
                       const modelMeta = [
                         model.id !== model.name ? model.id : null,
-                        model.context_window ? `${formatContextWindow(model.context_window)} 上下文` : null,
+                        model.context_window ? `${formatContextWindow(model.context_window)} ${model.context_window_source === "reference" ? "参考预算" : "上下文"}` : null,
                       ].filter(Boolean).join(" · ");
                       return (
                         <div key={model.id} className={cn("group flex min-h-10 items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/40", isChatModel && !selected.configured && "opacity-50")}>
@@ -1492,18 +1929,49 @@ export function ChatProvidersSettings({
             <DialogHeader><DialogTitle>{wizardCustom ? (wizardEditing ? "编辑自定义供应商" : "添加自定义供应商") : `${wizardEditing ? "编辑" : "添加"}${wizardProvider ? ` · ${wizardProvider.label}` : "供应商"}`}</DialogTitle><DialogDescription>{wizardStep === 1 ? "1 选择供应商" : wizardStep === 2 ? "✓ 选择供应商　2 连接" : "✓ 连接　3 选择模型"}</DialogDescription></DialogHeader>
             {wizardCustom ? wizardStep === 2 ? (
               <div className="space-y-4">
-                <div><p className="text-ui font-medium">自定义端点</p><p className="text-caption text-muted-foreground">接入任意 OpenAI 兼容的模型来源</p></div>
+                <div><p className="text-ui font-medium">自定义端点</p><p className="text-caption text-muted-foreground">接入自定义模型服务</p></div>
                 <label className="grid gap-1 text-caption">显示名称<Input value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="例如：我的本地模型" /></label>
-                <label className="grid gap-1 text-caption">API Base<Input value={customApiBase} onChange={(event) => setCustomApiBase(event.target.value)} placeholder="https://example.com/v1" /></label>
+                <label className="grid gap-1 text-caption">API Base<Input value={customApiBase} onChange={(event) => changeCustomRoute(event.target.value)} placeholder="https://example.com/v1" aria-invalid={!!customBaseError} />{customBaseError && <span className="text-destructive">{customBaseError}</span>}</label>
+                <label className="grid gap-1 text-caption">协议<Select aria-label="协议" value={customProtocol} onValueChange={changeCustomProtocol} options={[
+                  { value: "auto", label: "自动" },
+                  { value: "openai-completions", label: "OpenAI Chat Completions" },
+                  { value: "openai-responses", label: "OpenAI Responses" },
+                  { value: "anthropic-messages", label: "Anthropic Messages" },
+                ]} /></label>
                 <label className="grid gap-1 text-caption">API Key<Input type="password" value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} placeholder={wizardEditing ? "已配置，留空保持不变" : "可选"} autoComplete="new-password" /></label>
                 {wizardError ? <p className="text-caption text-destructive">{wizardError}</p> : null}
-                <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => setWizardOpen(false)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={loadCustomModels} disabled={wizardLoading}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}拉取模型列表</Button></div>
+                <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => { customProbeRevision.current += 1; setWizardLoading(false); setWizardOpen(false); }}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><div className="flex gap-2"><Button type="button" variant="outline" onClick={openCustomModelsManually} disabled={wizardLoading}>手动添加模型</Button><Button type="button" onClick={loadCustomModels} disabled={wizardLoading}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}拉取模型列表</Button></div></div>
               </div>
             ) : (
               <div className="space-y-4">
                  <div><p className="text-ui font-medium">选择对话模型</p><p className="text-caption text-muted-foreground">类型识别有误时，可在模型右侧修改；图片和视频模型可在供应商详情中分别选择。</p></div>
                 {wizardError ? <p className="rounded-lg bg-destructive/10 p-2 text-caption text-destructive">{wizardError}</p> : null}
-                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{customCandidates.map((model) => <div key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={customSelectedModels.includes(model.id)} onChange={() => setCustomSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label><Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS} onValueChange={(type) => setCustomModelTypes((current) => ({ ...current, [model.id]: type }))} className="h-8 w-24 text-caption" /></div>)}</div>
+                <div className={cn("space-y-1 overflow-y-auto rounded-xl border p-2", customExpandedModel ? "max-h-80" : "max-h-48")}>
+                  {customCandidates.map((model) => {
+                    const expanded = customExpandedModel === model.id;
+                    const draft = customOverrideDrafts[model.id] ?? modelOverrideDraft();
+                    const errors = { ...parseModelOverride(draft, knownCustomEfforts(model.id)).errors, ...customOverrideErrors[model.id] };
+                    return <div key={model.id} className="rounded-lg hover:bg-accent">
+                      <div className="flex items-center gap-2 px-2 py-2 text-ui">
+                        <label className="flex min-w-0 flex-1 items-center gap-2">
+                          <input type="checkbox" checked={customSelectedModels.includes(model.id)} onChange={() => setCustomSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} />
+                          <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                          {adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}
+                        </label>
+                        {isLanguageModel(model.type, false) && <Button type="button" variant="ghost" size="sm" aria-label={`${model.name} 能力设置`}
+                          aria-expanded={expanded} onClick={() => setCustomExpandedModel(expanded ? null : model.id)}>能力设置</Button>}
+                        <Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS}
+                          onValueChange={(type) => {
+                            setCustomModelTypes((current) => ({ ...current, [model.id]: type }));
+                            setCustomDiscoveredMetadata((current) => ({ ...current, [model.id]: { ...current[model.id], type } }));
+                            if (!isLanguageModel(type)) setCustomExpandedModel(null);
+                          }} className="h-8 w-24 text-caption" />
+                      </div>
+                      {expanded && isLanguageModel(model.type, false) && <ModelOverrideEditor name={model.name} draft={draft} errors={errors}
+                        onChange={(value) => changeCustomOverride(model.id, value)} />}
+                    </div>;
+                  })}
+                </div>
                 <div className="flex gap-2"><Input value={customManualModel} onChange={(event) => setCustomManualModel(event.target.value)} placeholder="手动添加模型 ID（逗号分隔）" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCustomManualModel(); } }} /><Button type="button" variant="outline" onClick={addCustomManualModel}>添加</Button></div>
                 <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => setWizardStep(2)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={finishCustomWizard} disabled={wizardLoading || customModels.length === 0}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}完成</Button></div>
               </div>
@@ -1513,22 +1981,45 @@ export function ChatProvidersSettings({
                 <div className="max-h-[55vh] space-y-1 overflow-y-auto">
                   {availableToAdd.map((provider) => <button key={provider.name} type="button" onClick={() => chooseWizardProvider(provider)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-accent"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm"><ProviderIcon provider={provider} size={24} /></span><span className="min-w-0 flex-1 truncate text-ui">{provider.label}</span>{provider.region === "cn" ? <span className="text-[11px] text-muted-foreground">中国大陆</span> : null}</button>)}
                 </div>
-                <button type="button" onClick={openCustomWizard} className="flex w-full items-center gap-2.5 rounded-xl border border-dashed p-3 text-left hover:bg-accent"><Plus className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1"><span className="block text-ui font-medium">自定义端点</span><span className="block text-caption text-muted-foreground">接入任意 OpenAI 兼容的模型来源</span></span></button>
+                <button type="button" onClick={openCustomWizard} className="flex w-full items-center gap-2.5 rounded-xl border border-dashed p-3 text-left hover:bg-accent"><Plus className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1"><span className="block text-ui font-medium">自定义端点</span><span className="block text-caption text-muted-foreground">接入自定义模型服务</span></span></button>
                 <p className="text-[11px] text-muted-foreground">鉴权方式由供应商定义决定；基础 URL 由你自行填写。</p>
               </div>
             ) : wizardStep === 2 && wizardProvider ? (
               <div className="space-y-4">
                 <div><p className="text-ui font-medium">{wizardProvider.label}</p><p className="text-caption text-muted-foreground">配置凭据和 API Base</p></div>
-                <label className="grid gap-1 text-caption">API Key<Input type="password" value={wizardApiKey} onChange={(event) => setWizardApiKey(event.target.value)} placeholder={wizardEditing && wizardProvider.api_key_hint ? `已配置 ${wizardProvider.api_key_hint}，留空保持不变` : wizardProvider.api_key_required ? "请输入 API Key" : "可选"} autoComplete="new-password" /></label>
-                <label className="grid gap-1 text-caption">API Base<Input value={wizardApiBase} onChange={(event) => setWizardApiBase(event.target.value)} readOnly={!wizardProvider.api_base_editable} /></label>
+                {wizardProvider.auth_method === "aws" && <p className="text-caption text-muted-foreground">可使用本机 AWS 凭据，也可填写 Bedrock API Key。</p>}
+                {wizardProvider.auth_method === "google-adc" && <p className="text-caption text-muted-foreground">使用 Google 应用默认凭据，请填写项目和区域对应的地址。</p>}
+                {wizardProvider.auth_method === "github-copilot" && <div className="space-y-2 text-caption">
+                  <p className="text-muted-foreground">使用 GitHub Copilot 账号的设备授权。</p>
+                  {githubChecking && <p role="status" className="text-muted-foreground">正在检查登录状态…</p>}
+                  {githubLogin.status === "authorized" ? <p>已登录 GitHub</p> : <>
+                    <Button type="button" variant="outline" size="sm" onClick={() => void changeGitHubLogin("start")}
+                      disabled={githubChecking || githubActionPending || githubLogin.status === "starting" || githubLogin.status === "waiting"}>登录 GitHub</Button>
+                    {githubLogin.status === "starting" && <p role="status" className="text-muted-foreground">正在获取登录验证码…</p>}
+                    {githubLogin.status === "waiting" && <div className="space-y-2">
+                      {githubLogin.user_code && <p>验证码：<span className="select-text font-mono">{githubLogin.user_code}</span></p>}
+                      {trustedGitHubDeviceUrl(githubLogin.verification_url)
+                        ? <Button type="button" variant="outline" size="sm" onClick={() => void openGitHubDevicePage()}>打开 GitHub 授权页面</Button>
+                        : <p className="text-muted-foreground">无法识别授权页面，请取消后重试。</p>}
+                    </div>}
+                    {(githubLogin.status === "starting" || githubLogin.status === "waiting") && <Button type="button" variant="ghost" size="sm" disabled={githubActionPending} onClick={() => void changeGitHubLogin("cancel")}>取消登录</Button>}
+                  </>}
+                </div>}
+                {wizardProvider.auth_method !== "google-adc" && wizardProvider.auth_method !== "github-copilot" && <label className="grid gap-1 text-caption">{wizardProvider.auth_method === "aws" ? "Bedrock API Key" : "API Key"}<Input type="password" value={wizardApiKey} onChange={(event) => setWizardApiKey(event.target.value)} placeholder={wizardEditing && wizardProvider.api_key_hint ? `已配置 ${wizardProvider.api_key_hint}，留空保持不变` : wizardProvider.api_key_required ? "请输入 API Key" : "可选"} autoComplete="new-password" /></label>}
+                <label className="grid gap-1 text-caption">API Base<Input value={wizardApiBase} onChange={(event) => changeWizardRoute(event.target.value)} readOnly={!wizardProvider.api_base_editable} placeholder={wizardProvider.api_base_editable ? "请输入 API Base" : undefined} aria-invalid={!!wizardBaseError} />{wizardBaseError && <span className="text-destructive">{wizardBaseError}</span>}</label>
+                {wizardProvider.wire_api === "azure-openai-responses" && <p className="text-caption text-muted-foreground">模型名称请填写 Azure 部署名称。</p>}
                 {wizardError ? <p className="text-caption text-destructive">{wizardError}</p> : null}
-                <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => wizardEditing ? setWizardOpen(false) : setWizardStep(1)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={loadWizardModels} disabled={wizardLoading || (wizardProvider.api_key_required && !wizardApiKey.trim() && !(wizardEditing && wizardProvider.api_key_hint))}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}拉取模型</Button></div>
+                <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => { wizardProbeRevision.current += 1; setWizardLoading(false); if (wizardEditing) setWizardOpen(false); else setWizardStep(1); }}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><div className="flex gap-2"><Button type="button" variant="outline" onClick={openWizardModelsManually} disabled={wizardLoading}>{wizardProvider.catalog_candidates?.length ? "选择模型" : "手动添加模型"}</Button>{wizardProvider.model_discovery_supported !== false && <Button type="button" onClick={loadWizardModels} disabled={wizardLoading || (wizardProvider.api_key_required && !wizardApiKey.trim() && !(wizardEditing && wizardProvider.api_key_hint))}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}拉取模型</Button>}</div></div>
               </div>
             ) : wizardProvider ? (
               <div className="space-y-4">
-                 <p className="text-ui font-medium">选择可用模型；类型识别有误时可在右侧修改</p>
+                 <p className="text-ui font-medium">{wizardProvider.catalog_candidates?.length ? "选择模型；目录候选是否可用取决于账号权限。" : "选择可用模型；类型识别有误时可在右侧修改"}</p>
+                {wizardProvider.wire_api === "azure-openai-responses" && <p className="text-caption text-muted-foreground">请使用 Azure 部署名称；目录候选需与部署名称一致。</p>}
                 {wizardError ? <p className="rounded-lg bg-destructive/10 p-2 text-caption text-destructive">{wizardError}</p> : null}
-                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{wizardCandidates.map((model) => <div key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={wizardSelectedModels.includes(model.id)} onChange={() => setWizardSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label><Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS} onValueChange={(type) => setWizardModelTypes((current) => ({ ...current, [model.id]: type }))} className="h-8 w-24 text-caption" /></div>)}</div>
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{wizardCandidates.map((model) => <div key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={wizardSelectedModels.includes(model.id)} onChange={() => setWizardSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label><Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS} onValueChange={(type) => {
+                  setWizardModelTypes((current) => ({ ...current, [model.id]: type }));
+                  setWizardDiscoveredMetadata((current) => ({ ...current, [model.id]: { ...current[model.id], type } }));
+                }} className="h-8 w-24 text-caption" /></div>)}</div>
                 <div className="flex gap-2"><Input value={wizardManualModel} onChange={(event) => setWizardManualModel(event.target.value)} placeholder="手动添加模型 ID（逗号分隔）" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addManualModel(); } }} /><Button type="button" variant="outline" onClick={addManualModel}>添加</Button></div>
                 <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => setWizardStep(2)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={finishWizard} disabled={wizardLoading || wizardSelectedModels.length === 0}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}完成</Button></div>
               </div>
@@ -1536,6 +2027,12 @@ export function ChatProvidersSettings({
           </DialogContent>
         </Dialog>
       ) : null}
+      <AlertDialog open={!!githubError} onOpenChange={(open) => { if (!open) setGithubError(""); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>GitHub 登录操作失败</AlertDialogTitle><AlertDialogDescription>{githubError}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>知道了</AlertDialogCancel></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={!!nativeFailure} onOpenChange={(open) => { if (!open) setNativeFailure(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

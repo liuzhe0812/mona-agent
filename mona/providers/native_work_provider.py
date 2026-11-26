@@ -17,7 +17,10 @@ from mona.development.context import ProjectContext
 from mona.development.contracts import DevelopmentSession, ExecutorId
 from mona.development.executors.base import SessionStart
 from mona.development.executors.codex import CodexExecutor
-from mona.development.executors.codex_policy import prepare_codex_work_profile
+from mona.development.executors.codex_policy import (
+    cleanup_codex_work_profile,
+    prepare_codex_work_profile,
+)
 from mona.development.executors.discovery import discover_executors
 from mona.development.executors.host_tools import WORK_TOOL, WorkToolCall
 from mona.development.executors.rpc import RemoteRpcError, RpcError
@@ -30,6 +33,7 @@ from mona.providers.native_work_tools import (
     NATIVE_BASIC_TOOLS,
     NativeWorkToolPolicy,
     filter_native_work_tools,
+    validate_native_work_policy,
 )
 
 _ERROR_MESSAGES = {
@@ -54,6 +58,9 @@ _ERROR_MESSAGES = {
     "native_dispatch_unconfirmed": "模型请求未收到明确的接受回执，结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
     "native_turn_incomplete": "模型未返回本轮的完成状态，结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
     "native_policy_unavailable": "所选模型程序无法保证当前工具授权或目录限制，本次任务尚未开始。请使用能满足这些限制的执行方式。",
+    "native_exec_rules_conflict": "所选模型已有命令放行规则，无法保证当前任务的工具授权，本次任务尚未开始。请在输入框下方切换其他模型来源后重试。",
+    "native_auth_binding_unavailable": "所选模型的账号连接未能安全复用，本次请求未切换账号。请在模型设置中检查账号连接后重试。",
+    "native_home_cleanup_failed": "模型执行环境未能完成清理，请先核对已有会话和文件结果后重试。",
     "native_turn_interrupted": "本次模型回复已中断，请核对已有内容和文件结果后继续。",
     "native_policy_violation": "模型请求了当前任务未授权的操作，Mona 已停止本轮。请核对操作授权和已有结果后继续。",
     "native_request_timeout": "等待模型确认超时，本次结果尚未确认。请先核对会话和文件结果，再决定是否继续。",
@@ -156,6 +163,7 @@ class NativeWorkProvider(LLMProvider):
         self._context_reset_failed = False
         self._context_rebuilding = False
         self._catalog_path: Path | None = None
+        self._codex_profile = None
         self._definitions = ""
         self._request_stage = "input"
         self._reconciliation_deadline: float | None = None
@@ -236,23 +244,7 @@ class NativeWorkProvider(LLMProvider):
     def _validate_native_policy(self) -> tuple[str, ...]:
         if self._native_policy is None:
             return ()
-        names = self._native_policy.native_tools
-        registry = self._native_policy.tools
-        shell = registry.get("exec")
-        if shell is not None and any(name in names for name in ("exec_command", "Bash", "PowerShell")):
-            if shell.sandbox or shell.restrict_to_workspace or self.config.tools.restrict_to_workspace:
-                raise RpcError("native_policy_unavailable", "原生程序不能复用当前命令沙箱或严格目录限制。")
-        if self.executor == ExecutorId.CODEX:
-            reads = [registry.get(name) for name in ("read_file", "list_dir", "find_files", "grep")
-                     if registry.is_permitted(name) and getattr(registry.get(name), "model_visible", True)
-                     and registry.get(name).available_in_context()]
-            if any(getattr(tool, "_allowed_dir", None) is not None for tool in reads):
-                raise RpcError("native_policy_unavailable", "此原生程序无法保证当前读取目录限制。")
-            if reads and "exec_command" not in names:
-                raise RpcError("native_policy_unavailable", "此原生程序的文件读取依赖未授权的命令工具。")
-            if ("exec_command" in names) != ("write_stdin" in names):
-                raise RpcError("native_policy_unavailable", "原生命令与进程续接必须具有同一套授权。")
-        return names
+        return validate_native_work_policy(self.config, self._native_policy)
 
     def get_capabilities(self, model: str) -> ModelCapabilities:
         return ModelCapabilities(supports_vision=True, supports_tool_calling=True)
@@ -323,6 +315,7 @@ class NativeWorkProvider(LLMProvider):
                     Path(discovery.executable), home, self.workspace, native_tools=native_tools)
             else:
                 profile, self._catalog_path = prepare_codex_work_profile(Path(discovery.executable), home, self.workspace)
+            self._codex_profile = profile
             self._host = CodexExecutor(profile, tool_handler=self._host_tool)
         else:
             profile = prepare_sdk_profile(self.executor, Path(discovery.executable), home, self.workspace,
@@ -489,6 +482,7 @@ class NativeWorkProvider(LLMProvider):
         for name, aliases in {
             "completion_tokens": ("outputTokens", "output_tokens"),
             "cached_tokens": ("cachedInputTokens", "cache_read_input_tokens"),
+            "cache_creation_input_tokens": ("cache_creation_input_tokens",),
         }.items():
             value = next((usage[key] for key in aliases if key in usage), None)
             if isinstance(value, int) and value >= 0:
@@ -761,3 +755,6 @@ class NativeWorkProvider(LLMProvider):
         if self._catalog_path is not None:
             self._catalog_path.unlink(missing_ok=True)
             self._catalog_path = None
+        if self._codex_profile is not None:
+            cleanup_codex_work_profile(self._codex_profile)
+            self._codex_profile = None

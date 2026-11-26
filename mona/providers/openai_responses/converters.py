@@ -5,6 +5,26 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from mona.providers.base import validate_declared_effort
+
+
+def responses_reasoning_fields(effort: str | None, route: dict[str, Any], declared: list[str] | None) -> dict:
+    if not effort or effort.lower() == "none":
+        return {}
+    effort = effort.lower()
+    validate_declared_effort(effort, declared)
+    levels = route.get("thinking_level_map") or {}
+    if effort == "off":
+        if not (declared and "off" in declared) and (levels.get("off", "none") is None or route.get("thinking_toggle") is False):
+            raise ValueError("当前模型的思考模式不能关闭。")
+        return {"reasoning": {"effort": levels.get("off") or "none"}}
+    selected = route.get("default_reasoning_effort") if effort == "on" else effort
+    if not selected or selected in {"off", "on"}:
+        raise ValueError("此 Responses 模型需要使用其声明的思考强度。")
+    if declared is None and selected in levels and levels[selected] is None:
+        raise ValueError("当前模型不支持所选的思考强度。")
+    return {"reasoning": {"effort": levels.get(selected) or selected}, "include": ["reasoning.encrypted_content"]}
+
 
 def convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
     """Convert Chat Completions messages to Responses API input items.

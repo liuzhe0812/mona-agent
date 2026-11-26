@@ -125,7 +125,7 @@ it("keeps model rows simple until per-model settings are requested", async () =>
   fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: /我的供应商/ }));
   expect(screen.getByRole("button", { name: "设置 共享名称" })).toBeInTheDocument();
   expect(screen.getByRole("switch")).toBeInTheDocument();
-  fireEvent.pointerDown(screen.getByRole("button", { name: "管理" }), { button: 0, ctrlKey: false });
+  fireEvent.pointerDown(screen.getByRole("button", { name: "筛选模型" }), { button: 0, ctrlKey: false });
   fireEvent.click(await screen.findByRole("menuitem", { name: "分别调整" }));
   fireEvent.pointerDown(screen.getByRole("button", { name: "设置 共享名称" }), { button: 0, ctrlKey: false });
   expect(await screen.findByRole("menuitemradio", { name: "对话" })).toHaveAttribute("aria-checked", "true");

@@ -438,8 +438,8 @@ class TestParseResponseOutput:
         assert result.usage["total_tokens"] == 150
 
     @pytest.mark.parametrize("details", [
-        {"cached_tokens": 40},
-        SimpleNamespace(cached_tokens=40),
+        {"cached_tokens": 40, "cache_write_tokens": 20},
+        SimpleNamespace(cached_tokens=40, cache_write_tokens=20),
     ])
     def test_usage_maps_cached_input_tokens_without_adding_them_twice(self, details):
         usage = parse_response_output({
@@ -458,6 +458,7 @@ class TestParseResponseOutput:
             "completion_tokens": 25,
             "total_tokens": 125,
             "cached_tokens": 40,
+            "cache_creation_input_tokens": 20,
         }
 
     def test_usage_omits_zero_or_missing_cached_input_tokens(self):
@@ -468,6 +469,13 @@ class TestParseResponseOutput:
             }).usage
             assert usage["prompt_tokens"] == 100
             assert "cached_tokens" not in usage
+
+    def test_usage_keeps_reported_zero_reasoning_tokens(self):
+        usage = parse_response_output({
+            "output": [], "status": "completed",
+            "usage": {"output_tokens": 25, "output_tokens_details": {"reasoning_tokens": 0}},
+        }).usage
+        assert usage["reasoning_tokens"] == 0
 
 
 # ======================================================================
@@ -584,7 +592,10 @@ class TestConsumeSdkStream:
 
     @pytest.mark.asyncio
     async def test_usage_extracted(self):
-        usage_obj = MagicMock(input_tokens=10, output_tokens=5, total_tokens=15)
+        usage_obj = SimpleNamespace(
+            input_tokens=10, output_tokens=5, total_tokens=15,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=3),
+        )
         resp_obj = MagicMock(status="completed", usage=usage_obj, output=[])
         ev = MagicMock(type="response.completed", response=resp_obj)
 
@@ -592,7 +603,7 @@ class TestConsumeSdkStream:
             yield ev
 
         _, _, _, usage, _ = await consume_sdk_stream(stream())
-        assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "reasoning_tokens": 3}
 
     @pytest.mark.parametrize("details, expected_cached", [
         (SimpleNamespace(cached_tokens=40), 40),

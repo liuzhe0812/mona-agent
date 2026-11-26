@@ -10,7 +10,12 @@ import httpx
 import json_repair
 from loguru import logger
 
-from mona.providers.base import LLMResponse, ToolCallRequest
+from mona.providers.base import (
+    LLMResponse,
+    ToolCallRequest,
+    read_cache_write_tokens,
+    read_reported_token_count,
+)
 
 FINISH_REASON_MAP = {
     "completed": "stop",
@@ -219,6 +224,12 @@ def parse_response_output(response: Any) -> LLMResponse:
         cached_tokens = _cached_input_tokens(usage_raw.get("input_tokens_details"))
         if cached_tokens:
             usage["cached_tokens"] = cached_tokens
+        cache_write = read_cache_write_tokens(usage_raw, "input_tokens_details")
+        if cache_write is not None:
+            usage["cache_creation_input_tokens"] = cache_write
+        reasoning = read_reported_token_count(usage_raw, "output_tokens_details", "reasoning_tokens")
+        if reasoning is not None:
+            usage["reasoning_tokens"] = reasoning
 
     status = response.get("status")
     finish_reason = map_finish_reason(status)
@@ -327,6 +338,12 @@ async def consume_sdk_stream(
                     )
                     if cached_tokens:
                         usage["cached_tokens"] = cached_tokens
+                    cache_write = read_cache_write_tokens(usage_obj, "input_tokens_details")
+                    if cache_write is not None:
+                        usage["cache_creation_input_tokens"] = cache_write
+                    reasoning = read_reported_token_count(usage_obj, "output_tokens_details", "reasoning_tokens")
+                    if reasoning is not None:
+                        usage["reasoning_tokens"] = reasoning
                 for out_item in getattr(resp, "output", None) or []:
                     if getattr(out_item, "type", None) == "reasoning":
                         for s in getattr(out_item, "summary", None) or []:

@@ -42,22 +42,28 @@ export function buildComposerProviderOptions(
       ))
       .map((model) => {
         const managedPrice = provider.is_builtin ? managedPriceByModel.get(model.id) : undefined;
+        const active = provider.name === settings.agent.provider && model.id === settings.agent.model;
+        const resolvedWindow = active && (settings.agent.executor ?? "mona") === "mona"
+          && settings.agent.context_window_source && settings.agent.context_window_source !== "default"
+          && Number.isSafeInteger(settings.agent.context_window_tokens) && settings.agent.context_window_tokens > 0
+          ? settings.agent.context_window_tokens : null;
         return {
           provider: provider.name,
           providerLabel: provider.label,
           model: model.id,
           label: model.name,
-          active: provider.name === settings.agent.provider && model.id === settings.agent.model,
+          active,
           isBuiltin: provider.is_builtin,
           description: model.description,
-          contextWindow: model.context_window,
+          contextWindow: resolvedWindow ?? model.context_window,
+          contextWindowSource: resolvedWindow ? settings.agent.context_window_source : model.context_window_source,
           recommended: model.recommended,
           tags: model.tags,
           priceTier: model.price_tier,
           reasoningEfforts: model.reasoning_efforts,
           defaultReasoningEffort: model.default_reasoning_effort,
           reasoningEffort:
-            provider.name === settings.agent.provider && model.id === settings.agent.model
+            active
               ? settings.agent.reasoning_effort ?? model.reasoning_effort ?? model.default_reasoning_effort
               : model.reasoning_effort ?? model.default_reasoning_effort,
           inputAmountPerMillion: managedPrice?.input_amount_per_million ?? model.input_amount_per_million,

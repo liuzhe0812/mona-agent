@@ -6,7 +6,11 @@ model metadata. Routing and authentication are handled by the providers.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -15,6 +19,14 @@ class CindyModel:
     name: str
     context_window: int | None = None
     input_modalities: tuple[str, ...] | None = None
+    reasoning_efforts: tuple[str, ...] | None = None
+    default_reasoning_effort: str | None = None
+    supports_image_input: bool | None = None
+    api_base: str | None = None
+    wire_api: str | None = None
+    wire_model_id: str | None = None
+    default_enabled: bool = True
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -28,6 +40,11 @@ class CindyChatProvider:
     api_key_required: bool = True
     api_base_editable: bool = False
     thinking_style: str = ""
+    wire_api: str = "openai-completions"
+    allow_private: bool = False
+    auth_method: str = "apiKey"
+    docs_url: str | None = None
+    catalog_models: tuple[CindyModel, ...] = ()
 
 
 _KNOWN_INPUT_MODALITIES: dict[str, tuple[str, ...]] = {
@@ -54,7 +71,7 @@ def _models(*rows: tuple[str, str, int | None]) -> tuple[CindyModel, ...]:
 
 
 # Preserve preset order; the settings UI places Chinese Mainland entries first.
-CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
+_LEGACY_CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
     CindyChatProvider(
         "openrouter", "OpenRouter", "https://openrouter.ai/api/v1",
         _models(("z-ai/glm-5.2", "GLM-5.2 (OpenRouter)", None), ("moonshotai/kimi-k2.6", "Kimi K2.6 (OpenRouter)", None)),
@@ -170,4 +187,122 @@ CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
 )
 
 
+@cache
+def bundled_model_catalog() -> dict[str, Any]:
+    """Read the packaged metadata once for all model catalog consumers."""
+    path = Path(__file__).resolve().parent / "catalog" / "model-capabilities.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _snapshot_providers() -> tuple[CindyChatProvider, ...]:
+    catalog = bundled_model_catalog()
+    legacy = {provider.id: provider for provider in _LEGACY_CINDY_CHAT_PROVIDERS}
+    routes = catalog["routes"]
+    preset_models = catalog["preset_models"]
+    providers = []
+
+    for preset in catalog["presets"]:
+        provider_id = preset["id"]
+        original = legacy.get(provider_id)
+        base = preset["api_base"]
+        wire_api = preset["wire_api"]
+        defaults = preset_models.get(provider_id, {})
+        preferred = {item["id"]: item for item in preset["models"]}
+
+        def make_model(row: dict[str, Any]) -> CindyModel:
+            model_id = row["id"]
+            model_base = row.get("api_base") or base
+            model_api = row.get("wire_api") or wire_api
+            preference = preferred.get(model_id, {})
+            same_route = (
+                model_base.rstrip("/") == (preference.get("api_base") or base).rstrip("/")
+                and model_api == (preference.get("wire_api") or wire_api)
+            )
+            model_defaults = defaults.get(model_id, {})
+            origins = model_defaults.get("_provenance", {})
+            declared = {
+                key: value for key, value in model_defaults.items()
+                if key != "_provenance" and origins.get(key) == "registry_base"
+            }
+            provenance = {key: "registry_base" for key in declared}
+            exact = {
+                **routes.get(model_base.rstrip("/"), {}).get(row.get("wire_model_id", model_id), {}),
+                **row.get("metadata", {}),
+            }
+            declared.update(exact)
+            provenance.update({key: "exact_pi" for key in exact})
+            higher = {
+                key: value for key, value in model_defaults.items()
+                if key != "_provenance" and origins.get(key) != "registry_base"
+                and (origins.get(key) not in {"exact_pi", "preset"} or same_route)
+            }
+            declared.update(higher)
+            provenance.update({key: origins.get(key) for key in higher})
+            if provenance:
+                declared["_provenance"] = provenance
+            modalities = declared.get("input_modalities")
+            efforts = declared.get("reasoning_efforts")
+            return CindyModel(
+                id=model_id,
+                name=row.get("name") or declared.get("name") or model_id,
+                context_window=declared.get("context_window"),
+                input_modalities=tuple(modalities) if isinstance(modalities, list) else None,
+                reasoning_efforts=tuple(efforts) if isinstance(efforts, list) else None,
+                default_reasoning_effort=declared.get("default_reasoning_effort"),
+                supports_image_input=declared.get("supports_image_input"),
+                api_base=row.get("api_base"),
+                wire_api=row.get("wire_api"),
+                wire_model_id=row.get("wire_model_id", model_id),
+                default_enabled=row.get("default_enabled") is not False,
+                metadata=declared or None,
+            )
+
+        models = [make_model(row) for row in preset["models"] if row.get("default_enabled") is not False]
+        if original:
+            ids = {model.id for model in models}
+            explicit = {row["id"] for row in preset["models"]}
+            hidden = {row["id"] for row in preset["models"] if row.get("default_enabled") is False}
+            hidden.update(row["id"] for row in preset["candidates"]
+                          if row.get("default_enabled") is False and row["id"] not in explicit)
+            models.extend(model for model in original.models if model.id not in ids | hidden)
+        candidates = []
+        seen = set()
+        for row in [*preset["models"], *preset["candidates"]]:
+            key = (row["id"], row.get("api_base", base), row.get("wire_api", wire_api))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(make_model(row))
+        auth = preset["auth_method"]
+        providers.append(CindyChatProvider(
+            id=provider_id,
+            name=preset["name"],
+            api_base=base,
+            models=tuple(models),
+            models_url=preset.get("models_url"),
+            region=preset.get("region"),
+            api_key_required=auth == "apiKey",
+            api_base_editable=preset.get("api_base_editable") is True,
+            thinking_style=original.thinking_style if original else "",
+            wire_api=wire_api,
+            allow_private=preset.get("allow_private") is True,
+            auth_method=auth,
+            docs_url=preset.get("docs_url"),
+            catalog_models=tuple(candidates),
+        ))
+    # Old saved source IDs must remain usable even if a future snapshot retires one.
+    known = {provider.id for provider in providers}
+    providers.extend(provider for provider in _LEGACY_CINDY_CHAT_PROVIDERS if provider.id not in known)
+    return tuple(providers)
+
+
+CINDY_PROVIDER_ID_ALIASES = {"openai-api": "openai", "anthropic-api": "anthropic"}
+_SNAPSHOT_PROVIDERS = _snapshot_providers()
+CINDY_OFFICIAL_API_PRESETS = {
+    CINDY_PROVIDER_ID_ALIASES[provider.id]: provider
+    for provider in _SNAPSHOT_PROVIDERS if provider.id in CINDY_PROVIDER_ID_ALIASES
+}
+CINDY_CHAT_PROVIDERS = tuple(
+    provider for provider in _SNAPSHOT_PROVIDERS if provider.id not in CINDY_PROVIDER_ID_ALIASES
+)
 CINDY_CHAT_PROVIDER_BY_ID = {provider.id: provider for provider in CINDY_CHAT_PROVIDERS}

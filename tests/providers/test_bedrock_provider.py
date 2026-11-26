@@ -69,6 +69,42 @@ def test_bedrock_provider_is_registered_and_matches_without_api_key() -> None:
     assert cfg.get_provider().region == "us-east-1"
 
 
+def test_bedrock_control_and_runtime_bearers_are_scoped_to_each_connection(monkeypatch):
+    import os
+    from botocore.awsrequest import AWSResponse
+    from mona.providers.bedrock_provider import make_bedrock_client
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "ambient-fixture")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://unrelated.example")
+    clients = [
+        make_bedrock_client("bedrock", region="us-east-1", api_key="fixture-us"),
+        make_bedrock_client("bedrock-runtime", region="eu-central-1", api_key="fixture-eu"),
+    ]
+    captured = []
+
+    class Body:
+        def stream(self):
+            yield b"{}"
+
+    def capture(request):
+        captured.append((request.url, request.headers.get("Authorization")))
+        return AWSResponse(request.url, 200, {}, Body())
+
+    for client in clients:
+        client._endpoint.http_session.send = capture
+    try:
+        clients[0].list_foundation_models()
+        clients[1].converse(modelId="model", messages=[{"role": "user", "content": [{"text": "fixture"}]}])
+    finally:
+        for client in clients:
+            client.close()
+    assert captured == [
+        ("https://bedrock.us-east-1.amazonaws.com/foundation-models", b"Bearer fixture-us"),
+        ("https://bedrock-runtime.eu-central-1.amazonaws.com/model/model/converse", b"Bearer fixture-eu"),
+    ]
+    assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "ambient-fixture"
+
+
 def test_opus_47_uses_adaptive_thinking_and_omits_temperature() -> None:
     provider = BedrockProvider(region="us-east-1", client=FakeClient())
 
@@ -84,10 +120,15 @@ def test_opus_47_uses_adaptive_thinking_and_omits_temperature() -> None:
 
     assert kwargs["modelId"] == "global.anthropic.claude-opus-4-7"
     assert kwargs["inferenceConfig"] == {"maxTokens": 2048}
-    assert kwargs["additionalModelRequestFields"]["thinking"] == {
-        "type": "adaptive",
-        "effort": "medium",
-    }
+    assert kwargs["additionalModelRequestFields"] == {"thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
+
+
+def test_older_bedrock_claude_uses_a_token_budget():
+    provider = BedrockProvider(region="us-east-1", client=FakeClient())
+    kwargs = provider._build_kwargs([{"role": "user", "content": "fixture"}], None,
+        "anthropic.claude-haiku-4-5-20251001-v1:0", 1024, 0.3, "low", None)
+    assert kwargs["additionalModelRequestFields"] == {"thinking": {"type": "enabled", "budget_tokens": 2048}}
+    assert kwargs["inferenceConfig"] == {"maxTokens": 3072}
 
 
 def test_generic_bedrock_model_keeps_temperature_and_skips_anthropic_thinking() -> None:

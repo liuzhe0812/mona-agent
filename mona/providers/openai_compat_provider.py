@@ -21,13 +21,23 @@ from urllib.parse import urlparse
 import json_repair
 from loguru import logger
 
-from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from mona.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    read_cache_write_tokens,
+    read_reported_token_count,
+    validate_declared_effort,
+)
+from mona.providers.model_metadata import catalog_model_for_route
 from mona.providers.openai_responses import (
     consume_sdk_stream,
     convert_messages,
     convert_tools,
     parse_response_output,
 )
+from mona.providers.openai_responses.converters import responses_reasoning_fields
+from mona.providers.preset_transport import opencode_session_headers
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI as AsyncOpenAIType
@@ -113,6 +123,78 @@ def _gateway_reasoning_extra_body(style: str, effort: str | None) -> dict[str, A
         return None
     builder = _GATEWAY_REASONING_STYLE_MAP.get(style)
     return builder(effort) if builder else None
+
+
+def _catalog_chat_reasoning(
+    record: dict[str, Any], effort: str, declared: list[str] | None,
+) -> dict[str, Any] | None:
+    """Serialize a choice using the matched endpoint's Chat Completions dialect."""
+    if record.get("wire_api") != "openai-completions":
+        return None
+    fmt = record.get("thinking_format")
+    levels = record.get("thinking_level_map") or {}
+    supports_effort = record.get("supports_reasoning_effort")
+    if not fmt and not levels and supports_effort is None:
+        return None
+    if declared == [] or (declared is None and not record.get("reasoning_efforts")
+                          and not record.get("thinking_toggle")):
+        return {}
+    enabled = effort not in {"off", "none"}
+    if enabled and effort != "on" and declared is None and effort in levels and levels[effort] is None:
+        raise ValueError("当前模型不支持所选的思考强度。")
+    off_declared = declared is not None and "off" in declared
+    if not enabled and not off_declared and (record.get("thinking_toggle") is False or levels.get("off", "none") is None):
+        if effort == "off":
+            raise ValueError("当前模型的思考模式不能关闭。")
+        return {}
+
+    selected = record.get("default_reasoning_effort") if effort == "on" else effort
+    wire = (levels.get(selected) or selected) if enabled else levels.get("off")
+    if not enabled and wire is None and off_declared and fmt in {None, "openai"}:
+        wire = "none"
+    if wire in {"on", "off"} and enabled:
+        wire = None
+    if declared and effort in declared and effort not in {"on", "off", "none"}:
+        supports_effort = True
+
+    if fmt == "openrouter":
+        if enabled and not wire:
+            return {"reasoning": {"enabled": True}}
+        return {"reasoning": {"effort": wire or "none"}}
+    if fmt == "ant-ling":
+        if enabled and wire and (isinstance(levels.get(selected), str) or (declared and effort in declared)):
+            return {"reasoning": {"effort": wire}}
+        return {}
+
+    fields: dict[str, Any] = {}
+    if fmt == "qwen":
+        fields["enable_thinking"] = enabled
+    elif fmt in {"deepseek", "zai"}:
+        fields["thinking"] = {"type": "enabled" if enabled else "disabled"}
+        if fmt == "zai" and enabled:
+            fields["thinking"]["clear_thinking"] = False
+    elif fmt == "together":
+        fields["reasoning"] = {"enabled": enabled}
+    elif fmt == "baseten":
+        args = {}
+        variables = {"thinking.enabled": enabled, "thinking.effort": wire}
+        for name, template in (record.get("chat_template_args") or {}).items():
+            if isinstance(template, dict):
+                value = variables.get(template.get("$var"))
+                if value is not None and (enabled or not template.get("omitWhenOff")):
+                    args[name] = value
+            else:
+                args[name] = template
+        if args:
+            fields["chat_template_args"] = args
+    elif fmt not in {None, "openai"}:
+        return None
+
+    if supports_effort is not False and isinstance(wire, str) and (enabled or fmt in {None, "openai", "baseten"}):
+        fields["reasoning_effort"] = wire
+    if effort in {"on", "off"} and not fields:
+        raise ValueError("当前模型接口未声明可用的思考开关。")
+    return fields
 
 
 def _openai_compat_timeout_s() -> float:
@@ -305,6 +387,8 @@ class OpenAICompatProvider(LLMProvider):
     registry lookups needed.
     """
 
+    _wire_api: str | None = None
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -314,14 +398,23 @@ class OpenAICompatProvider(LLMProvider):
         spec: ProviderSpec | None = None,
         extra_body: dict[str, Any] | None = None,
         no_auth: bool = False,
+        model_metadata: list[dict[str, Any]] | None = None,
+        wire_api: str | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self._spec = spec
         self.spec = spec
+        self._wire_api = wire_api or getattr(spec, "wire_api", None)
         self._extra_body = extra_body or {}
         self._no_auth = no_auth
+        self._model_efforts = {
+            item["id"]: item["reasoning_efforts"]
+            for item in model_metadata or []
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+            and isinstance(item.get("reasoning_efforts"), list)
+        }
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -367,16 +460,7 @@ class OpenAICompatProvider(LLMProvider):
                 timeout=timeout_s,
             )
         elif http_client is None and self._no_auth:
-            # Keyless providers reject Authorization headers; strip them.
-            async def _strip_auth(request: httpx.Request) -> None:
-                request.headers.pop("authorization", None)
-
-            http_client = httpx.AsyncClient(
-                timeout=timeout_s,
-                event_hooks={
-                    "request": [_strip_auth],
-                },
-            )
+            http_client = httpx.AsyncClient(timeout=timeout_s)
         if http_client is None:
             # Keep the transport on Mona's declared HTTPX dependency. SDK v3's
             # implicit HTTPX2 pool leaves nested async generators during shutdown;
@@ -385,10 +469,12 @@ class OpenAICompatProvider(LLMProvider):
                 timeout=timeout_s, follow_redirects=True,
                 limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             )
-        if self.http_client_factory and self._no_auth:
-            async def _strip_bridge_auth(request: httpx.Request) -> None:
+        if self._no_auth:
+            async def _strip_auth(request: httpx.Request) -> None:
                 request.headers.pop("authorization", None)
-            http_client.event_hooks["request"].append(_strip_bridge_auth)
+            http_client.event_hooks["request"].append(_strip_auth)
+        if getattr(self._spec, "backend", None) in {"vertex", "github_copilot"}:
+            http_client.follow_redirects = False
         self._client = AsyncOpenAI(
             api_key=self._api_key_for_client,
             base_url=self._effective_base,
@@ -400,6 +486,11 @@ class OpenAICompatProvider(LLMProvider):
 
     async def _ensure_client(self):
         """Return the shared OpenAI client, creating it on first call."""
+        provider_name = getattr(self._spec, "name", "") or ""
+        if ((self._effective_base and ("{" in self._effective_base or "}" in self._effective_base)) or (
+            not self._effective_base and isinstance(provider_name, str) and (provider_name == "custom" or provider_name.startswith("custom-"))
+        )):
+            raise ValueError("请先在模型设置中填写该供应商的完整 API 地址。")
         if self._client is not None:
             return self._client
         async with self._client_lock:
@@ -610,10 +701,53 @@ class OpenAICompatProvider(LLMProvider):
         GPT-5 family and reasoning models (o1/o3/o4) reject temperature
         when reasoning_effort is set to anything other than ``"none"``.
         """
-        if reasoning_effort and reasoning_effort.lower() != "none":
+        if reasoning_effort and reasoning_effort.lower() not in {"off", "none"}:
             return False
         name = model_name.lower()
         return not any(token in name for token in ("gpt-5", "o1", "o3", "o4"))
+
+    def _chat_reasoning_fields(self, model: str, requested: str | None) -> tuple[dict[str, Any], bool]:
+        if not requested:
+            return {}, False
+        effort = requested.lower()
+        if effort == "minimum":
+            effort = "minimal"
+        spec = self._spec
+        model_style = _model_thinking_style(model)
+        gateway_style = getattr(spec, "gateway_reasoning_style", "") if spec else ""
+        declared = getattr(self, "_model_efforts", {}).get(model)
+        validate_declared_effort(requested, declared)
+        provider_name = getattr(spec, "name", None)
+        api_base = getattr(self, "_catalog_api_base", None) or getattr(self, "_effective_base", None) or os.environ.get("OPENAI_BASE_URL")
+        record = catalog_model_for_route(provider_name, model, api_base)
+        fields = _catalog_chat_reasoning(record, effort, declared) if record else None
+        if fields is not None:
+            enabled = effort not in {"off", "none"} and bool(fields)
+            # Existing OpenRouter MiMo/Kimi integrations also pass the native
+            # model's switch for routes that forward provider-specific fields.
+            if fields and record.get("thinking_format") == "openrouter" and gateway_style and model_style:
+                fields.update(_thinking_extra_body(model_style, enabled) or {})
+                if enabled and effort != "on" and _model_slug(model) not in _KIMI_THINKING_MODELS:
+                    fields["reasoning_effort"] = fields["reasoning"]["effort"]
+            return fields, enabled
+
+        if (isinstance(provider_name, str) and (provider_name == "custom" or provider_name.startswith("custom-"))
+                and declared and effort in declared and effort not in {"on", "off", "none"}):
+            return {"reasoning_effort": requested}, True
+
+        # A plain compatible endpoint uses the declared OpenAI effort. Vendor
+        # switches here retain the existing contracts for uncatalogued routes.
+        fields = {}
+        enabled = effort not in {"off", "none", "minimal"}
+        if effort not in {"off", "none", "on"} and _model_slug(model) not in _KIMI_THINKING_MODELS:
+            fields["reasoning_effort"] = "minimum" if provider_name == "dashscope" and effort == "minimal" else requested
+        for style in _thinking_styles_for(spec, model):
+            fields.update(_thinking_extra_body(style, enabled) or {})
+        if gateway_style and model_style:
+            fields.update(_gateway_reasoning_extra_body(gateway_style, "none" if effort == "off" else effort) or {})
+        if effort in {"on", "off"} and not fields:
+            raise ValueError("当前模型接口未声明可用的思考开关。")
+        return fields, enabled
 
     def _build_kwargs(
         self,
@@ -625,15 +759,14 @@ class OpenAICompatProvider(LLMProvider):
         reasoning_effort: str | None,
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
-        model_name = model or self.default_model
+        model_name = self.request_model_name(model)
         spec = self._spec
 
         if spec and spec.supports_prompt_caching:
-            model_name = model or self.default_model
             if any(model_name.lower().startswith(k) for k in ("anthropic/", "claude")):
                 messages, tools = self._apply_cache_control(messages, tools)
 
-        if spec and spec.strip_model_prefix:
+        if spec and spec.strip_model_prefix and (model or self.default_model) not in getattr(self, "wire_model_ids", {}):
             model_name = model_name.split("/")[-1]
 
         kwargs: dict[str, Any] = {
@@ -658,44 +791,11 @@ class OpenAICompatProvider(LLMProvider):
                     kwargs.update(overrides)
                     break
 
-        # Normalize reasoning_effort into a semantic form (OpenAI vocab)
-        # used for internal decisions, and a wire form actually sent out.
-        # "minimum" is accepted as a DashScope-native alias for "minimal".
-        semantic_effort: str | None = None
-        if isinstance(reasoning_effort, str):
-            semantic_effort = reasoning_effort.lower()
-            if semantic_effort == "minimum":
-                semantic_effort = "minimal"
-
-        wire_effort = reasoning_effort
-        if spec and spec.name == "dashscope" and semantic_effort == "minimal":
-            # DashScope accepts none/minimum/low/medium/high/xhigh; "minimal" 400s.
-            wire_effort = "minimum"
-
-        if wire_effort and semantic_effort != "none":
-            kwargs["reasoning_effort"] = wire_effort
-
-        # Only send thinking controls when reasoning_effort is explicit so
-        # omitting the config preserves each provider's default.
-        if reasoning_effort is not None:
-            thinking_enabled = semantic_effort not in ("none", "minimal")
-            for thinking_style in _thinking_styles_for(spec, model_name):
-                extra = _thinking_extra_body(thinking_style, thinking_enabled)
-                if extra:
-                    kwargs.setdefault("extra_body", {}).update(extra)
-            gateway_style = getattr(spec, "gateway_reasoning_style", "") if spec else ""
-            if gateway_style and _model_thinking_style(model_name):
-                extra = _gateway_reasoning_extra_body(gateway_style, semantic_effort)
-                if extra:
-                    kwargs.setdefault("extra_body", {}).update(extra)
-
-            # Moonshot rejects requests that carry both 'reasoning_effort'
-            # and the native 'thinking' param.  We already expressed the
-            # user's intent via the provider-native shape, so drop the
-            # redundant wire-level kwarg.  Only kimi models need this —
-            # Xiaomi's API accepts both params.
-            if _model_slug(model_name) in _KIMI_THINKING_MODELS:
-                kwargs.pop("reasoning_effort", None)
+        fields, thinking_enabled = self._chat_reasoning_fields(model_name, reasoning_effort)
+        if "reasoning_effort" in fields:
+            kwargs["reasoning_effort"] = fields.pop("reasoning_effort")
+        if fields:
+            kwargs.setdefault("extra_body", {}).update(fields)
 
         if tools:
             kwargs["tools"] = tools
@@ -706,8 +806,7 @@ class OpenAICompatProvider(LLMProvider):
         # as "no thinking that turn". DeepSeek-V4/reasoner reason natively,
         # so backfill even without explicit reasoning_effort.
         explicit_thinking = (
-            reasoning_effort is not None
-            and semantic_effort not in ("none", "minimal")
+            thinking_enabled
             and (
                 (spec and spec.thinking_style)
                 or _model_thinking_style(model_name)
@@ -718,7 +817,7 @@ class OpenAICompatProvider(LLMProvider):
         # （Console / OpenRouter / VolcEngine 等）调用，上游 API 也会
         # 强制校验，因此判断只看模型名，不看 spec.name。
         implicit_deepseek_thinking = (
-            semantic_effort not in ("none", "minimal", "minimum")
+            (reasoning_effort is None or thinking_enabled)
             and any(t in model_name.lower() for t in ("deepseek-v4", "deepseek-reasoner"))
         )
         if explicit_thinking or implicit_deepseek_thinking:
@@ -734,6 +833,9 @@ class OpenAICompatProvider(LLMProvider):
         if self._extra_body:
             existing = kwargs.get("extra_body", {})
             kwargs["extra_body"] = _deep_merge(existing, self._extra_body)
+        session_headers = opencode_session_headers(getattr(self, "_effective_base", None), getattr(self, "extra_headers", None))
+        if session_headers:
+            kwargs["extra_headers"] = session_headers
 
         return kwargs
 
@@ -742,7 +844,9 @@ class OpenAICompatProvider(LLMProvider):
         model: str | None,
         reasoning_effort: str | None,
     ) -> bool:
-        """Use Responses API only for direct OpenAI requests that benefit from it."""
+        """Explicit routes stay on their API; legacy OpenAI selects it per request."""
+        if self._wire_api in {"openai-completions", "openai-responses"}:
+            return self._wire_api == "openai-responses"
         if self._spec and self._spec.name not in ("openai", "github_copilot"):
             return False
         if self._spec is None or self._spec.name != "github_copilot":
@@ -824,8 +928,8 @@ class OpenAICompatProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build a Responses API body for direct OpenAI requests."""
-        model_name = model or self.default_model
-        if self._spec and self._spec.strip_model_prefix:
+        model_name = self.request_model_name(model)
+        if self._spec and self._spec.strip_model_prefix and (model or self.default_model) not in getattr(self, "wire_model_ids", {}):
             model_name = model_name.split("/")[-1]
         sanitized_messages = self._sanitize_messages(self._sanitize_empty_content(messages))
         instructions, input_items = convert_messages(sanitized_messages)
@@ -838,13 +942,19 @@ class OpenAICompatProvider(LLMProvider):
             "store": False,
             "stream": False,
         }
+        session_headers = opencode_session_headers(getattr(self, "_effective_base", None), getattr(self, "extra_headers", None))
+        if session_headers:
+            body["extra_headers"] = session_headers
 
         if self._supports_temperature(model_name, reasoning_effort):
             body["temperature"] = temperature
 
         if reasoning_effort and reasoning_effort.lower() != "none":
-            body["reasoning"] = {"effort": reasoning_effort}
-            body["include"] = ["reasoning.encrypted_content"]
+            api_base = getattr(self, "_catalog_api_base", None) or getattr(self, "_effective_base", None) or os.environ.get("OPENAI_BASE_URL")
+            row = catalog_model_for_route(getattr(self._spec, "name", None), model_name, api_base)
+            if row is None or row.get("wire_api") != "openai-responses":
+                row = {}
+            body.update(responses_reasoning_fields(reasoning_effort, row, getattr(self, "_model_efforts", {}).get(model_name)))
 
         if tools:
             body["tools"] = convert_tools(tools)
@@ -926,36 +1036,40 @@ class OpenAICompatProvider(LLMProvider):
         # --- cached_tokens (normalised across providers) ---
         # Try nested paths first (dict), fall back to attribute (SDK object).
         # Priority order ensures the most specific field wins.
+        cache_zero_reported = False
         for path in (
             ("prompt_tokens_details", "cached_tokens"),  # OpenAI/Zhipu/MiniMax/Qwen/Mistral/xAI
             ("cached_tokens",),                          # StepFun/Moonshot (top-level)
             ("prompt_cache_hit_tokens",),                # DeepSeek/SiliconFlow
         ):
-            cached = cls._get_nested_int(usage_map, path)
-            if not cached and usage_obj:
-                cached = cls._get_nested_int(usage_obj, path)
+            cached = read_reported_token_count(usage_map, *path)
+            if cached is None and usage_obj:
+                cached = read_reported_token_count(usage_obj, *path)
             if cached:
                 result["cached_tokens"] = cached
                 break
+            cache_zero_reported = cache_zero_reported or cached == 0
+        else:
+            if cache_zero_reported:
+                result["reported_cache_read_tokens"] = 0
+
+        cache_write = read_cache_write_tokens(usage_map if usage_map is not None else usage_obj, "prompt_tokens_details")
+        if cache_write is not None:
+            result["cache_creation_input_tokens"] = cache_write
+
+        for path in (
+            ("completion_tokens_details", "reasoning_tokens"),
+            ("output_tokens_details", "reasoning_tokens"),
+            ("output_tokens_details", "thinking_tokens"),
+        ):
+            reasoning = read_reported_token_count(usage_map, *path)
+            if reasoning is None and usage_obj:
+                reasoning = read_reported_token_count(usage_obj, *path)
+            if reasoning is not None:
+                result["reasoning_tokens"] = reasoning
+                break
 
         return result
-
-    @staticmethod
-    def _get_nested_int(obj: Any, path: tuple[str, ...]) -> int:
-        """Drill into *obj* by *path* segments and return an ``int`` value.
-
-        Supports both dict-key access and attribute access so it works
-        uniformly with raw JSON dicts **and** SDK Pydantic models.
-        """
-        current = obj
-        for segment in path:
-            if current is None:
-                return 0
-            if isinstance(current, dict):
-                current = current.get(segment)
-            else:
-                current = getattr(current, segment, None)
-        return int(current or 0) if current is not None else 0
 
     def _parse(self, response: Any) -> LLMResponse:
         if isinstance(response, str):
@@ -1132,10 +1246,15 @@ class OpenAICompatProvider(LLMProvider):
                 continue
 
             chunk_map = cls._maybe_mapping(chunk)
+            chunk_usage = cls._extract_usage(chunk_map if chunk_map is not None else chunk)
+            if chunk_usage:
+                for key in ("reasoning_tokens", "cache_creation_input_tokens"):
+                    if key in usage:
+                        chunk_usage.setdefault(key, usage[key])
+                usage = chunk_usage
             if chunk_map is not None:
                 choices = chunk_map.get("choices") or []
                 if not choices:
-                    usage = cls._extract_usage(chunk_map) or usage
                     text = cls._extract_text_content(
                         chunk_map.get("content") or chunk_map.get("output_text")
                     )
@@ -1157,11 +1276,9 @@ class OpenAICompatProvider(LLMProvider):
                 for idx, tc in enumerate(delta.get("tool_calls") or []):
                     _accum_tc(tc, idx)
                 _accum_legacy_function_call(delta.get("function_call"))
-                usage = cls._extract_usage(chunk_map) or usage
                 continue
 
             if not chunk.choices:
-                usage = cls._extract_usage(chunk) or usage
                 continue
             choice = chunk.choices[0]
             if choice.finish_reason:
@@ -1309,8 +1426,8 @@ class OpenAICompatProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        await self._ensure_client()
         try:
+            await self._ensure_client()
             if self._should_use_responses_api(model, reasoning_effort):
                 try:
                     body = self._build_responses_body(
@@ -1321,7 +1438,7 @@ class OpenAICompatProvider(LLMProvider):
                     self._record_responses_success(model, reasoning_effort)
                     return result
                 except Exception as responses_error:
-                    if self._spec and self._spec.name == "github_copilot":
+                    if self._wire_api == "openai-responses" or (self._spec and self._spec.name == "github_copilot"):
                         # Copilot gateway exposes GPT-5/o-series only via /responses;
                         # falling back to /chat/completions cannot succeed and would
                         # hide the real error.
@@ -1351,9 +1468,9 @@ class OpenAICompatProvider(LLMProvider):
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        await self._ensure_client()
         idle_timeout_s = int(os.environ.get("mona_STREAM_IDLE_TIMEOUT_S", "90"))
         try:
+            await self._ensure_client()
             if self._should_use_responses_api(model, reasoning_effort):
                 try:
                     body = self._build_responses_body(
@@ -1387,7 +1504,7 @@ class OpenAICompatProvider(LLMProvider):
                         reasoning_content=reasoning_content,
                     )
                 except Exception as responses_error:
-                    if self._spec and self._spec.name == "github_copilot":
+                    if self._wire_api == "openai-responses" or (self._spec and self._spec.name == "github_copilot"):
                         # Copilot gateway exposes GPT-5/o-series only via /responses;
                         # falling back to /chat/completions cannot succeed and would
                         # hide the real error.

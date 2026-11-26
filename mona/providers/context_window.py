@@ -6,8 +6,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID, CINDY_CHAT_PROVIDERS
+from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS
 from mona.providers.managed_catalog import managed_model_catalog
+from mona.providers.model_metadata import configured_model_metadata
 
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000
 
@@ -37,6 +38,10 @@ def _known_model_family_window(model: str) -> int | None:
 class ResolvedContextWindow:
     tokens: int
     source: str
+
+    @property
+    def verified(self) -> bool:
+        return self.source not in {"default", "reference"}
 
 
 _CONTEXT_LIMIT_MARKERS = (
@@ -115,16 +120,20 @@ def record_discovered_context_window(
         return False
 
     existing = list(getattr(provider, "discovered_models", None) or [])
+    override = (getattr(provider, "model_overrides", None) or {}).get(model)
+    confirmed = {"context_window": tokens}
+    if override and (override.context_window or 0) > tokens:
+        confirmed["context_window_max"] = tokens
     for index, item in enumerate(existing):
         if not isinstance(item, dict) or str(item.get("id") or "").strip() != model:
             continue
-        if item.get("context_window") == tokens:
+        if all(item.get(key) == value for key, value in confirmed.items()):
             return False
-        existing[index] = {**item, "context_window": tokens}
+        existing[index] = {**item, **confirmed}
         provider.discovered_models = existing
         return True
 
-    existing.append({"id": model, "name": model, "context_window": tokens})
+    existing.append({"id": model, "name": model, **confirmed})
     provider.discovered_models = existing
     return True
 
@@ -141,14 +150,16 @@ def resolve_model_context_window_details(
     resolved_provider = provider_name or config.get_provider_name(model, preset=preset)
 
     provider_config = config.get_provider(model, preset=preset)
-    for item in (getattr(provider_config, "discovered_models", None) or []):
-        if not isinstance(item, dict) or str(item.get("id") or "").strip() != model:
-            continue
-        detected = _positive_int(item.get("context_window", item.get("contextWindow")))
-        if detected is not None:
-            return ResolvedContextWindow(detected, "discovered")
-
-    if resolved_provider == "mona_managed":
+    if resolved_provider != "mona_managed":
+        metadata = configured_model_metadata(resolved_provider, model, provider_config)
+        if metadata.get("context_window"):
+            return ResolvedContextWindow(metadata["context_window"], metadata["context_window_source"])
+    else:
+        for item in (getattr(provider_config, "discovered_models", None) or []):
+            if isinstance(item, dict) and item.get("id") == model:
+                detected = _positive_int(item.get("context_window", item.get("contextWindow")))
+                if detected is not None:
+                    return ResolvedContextWindow(detected, "discovered")
         catalog = managed_catalog if managed_catalog is not None else managed_model_catalog()
         for item in catalog.get("models", []):
             if not isinstance(item, dict) or str(item.get("id") or "").strip() != model:
@@ -159,12 +170,6 @@ def resolve_model_context_window_details(
         detected = _known_model_family_window(model)
         if detected is not None:
             return ResolvedContextWindow(detected, "catalog")
-
-    entry = CINDY_CHAT_PROVIDER_BY_ID.get(str(resolved_provider or ""))
-    if entry is not None:
-        for item in entry.models:
-            if item.id == model and item.context_window is not None:
-                return ResolvedContextWindow(item.context_window, "catalog")
 
     return ResolvedContextWindow(DEFAULT_CONTEXT_WINDOW_TOKENS, "default")
 

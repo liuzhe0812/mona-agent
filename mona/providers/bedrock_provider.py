@@ -12,12 +12,13 @@ from typing import Any
 
 import json_repair
 
-from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest, validate_declared_effort
+from mona.providers.model_metadata import catalog_model_for_route
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
-_TEMPERATURE_UNSUPPORTED_MODEL_TOKENS = ("claude-opus-4-7",)
-_ADAPTIVE_THINKING_ONLY_MODEL_TOKENS = ("claude-opus-4-7",)
+_TEMPERATURE_UNSUPPORTED_MODEL_TOKENS = ("claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-fable-5")
+_ADAPTIVE_THINKING_ONLY_MODEL_TOKENS = (*_TEMPERATURE_UNSUPPORTED_MODEL_TOKENS, "claude-opus-4-6", "claude-sonnet-4-6")
 _NOOP_TOOL_NAME = "mona_noop"
 
 
@@ -38,6 +39,33 @@ def _next_or_none(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
         return None
 
 
+def make_bedrock_client(
+    service: str, *, region: str | None = None, profile: str | None = None,
+    api_key: str | None = None, endpoint_url: str | None = None,
+) -> Any:
+    """Build one regional control/runtime client with its own credential chain."""
+    if service not in {"bedrock", "bedrock-runtime"}:
+        raise ValueError("Unsupported Bedrock service")
+    import boto3
+    from botocore.config import Config
+    from botocore.credentials import CredentialResolver
+    from botocore.session import Session
+    from botocore.tokens import ScopedEnvTokenProvider, TokenProviderChain
+
+    session = Session(profile=profile)
+    options = {"ignore_configured_endpoint_urls": True}
+    if api_key:
+        # An explicit Bedrock bearer must not fall back to another profile's
+        # signing credentials or become an environment variable for other clients.
+        session.register_component("credential_provider", CredentialResolver([]))
+        token = ScopedEnvTokenProvider(session, environ={"AWS_BEARER_TOKEN_BEDROCK": api_key})
+        session.register_component("token_provider", TokenProviderChain([token]))
+        options.update(signature_version="bearer", auth_scheme_preference="httpBearerAuth")
+    return boto3.Session(botocore_session=session).client(
+        service, region_name=region, endpoint_url=endpoint_url, config=Config(**options),
+    )
+
+
 class BedrockProvider(LLMProvider):
     """LLM provider using AWS Bedrock Runtime's Converse APIs."""
 
@@ -51,35 +79,25 @@ class BedrockProvider(LLMProvider):
         profile: str | None = None,
         extra_body: dict[str, Any] | None = None,
         client: Any | None = None,
+        model_metadata=None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
         self.profile = profile
         self._extra_body = extra_body or {}
+        self._declared_efforts = {item["id"]: item["reasoning_efforts"] for item in model_metadata or []
+                                  if isinstance(item.get("id"), str) and isinstance(item.get("reasoning_efforts"), list)}
         self._client = client if client is not None else self._make_client()
 
     def _make_client(self) -> Any:
-        if self.api_key:
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = self.api_key
-        try:
-            import boto3
-        except ImportError as exc:  # pragma: no cover - exercised only without boto3 installed
-            raise RuntimeError(
-                "AWS Bedrock provider requires boto3. Install it with `pip install boto3`."
-            ) from exc
+        return make_bedrock_client("bedrock-runtime", region=self.region, profile=self.profile,
+                                   api_key=self.api_key, endpoint_url=self.api_base)
 
-        session_kwargs: dict[str, Any] = {}
-        if self.profile:
-            session_kwargs["profile_name"] = self.profile
-        session = boto3.Session(**session_kwargs)
-
-        client_kwargs: dict[str, Any] = {}
-        if self.region:
-            client_kwargs["region_name"] = self.region
-        if self.api_base:
-            client_kwargs["endpoint_url"] = self.api_base
-        return session.client("bedrock-runtime", **client_kwargs)
+    async def aclose(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            await asyncio.to_thread(close)
 
     @staticmethod
     def _strip_prefix(model: str) -> str:
@@ -363,18 +381,6 @@ class BedrockProvider(LLMProvider):
                 return {"tool": {"name": str(name)}}
         return {"auto": {}}
 
-    @staticmethod
-    def _adaptive_thinking(reasoning_effort: str | None) -> dict[str, Any] | None:
-        if not reasoning_effort:
-            return None
-        effort = reasoning_effort.lower()
-        if effort == "none":
-            return None
-        thinking: dict[str, Any] = {"type": "adaptive"}
-        if effort != "adaptive":
-            thinking["effort"] = effort
-        return thinking
-
     def _build_kwargs(
         self,
         messages: list[dict[str, Any]],
@@ -385,7 +391,7 @@ class BedrockProvider(LLMProvider):
         reasoning_effort: str | None,
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
-        model_id = self._strip_prefix(model or self.default_model)
+        model_id = self._strip_prefix(self.request_model_name(model))
         system, bedrock_messages = self._convert_messages(self._sanitize_empty_content(messages))
         if not bedrock_messages:
             bedrock_messages = [{"role": "user", "content": [{"text": "(empty)"}]}]
@@ -401,10 +407,30 @@ class BedrockProvider(LLMProvider):
             kwargs["inferenceConfig"]["temperature"] = temperature
 
         additional: dict[str, Any] = {}
-        if self._uses_adaptive_thinking_only(model_id):
-            thinking = self._adaptive_thinking(reasoning_effort)
-            if thinking:
-                additional["thinking"] = thinking
+        effort = reasoning_effort.lower() if reasoning_effort else None
+        validate_declared_effort(effort, self._declared_efforts.get(model_id))
+        if effort and effort != "none" and "anthropic.claude" in model_id.lower():
+            endpoint = self.api_base or (f"https://bedrock-runtime.{self.region}.amazonaws.com" if self.region else None)
+            route = catalog_model_for_route(None, model_id, endpoint) or {}
+            levels = route.get("thinking_level_map") or {}
+            if effort == "off":
+                if levels.get("off", "none") is None:
+                    raise ValueError("当前模型的思考模式不能关闭。")
+                additional["thinking"] = {"type": "disabled"}
+            elif self._uses_adaptive_thinking_only(model_id):
+                additional["thinking"] = {"type": "adaptive"}
+                if effort not in {"adaptive", "on"}:
+                    additional["output_config"] = {"effort": levels.get(effort) or ("low" if effort in {"minimal", "minimum"} else effort)}
+            elif route.get("reasoning_efforts") or self._declared_efforts.get(model_id):
+                budgets = {"on": 1024, "minimum": 1024, "minimal": 1024, "low": 2048, "medium": 8192,
+                           "high": 16384, "xhigh": 16384, "max": 16384}
+                if effort not in budgets:
+                    raise ValueError("当前模型不支持所选的思考强度。")
+                budget = budgets[effort]
+                additional["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                kwargs["inferenceConfig"]["maxTokens"] = max(max_tokens, budget + 1024)
+            if "thinking" in additional and effort != "off":
+                kwargs["inferenceConfig"].pop("temperature", None)
         if self._extra_body:
             additional = _deep_merge(additional, self._extra_body)
         if additional:

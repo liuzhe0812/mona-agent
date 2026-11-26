@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Cpu, LayoutGrid, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Cpu, LayoutGrid, Loader2, Plus, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuPortal, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/api";
 import { DevelopmentApiError } from "@/lib/development-api";
 import { getHostedPlatform } from "@/lib/hosted-platform";
@@ -30,17 +29,18 @@ function selectionErrorMessage(error: unknown, option: ModelOption, close: boole
   return close ? "模型未切换，设置未保存。请稍后重试。" : "思考强度未保存。请稍后重试。";
 }
 
-export function ModelSelector({ options, label, disabled, onSelect, onManage, className }: {
+export function ModelSelector({ options, label, disabled, onSelect, onManage, className, collisionBoundary }: {
   options: ModelOption[]; label?: string | null; disabled?: boolean;
   onSelect: (option: ModelOption, effort?: string | null) => void | Promise<void>;
   onManage?: () => void; currentExecutor?: string; className?: string;
+  collisionBoundary?: HTMLElement | null;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [selectionError, setSelectionError] = useState("");
   const [selectionPending, setSelectionPending] = useState(false);
-  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
   const selectionPendingRef = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const modelList = useRef<HTMLDivElement>(null);
@@ -57,9 +57,6 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
   const selected = options.find((option) => option.active);
   const selectedEffort = selected ? modelEffort(selected) : null;
   const triggerLabel = label ?? selected?.label ?? "选择模型";
-  const tooltipLabel = selected
-    ? [triggerLabel, !triggerLabel.includes(selected.providerLabel) ? selected.providerLabel : null, selectedEffort ? `思考强度：${effortLabel(selectedEffort)}` : null].filter(Boolean).join(" · ")
-    : triggerLabel;
   const hosted = !!getHostedPlatform();
   const sources = useMemo(() => {
     const ordered = orderedSources([...PRIMARY_SOURCES, ...options.map((o) => sourceId(o.provider, o.isBuiltin))], providerOrder);
@@ -74,6 +71,7 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
     return !normalized || `${option.providerLabel} ${option.label} ${option.model} ${option.description ?? ""} ${(option.tags ?? []).join(" ")}`.toLocaleLowerCase().includes(normalized);
   });
   const groups = sources.map((id) => ({ id, label: names.get(id) ?? sourceLabel(id), options: visible.filter((o) => sourceId(o.provider, o.isBuiltin) === id) })).filter((g) => g.options.length);
+  const boundaryRect = collisionBoundary && selectionError ? collisionBoundary.getBoundingClientRect() : null;
   const choose = async (option: ModelOption, effort = modelEffort(option), close = true): Promise<void> => {
     if (disabled || selectionPendingRef.current || option.disabledReason) return;
     selectionPendingRef.current = true;
@@ -89,9 +87,8 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
       setSelectionPending(false);
     }
   };
-  return <><TooltipProvider delayDuration={300}><DropdownMenu open={open} onOpenChange={(value) => { setOpen(value); setTooltipOpen(false); if (value) setQuery(""); }}>
-    <Tooltip open={tooltipOpen && !open} onOpenChange={setTooltipOpen}>
-      <TooltipTrigger asChild><DropdownMenuTrigger asChild><button type="button" disabled={disabled || selectionPending} aria-label={triggerLabel} data-loading={selectionPending || undefined}
+  return <><DropdownMenu open={open} onOpenChange={(value) => { setOpen(value); if (value) setQuery(""); else setDetailKey(null); }}>
+    <DropdownMenuTrigger asChild><button type="button" disabled={disabled || selectionPending} aria-label={triggerLabel} data-loading={selectionPending || undefined}
         className={cn("composer-icon-control inline-flex h-8 min-w-0 max-w-72 shrink items-center gap-2 rounded-full border border-border/70 bg-background px-3 text-caption font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", className)}>
         <span className="composer-control-icon flex h-4 w-4 shrink-0 items-center justify-center">{selected
           ? <ProviderMark provider={sourceId(selected.provider, selected.isBuiltin)} label={selected.providerLabel} className="h-4 w-4" />
@@ -99,10 +96,8 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
         <span className="composer-control-label min-w-0 flex-1 truncate whitespace-nowrap">{triggerLabel}</span>
         {selectedEffort && <span aria-hidden className="composer-control-label hidden shrink-0 items-center gap-1 whitespace-nowrap text-muted-foreground sm:inline-flex"><Cpu className="h-3 w-3 shrink-0" />{effortLabel(selectedEffort)}</span>}
         {selectionPending ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="正在切换模型" /> : <ChevronDown className="composer-control-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-      </button></DropdownMenuTrigger></TooltipTrigger>
-      <TooltipContent side="bottom">{tooltipLabel}</TooltipContent>
-    </Tooltip>
-    <DropdownMenuContent align="end" side="top" sideOffset={8} className="flex w-[350px] max-w-[calc(100vw-48px)] min-w-0 max-h-[min(560px,calc(100vh-120px))] min-h-0 flex-col overflow-hidden rounded-lg p-0">
+    </button></DropdownMenuTrigger>
+    <DropdownMenuContent align="end" side="top" sideOffset={8} collisionBoundary={collisionBoundary ?? undefined} collisionPadding={collisionBoundary ? 8 : undefined} className={cn("flex max-w-[calc(100vw-48px)] min-w-0 min-h-0 flex-col overflow-hidden rounded-lg p-0", collisionBoundary ? "w-64 max-h-[min(560px,var(--radix-dropdown-menu-content-available-height))]" : "w-[350px] max-h-[min(560px,calc(100vh-120px))]")}>
       <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3.5 py-3">
         <Search className="pointer-events-none h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <Input ref={search} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
@@ -138,11 +133,15 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
               const key = modelKey(option);
               const effort = modelEffort(option);
               const credits = creditMultiplierLabel(option);
+              const window = contextLabel(option.contextWindow);
+              const windowDescription = option.contextWindowSource === "reference" ? "参考预算" : "上下文";
               return <div key={key} title={option.disabledReason || undefined} className={cn("flex items-center rounded-md [&+div]:mt-1", option.active && "bg-muted/80")}>
-                <DropdownMenuSub>
+                {/* A narrow browser panel opens details on demand so the overlay cannot cover a model before it is selected. */}
+                <DropdownMenuSub open={collisionBoundary ? detailKey === key : undefined} onOpenChange={collisionBoundary ? (value) => setDetailKey(value ? key : null) : undefined}>
                   <DropdownMenuSubTrigger data-model-choice aria-label={`${option.providerLabel} · ${option.label}`} aria-description={[option.disabledReason, credits && `积分消耗 ${credits}`].filter(Boolean).join(" · ") || undefined} aria-current={option.active ? "true" : undefined} disabled={selectionPending || !!option.disabledReason}
                     className="min-w-0 flex-1 gap-2 rounded-md px-3 py-2 text-body leading-5 [&>svg:last-child]:hidden"
-                    onClick={() => { void choose(option).catch(() => undefined); }}
+                    onPointerMove={collisionBoundary ? (event) => event.preventDefault() : undefined}
+                    onClick={(event) => { void choose(option).catch(() => undefined); if (collisionBoundary) event.preventDefault(); }}
                     onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void choose(option).catch(() => undefined); } }}>
                     <span className="min-w-0 flex-1"><span className="flex items-center gap-2"><span className="truncate font-medium">{option.label}</span>
                       {option.promotionLabel && <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 !text-micro text-success">{option.promotionLabel}</span>}
@@ -150,10 +149,10 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
                       {option.tags?.map((tag) => <span key={tag} className="shrink-0 rounded-full bg-muted px-2 py-0.5 !text-micro font-normal text-muted-foreground">{tag}</span>)}</span>
                     </span>
                     {effort ? <span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground"><Cpu className="h-3.5 w-3.5" />{effortLabel(effort)}</span>
-                      : contextLabel(option.contextWindow) && <span className="shrink-0 text-caption text-muted-foreground">{contextLabel(option.contextWindow)}</span>}
+                      : window && <span className="shrink-0 text-caption text-muted-foreground">{window}{option.contextWindowSource === "reference" ? " 参考预算" : ""}</span>}
                     {credits && <span className="shrink-0 text-ui font-medium tabular-nums text-foreground">{credits}</span>}
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuPortal><DropdownMenuSubContent sideOffset={8} className="scrollbar-thin max-h-[min(70vh,480px)] w-64 overflow-y-auto rounded-xl p-3">
+                  <DropdownMenuPortal><DropdownMenuSubContent sideOffset={collisionBoundary ? -224 : 8} collisionBoundary={collisionBoundary ?? undefined} collisionPadding={collisionBoundary ? 8 : undefined} className={cn("scrollbar-thin overflow-y-auto rounded-xl p-3", collisionBoundary ? "w-56 max-h-[min(480px,var(--radix-dropdown-menu-content-available-height))]" : "w-64 max-h-[min(70vh,480px)]")}>
                     <p className="text-ui font-semibold">{option.label}</p>
                     {option.description && !credits && <p className="mt-1 text-caption text-muted-foreground">{option.description}</p>}
                     {option.promotionName && <p className="mt-2 text-caption font-medium">{option.promotionName}</p>}
@@ -169,9 +168,12 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
                       {[["输入", option.inputAmountPerMillion, option.originalInputAmountPerMillion], ["输出", option.outputAmountPerMillion, option.originalOutputAmountPerMillion], ["缓存读取", option.cachedInputAmountPerMillion, option.originalCachedInputAmountPerMillion]].map(([name, amount, original]) => amount ?
                         <p key={name} className="flex justify-between gap-2"><span>{name}</span><span>¥{amount}{original && <span className="ml-1 text-muted-foreground line-through">¥{original}</span>}</span></p> : null)}
                     </div>}
-                    <p className="mt-3 border-t border-border/70 pt-2 text-caption text-muted-foreground">来源：{option.providerLabel}{contextLabel(option.contextWindow) ? ` · ${contextLabel(option.contextWindow)} 上下文` : ""}</p>
+                    <p className="mt-3 border-t border-border/70 pt-2 text-caption text-muted-foreground">来源：{option.providerLabel}{window ? ` · ${window} ${windowDescription}` : ""}</p>
                   </DropdownMenuSubContent></DropdownMenuPortal>
                 </DropdownMenuSub>
+                {collisionBoundary && <button type="button" aria-label={`${option.label}模型详情`} aria-haspopup="menu" aria-expanded={detailKey === key} disabled={selectionPending}
+                  onPointerDown={(event) => event.preventDefault()} onClick={() => setDetailKey(detailKey === key ? null : key)}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"><ChevronRight className="h-3.5 w-3.5" /></button>}
               </div>;
             })}
           </div>)}
@@ -180,9 +182,9 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
       </div>
       {onManage && <div className="shrink-0 border-t border-border/70 px-3.5 py-[9px]"><button type="button" onClick={() => { setOpen(false); onManage(); }} className="flex items-center gap-1.5 text-ui text-muted-foreground hover:text-foreground"><Plus className="h-3.5 w-3.5" />添加模型</button></div>}
     </DropdownMenuContent>
-  </DropdownMenu></TooltipProvider>
+  </DropdownMenu>
     <AlertDialog open={!!selectionError} onOpenChange={(value) => { if (!value) setSelectionError(""); }}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>设置未保存</AlertDialogTitle><AlertDialogDescription>{selectionError}</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogContent className={boundaryRect ? "fixed max-w-none overflow-y-auto p-4" : undefined} style={boundaryRect ? { left: boundaryRect.left + 8, top: boundaryRect.top + boundaryRect.height / 2, width: Math.max(0, boundaryRect.width - 16), maxHeight: Math.max(0, boundaryRect.height - 16), transform: "translateY(-50%)" } : undefined}><AlertDialogHeader><AlertDialogTitle>设置未保存</AlertDialogTitle><AlertDialogDescription>{selectionError}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>知道了</AlertDialogCancel></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

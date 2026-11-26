@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "./ModelSelector";
 import { ProviderMark } from "./ProviderMark";
 import { modelKey, sourceId, useModelPreferences, type ModelOption } from "./model-sources";
+import { buildComposerProviderOptions } from "./model-options";
 import { developmentModels, developmentModelRoute } from "@/components/development/development-models";
 import { DevelopmentApiError } from "@/lib/development-api";
 import { configureHostedPlatform } from "@/lib/hosted-platform";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import type { SettingsPayload } from "@/lib/types";
 
 const models: ModelOption[] = [
   { provider: "mona_managed", providerLabel: "Mona AI", model: "self-test", label: "自供示例", active: true, isBuiltin: true },
@@ -45,7 +47,7 @@ describe("source-first unified model selector", () => {
     expect(button.querySelector("svg.lucide-cpu")).not.toBeNull();
   });
 
-  it("shows the full selected model label in a tooltip without changing its accessible name", async () => {
+  it("opens the selected model menu without a trigger tooltip", async () => {
     const option = {
       ...models[1], active: true, reasoningEfforts: ["low", "high"], reasoningEffort: "high",
     };
@@ -54,7 +56,7 @@ describe("source-first unified model selector", () => {
     const button = screen.getByRole("button", { name: "Same Model" });
     expect(button).not.toHaveAttribute("title");
     fireEvent.focus(button);
-    expect(await screen.findByRole("tooltip", { name: "Same Model · OpenAI · 思考强度：高" })).toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
     fireEvent.pointerDown(button, { button: 0, ctrlKey: false, pointerType: "mouse" });
     await screen.findByRole("textbox", { name: "搜索模型" });
@@ -160,6 +162,35 @@ describe("source-first unified model selector", () => {
     expect(slider).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "恢复推荐" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "搜索模型" })).toBeInTheDocument();
+  });
+
+  it("shows a known API route window in model details while changing a supported effort", async () => {
+    const settings = {
+      agent: { executor: "mona", provider: "custom-relay", model: "manual-model", reasoning_effort: "low",
+        context_window_source: "discovered", context_window_tokens: 196_608 },
+      chat_providers: [{ name: "custom-relay", label: "我的转发服务", configured: true, models: [
+        { id: "manual-model", name: "Friendly Model", enabled: true, context_window: null,
+          reasoning_efforts: ["low", "high"], default_reasoning_effort: "low" },
+      ] }],
+    } as SettingsPayload;
+    const [option] = buildComposerProviderOptions(settings);
+    const select = vi.fn();
+    await open(select, [option]);
+    fireEvent.pointerMove(screen.getByRole("menuitem", { name: "我的转发服务 · Friendly Model" }), { pointerType: "mouse" });
+    const slider = await screen.findByRole("slider", { name: "思考强度" });
+    expect(screen.getByText("来源：我的转发服务 · 197K 上下文")).toBeInTheDocument();
+    fireEvent.keyDown(slider, { key: "End" });
+    expect(select).toHaveBeenCalledWith(option, "high");
+    await waitFor(() => expect(slider).toHaveAttribute("aria-disabled", "false"));
+  });
+
+  it("labels a reference budget separately from a confirmed model window", async () => {
+    const option = { ...models[2], contextWindow: 1_000_000, contextWindowSource: "reference" };
+    await open(vi.fn(), [option]);
+    const row = screen.getByRole("menuitem", { name: "我的转发服务 · Same Model" });
+    expect(within(row).getByText("1M 参考预算")).toBeInTheDocument();
+    fireEvent.pointerMove(row, { pointerType: "mouse" });
+    expect(await screen.findByText("来源：我的转发服务 · 1M 参考预算")).toBeInTheDocument();
   });
   it("keeps model details mounted while the model list scrolls under the pointer", async () => {
     const select = vi.fn();

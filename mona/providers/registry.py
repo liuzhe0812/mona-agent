@@ -104,6 +104,8 @@ class ProviderSpec:
     supports_vision: bool | None = None
     supports_tool_calling: bool | None = None
     supports_json_mode: bool | None = None
+    # Preset-specific API contract; legacy OpenAI connections negotiate per model.
+    wire_api: str | None = None
 
     @property
     def label(self) -> str:
@@ -548,6 +550,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="vLLM",
         backend="openai_compat",
         is_local=True,
+        api_key_required=False,
+        default_api_base="http://127.0.0.1:8000/v1",
+        allow_auto_fallback=False,
     ),
     # Ollama (local, OpenAI-compatible)
     ProviderSpec(
@@ -627,20 +632,33 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
 )
 
+WIRE_PROVIDER_BACKENDS = {
+    "openai-completions": "openai_compat", "openai-responses": "openai_compat",
+    "anthropic-messages": "anthropic", "azure-openai-responses": "azure_openai",
+    "bedrock-converse-stream": "bedrock", "google-vertex": "vertex",
+}
+
 PROVIDERS = PROVIDERS + tuple(
     ProviderSpec(
         name=provider.id,
         keywords=(provider.id, provider.name.lower()),
-        env_key="OPENAI_API_KEY",
+        env_key="",  # Each connection supplies its own credentials directly to the SDK.
         display_name=provider.name,
-        backend="openai_compat",
+        backend="github_copilot" if provider.auth_method == "github-copilot" else WIRE_PROVIDER_BACKENDS[provider.wire_api],
+        wire_api=provider.wire_api,
         is_gateway=True,
+        is_local=provider.auth_method == "none" and provider.allow_private,
+        is_oauth=provider.auth_method == "github-copilot",
+        allow_auto_fallback=provider.auth_method == "apiKey" and not provider.api_base_editable,
         chat_only=True,
         api_key_required=provider.api_key_required,
         default_api_base=provider.api_base,
         thinking_style=provider.thinking_style,
     )
     for provider in CINDY_CHAT_PROVIDERS
+    # Keep the established transport for an existing provider (including its
+    # prompt caching and gateway reasoning fields) in every registry lookup.
+    if all(registered.name != provider.id for registered in PROVIDERS)
 )
 
 
@@ -680,8 +698,11 @@ def custom_provider_spec(
 def find_by_name(name: str) -> ProviderSpec | None:
     """Find a provider spec by config field name, e.g. "dashscope"."""
     raw = name.strip()
+    for spec in PROVIDERS:
+        if spec.name == raw:
+            return spec
     normalized = to_snake(raw.replace("-", "_"))
     for spec in PROVIDERS:
-        if spec.name == raw or spec.name == normalized:
+        if spec.name == normalized:
             return spec
     return custom_provider_spec(raw)

@@ -75,6 +75,16 @@ def _effort_value(value: Any) -> str | None:
     return normalized
 
 
+def supported_default_effort(recommended: str, efforts: list[str]) -> str | None:
+    if recommended in efforts:
+        return recommended
+    if recommended in _EFFORT_ORDER:
+        for effort in reversed(_EFFORT_ORDER[:_EFFORT_ORDER.index(recommended) + 1]):
+            if effort in efforts:
+                return effort
+    return efforts[0] if efforts else None
+
+
 def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in mapping:
@@ -144,8 +154,10 @@ def normalize_reasoning_metadata(
     Discovery input is treated leniently because it comes from provider catalogs.
     Settings saves use ``strict=True`` so malformed explicit metadata is reported.
     """
-    reasoning = model.get("reasoning")
-    reasoning = reasoning if isinstance(reasoning, Mapping) else {}
+    raw_reasoning = model.get("reasoning")
+    reasoning = raw_reasoning if isinstance(raw_reasoning, Mapping) else {}
+    info = model.get("model_info")
+    info = info if isinstance(info, Mapping) else {}
     effort = model.get("effort")
     effort = effort if isinstance(effort, Mapping) else {}
     capabilities = model.get("capabilities")
@@ -171,11 +183,13 @@ def normalize_reasoning_metadata(
                 else adaptive_thinking
             )
 
-    raw_efforts = _first(model, "reasoning_efforts", "reasoningEfforts")
+    raw_efforts = _first(model, "reasoning_efforts", "reasoningEfforts", "efforts")
     if raw_efforts is _MISSING:
         raw_efforts = _first(reasoning, "supportedEfforts", "supported_efforts")
     if raw_efforts is _MISSING:
         raw_efforts = model.get("supported_efforts", _MISSING)
+    if raw_efforts is _MISSING:
+        raw_efforts = model.get("supported_reasoning_levels", _MISSING)
     if raw_efforts is _MISSING:
         raw_efforts = effort.get("supported_levels", _MISSING)
     if raw_efforts is _MISSING:
@@ -186,6 +200,12 @@ def normalize_reasoning_metadata(
             and anthropic_effort is not _MISSING
         ):
             raise ValueError("reasoning efforts metadata is invalid")
+    if raw_efforts is _MISSING and (
+        raw_reasoning is False or info.get("supports_reasoning") is False or model.get("supportsReasoningEffort") is False
+    ):
+        raw_efforts = []
+    if isinstance(raw_efforts, list) and not strict:
+        raw_efforts = [level.get("effort", level.get("value")) if isinstance(level, Mapping) else level for level in raw_efforts]
 
     raw_default = _first(
         model, "default_reasoning_effort", "defaultReasoningEffort"
@@ -193,7 +213,7 @@ def normalize_reasoning_metadata(
     if raw_default is _MISSING:
         raw_default = _first(reasoning, "defaultEffort", "default_effort")
     if raw_default is _MISSING:
-        raw_default = model.get("default_effort", _MISSING)
+        raw_default = _first(model, "default_effort", "defaultEffort", "default_reasoning_level", "reasoningEffort")
     if raw_default is _MISSING:
         raw_default = effort.get("default_level", _MISSING)
     if raw_default is _MISSING and isinstance(anthropic_effort, Mapping):
@@ -236,7 +256,9 @@ def normalize_reasoning_metadata(
             if default is None:
                 if strict:
                     raise ValueError("default reasoning effort is invalid")
-            elif efforts is None or default not in efforts:
+            elif not default:
+                normalized["default_reasoning_effort"] = None
+            elif efforts is not None and default not in efforts:
                 if strict:
                     raise ValueError("default reasoning effort is not supported")
             else:

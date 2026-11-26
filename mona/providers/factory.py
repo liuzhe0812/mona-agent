@@ -6,17 +6,24 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from loguru import logger
 
 from mona.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from mona.providers.base import LLMProvider
-from mona.providers.context_window import (
-    resolve_model_context_window,
-    resolve_model_context_window_details,
-)
+from mona.providers.context_window import resolve_model_context_window_details
 from mona.providers.fallback_provider import FallbackProvider
-from mona.providers.registry import find_by_name
+from mona.providers.model_metadata import (
+    catalog_model_for_route,
+    configured_model_metadata,
+    declared_model_metadata,
+    preset_model_route,
+    stored_model,
+)
+from mona.providers.model_sources import CHAT_SOURCE_PROVIDER_BY_ID
+from mona.providers.preset_transport import cloudflare_client_factory, openai_compatible_preset
+from mona.providers.registry import WIRE_PROVIDER_BACKENDS, find_by_name, is_custom_provider_name
 
 
 @dataclass(frozen=True)
@@ -51,13 +58,44 @@ def _make_provider_core(
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     model = model or resolved.model
     provider_name = config.get_provider_name(model, preset=resolved)
+    if not provider_name and resolved.provider != "auto":
+        # An unconfigured named connection still owns its destination. Falling
+        # through to the generic SDK default would send this prompt to OpenAI.
+        provider_name = resolved.provider
     p = config.get_provider(model, preset=resolved)
     spec = find_by_name(provider_name) if provider_name else None
     backend = spec.backend if spec else "openai_compat"
+    declared_models = declared_model_metadata(p)
+    api_base = config.get_api_base(model, preset=resolved) or (spec.default_api_base if spec else None)
+    route = preset_model_route(provider_name, model, api_base) or {}
+    api_base = route.get("api_base") or api_base
+    wire_api = route.get("wire_api") or (spec.wire_api if spec else None)
+    wire_model_id = route.get("wire_model_id") or model
+    if provider_name and (provider_name == "custom" or is_custom_provider_name(provider_name)):
+        wire_api = getattr(p, "wire_api", None)
+        if wire_api is None:
+            matched = catalog_model_for_route(provider_name, model, api_base) or {}
+            discovered_api = matched.get("wire_api")
+            wire_api = discovered_api if discovered_api in {"openai-completions", "openai-responses", "anthropic-messages"} else "openai-completions"
+    if wire_api and api_base:
+        wire_api, api_base = openai_compatible_preset(provider_name, wire_api, api_base)
+        if backend != "github_copilot":
+            backend = WIRE_PROVIDER_BACKENDS[wire_api]
+    api_key = (p.api_key if p else None) or None
+    if provider_name == "cloudflare-ai-gateway":
+        http_client_factory = cloudflare_client_factory(api_base or "", api_key or "", http_client_factory)
+        # The connection sends this gateway key only in cf-aig-authorization.
+        api_key = "gateway-managed"
 
     if backend == "azure_openai":
         if not p or not p.api_key or not p.api_base:
             raise ValueError("Azure OpenAI requires api_key and api_base in config.")
+        if provider_name == "azure-openai-responses":
+            target = urlsplit(api_base or "")
+            if (target.scheme != "https" or not (target.hostname or "").endswith(".openai.azure.com")
+                    or target.username is not None or target.password is not None or target.port not in {None, 443}
+                    or target.path.rstrip("/") not in {"", "/openai/v1"} or target.query or target.fragment):
+                raise ValueError("请填写所用 Azure OpenAI 资源的官方 HTTPS 地址。")
     elif backend == "openai_compat" and not model.startswith("bedrock/"):
         needs_key = not (p and p.api_key)
         exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
@@ -82,55 +120,75 @@ def _make_provider_core(
 
         provider = AzureOpenAIProvider(
             api_key=p.api_key,
-            api_base=p.api_base,
+            api_base=api_base,
             default_model=model,
+            http_client=http_client_factory() if http_client_factory else None,
+            model_metadata=declared_models,
         )
     elif backend == "github_copilot":
         from mona.providers.github_copilot_provider import GitHubCopilotProvider
 
-        provider = GitHubCopilotProvider(default_model=model)
+        provider = GitHubCopilotProvider(default_model=model, api_base=api_base, wire_api=wire_api,
+                                        model_metadata=declared_models)
+    elif backend == "vertex":
+        from mona.providers.vertex_provider import VertexOpenAIProvider
+
+        provider = VertexOpenAIProvider(api_base=api_base, default_model=model, spec=spec, model_metadata=declared_models)
     elif backend == "anthropic":
         from mona.providers.anthropic_provider import AnthropicProvider
 
         provider = AnthropicProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model, preset=resolved),
+            api_key=api_key,
+            api_base=api_base,
             default_model=model,
             extra_headers=p.extra_headers if p else None,
-            model_metadata=p.discovered_models if p else None,
+            model_metadata=declared_models,
             http_client=http_client_factory() if http_client_factory else None,
         )
     elif backend == "bedrock":
         from mona.providers.bedrock_provider import BedrockProvider
 
+        region = getattr(p, "region", None) if p else None
+        if wire_api == "bedrock-converse-stream" and spec and spec.wire_api == wire_api:
+            if api_base != spec.default_api_base:
+                raise ValueError("Bedrock 区域预设只接受所选区域的 AWS 官方地址。")
+            region = urlsplit(api_base).hostname.split(".")[1]
         provider = BedrockProvider(
-            api_key=p.api_key if p else None,
-            api_base=p.api_base if p else None,
+            api_key=api_key,
+            api_base=api_base,
             default_model=model,
-            region=getattr(p, "region", None) if p else None,
+            region=region,
             profile=getattr(p, "profile", None) if p else None,
             extra_body=p.extra_body if p else None,
+            model_metadata=declared_models,
         )
     else:
         from mona.providers.openai_compat_provider import OpenAICompatProvider
 
-        api_key = (p.api_key if p else None) or None
-
         provider = OpenAICompatProvider(
             api_key=api_key,
-            api_base=config.get_api_base(model, preset=resolved),
+            api_base=api_base,
             default_model=model,
             extra_headers=p.extra_headers if p else None,
             spec=spec,
+            model_metadata=declared_models,
+            wire_api=wire_api,
             extra_body=p.extra_body if p else None,
             # Optional-key endpoints (including custom chat endpoints) still
             # need their Authorization header when the user supplied a key;
             # only keyless free providers should strip auth.
-            no_auth=(not spec.api_key_required and not api_key) if spec else False,
+            no_auth=bool(spec and not api_key and (not spec.api_key_required or spec.is_local)),
         )
 
+    if route:
+        provider.wire_model_ids = {model: wire_model_id}
     provider.http_client_factory = http_client_factory
     provider.generation = resolved.to_generation_settings()
+    capabilities = configured_model_metadata(provider_name, model, p) if provider_name in CHAT_SOURCE_PROVIDER_BY_ID or (
+        provider_name and is_custom_provider_name(provider_name)
+    ) else {}
+    if resolved.reasoning_effort is None and capabilities.get("default_reasoning_effort"):
+        provider.generation = replace(provider.generation, reasoning_effort=capabilities["default_reasoning_effort"])
     provider.spec = spec
     provider.model_input_modalities = {}
     for item in (p.discovered_models if p else None) or []:
@@ -148,6 +206,8 @@ def _make_provider_core(
             )
         )
         provider.model_input_modalities[model_id] = modalities
+    if capabilities.get("input_modalities") is not None:
+        provider.model_input_modalities[model] = tuple(capabilities["input_modalities"])
     return provider
 
 
@@ -175,6 +235,23 @@ def _resolve_fallback_presets(config: Config, primary: ModelPresetConfig) -> lis
         else:
             presets.append(_inline_fallback_preset(primary, fallback))
     return presets
+
+
+def resolve_work_context_budget(
+    config: Config,
+    preset: ModelPresetConfig,
+    fallbacks: list[ModelPresetConfig] | None = None,
+    *,
+    managed_catalog: dict[str, Any] | None = None,
+) -> tuple[int, bool]:
+    """Resolve the total budget shared by the primary model and its fallback routes."""
+    if fallbacks is None:
+        fallbacks = _resolve_fallback_presets(config, preset)
+    windows = [
+        resolve_model_context_window_details(config, item, managed_catalog=managed_catalog)
+        for item in [preset, *fallbacks]
+    ]
+    return min(window.tokens for window in windows), all(window.verified for window in windows)
 
 
 def _effective_auto_compact_token_limit(
@@ -230,6 +307,15 @@ def provider_signature(
     p = config.get_provider(resolved.model, preset=resolved)
     fallback_presets = _resolve_fallback_presets(config, resolved)
 
+    def model_capabilities(preset: ModelPresetConfig, connection: Any) -> tuple:
+        override = (getattr(connection, "model_overrides", None) or {}).get(preset.model)
+        return (
+            resolve_model_context_window_details(config, preset),
+            getattr(connection, "wire_api", None),
+            dict(stored_model(connection, preset.model)),
+            override.model_dump(exclude_none=True) if override else None,
+        )
+
     def _fallback_signature(fallback: ModelPresetConfig) -> tuple[object, ...]:
         fp = config.get_provider(fallback.model, preset=fallback)
         return (
@@ -245,7 +331,7 @@ def provider_signature(
             fallback.max_tokens,
             fallback.temperature,
             fallback.reasoning_effort,
-            resolve_model_context_window(config, fallback),
+            model_capabilities(fallback, fp),
             fallback.auto_compact_token_limit,
         )
 
@@ -262,7 +348,7 @@ def provider_signature(
         resolved.max_tokens,
         resolved.temperature,
         resolved.reasoning_effort,
-        resolve_model_context_window(config, resolved),
+        model_capabilities(resolved, p),
         resolved.auto_compact_token_limit,
         tuple(_fallback_signature(fallback) for fallback in fallback_presets),
     )
@@ -296,20 +382,14 @@ def build_provider_snapshot(
         )
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     fallback_presets = _resolve_fallback_presets(config, resolved)
-    fallback_windows = [resolve_model_context_window(config, fallback) for fallback in fallback_presets]
-    window = resolve_model_context_window_details(config, resolved)
+    context_budget, context_window_verified = resolve_work_context_budget(config, resolved, fallback_presets)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
         context_provider=config.get_provider_name(resolved.model, preset=resolved),
-        context_window_tokens=min([
-            window.tokens,
-            *fallback_windows,
-        ]),
+        context_window_tokens=context_budget,
         signature=provider_signature(config, preset=resolved),
-        context_window_verified=window.source != "default" and all(
-            resolve_model_context_window_details(config, fallback).source != "default" for fallback in fallback_presets
-        ),
+        context_window_verified=context_window_verified,
         auto_compact_token_limit=_effective_auto_compact_token_limit(
             resolved,
             fallback_presets,

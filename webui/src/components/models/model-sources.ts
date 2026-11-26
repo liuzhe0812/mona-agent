@@ -13,6 +13,7 @@ export interface ModelOption {
   disabledReason?: string | null;
   description?: string | null;
   contextWindow?: number | null;
+  contextWindowSource?: string | null;
   recommended?: boolean;
   tags?: string[];
   priceTier?: string | null;

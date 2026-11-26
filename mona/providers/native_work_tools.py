@@ -5,6 +5,8 @@ from typing import Any
 
 from mona.agent.tools.capabilities import capabilities_for_tool, tool_enabled_by_capability
 from mona.agent.tools.registry import ToolRegistry
+from mona.config.schema import Config
+from mona.development.executors.rpc import RpcError
 
 NATIVE_BASIC_TOOLS = frozenset({
     "read_file",
@@ -115,3 +117,62 @@ class NativeWorkToolPolicy:
         except (OSError, ValueError, TypeError, RuntimeError):
             return {"allow": False, "message": "无法确认本次操作的目录范围。"}
         return {"allow": True, "arguments": updated}
+
+
+def validate_native_work_policy(config: Config, policy: NativeWorkToolPolicy) -> tuple[str, ...]:
+    """Check that the selected engine can enforce this Work tool registry."""
+    names = policy.native_tools
+    registry = policy.tools
+    shell = registry.get("exec")
+    if shell is not None and any(name in names for name in ("exec_command", "Bash", "PowerShell")):
+        if shell.sandbox or shell.restrict_to_workspace or config.tools.restrict_to_workspace or config.tools.exec.sandbox:
+            raise RpcError("native_policy_unavailable", "当前模型无法使用已启用的命令沙箱或严格目录限制，请选择其他模型来源或调整工具权限。")
+    if policy.executor == "codex":
+        reads = [registry.get(name) for name in ("read_file", "list_dir", "find_files", "grep")
+                 if registry.is_permitted(name) and getattr(registry.get(name), "model_visible", True)
+                 and registry.get(name).available_in_context()]
+        if reads and (config.tools.restrict_to_workspace or config.tools.exec.sandbox
+                      or any(getattr(tool, "_allowed_dir", None) is not None for tool in reads)):
+            raise RpcError("native_policy_unavailable", "当前模型无法保证已启用的读取目录限制，请选择其他模型来源或调整工具权限。")
+        if reads and "exec_command" not in names:
+            raise RpcError("native_policy_unavailable", "当前模型需要命令权限才能读取文件，请选择其他模型来源或调整工具权限。")
+        if ("exec_command" in names) != ("write_stdin" in names):
+            raise RpcError("native_policy_unavailable", "当前模型的命令与进程续接权限不一致，请选择其他模型来源或调整工具权限。")
+    return names
+
+
+def work_model_policy(
+    config: Config, executor: str, workspace: Path, source_tools: ToolRegistry | None = None,
+) -> NativeWorkToolPolicy:
+    """Snapshot Mona's current basic tools and grants without mutating its running loop."""
+    from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+    from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
+
+    registry = ToolRegistry()
+    if source_tools is not None:
+        for name in NATIVE_BASIC_TOOLS:
+            if tool := source_tools.get(name):
+                registry.register(tool)
+    else:
+        from mona.agent.tools.apply_patch import ApplyPatchTool
+        from mona.agent.tools.context import ToolContext
+        from mona.agent.tools.exec_session import ListExecSessionsTool, WriteStdinTool
+        from mona.agent.tools.filesystem import (
+            EditFileTool,
+            ListDirTool,
+            ReadFileTool,
+            WriteFileTool,
+        )
+        from mona.agent.tools.search import FindFilesTool, GrepTool
+        from mona.agent.tools.shell import ExecTool
+
+        context = ToolContext(config=config.tools, workspace=str(workspace))
+        for tool_type in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, FindFilesTool, GrepTool,
+                          ApplyPatchTool, ExecTool, WriteStdinTool, ListExecSessionsTool):
+            if tool_type.enabled(context):
+                registry.register(tool_type.create(context))
+    effective = resolve_effective_agent_config(
+        AgentRegistry().require(MONA_AGENT_ID), load_agent_user_config(MONA_AGENT_ID),
+    )
+    registry.set_allowed_tool_names(set(effective.allowed_tools) if effective.allowed_tools is not None else None)
+    return NativeWorkToolPolicy(registry, executor, workspace)

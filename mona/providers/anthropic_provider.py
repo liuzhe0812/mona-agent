@@ -9,10 +9,13 @@ import secrets
 import string
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import json_repair
 
-from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest, read_reported_token_count, validate_declared_effort
+from mona.providers.model_metadata import catalog_model_for_route
+from mona.providers.preset_transport import opencode_session_headers
 
 _ALNUM = string.ascii_letters + string.digits
 
@@ -36,6 +39,7 @@ class AnthropicProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         model_metadata: list[dict[str, Any]] | None = None,
         http_client: Any = None,
+        auth_token: str | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -45,12 +49,31 @@ class AnthropicProvider(LLMProvider):
         from anthropic import AsyncAnthropic
 
         client_kw: dict[str, Any] = {}
+        if api_base and urlsplit(api_base).hostname != "api.anthropic.com":
+            # A compatible gateway must never inherit credentials for Anthropic
+            # from the process environment. Keep deliberately configured headers.
+            import httpx
+
+            http_client = http_client if http_client is not None else httpx.AsyncClient()
+            explicit_headers = {name.lower() for name in self.extra_headers}
+
+            async def connection_auth(request):
+                if not auth_token and "authorization" not in explicit_headers:
+                    request.headers.pop("authorization", None)
+                if not api_key and "x-api-key" not in explicit_headers:
+                    request.headers.pop("x-api-key", None)
+
+            http_client.event_hooks["request"].append(connection_auth)
+            if not api_key and not auth_token:
+                client_kw["api_key"] = "keyless"
         if http_client is not None:
             client_kw["http_client"] = http_client
         if api_key:
             client_kw["api_key"] = api_key
+        if auth_token:
+            client_kw["auth_token"] = auth_token
         if api_base:
-            client_kw["base_url"] = api_base
+            client_kw["base_url"] = api_base.rstrip("/").removesuffix("/v1")
         if extra_headers:
             client_kw["default_headers"] = extra_headers
         # Keep retries centralized in LLMProvider._run_with_retry to avoid retry amplification.
@@ -432,7 +455,9 @@ class AnthropicProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None,
         supports_caching: bool = True,
     ) -> dict[str, Any]:
-        model_name = self._strip_prefix(model or self.default_model)
+        model_name = self.request_model_name(model)
+        if (model or self.default_model) not in getattr(self, "wire_model_ids", {}):
+            model_name = self._strip_prefix(model_name)
         system, anthropic_msgs = self._convert_messages(self._sanitize_empty_content(messages))
         anthropic_tools = self._convert_tools(tools)
 
@@ -442,7 +467,8 @@ class AnthropicProvider(LLMProvider):
             )
 
         max_tokens = max(1, max_tokens)
-        thinking_enabled = bool(reasoning_effort) and reasoning_effort.lower() != "none"
+        effort = reasoning_effort.lower() if reasoning_effort else None
+        thinking_enabled = effort is not None and effort not in {"off", "none"}
 
         # claude-opus-4-7 deprecated the `temperature` parameter entirely — the
         # API returns 400 if it is present, on any code path.
@@ -458,10 +484,21 @@ class AnthropicProvider(LLMProvider):
             kwargs["system"] = system
 
         metadata = self._model_metadata.get(model, self._model_metadata.get(model_name, {}))
-        declared_effort = reasoning_effort in metadata.get("reasoning_efforts", []) and reasoning_effort != "adaptive"
-        if declared_effort:
-            kwargs["output_config"] = {"effort": reasoning_effort}
-        if reasoning_effort == "adaptive" or declared_effort and metadata.get("supports_adaptive_thinking") is True:
+        if effort != "adaptive" or metadata.get("supports_adaptive_thinking") is not True:
+            validate_declared_effort(effort, metadata.get("reasoning_efforts"))
+        api_base = getattr(self, "_catalog_api_base", None) or self.api_base or os.environ.get("ANTHROPIC_BASE_URL")
+        route = catalog_model_for_route(getattr(self.spec, "name", None), model_name, api_base) if effort else None
+        if route is None or route.get("wire_api") != "anthropic-messages":
+            route = {}
+        adaptive = metadata.get("supports_adaptive_thinking", route.get("supports_adaptive_thinking")) is True
+        omit_temperature = omit_temperature or bool(route and thinking_enabled)
+        levels = route.get("thinking_level_map") or {}
+        declared = metadata.get("reasoning_efforts") or []
+        # Budget-based models expose useful levels without accepting output_config.
+        # Only a native effort declaration or an adaptive route authorizes that field.
+        if thinking_enabled and effort not in {"adaptive", "on"} and (effort in declared or adaptive):
+            kwargs["output_config"] = {"effort": levels.get(effort) or ("low" if effort in {"minimal", "minimum"} else effort)}
+        if effort == "adaptive" or (thinking_enabled and adaptive):
             # Adaptive thinking: model decides when and how much to think
             # Supported on claude-sonnet-4-6 and claude-opus-4-6.
             # Also auto-enables interleaved thinking between tool calls.
@@ -470,13 +507,18 @@ class AnthropicProvider(LLMProvider):
                 kwargs["temperature"] = 1.0
         elif thinking_enabled:
             budget_map = {"low": 1024, "medium": 4096, "high": max(8192, max_tokens)}
-            budget = budget_map.get(reasoning_effort.lower(), 4096)
+            budget = budget_map.get(effort, 4096)
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["max_tokens"] = max(max_tokens, budget + 4096)
             if not omit_temperature:
                 kwargs["temperature"] = 1.0
-        elif not omit_temperature:
-            kwargs["temperature"] = temperature
+        else:
+            if effort == "off":
+                if "off" not in declared and (route.get("thinking_toggle") is False or levels.get("off", "none") is None):
+                    raise ValueError("当前模型的思考模式不能关闭。")
+                kwargs["thinking"] = {"type": "disabled"}
+            if not omit_temperature:
+                kwargs["temperature"] = temperature
 
         if anthropic_tools:
             kwargs["tools"] = anthropic_tools
@@ -484,8 +526,9 @@ class AnthropicProvider(LLMProvider):
             if tc:
                 kwargs["tool_choice"] = tc
 
-        if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
+        headers = {**self.extra_headers, **opencode_session_headers(self.api_base, self.extra_headers)}
+        if headers:
+            kwargs["extra_headers"] = headers
 
         return kwargs
 
@@ -530,12 +573,15 @@ class AnthropicProvider(LLMProvider):
                 "total_tokens": total_prompt_tokens + response.usage.output_tokens,
             }
             for attr in ("cache_creation_input_tokens", "cache_read_input_tokens"):
-                val = getattr(response.usage, attr, 0)
-                if val:
+                val = read_reported_token_count(response.usage, attr)
+                if val is not None:
                     usage[attr] = val
             # Normalize to cached_tokens for downstream consistency.
             if cache_read:
                 usage["cached_tokens"] = cache_read
+            thinking = read_reported_token_count(response.usage, "output_tokens_details", "thinking_tokens")
+            if thinking is not None:
+                usage["reasoning_tokens"] = thinking
 
         return LLMResponse(
             content="".join(content_parts) or None,

@@ -14,6 +14,8 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from mona.providers.base import LLMProvider, LLMResponse
+from mona.providers.model_metadata import catalog_model_for_route
+from mona.providers.openai_responses.converters import responses_reasoning_fields
 from mona.providers.openai_responses import (
     consume_sdk_stream,
     convert_messages,
@@ -38,9 +40,13 @@ class AzureOpenAIProvider(LLMProvider):
         api_key: str = "",
         api_base: str = "",
         default_model: str = "gpt-5.2-chat",
+        http_client: Any = None,
+        model_metadata=None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
+        self._declared_efforts = {item["id"]: item["reasoning_efforts"] for item in model_metadata or []
+                                  if isinstance(item.get("id"), str) and isinstance(item.get("reasoning_efforts"), list)}
 
         if not api_key:
             raise ValueError("Azure OpenAI api_key is required")
@@ -53,13 +59,19 @@ class AzureOpenAIProvider(LLMProvider):
         self.api_base = api_base
 
         # SDK client targeting the Azure Responses API endpoint
-        base_url = f"{api_base.rstrip('/')}/openai/v1/"
+        base_url = api_base.rstrip("/")
+        if not base_url.endswith("/openai/v1"):
+            base_url += "/openai/v1"
         self._client = AsyncOpenAI(
             api_key=api_key,
-            base_url=base_url,
+            base_url=base_url + "/",
             default_headers={"x-session-affinity": uuid.uuid4().hex},
             max_retries=0,
+            **({"http_client": http_client} if http_client is not None else {}),
         )
+
+    async def aclose(self) -> None:
+        await self._client.close()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -87,7 +99,7 @@ class AzureOpenAIProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build the Responses API request body from Chat-Completions-style args."""
-        deployment = model or self.default_model
+        deployment = self.request_model_name(model)
         instructions, input_items = convert_messages(self._sanitize_empty_content(messages))
 
         body: dict[str, Any] = {
@@ -103,8 +115,9 @@ class AzureOpenAIProvider(LLMProvider):
             body["temperature"] = temperature
 
         if reasoning_effort and reasoning_effort.lower() != "none":
-            body["reasoning"] = {"effort": reasoning_effort}
-            body["include"] = ["reasoning.encrypted_content"]
+            route = catalog_model_for_route("azure-openai-responses", deployment, self.api_base) or {}
+            body.update(responses_reasoning_fields(reasoning_effort, route if route.get("wire_api") == "azure-openai-responses" else {},
+                                                  self._declared_efforts.get(deployment)))
 
         if tools:
             body["tools"] = convert_tools(tools)
