@@ -1,0 +1,177 @@
+.office-page {
+  overflow: hidden;
+  background: #070706;
+}
+
+#office {
+  width: 100%;
+  height: 100dvh;
+}
+
+.office-character-art,
+.office-foreground {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+}
+
+.office-foreground { z-index: 3; }
+.office-foreground--rest { display: none; }
+.office-scene__frame[data-pose="rest"] .office-foreground--rest { display: block; }
+
+.office-character-art--pose,
+.office-character-art--model { transition: opacity 140ms ease-in-out; }
+
+.office-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #070706;
+  pointer-events: none;
+}
+
+.office-scene__frame {
+  position: absolute;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.office-scene__background,
+.office-scene__atmosphere {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.office-scene__sky,
+.office-scene__night {
+  position: absolute;
+  inset: 0;
+}
+
+.office-scene__night {
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  transition: opacity 1s linear;
+}
+
+.office-scene__background {
+  z-index: 0;
+  user-select: none;
+}
+
+.office-scene__atmosphere {
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* Evening window fill falls away. The warm pool around the shelf lamp stays. */
+.office-scene__room-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    linear-gradient(95deg, rgb(28 21 45 / 18%) 10%, rgb(26 26 52 / 12%) 39%,
+      rgb(39 36 66 / 47%) 62%, rgb(39 33 61 / 40%) 77%),
+    linear-gradient(0deg, rgb(40 38 64 / 22%), transparent 48%);
+  mask-image: radial-gradient(ellipse 15% 24% at 51.6% 28%, transparent 0%, #0009 50%, #000 100%);
+}
+
+.office-scene__clouds {
+  position: absolute;
+  background:
+    radial-gradient(ellipse 11% 3% at 34% 24%, rgba(255, 255, 255, .32) 50%, transparent 95%),
+    radial-gradient(ellipse 6% 4% at 31% 22%, rgba(255, 255, 255, .30) 50%, transparent 95%),
+    radial-gradient(ellipse 5% 3% at 39% 22%, rgba(255, 255, 255, .30) 50%, transparent 95%),
+    radial-gradient(ellipse 9% 2.5% at 64% 32%, rgba(255, 255, 255, .27) 50%, transparent 95%),
+    radial-gradient(ellipse 5% 3.5% at 61% 30%, rgba(255, 255, 255, .24) 50%, transparent 95%);
+  animation: office-cloud-drift 110s ease-in-out infinite alternate;
+}
+
+.office-scene__cloud-layers,
+.office-scene__cloud-pane,
+.office-scene__day-sky,
+.office-scene__cloud-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.office-scene__cloud-image {
+  animation: office-cloud-drift 110s ease-in-out infinite alternate;
+}
+
+.office-scene__city-lights {
+  position: absolute;
+}
+
+.office-scene__city-light {
+  position: absolute;
+  width: .7%;
+  height: .6%;
+  background: #ffe0a0;
+  box-shadow: 0 0 3px 1px rgba(255, 202, 116, .35);
+  opacity: .2;
+  animation: office-city-light 15s ease-in-out infinite;
+}
+
+.office-scene__city-light:nth-child(1) { left: 58.7%; top: 57.4%; animation-duration: 17s; }
+.office-scene__city-light:nth-child(2) { left: 61.5%; top: 59.4%; animation-duration: 23s; animation-delay: -8s; }
+.office-scene__city-light:nth-child(3) { left: 63.1%; top: 61.4%; animation-duration: 29s; animation-delay: -15s; }
+
+.office-scene__light {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(255, 230, 200, .07), transparent 65%);
+  animation: office-window-light 70s ease-in-out infinite alternate;
+}
+
+.office-scene__clock {
+  position: absolute;
+  z-index: 3;
+  height: auto;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(1px 2px 2px rgba(0, 0, 0, .5));
+}
+
+.office-scene[data-paused="true"] .office-scene__clouds,
+.office-scene[data-paused="true"] .office-scene__cloud-image,
+.office-scene[data-paused="true"] .office-scene__light,
+.office-scene[data-paused="true"] .office-scene__city-light {
+  animation-play-state: paused;
+}
+
+@keyframes office-cloud-drift {
+  from { transform: translateX(-4%); }
+  to { transform: translateX(4%); }
+}
+
+@keyframes office-city-light {
+  0%, 38%, 100% { opacity: .16; }
+  55%, 76% { opacity: .6; }
+}
+
+@keyframes office-window-light {
+  from { opacity: .35; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-character-art--pose { transition: none; }
+  .office-character-art--model { transition: none; }
+  .office-scene__night { transition: none; }
+  .office-scene__clouds,
+  .office-scene__cloud-image,
+  .office-scene__light,
+  .office-scene__city-light { animation: none; }
+}

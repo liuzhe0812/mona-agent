@@ -4,6 +4,12 @@ set -euo pipefail
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 venv_python="$project_dir/.venv/bin/python"
 
+if [[ -n "${MONA_INTERACTION_MANAGED_PYTHON:-}" ]]; then
+    exec /bin/bash "$project_dir/scripts/ubuntu-managed-launcher.sh" run \
+        "${MONA_INTERACTION_RUNTIME_ROOT:-$HOME/.mona/runtimes}" \
+        "$MONA_INTERACTION_MANAGED_PYTHON" "$@"
+fi
+
 if [[ ! -x "$venv_python" ]]; then
     python="${MONA_INTERACTION_PYTHON:-python3}"
     "$python" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || {

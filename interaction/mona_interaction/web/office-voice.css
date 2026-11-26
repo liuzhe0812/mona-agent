@@ -1,0 +1,31 @@
+.office-voice {
+  position: absolute;
+  z-index: 5;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: fit-content;
+  max-width: min(360px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 4px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-body);
+}
+
+.office-voice:has(details[open]) { width: min(360px, calc(100% - 32px)); }
+.office-voice p { margin: 0; padding-inline: 4px; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.office-voice p:empty { display: none; }
+.office-voice summary { padding: 8px; cursor: pointer; }
+.office-voice summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.office-voice details[open] { flex-basis: 100%; padding: 0 4px 4px; }
+.office-voice details[open] > :not(summary) { margin-top: 8px; }
+.office-voice__controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.office-voice textarea { min-height: 60px; }
+.office-voice label { display: block; margin-bottom: 8px; }

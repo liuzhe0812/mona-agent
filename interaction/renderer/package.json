@@ -1,0 +1,15 @@
+{
+  "name": "mona-character-renderer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@live2d/framework": "https://codeload.github.com/Live2D/CubismWebFramework/tar.gz/198a3769c26ca3d7b600e932590433badd392edd"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

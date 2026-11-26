@@ -1,4 +1,5 @@
 import { PerformanceController } from "/performance-controller.js";
+import { CharacterView } from "/character-view.js";
 
 const $ = (id) => document.getElementById(id);
 const sessionKey = "mona-interaction-demo-session";
@@ -17,17 +18,32 @@ let ready = false;
 let reviewId = null;
 let syncTimer;
 const performanceController = new PerformanceController();
+const characterView = new CharacterView($("character-canvas"), $("character-image"), $("stage-caption"), showNotice);
 let previousFrame = 0;
 
 function animate(timestamp) {
-  const parameters = performanceController.tick(previousFrame ? (timestamp - previousFrame) / 1000 : 0);
+  const dt = previousFrame ? (timestamp - previousFrame) / 1000 : 0;
+  const parameters = performanceController.tick(dt);
   previousFrame = timestamp;
+  characterView.render(parameters, dt);
   window.dispatchEvent(new CustomEvent("mona:performance-frame", { detail: parameters }));
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
+characterView.load();
 
-function applyPerformance(decision) {
+$("character-canvas").parentElement.addEventListener("pointermove", (event) => {
+  const bounds = $("character-canvas").parentElement.getBoundingClientRect();
+  performanceController.setAttention({
+    x: Math.max(-1, Math.min(1, 2 * (event.clientX - bounds.left) / bounds.width - 1)),
+    y: Math.max(-1, Math.min(1, 2 * (event.clientY - bounds.top) / bounds.height - 1)),
+  });
+});
+$("character-canvas").parentElement.addEventListener("pointerleave", () => performanceController.setAttention(null));
+window.addEventListener("pagehide", () => characterView.dispose());
+
+function applyPerformance(decision, restore = false) {
+  if (restore && decision) decision = { ...decision, gesture: { type: "none", strength: 0 } };
   performanceController.setDecision(decision || null);
   window.dispatchEvent(new CustomEvent("mona:performance-decision", { detail: decision || null }));
 }
@@ -96,7 +112,7 @@ function reconcileSnapshot(payload) {
     }
   }
   lastReply = [...records.values()].filter((record) => record.state === "completed").at(-1)?.reply || "";
-  applyPerformance([...records.values()].at(-1)?.performance);
+  applyPerformance([...records.values()].at(-1)?.performance, true);
   $("read-reply").disabled = !lastReply || !("speechSynthesis" in window);
   renderRecords();
   updateState(ready ? payload.state : "unconfigured");

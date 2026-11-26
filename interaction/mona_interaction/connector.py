@@ -55,7 +55,7 @@ class ConnectionSettings:
 
 def project_record(record: dict) -> dict:
     replies = []
-    for part in record.get("parts", []):
+    for part in (record.get("parts", []) if record["status"] != "failed" else []):
         try:
             replies.append(parse_reply(part))
         except (TypeError, ValueError):
@@ -114,8 +114,10 @@ class MonaConnector:
         except (aiohttp.ClientError, OSError, ValueError, KeyError):
             raise ConnectorError("暂时无法连接 Mona，请确认交互渠道已启用且连接文件有效。") from None
 
-    async def request(self, command, on_accepted) -> dict:
-        sent = False
+    async def request(self, command, on_accepted, *, recovery: bool = False) -> dict:
+        # A recovered input was already accepted before this connection.  Even
+        # a failure before we send anything leaves its original result unknown.
+        sent = recovery
         try:
             async with await self._client() as client, client.ws_connect(
                 self.settings.url, headers={"Authorization": f"Bearer {self.settings.token}"},
@@ -124,13 +126,13 @@ class MonaConnector:
                 await ws.send_json({"version": 1, "type": "session.sync", "session_id": command.session_id,
                                     "message_id": uuid4().hex, "payload": {}})
                 snapshot = await self._receive(ws)
-                if snapshot.get("type") != "session.snapshot":
-                    raise ConnectorError("会话状态暂时无法确认。")
+                if snapshot.get("type") != "session.snapshot" or snapshot.get("session_id") != command.session_id:
+                    raise ConnectorError("会话状态暂时无法确认。", result_unknown=recovery)
                 previous = next((item for item in snapshot["payload"]["records"]
                                  if item["message_id"] == command.message_id), None)
                 if previous:
                     if previous["text"] != command.text:
-                        raise ConnectorError("消息标识已被用于其他内容。")
+                        raise ConnectorError("消息标识已被用于其他内容。", result_unknown=recovery)
                     if previous["status"] in {"completed", "failed"}:
                         await on_accepted()
                         return project_record(previous)
@@ -138,9 +140,14 @@ class MonaConnector:
                         raise ConnectorError("原输入的结果需要核对，程序没有重新执行。", result_unknown=True)
                     if previous["status"] == "closed_unknown":
                         raise ConnectorError("原请求已结束核对，请发送新的内容。")
+                    if previous["status"] != "accepted":
+                        raise ConnectorError("原输入的状态无法确认，请先核对原会话。", result_unknown=True)
                     sent = True
                     await on_accepted()
                 else:
+                    if recovery:
+                        raise ConnectorError("未找到原输入的处理记录，结果尚未确认。请先核对原会话；程序没有重新执行。",
+                                             result_unknown=True)
                     sent = True
                     await ws.send_json({"version": 1, "type": "input.text", "session_id": command.session_id,
                                         "message_id": command.message_id, "payload": {"text": command.text}})
@@ -151,7 +158,7 @@ class MonaConnector:
                     kind, payload = result.get("type"), result.get("payload", {})
                     if kind == "error":
                         raise ConnectorError(payload.get("message", "这条内容暂时无法处理。"),
-                                             result_unknown=payload.get("code") == "result_unknown")
+                                             result_unknown=recovery or payload.get("code") == "result_unknown")
                     if result.get("message_id") != command.message_id:
                         continue
                     if kind == "input.accepted":
@@ -163,7 +170,7 @@ class MonaConnector:
                                                "status": payload["status"], "parts": payload["parts"]})
         except ConnectorError:
             raise
-        except (aiohttp.ClientError, OSError, ValueError, KeyError):
+        except (aiohttp.ClientError, OSError, ValueError, KeyError, TypeError):
             raise ConnectorError(
                 "连接中断，请先核对原输入的结果。" if sent else "暂时无法连接 Mona，请检查交互渠道。",
                 result_unknown=sent,

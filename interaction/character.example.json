@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "asset_root": ".",
+  "model": "Mona/Mona.model3.json",
+  "core": "Core/live2dcubismcore.min.js",
+  "bindings": [
+    { "source": "armWave", "parameter": "ParamMonaWave", "scale": 1, "offset": 0 }
+  ]
+}

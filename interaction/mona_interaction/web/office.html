@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mona · 办公室</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/office-scene.css">
+  <link rel="stylesheet" href="/office-voice.css">
+  <script type="module" src="/office.js"></script>
+</head>
+<body class="office-page">
+  <main id="office" aria-label="Mona 的办公室"></main>
+  <aside class="office-voice" aria-label="语音交互">
+    <div class="office-voice__controls">
+      <button id="voice-toggle" class="button secondary" type="button" hidden>静音</button>
+      <button id="voice-stop-speech" class="button secondary" type="button" disabled hidden>停止朗读</button>
+    </div>
+    <p id="voice-status" role="status" aria-live="polite">正在连接 Mona…</p>
+    <p id="voice-mode"></p>
+    <details id="voice-details" hidden>
+      <summary>对话文字</summary>
+      <p id="voice-partial" aria-live="polite"></p>
+      <div class="composer">
+        <label for="voice-text">待发送的内容</label>
+        <textarea id="voice-text" rows="2" placeholder="写给 Mona，或核对识别出的文字"></textarea>
+      </div>
+      <div class="office-voice__controls">
+        <button id="voice-send" class="button" type="button" disabled>确认并发送</button>
+        <button id="voice-review" class="button secondary" type="button" hidden>我已核对上次结果</button>
+      </div>
+      <p id="voice-reply" aria-live="polite"></p>
+    </details>
+  </aside>
+  <dialog id="notice">
+    <h2>办公室暂时无法打开</h2>
+    <p>场景素材未能加载，请检查场景文件后重新打开。</p>
+    <form method="dialog"><button class="button">知道了</button></form>
+  </dialog>
+</body>
+</html>

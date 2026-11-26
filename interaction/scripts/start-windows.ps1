@@ -1,6 +1,11 @@
 param(
     [string]$ConnectionFile,
-    [switch]$Demo
+    [string]$CharacterFile,
+    [string]$SceneFile,
+    [switch]$Demo,
+    [string]$RestCharacterFile,
+    [string]$WorkCharacterFile,
+    [string]$DialogueCharacterFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +42,11 @@ if ($LASTEXITCODE -ne 0) { throw "Could not install Mona Interaction into the pr
 Write-Host "Open http://127.0.0.1:17880/ . Press Ctrl+C to stop."
 $serveArgs = @("-m", "mona_interaction", "serve", "--host", "127.0.0.1", "--port", "17880")
 if ($ConnectionFile) { $serveArgs += @("--connection-file", $ConnectionFile) }
+if ($CharacterFile) { $serveArgs += @("--character-file", $CharacterFile) }
+if ($SceneFile) { $serveArgs += @("--scene-file", $SceneFile) }
+if ($RestCharacterFile) { $serveArgs += @("--rest-character-file", $RestCharacterFile) }
+if ($WorkCharacterFile) { $serveArgs += @("--work-character-file", $WorkCharacterFile) }
+if ($DialogueCharacterFile) { $serveArgs += @("--dialogue-character-file", $DialogueCharacterFile) }
 if ($Demo) { $serveArgs += "--demo" }
 & $venvPython @serveArgs
 exit $LASTEXITCODE

@@ -27,6 +27,7 @@ button, textarea { font: inherit; }
 .brand { font-size: 24px; font-weight: 650; }
 .mode { font-size: 12px; color: var(--muted-foreground); }
 .character { position: absolute; height: calc(100% - 96px); max-width: 100%; bottom: 24px; left: 50%; transform: translateX(-50%); object-fit: contain; object-position: bottom; user-select: none; }
+.character-canvas { position: absolute; width: 100%; height: calc(100% - 96px); bottom: 24px; left: 0; }
 .stage-caption { position: absolute; bottom: 0; width: 100%; text-align: center; font-size: 12px; color: var(--muted-foreground); }
 .conversation { display: flex; flex-direction: column; height: 100dvh; border-left: 1px solid var(--border); padding: 32px 24px 24px; }
 .conversation-header h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
@@ -57,5 +58,6 @@ dialog::backdrop { background: #14131066; }
   .stage { height: 52dvh; }
   .stage-header { top: 16px; left: 24px; right: 24px; }
   .character { height: calc(100% - 48px); }
+  .character-canvas { height: calc(100% - 48px); }
   .conversation { height: 60dvh; min-height: 420px; border-left: 0; border-top: 1px solid var(--border); padding: 24px; }
 }

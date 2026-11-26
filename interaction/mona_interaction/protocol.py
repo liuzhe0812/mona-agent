@@ -25,7 +25,7 @@ def parse_message(raw: Any) -> ClientMessage:
             or raw["version"] != PROTOCOL_VERSION):
         raise ProtocolError("消息版本不受支持，请更新交互程序。")
     kind = raw.get("type")
-    if kind not in {"input.text", "session.sync", "input.resolve"}:
+    if kind not in {"input.text", "session.sync", "session.observe", "input.resolve"}:
         raise ProtocolError("不支持此交互操作。")
     for key in ("session_id", "message_id"):
         value = raw.get(key)
