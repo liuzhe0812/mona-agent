@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from mona.agent.partners import STOCK_RESEARCH_AGENT_ID
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import ContextAware, RequestContext
 from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
@@ -610,4 +611,41 @@ class StockVibeTaskTool(Tool, ContextAware):
             notice = "取消结果尚未核实；不会自动重发，可稍后查询同一请求。"
         return json.dumps({"result": result, "notice": notice}, ensure_ascii=False, separators=(",", ":"))
 
-__all__ = ["StockVibeTaskTool"]
+_PARTNER_ACTIONS = ("start_research", "continue_research", "read_research")
+_PARTNER_FIELDS = {"symbol", "question", "mode", "task", "attachments"}
+
+
+@tool_parameters({
+    **_PARAMETERS,
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(_PARTNER_ACTIONS),
+            "description": "开始新的股票研究，继续本对话关联的研究，或读取真实研究进度及报告。",
+        },
+        **{name: value for name, value in _PARAMETERS["properties"].items() if name in _PARTNER_FIELDS},
+    },
+})
+class StockPartnerResearchTool(StockVibeTaskTool):
+    """Expose chat-bound research for the official stock partner only."""
+
+    _plugin_discoverable = True
+    _scopes = {"subagent"}
+    agent_allowlist = frozenset({STOCK_RESEARCH_AGENT_ID})
+
+    @property
+    def description(self) -> str:
+        return (
+            "Use the Stock Workbench's native research for company, industry, event, and risk questions. "
+            "Use start_research for a new task, continue_research for follow-ups to the research bound "
+            "to this conversation, and read_research for its recorded progress, evidence, or report. "
+            "A submission receipt is not a completed report. Do not replay unconfirmed submissions."
+        )
+
+    async def execute(self, action: str, **kwargs: Any) -> str:
+        if action not in _PARTNER_ACTIONS or kwargs.keys() - _PARTNER_FIELDS:
+            return "此伙伴只支持发起研究、续问和读取当前对话关联的研究。"
+        return await super().execute(action, **kwargs)
+
+
+__all__ = ["StockPartnerResearchTool", "StockVibeTaskTool"]

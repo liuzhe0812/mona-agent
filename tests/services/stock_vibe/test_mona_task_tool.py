@@ -10,9 +10,11 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from mona.agent.partners import MONA_AGENT_ID, STOCK_RESEARCH_AGENT_ID
 from mona.agent.tools.context import RequestContext, ToolContext
 from mona.agent.tools.loader import ToolLoader
-from mona.agent.tools.stock_vibe import StockVibeTaskTool
+from mona.agent.tools.registry import ToolRegistry
+from mona.agent.tools.stock_vibe import StockPartnerResearchTool, StockVibeTaskTool
 from mona.config import loader as config_loader
 from mona.config.schema import Config, _resolve_tool_config_refs
 from mona.materials.auth import materials_auth_middleware
@@ -354,6 +356,31 @@ async def test_unknown_send_is_not_replayed_when_tool_is_recreated(tmp_path, mon
         second = json.loads(await _session_tool(port, tmp_path).execute(action="start_research", question="研究行业变化"))
         assert second["result"]["request_id"] == first["result"]["request_id"]
         assert [row[0] for row in state["posts"]] == ["/sessions", "/sessions/session_1/messages"]
+
+
+@pytest.mark.asyncio
+async def test_stock_partner_can_only_research_in_its_own_chat(tmp_path, monkeypatch):
+    monkeypatch.setattr(ToolLoader, "_discover_plugins", lambda self: {})
+    assert StockPartnerResearchTool in ToolLoader().discover()
+    async with _research_host(tmp_path, monkeypatch) as (port, state):
+        loader = ToolLoader(test_classes=[StockPartnerResearchTool])
+        for actor in (MONA_AGENT_ID, "com.example.other", STOCK_RESEARCH_AGENT_ID):
+            registry = ToolRegistry()
+            ctx = ToolContext(config=None, workspace=str(tmp_path), services_port=port, agent_id=actor)
+            assert bool(loader.load(ctx, registry, scope="subagent")) == (actor == STOCK_RESEARCH_AGENT_ID)
+        tool = registry.get("stock_vibe_task")
+        assert set(tool.parameters["properties"]["action"]["enum"]) == {
+            "start_research", "continue_research", "read_research",
+        }
+        assert "session_id" not in tool.parameters["properties"]
+        tool.set_context(RequestContext(channel="websocket", chat_id="stock", message_id="trusted-stock"))
+        assert "只支持" in await tool.execute(action="read_research", session_id="another_session")
+        assert "只支持" in await tool.execute(action="list_research")
+        assert not state["posts"]
+        result = json.loads(await tool.execute(action="start_research", question="核对 600000 的公开财报", symbol="600000"))
+        assert result["session_id"] == "session_1"
+        read = json.loads(await tool.execute(action="read_research"))
+        assert read["session_id"] == "session_1"
 
 
 @pytest.mark.asyncio
