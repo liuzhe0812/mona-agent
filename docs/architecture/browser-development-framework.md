@@ -59,7 +59,9 @@ Python Agent
 
 ### 3.2 Agent 操作目标
 
-- `browser_*` 只控制 Mona 内置 WebView；工具描述、标签列表结果和运行时页面上下文必须明确此范围，空列表不代表外部 Chrome/Edge 没有窗口。
+- 桌面普通对话由运行时绑定当前会话的右栏浏览器。助手打开网页、点击对话中的 HTTP(S) 链接和从右栏地址栏导航共享这个会话的 WebView。再次打开同一地址保留页面状态。切换会话只改变可见页面，返回时复用原实例。
+- 用户从顶部新建的标签和助手按明确要求打开的顶部标签使用独立浏览表面。引用已有标签时沿用其 ID。网页搜索和正文读取在后台执行。
+- `browser_*` 只控制 Mona 内置 WebView。新的网站交互任务如无匹配标签，使用 `browser_act(kind="open")` 打开目标网址。空标签列表是正常状态，列表查询失败应明确报告。
 - 用户指定 Computer Use 或外部浏览器当前页面时，使用已提供的 `computer_*` 工具观察和操作原窗口。继续现有游戏、表单等活动必须保留目标身份；相同 URL 的新标签不是原实例，不能用另开网页替代。
 - 操作后在同一目标上验证状态；工具不可用或失败时说明具体限制，不静默更换实例。
 
@@ -116,7 +118,7 @@ ready-*
 
 ### 5.1 新标签链接
 
-`on_new_window` 只做两件事：发送 `browser-open-new-tab { sourceTabId, url }`，并返回 `NewWindowResponse::Deny`。前端收到后必须复用统一的 `openBrowserTab(url, options)` 流程。
+`on_new_window` 发送 `browser-open-new-tab { sourceTabId, url }` 并返回 `NewWindowResponse::Deny`。前端根据来源标签处理：顶部网页创建一个顶部标签，右栏网页的 HTTP(S) 链接在来源会话的原标签导航。
 
 禁止通过 `NewWindowRequested + SetHandled(true)` 再实现一套并行流程。
 
@@ -174,6 +176,7 @@ ready-*
 |---|---|---|---|
 | `browser-tab-created` | Rust | `useBrowserTabs` | 原生 WebView 已创建 |
 | `browser-tab-closed` | Rust | `useBrowserTabs` | 原生 WebView 已销毁 |
+| `conversation-browser-opened` | Rust | `useBrowserTabs` | 当前操作已打开或复用指定会话的网页，携带 `conversationId` 和 `tabId` |
 | `browser-url-changed` | Rust | `useBrowserTabs` | 已接受的当前 URL |
 | `browser-nav-started/completed` | Rust | UI | 加载状态 |
 | `browser-tab-title-changed` | Rust | `useBrowserTabs` | 当前标题 |

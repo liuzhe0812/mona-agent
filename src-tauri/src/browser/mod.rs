@@ -718,6 +718,65 @@ impl BrowserState {
         ad_block_enabled: bool,
     ) -> Result<CreateTabResult, String> {
         let lifecycle = self.lifecycle.clone().lock_owned().await;
+        self.create_tab_with_lifecycle(app, id, url, is_incognito, ad_block_enabled, None, lifecycle)
+            .await
+    }
+
+    pub async fn open_conversation_tab(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        url: &str,
+        conversation_id: &str,
+        ad_block_enabled: bool,
+    ) -> Result<CreateTabResult, String> {
+        if conversation_id.is_empty()
+            || conversation_id.len() > 64
+            || !conversation_id.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b':' | b'-'))
+        {
+            return Err("Invalid browser conversation ID".to_string());
+        }
+        let url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err("Conversation browser supports only HTTP(S) URLs".to_string());
+        }
+
+        let lifecycle = self.lifecycle.clone().lock_owned().await;
+        let existing_tab = self.tabs.iter()
+            .find(|tab| tab.conversation_id.as_deref() == Some(conversation_id))
+            .map(|tab| tab.value().clone());
+        if let Some(tab) = existing_tab {
+            if tab.url == url.as_str() {
+                get_browser_webview(app, &tab.id)?;
+            } else {
+                self.navigate_tab(app, &tab.id, url.as_str()).await?;
+            }
+            Self::emit_conversation_tab_opened(app, conversation_id, &tab.id);
+            return Ok(CreateTabResult { id: tab.id, cdp_port: tab.cdp_port });
+        }
+
+        self.create_tab_with_lifecycle(app, id, url.as_str(), false, ad_block_enabled, Some(conversation_id), lifecycle)
+            .await
+    }
+
+    fn emit_conversation_tab_opened(app: &AppHandle, conversation_id: &str, id: &str) {
+        let _ = app.emit_to(
+            "main",
+            "conversation-browser-opened",
+            serde_json::json!({ "conversationId": conversation_id, "tabId": id }),
+        );
+    }
+
+    async fn create_tab_with_lifecycle(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        url: &str,
+        is_incognito: bool,
+        ad_block_enabled: bool,
+        conversation_id: Option<&str>,
+        lifecycle: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<CreateTabResult, String> {
         let cdp_port = CDP_PORT;
         let webview_label = format!("browser-{}", id);
 
@@ -734,6 +793,7 @@ impl BrowserState {
         // 导航事件可能在首次 load_url 后立即抵达；先登记元数据，确保事件能更新正确的标签。
         let tab = BrowserTab {
             id: id.to_string(),
+            conversation_id: conversation_id.map(str::to_owned),
             title: "New Tab".to_string(),
             url: url.to_string(),
             cdp_port,
@@ -1061,11 +1121,15 @@ impl BrowserState {
             "browser-tab-created",
             serde_json::json!({
                 "id": id,
+                "conversation_id": conversation_id,
                 "url": url,
                 "title": "New Tab",
                 "cdp_port": cdp_port,
             }),
         );
+        if let Some(conversation_id) = conversation_id {
+            Self::emit_conversation_tab_opened(app, conversation_id, id);
+        }
 
         Ok(CreateTabResult {
             id: id.to_string(),

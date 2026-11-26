@@ -15,6 +15,7 @@ export interface BrowserTabInfo {
   cdp_port: number;
   webview_label: string;
   is_ai_controlled: boolean;
+  conversation_id?: string | null;
 }
 
 export interface CreateTabResult {
@@ -33,6 +34,10 @@ export const browserPageAction = (id: string, action: "capture" | "device" | "de
 /** 创建浏览器标签（Rust 侧创建 WebView） */
 export async function browserCreateTab(id: string, url: string, isIncognito?: boolean, adBlockEnabled?: boolean): Promise<CreateTabResult> {
   return invoke<CreateTabResult>("browser_create_tab", { id, url, isIncognito: isIncognito ?? false, adBlockEnabled: adBlockEnabled ?? true });
+}
+
+export async function openConversationBrowser(id: string, conversationId: string, url: string): Promise<CreateTabResult> {
+  return invoke<CreateTabResult>("browser_create_tab", { id, conversationId, url: browserLinkUrl(url) });
 }
 
 function browserLinkUrl(value: string): string {

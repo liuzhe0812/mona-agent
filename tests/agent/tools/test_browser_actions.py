@@ -1,6 +1,7 @@
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,15 +10,41 @@ from mona.agent.tools import browser as browser_module
 from mona.agent.tools.browser import (
     _UNTRUSTED_BROWSER_BANNER,
     BrowserActTool,
+    BrowserConnectionManager,
     BrowserListTabsTool,
     BrowserObserveTool,
     BrowserOpenTool,
     BrowserScreenshotTool,
+    BrowserToolsConfig,
     _resolve_query_locator,
     _validate_navigation_url,
 )
+from mona.agent.tools.capabilities import LoadCapabilityTool
+from mona.agent.tools.context import BROWSER_SIDEBAR_CONVERSATION_META, RequestContext, ToolContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.config.schema import JevConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,reason", [
+    (True, "Playwright is unavailable in the Gateway Python environment"),
+    (False, "the built-in browser is disabled in settings"),
+])
+async def test_browser_capability_explains_unavailability(monkeypatch, tmp_path, enabled, reason):
+    monkeypatch.setattr(browser_module, "_playwright_available", lambda: False)
+    registry = ToolRegistry()
+    context = ToolContext(
+        config=SimpleNamespace(browser=BrowserToolsConfig(enable=enabled)),
+        workspace=str(tmp_path),
+        registry=registry,
+    )
+
+    assert not BrowserActTool.enabled(context)
+    result = await LoadCapabilityTool.create(context).execute(capabilities=["browser"])
+    assert "Requested capabilities: browser" in result
+    assert "Available tools: none" in result
+    assert reason in result
+    assert "Reload the capability only after" in result
 
 
 def _patch_page(monkeypatch: pytest.MonkeyPatch, page: MagicMock) -> MagicMock:
@@ -63,7 +90,100 @@ async def test_browser_act_opens_without_existing_tab(monkeypatch: pytest.Monkey
     result = await BrowserActTool().execute(kind="open", url="https://example.com")
 
     assert result == '{"tab_id":"tab-2"}'
-    execute.assert_awaited_once_with(url="https://example.com")
+    execute.assert_awaited_once_with(url="https://example.com", destination=None)
+
+
+@pytest.mark.asyncio
+async def test_browser_actions_route_conversation_opens_and_preserve_explicit_tabs(monkeypatch) -> None:
+    manager = MagicMock(create_tab=AsyncMock(return_value=("opened", 9300)))
+    monkeypatch.setattr(browser_module, "_get_connection_manager", AsyncMock(return_value=manager))
+    monkeypatch.setattr(browser_module, "_tauri_invoke_async", AsyncMock(return_value=[
+        {"id": "right-existing", "conversation_id": "chat-1"},
+        {"id": "right-other", "conversation_id": "chat-2"},
+        {"id": "top-existing"},
+    ]))
+    navigate = AsyncMock(return_value="navigated")
+    monkeypatch.setattr(browser_module.BrowserNavigateTool, "execute", navigate)
+    tool = BrowserActTool()
+    tool.set_context(RequestContext(
+        channel="websocket",
+        chat_id="chat-1",
+        metadata={BROWSER_SIDEBAR_CONVERSATION_META: "chat-1", "browser_tab_id": "right-existing"},
+    ))
+
+    url = "https://example.com"
+    assert json.loads(await tool.execute(kind="open", url=url))["tab_id"] == "opened"
+    manager.create_tab.assert_awaited_with(url, conversation_id="chat-1")
+    await tool.execute(kind="open", url=url, destination="top")
+    manager.create_tab.assert_awaited_with(url, conversation_id=None)
+    await tool.execute(kind="navigate", url=url)
+    navigate.assert_awaited_with(tabId="right-existing", url=url)
+    await tool.execute(kind="navigate", tabId="top-existing", url=url)
+    navigate.assert_awaited_with(tabId="top-existing", url=url)
+    result = await tool.execute(kind="navigate", tabId="right-other", url=url)
+    assert "unavailable in this conversation" in result
+    assert navigate.await_count == 2
+    listed = await BrowserObserveTool().execute(action="list_tabs")
+    assert "right-existing" in listed
+    assert "top-existing" in listed
+    assert "right-other" not in listed
+
+
+@pytest.mark.asyncio
+async def test_open_conversation_tab_reuses_native_identity_and_cdp_page(monkeypatch) -> None:
+    manager = BrowserConnectionManager()
+    manager._browser = object()
+    manager._pages["right-existing"] = object()
+    manager._reset_cdp = AsyncMock()
+    invoke = AsyncMock(return_value={"id": "right-existing", "cdp_port": 9300})
+    monkeypatch.setattr(browser_module, "_tauri_invoke_async", invoke)
+
+    result = await manager.create_tab("https://example.com", conversation_id="chat-1")
+
+    assert result == ("right-existing", 9300)
+    command, args = invoke.await_args.args
+    assert command == "browser_create_tab"
+    assert args["conversationId"] == "chat-1"
+    assert args["url"] == "https://example.com"
+    manager._reset_cdp.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_id", ["chat-1", None])
+@pytest.mark.parametrize("marker", ["right-other", ""])
+async def test_page_discovery_does_not_reuse_another_conversations_page(
+    monkeypatch, conversation_id, marker,
+) -> None:
+    manager = BrowserConnectionManager()
+    url = "https://example.com"
+    other_page = SimpleNamespace(url=url, evaluate=AsyncMock(return_value=marker))
+    manager._browser = SimpleNamespace(contexts=[SimpleNamespace(pages=[other_page])])
+    manager._ensure_cdp_connection = AsyncMock()
+    manager._log_cdp_state = AsyncMock()
+    monkeypatch.setattr(browser_module, "_tauri_invoke_async", AsyncMock(return_value=[
+        {"id": "missing", "url": url, "conversation_id": conversation_id},
+        {"id": "right-other", "url": url, "conversation_id": "chat-2"},
+    ]))
+
+    assert await manager._find_page_for_tab("missing") is None
+
+
+def test_browser_destination_is_in_runtime_context_before_loading_browser(tmp_path) -> None:
+    from mona.agent.context import ContextBuilder
+
+    messages = ContextBuilder(workspace=tmp_path).build_messages(
+        history=[],
+        current_message="Open a webpage",
+        channel="websocket",
+        chat_id="chat-1",
+        message_metadata={BROWSER_SIDEBAR_CONVERSATION_META: "chat-1"},
+        tool_names={"load_capability", "computer_observe", "computer_act"},
+    )
+
+    assert "Browser destination: the current conversation's right sidebar" in messages[-1]["content"]
+    assert "Load the browser capability to open a visible webpage" in messages[-1]["content"]
+    assert "Browser destination:" not in messages[0]["content"]
+    assert "For website interaction, use the `browser` capability" in messages[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -92,8 +212,18 @@ async def test_browser_tab_discovery_identifies_its_scope(monkeypatch, tabs) -> 
         assert "tabId: tab-1" in result
         assert "https://example.com" in result
     else:
-        assert "computer_*" in result
-        assert "do not open a replacement" in result
+        assert "use browser_act(kind='open', url=...) with the target URL" in result
+        assert "preserve that target" in result
+        assert "computer_*" not in result
+
+
+@pytest.mark.asyncio
+async def test_browser_tab_discovery_reports_a_missing_list_as_an_error(monkeypatch) -> None:
+    monkeypatch.setattr(browser_module, "_tauri_invoke_async", AsyncMock(return_value=None))
+
+    result = await BrowserObserveTool().execute(action="list_tabs")
+
+    assert result == "Error listing tabs: the built-in browser returned an invalid tab list."
 
 
 def test_browser_target_scope_reaches_model_context(tmp_path) -> None:
@@ -108,9 +238,9 @@ def test_browser_target_scope_reaches_model_context(tmp_path) -> None:
     assert "Mona Built-in Browser Page: Game [Tab ID: tab-1]" in messages[-1]["content"]
     prompt = messages[0]["content"]
     assert "`browser_observe` and `browser_act` operate only" in prompt
-    assert "use `computer_observe` and `computer_act` automatically" in prompt
-    assert "do not require the user to name Computer Use" in prompt
-    assert "Keep its tab/window identity throughout the task" in prompt
+    assert 'use `browser_act(kind="open")` with its URL if no suitable Mona tab exists' in prompt
+    assert "Use Computer Use for a browser task only when the user asks for Computer Use" in prompt
+    assert "For an ongoing activity in Mona's browser, identify and retain its existing tab" in prompt
     assert "Mona Built-in Browser Page: Game" not in prompt
 
 

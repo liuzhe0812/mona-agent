@@ -24,6 +24,7 @@ const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
 export interface Tab {
   id: string;
   type: "mona" | "browser" | "md-reader" | "canvas-reader" | "history" | "downloads";
+  conversationId?: string;
   title: string;
   url?: string;
   favicon?: string;
@@ -46,6 +47,11 @@ export interface Tab {
   };
 }
 
+export interface ConversationBrowserOpen {
+  conversationId: string;
+  tabId: string;
+}
+
 const MONA_TAB: Tab = {
   id: "mona",
   type: "mona",
@@ -60,6 +66,7 @@ function tabFromServer(tab: BrowserTabInfo): Tab {
     type: "browser",
     title: tab.title,
     url: tab.url,
+    conversationId: tab.conversation_id ?? undefined,
     isAiControlled: tab.is_ai_controlled,
     webviewCreated: true,
   };
@@ -93,6 +100,7 @@ export function createBrowserTabId(): string {
 
 // 关闭标签后选择下一个激活标签：优先左侧相邻标签，避免直接跳回 mona
 function pickNextActiveAfterClose(tabsList: Tab[], closedId: string): string {
+  tabsList = tabsList.filter((tab) => !tab.conversationId);
   const idx = tabsList.findIndex((t) => t.id === closedId);
   if (idx === -1) return "mona";
   for (let i = idx - 1; i >= 0; i--) {
@@ -106,6 +114,7 @@ export function useBrowserTabs() {
   const [tabs, setTabs] = useState<Tab[]>([MONA_TAB]);
   const [activeTabId, setActiveTabId] = useState<string>("mona");
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
+  const [conversationBrowserOpens, setConversationBrowserOpens] = useState(() => new Map<string, ConversationBrowserOpen>());
 
   // 最近关闭的标签（用于 Ctrl+Shift+T 恢复）
   const recentlyClosedRef = useRef<Array<{ url: string; title: string }>>([]);
@@ -192,7 +201,7 @@ export function useBrowserTabs() {
       try {
         const seenUrls = new Set<string>();
         const browserTabsList = tabs
-          .filter((t) => t.type === "browser" && t.url && t.webviewCreated && !t.isIncognito)
+          .filter((t) => t.type === "browser" && !t.conversationId && t.url && t.webviewCreated && !t.isIncognito)
           .filter((t) => {
             // 按 URL 去重，避免 localStorage 被污染后每次恢复都重复
             if (seenUrls.has(t.url!)) return false;
@@ -323,6 +332,7 @@ export function useBrowserTabs() {
 
     // 监听 AI 通过 IPC 创建的标签
     let unlistenCreated: (() => void) | undefined;
+    let unlistenConversationOpen: (() => void) | undefined;
     let unlistenClosed: (() => void) | undefined;
     let unlistenUrlChanged: (() => void) | undefined;
     let unlistenOpenNewTab: (() => void) | undefined;
@@ -340,10 +350,16 @@ export function useBrowserTabs() {
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
 
-      unlistenCreated = await listen<{ id: string; url: string; title: string; cdp_port: number }>(
+      unlistenConversationOpen = await listen<ConversationBrowserOpen>(
+        "conversation-browser-opened",
+        ({ payload }) => setConversationBrowserOpens((current) => new Map(current).set(payload.conversationId, payload)),
+      );
+      if (!keepListener(unlistenConversationOpen)) return;
+
+      unlistenCreated = await listen<Pick<BrowserTabInfo, "id" | "url" | "title" | "conversation_id">>(
         "browser-tab-created",
         (event) => {
-          const { id, url, title } = event.payload;
+          const { id, url, title, conversation_id } = event.payload;
           setTabs((prev) => {
             // 避免重复添加
             if (prev.some((t) => t.id === id)) return prev;
@@ -352,18 +368,26 @@ export function useBrowserTabs() {
               type: "browser" as const,
               title: title || url,
               url,
+              conversationId: conversation_id ?? undefined,
               isAiControlled: false,
               webviewCreated: true,
               isLoading: true,
             }];
           });
-          if (!backgroundTabIdsRef.current.has(id)) setActiveTabId(id);
+          if (!conversation_id && !backgroundTabIdsRef.current.has(id)) setActiveTabId(id);
         }
       );
       if (!keepListener(unlistenCreated)) return;
 
       unlistenClosed = await listen<string>("browser-tab-closed", (event) => {
         const id = event.payload;
+        const owner = tabsRef.current.find((tab) => tab.id === id)?.conversationId;
+        if (owner) setConversationBrowserOpens((current) => {
+          if (current.get(owner)?.tabId !== id) return current;
+          const next = new Map(current);
+          next.delete(owner);
+          return next;
+        });
         backgroundTabIdsRef.current.delete(id);
         const nextActive = pickNextActiveAfterClose(tabsRef.current, id);
         setTabs((prev) => prev.filter((t) => t.id !== id));
@@ -396,6 +420,15 @@ export function useBrowserTabs() {
           const sourceTab = tabsRef.current.find(
             (t) => t.id === (sourceTabId ?? activeTabIdRef.current),
           );
+          if (sourceTabId && !sourceTab) return;
+          if (sourceTab?.conversationId) {
+            if (/^https?:\/\//i.test(url)) {
+              void browserNavigateTab(sourceTab.id, url).catch((error) => {
+                console.error("[useBrowserTabs] conversation page navigation failed:", error);
+              });
+            }
+            return;
+          }
           const isIncognito = sourceTab?.isIncognito ?? false;
           const newTab: Tab = {
             id,
@@ -493,6 +526,7 @@ export function useBrowserTabs() {
     return () => {
       cancelled = true;
       unlistenCreated?.();
+      unlistenConversationOpen?.();
       unlistenClosed?.();
       unlistenUrlChanged?.();
       unlistenOpenNewTab?.();
@@ -587,7 +621,7 @@ export function useBrowserTabs() {
     if (!tab) return;
 
     // 记录到最近关闭列表（供 Ctrl+Shift+T 恢复）
-    if (tab.url && tab.type === "browser") {
+    if (tab.url && tab.type === "browser" && !tab.conversationId) {
       recentlyClosedRef.current.push({ url: tab.url, title: tab.title });
     }
 
@@ -850,14 +884,14 @@ export function useBrowserTabs() {
 
   // 关闭其他标签
   const closeOtherTabs = useCallback(async (id: string) => {
-    const toClose = tabs.filter((t) => t.id !== id && t.id !== "mona");
+    const toClose = tabs.filter((t) => t.id !== id && t.id !== "mona" && !t.conversationId);
     for (const t of toClose) {
       if (t.webviewCreated && isTauri()) {
         try { await closeTabIpc(t.id); } catch (e) { console.error("[closeOtherTabs]", e); }
       }
       if (t.url) recentlyClosedRef.current.push({ url: t.url, title: t.title });
     }
-    setTabs((prev) => prev.filter((t) => t.id === id || t.id === "mona"));
+    setTabs((prev) => prev.filter((t) => t.id === id || t.id === "mona" || t.conversationId));
     setActiveTabId(id);
   }, [tabs]);
 
@@ -865,7 +899,7 @@ export function useBrowserTabs() {
   const closeTabsToRight = useCallback(async (id: string) => {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx === -1) return;
-    const toClose = tabs.slice(idx + 1).filter((t) => t.id !== "mona");
+    const toClose = tabs.slice(idx + 1).filter((t) => t.id !== "mona" && !t.conversationId);
     for (const t of toClose) {
       if (t.webviewCreated && isTauri()) {
         try { await closeTabIpc(t.id); } catch (e) { console.error("[closeTabsToRight]", e); }
@@ -874,7 +908,7 @@ export function useBrowserTabs() {
     }
     setTabs((prev) => {
       const i = prev.findIndex((t) => t.id === id);
-      return [...prev.slice(0, i + 1)];
+      return prev.filter((tab, index) => index <= i || tab.conversationId);
     });
   }, [tabs]);
 
@@ -984,7 +1018,7 @@ export function useBrowserTabs() {
       // Ctrl+Tab / Ctrl+Shift+Tab: 切换标签
       if (ctrl && e.key === "Tab") {
         const browserTabsList = tabs.filter(
-          (tab) => (tab.id !== "mona" || tabs.length === 1) && !backgroundTabIdsRef.current.has(tab.id),
+          (tab) => (tab.id !== "mona" || tabs.length === 1) && !tab.conversationId && !backgroundTabIdsRef.current.has(tab.id),
         );
         if (browserTabsList.length < 2) return;
         const currentIdx = browserTabsList.findIndex((t) => t.id === activeTabId);
@@ -1032,6 +1066,7 @@ export function useBrowserTabs() {
 
   return {
     tabs,
+    conversationBrowserOpens,
     activeTabId,
     activeTab,
     addEmptyTab,

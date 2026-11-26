@@ -3,6 +3,7 @@ import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { ChatSummary, UIMessage } from "@/lib/types";
@@ -29,6 +30,7 @@ interface AiAssistantPanelProps {
   onToggle?: (expanded: boolean) => void;
   /** Callback when panel is closed */
   onClose?: () => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function AiAssistantPanel({
@@ -39,6 +41,7 @@ export function AiAssistantPanel({
   pageTitle,
   onToggle,
   onClose,
+  onOpenSettings,
 }: AiAssistantPanelProps) {
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
@@ -62,6 +65,7 @@ export function AiAssistantPanel({
   } = useMonaStream(chatId, initial, hasPendingToolCalls);
 
   const [draft, setDraft] = useState("");
+  const [panelElement, setPanelElement] = useState<HTMLElement | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
@@ -152,7 +156,7 @@ export function AiAssistantPanel({
   const hasMessages = displayMessages.length > 0;
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-border/70 bg-background">
+    <aside ref={setPanelElement} className="flex w-72 shrink-0 flex-col border-l border-border/70 bg-background">
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
@@ -293,6 +297,9 @@ export function AiAssistantPanel({
               <Send className="h-3 w-3" />
             )}
           </Button>
+        </div>
+        <div className="flex justify-end pt-1">
+          <WorkModelSelector disabled={creatingChat} onOpenSettings={onOpenSettings} collisionBoundary={panelElement} />
         </div>
       </div>
     </aside>

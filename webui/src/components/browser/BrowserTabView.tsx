@@ -44,6 +44,7 @@ interface BrowserTabViewProps {
   onToggleAdBlock?: () => void;
   onToggleDarkMode?: () => void;
   onOpenDevtools?: () => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function BrowserTabView({
@@ -67,6 +68,7 @@ export function BrowserTabView({
   onToggleAdBlock,
   onToggleDarkMode,
   onOpenDevtools,
+  onOpenSettings,
 }: BrowserTabViewProps) {
   const { token } = useClientOptional();
   const webviewContainerRef = useRef<HTMLDivElement>(null);
@@ -503,6 +505,7 @@ export function BrowserTabView({
             tabId={tab.id}
             pageUrl={tab.url}
             pageTitle={tab.title}
+            onOpenSettings={onOpenSettings}
             onClose={() => setIsAiPanelOpen(false)}
             onToggle={() => {
               setTimeout(() => requestAnimationFrame(() => updateWebviewBounds()), 50);

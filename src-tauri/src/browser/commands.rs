@@ -10,10 +10,17 @@ pub async fn browser_create_tab(
     url: String,
     is_incognito: Option<bool>,
     ad_block_enabled: Option<bool>,
+    conversation_id: Option<String>,
 ) -> Result<CreateTabResult, String> {
     let state = app.state::<BrowserState>();
+    let ad_block_enabled = ad_block_enabled.unwrap_or(true);
+    if let Some(conversation_id) = conversation_id {
+        return state
+            .open_conversation_tab(&app, &id, &url, &conversation_id, ad_block_enabled)
+            .await;
+    }
     state
-        .create_tab(&app, &id, &url, is_incognito.unwrap_or(false), ad_block_enabled.unwrap_or(true))
+        .create_tab(&app, &id, &url, is_incognito.unwrap_or(false), ad_block_enabled)
         .await
 }
 
