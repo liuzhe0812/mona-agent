@@ -47,6 +47,10 @@ ERRORS = {
     "isolation_unverified": ("protocol", "不能确认项目配置隔离。", "使用支持矩阵内版本；不会默认继承用户配置。"),
     "project_policy_violation": ("protocol", "当前配置不满足项目隔离要求。", "核对配套版本，保留项目规则和 Skills 白名单。"),
     "authentication_required": ("authentication", "尚未完成当前受管环境的认证。", "使用官方登录入口或明确的认证环境变量。"),
+    "native_policy_unavailable": ("protocol", "所选模型无法保证当前会话的工具授权或目录限制，设置未保存。", "请选择能满足当前限制的模型来源。"),
+    "native_exec_rules_conflict": ("protocol", "模型执行环境的命令授权规则与当前工具权限冲突。", "请在模型设置中重新检查连接后重试。"),
+    "native_auth_binding_unavailable": ("authentication", "所选模型的账号连接未能安全复用，设置未保存。", "请在模型设置中检查账号连接后重试。"),
+    "native_home_cleanup_failed": ("protocol", "模型执行环境未能完成清理。", "请先核对已有会话和文件结果后重试。"),
     **{code: ("authentication", reason, "先核对当前连接与原登录状态，不自动重复授权。")
        for code, reason in AUTH_FAILURE_REASONS.items()},
 }

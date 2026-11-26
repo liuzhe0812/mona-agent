@@ -25,7 +25,11 @@ from mona.development.decisions import DecisionBroker
 from mona.development.design_resources import DESIGN_POLICY_TAG
 from mona.development.executors.base import Executor, SessionStart
 from mona.development.executors.codex import CodexExecutor
-from mona.development.executors.codex_policy import prepare_codex_profile
+from mona.development.executors.codex_policy import (
+    cleanup_codex_work_profile,
+    prepare_codex_profile,
+    prepare_codex_work_profile,
+)
 from mona.development.executors.diagnostics import failed_probe
 from mona.development.executors.discovery import discover_executors
 from mona.development.executors.host_tools import COLLABORATION_POLICY_TAG, HostToolHandler
@@ -129,6 +133,27 @@ class NativeExecutorManager:
                     (current.get("modelDetails") or
                      [{"id": model, "label": model} for model in current.get("models", [])])})
         return result
+
+    @_native_operation
+    async def preflight_work(self, executor: ExecutorId, workspace: Path,
+                             native_tools: tuple[str, ...]) -> None:
+        if executor != ExecutorId.CODEX:
+            return
+        config = self.config_loader().development
+        discovery = next((item for item in discover_executors(config) if item.executor == executor), None)
+        if discovery is None or discovery.state != "detected" or not discovery.executable:
+            raise RpcError("executor_unavailable", "未找到此模型需要的本机程序。")
+        profile, _ = prepare_codex_work_profile(
+            Path(discovery.executable), self.store.path.parent / "native" / executor.value,
+            workspace, native_tools=native_tools)
+        host = CodexExecutor(profile)
+        try:
+            probe = await host.probe(include_models=False)
+            if probe.state != "ready":
+                raise RpcError(probe.error_code or "authentication_required", "模型尚未满足当前会话的执行要求。")
+        finally:
+            await host.shutdown()
+            cleanup_codex_work_profile(profile)
 
     async def _current_host(self, key: tuple, executable: str) -> Executor | None:
         host = self.hosts.get(key)

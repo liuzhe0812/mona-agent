@@ -312,7 +312,7 @@ def workbuddy_cli_launcher(entry: Path) -> Path | None:
         return None
     try:
         root = app_root.resolve(strict=True)
-        required = (entry, package / "package.json", package / "dist/codebuddy.js", app, fuse_binary)
+        required = (entry, package / "package.json", app, fuse_binary)
         if any(not path.is_file() or not path.resolve().is_relative_to(root) for path in required):
             return None
         with (package / "package.json").open(encoding="utf8") as file:
@@ -331,3 +331,16 @@ def discover_workbuddy_cli() -> Path | None:
     resources = app.parent / "resources" if app.suffix.lower() == ".exe" else app.parent.parent / "Resources"
     entry = resources / "app.asar.unpacked/cli/bin/codebuddy"
     return entry.resolve() if workbuddy_cli_launcher(entry) else None
+
+
+def workbuddy_launch_env(entry: Path) -> dict[str, str]:
+    if not workbuddy_cli_launcher(entry):
+        return {}
+    env = {"ELECTRON_RUN_AS_NODE": "1"}
+    dist = entry.parent.parent / "dist"
+    lite = dist / "codebuddy-lite-wb.mjs"
+    # Lite-only releases require the desktop dispatch mode, even for SDK calls.
+    if (lite.is_file() and lite.resolve().is_relative_to(entry.parent.parent.resolve())
+            and not any((dist / name).is_file() for name in ("codebuddy.js", "codebuddy-headless.js"))):
+        env["CODEBUDDY_FORCE_LITE_WB_BUNDLE"] = "1"
+    return env

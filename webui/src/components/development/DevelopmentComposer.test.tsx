@@ -63,11 +63,11 @@ describe("development uses the shared composer", () => {
   it("shows persisted context usage and updates the same indicator from new events", () => {
     const initial = { ...snapshot(), events: [{ id: "u1", sequence: 1, runId: run.id, type: "usage.updated", payload: { contextTokens: 50000, contextWindow: 200000 } }] };
     mount(initial);
-    expect(screen.getByRole("img", { name: "25.0% · 50.0K / 200.0K 上下文已使用" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "25.0% · 50.0K / 200.0K context used" })).toBeInTheDocument();
     act(() => useDevelopmentStore.getState().setSnapshot(session.id, { ...initial, events: [...initial.events,
       { id: "u2", sequence: 2, runId: run.id, type: "usage.updated", payload: { contextTokens: 10000, contextWindow: 200000 } },
     ] }));
-    expect(screen.getByRole("img", { name: "5.0% · 10.0K / 200.0K 上下文已使用" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "5.0% · 10.0K / 200.0K context used" })).toBeInTheDocument();
   });
   it("uses the ordinary plus attachment flow instead of a development-only file action", async () => {
     const client = attachmentClient();

@@ -183,6 +183,8 @@ class CodexExecutor:
         self._isolation_checked = False
         self._auth: Literal["unknown", "required", "ready"] = "unknown"
         self._auth_mode: Literal["unknown", "chatgpt", "api_key"] = "unknown"
+        self._work_account_id: str | None = None
+        self._work_access_token: str | None = None
         self._login: NativeLogin | None = None
         self._login_lock = asyncio.Lock()
         self._model_details: list[ExecutorModel] = []
@@ -226,6 +228,13 @@ class CodexExecutor:
             self._version = reply.get("userAgent") if isinstance(reply.get("userAgent"), str) else None
             await client.notify("initialized")
             await self._check_policy(client)
+            if self.profile.work_auth_home is not None:
+                login = await self._work_auth()
+                self._work_account_id = login.get("chatgptAccountId")
+                self._work_access_token = login.get("accessToken")
+                logged_in = await client.request("account/login/start", login)
+                if not isinstance(logged_in, dict) or logged_in.get("type") != login["type"]:
+                    raise RpcError("native_auth_binding_unavailable", "模型账号连接未返回可确认的回执。")
             account = await client.request("account/read", {"refreshToken": False})
             if not isinstance(account, dict) or "requiresOpenaiAuth" not in account:
                 raise RpcError("native_protocol_error", "原生认证状态回执无效。")
@@ -237,6 +246,15 @@ class CodexExecutor:
             await client.close()
             raise
 
+    async def _work_auth(self, *, refresh: bool = False) -> dict:
+        from mona.development.executors.codex_work_auth import read_codex_work_auth
+
+        if self.profile.work_auth_home is None or self._closed:
+            raise RpcError("native_auth_binding_unavailable", "当前模型连接不能接受账号更新。")
+        return await read_codex_work_auth(Path(self.profile.command[0]), self.profile.work_auth_home,
+                                          self.profile.project_root, refresh=refresh,
+                                          expected_account_id=self._work_account_id)
+
     async def _check_policy(self, client: JsonRpcProcess) -> None:
         native_work = bool(self.profile.work_native_tools)
         if native_work:
@@ -246,7 +264,8 @@ class CodexExecutor:
         reply = await client.request("config/read", {"includeLayers": native_work, "cwd": str(self.profile.project_root)})
         validate_effective_config(reply, model_endpoint=self.profile.model_endpoint,
                                   work_model_catalog=self.profile.work_model_catalog,
-                                  work_native_tools=self.profile.work_native_tools)
+                                  work_native_tools=self.profile.work_native_tools,
+                                  work_auth_home=self.profile.work_auth_home)
         if native_work:
             try:
                 requirements = await client.request("configRequirements/read")
@@ -255,7 +274,7 @@ class CodexExecutor:
             validate_work_rule_sources(reply, self.profile, requirements)
         self._isolation_checked = True
 
-    async def probe(self) -> ExecutorProbe:
+    async def probe(self, *, include_models: bool = True) -> ExecutorProbe:
         try:
             client = await self._ensure_started()
             account = await client.request("account/read", {"refreshToken": False})
@@ -264,7 +283,8 @@ class CodexExecutor:
             self._auth = "ready" if account.get("account") or account["requiresOpenaiAuth"] is False else "required"
             account_type = (account.get("account") or {}).get("type") if isinstance(account.get("account"), dict) else None
             self._auth_mode = "chatgpt" if account_type == "chatgpt" else "api_key" if account_type == "apiKey" else "unknown"
-            await self.list_models()
+            if include_models:
+                await self.list_models()
             return ExecutorProbe(executor=self.id, state="ready" if self._auth == "ready" else "detected",
                                  executable=self.profile.command[0], version=self._version,
                                  authentication=self._auth, auth_mode=self._auth_mode, capabilities=_CAPABILITIES,
@@ -821,6 +841,16 @@ class CodexExecutor:
         runtime.publish(event)
 
     async def _on_server_request(self, request_id: JsonId, method: str, params: dict[str, Any]) -> Any:
+        if method == "account/chatgptAuthTokens/refresh":
+            if (self._work_account_id is None
+                    or params.get("previousAccountId") not in {None, self._work_account_id}):
+                raise RpcError("native_auth_binding_unavailable", "模型账号已变化，原任务未切换账号。")
+            login = await self._work_auth(refresh=True)
+            if (login.get("type") != "chatgptAuthTokens"
+                    or login.get("accessToken") == self._work_access_token):
+                raise RpcError("native_auth_binding_unavailable", "原任务的模型账号未能完成更新。")
+            self._work_access_token = login["accessToken"]
+            return {key: login[key] for key in ("accessToken", "chatgptAccountId", "chatgptPlanType")}
         owner = thread_id(method, params)
         runtime = self._threads.get(owner or "")
         turn_id = params.get("turnId")

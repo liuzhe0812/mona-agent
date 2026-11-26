@@ -38,6 +38,7 @@ from mona.materials.auth import SERVICES_TOKEN_HEADER, is_valid_services_token
 
 RUNTIME_KEY = web.AppKey("development_runtime", DevelopmentRuntime)
 PREFIX = "/api/development"
+_MODEL_CATALOG_TIMEOUT_SECONDS = 3
 
 
 class ProjectBody(Contract):
@@ -261,17 +262,50 @@ async def provider_executors(request):
     return web.json_response({"executors": await asyncio.to_thread(runtime.native.describe)})
 
 
+def _work_model_identity(config):
+    defaults = config.agents.defaults
+    return (defaults.executor, defaults.model, defaults.provider, defaults.model_preset,
+            defaults.reasoning_effort, defaults.native_model, defaults.native_reasoning_effort,
+            defaults.native_context_window_tokens)
+
+
 async def select_work_model_source(request):
     from mona.config.loader import save_config
+    from mona.providers.managed_catalog import managed_model_catalog, use_cached_managed_catalog
     from mona.webui.settings_api import settings_payload, update_agent_settings
 
     body = await _body(request, WorkModelSourceBody)
     runtime = get_runtime(request)
+    runtime.work_model_selection_generation += 1
+    generation = runtime.work_model_selection_generation
+    expected_identity = None
+    if body.executor == ExecutorId.MONA and body.provider == "mona_managed":
+        expected_identity = _work_model_identity(await asyncio.to_thread(load_config))
+        official_catalog = await asyncio.to_thread(managed_model_catalog, timeout=_MODEL_CATALOG_TIMEOUT_SECONDS)
+        if not official_catalog["available"]:
+            raise DevelopmentError("managed_catalog_unavailable", "官方模型列表暂不可用，请检查网络后重试。")
+
+    def ensure_current_selection():
+        if generation != runtime.work_model_selection_generation:
+            raise ConflictError("模型选择已更新，请重新选择模型。")
+
+    def selection_payload():
+        with use_cached_managed_catalog():
+            return settings_payload()
+
     if body.executor == ExecutorId.MONA:
-        resolve_coding_model(runtime.config_loader(), body.model, body.provider, body.effort, require_visible=True)
-        query = {"provider": [body.provider], "model": [body.model], "provider_model": [body.model],
+        query = {"provider": [body.provider], "model": [body.model], "provider_model": [body.model], "model_preset": ["default"],
                  "reasoning_effort": [body.effort or "none"]}
-        return web.json_response(update_agent_settings(query))
+
+        async with runtime.work_model_selection_lock:
+            ensure_current_selection()
+            if expected_identity is not None and _work_model_identity(await asyncio.to_thread(load_config)) != expected_identity:
+                raise ConflictError("模型来源已变化，请重新选择模型。")
+            ensure_current_selection()
+            with use_cached_managed_catalog():
+                resolve_coding_model(runtime.config_loader(), body.model, body.provider, body.effort, require_visible=True)
+                update_agent_settings(query, include_payload=False)
+            return web.json_response(await asyncio.to_thread(selection_payload))
     if body.provider is not None:
         raise DevelopmentError("invalid_model_source", "请选择该引擎自身的模型来源。")
     source = next((item for item in await asyncio.to_thread(runtime.native.describe)
@@ -295,13 +329,61 @@ async def select_work_model_source(request):
     if body.effort is not None and body.effort not in choice.get("reasoningEfforts", []):
         raise DevelopmentError("unsupported_reasoning_effort", "当前模型不支持所选思考强度。")
     config = runtime.config_loader()
-    config.agents.defaults.executor = body.executor.value
-    config.agents.defaults.native_model = body.model
-    config.agents.defaults.native_reasoning_effort = body.effort
-    config.agents.defaults.native_context_window_tokens = choice.get("contextWindow")
-    config.agents.defaults.model_preset = None
-    await asyncio.to_thread(save_config, config)
-    return web.json_response(await asyncio.to_thread(settings_payload))
+    from mona.providers.native_work_tools import validate_native_work_policy, work_model_policy
+
+    loop = request.app.get("agent_loop")
+    workspace = Path(loop.workspace if loop is not None else config.workspace_path).resolve()
+
+    def execution_settings(value):
+        development = value.development
+        return (value.tools.restrict_to_workspace, value.tools.exec.model_dump(mode="json"),
+                body.executor.value in development.enabled_engines,
+                getattr(development, f"{body.executor.value}_path"),
+                (development.codebuddy_api_key_env, development.codebuddy_environment)
+                if body.executor == ExecutorId.CODEBUDDY else None,
+                _work_model_identity(value))
+
+    def tool_snapshot(value):
+        policy = work_model_policy(value, body.executor.value, workspace, loop.tools if loop is not None else None)
+        native_tools = validate_native_work_policy(value, policy)
+        grants = frozenset(name for name in policy.tools.tool_names if policy.tools.is_permitted(name))
+        return native_tools, grants
+
+    before_settings = execution_settings(config)
+    try:
+        native_tools, grants = await asyncio.to_thread(tool_snapshot, config)
+    except RpcError as exc:
+        if exc.code != "native_policy_unavailable":
+            raise
+        raise DevelopmentError(exc.code, str(exc)) from None
+    await runtime.native.preflight_work(body.executor, workspace, native_tools)
+
+    async with runtime.work_model_selection_lock:
+        ensure_current_selection()
+        latest_raw = await asyncio.to_thread(load_config)
+        latest = resolve_config_env_vars(latest_raw.model_copy(deep=True))
+        latest_workspace = Path(loop.workspace if loop is not None else latest.workspace_path).resolve()
+        if execution_settings(latest) != before_settings or latest_workspace != workspace:
+            raise ConflictError("模型来源或工具权限已变化，请重新选择模型。")
+        try:
+            latest_tools, latest_grants = await asyncio.to_thread(tool_snapshot, latest)
+        except RpcError:
+            raise ConflictError("模型来源或工具权限已变化，请重新选择模型。") from None
+        if latest_tools != native_tools or latest_grants != grants:
+            raise ConflictError("模型来源或工具权限已变化，请重新选择模型。")
+        ensure_current_selection()
+        latest_raw = load_config()
+        latest = resolve_config_env_vars(latest_raw.model_copy(deep=True))
+        latest_workspace = Path(loop.workspace if loop is not None else latest.workspace_path).resolve()
+        if execution_settings(latest) != before_settings or latest_workspace != workspace:
+            raise ConflictError("模型来源或工具权限已变化，请重新选择模型。")
+        latest_raw.agents.defaults.executor = body.executor.value
+        latest_raw.agents.defaults.native_model = body.model
+        latest_raw.agents.defaults.native_reasoning_effort = body.effort
+        latest_raw.agents.defaults.native_context_window_tokens = choice.get("contextWindow")
+        latest_raw.agents.defaults.model_preset = None
+        save_config(latest_raw)
+        return web.json_response(await asyncio.to_thread(selection_payload))
 
 
 async def capabilities(request):

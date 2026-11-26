@@ -55,7 +55,7 @@ class JsonRpcProcess:
                  server_request: RequestHandler,
                  disconnected: Callable[[str], None],
                  jsonrpc_version: bool = False, max_frame_bytes: int = 2_097_152,
-                 request_timeout: float = 30.0, max_pending: int = 128):
+                 request_timeout: float = 30.0, max_pending: int = 128, stdout_preamble_lines: int = 0):
         self.process = process
         self._notification = notification
         self._server_request = server_request
@@ -64,6 +64,7 @@ class JsonRpcProcess:
         self._max_frame_bytes = max_frame_bytes
         self._timeout = request_timeout
         self._max_pending = max_pending
+        self._stdout_preamble_lines = stdout_preamble_lines
         self._next_id = 0
         self._pending: dict[JsonId, asyncio.Future[Any]] = {}
         self._error_classifiers: dict[JsonId, Callable[[dict[str, Any]], RpcError | None]] = {}
@@ -79,7 +80,8 @@ class JsonRpcProcess:
     async def spawn(cls, command: tuple[str, ...], *, cwd: Path, env: Mapping[str, str],
                     notification: NotificationHandler, server_request: RequestHandler,
                     disconnected: Callable[[str], None], jsonrpc_version: bool = False,
-                    max_frame_bytes: int = 2_097_152, request_timeout: float = 30.0) -> JsonRpcProcess:
+                    max_frame_bytes: int = 2_097_152, request_timeout: float = 30.0,
+                    stdout_preamble_lines: int = 0) -> JsonRpcProcess:
         if not command or not Path(command[0]).is_absolute() or not Path(command[0]).is_file():
             raise RpcError("invalid_executable", "请指定原生执行程序的实际绝对路径。")
         if Path(command[0]).suffix.lower() in {".cmd", ".bat", ".ps1"}:
@@ -113,7 +115,8 @@ class JsonRpcProcess:
             raise
         return cls(process, notification=notification, server_request=server_request,
                    disconnected=disconnected, jsonrpc_version=jsonrpc_version,
-                   max_frame_bytes=max_frame_bytes, request_timeout=request_timeout)
+                   max_frame_bytes=max_frame_bytes, request_timeout=request_timeout,
+                   stdout_preamble_lines=stdout_preamble_lines)
 
     @property
     def closed(self) -> bool:
@@ -212,6 +215,10 @@ class JsonRpcProcess:
                     raise ValueError("invalid frame")
                 if not raw.strip():
                     continue
+                if self._stdout_preamble_lines and not raw.lstrip().startswith((b"{", b"[")):
+                    self._stdout_preamble_lines -= 1
+                    continue
+                self._stdout_preamble_lines = 0
                 message = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant)
                 if not isinstance(message, dict):
                     raise ValueError("invalid envelope")

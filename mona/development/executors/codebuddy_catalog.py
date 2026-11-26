@@ -7,6 +7,7 @@ reading credential files or maintaining a static list of vendor models.
 from __future__ import annotations
 
 import asyncio
+import secrets
 
 from mona.development.contracts import ExecutorId
 from mona.development.executors.base import ExecutorModel, ExecutorProbe
@@ -53,12 +54,20 @@ async def inspect_codebuddy_catalog(profile: SDKProfile) -> ExecutorProbe:
         async with asyncio.timeout(45):
             launcher = workbuddy_cli_launcher(profile.executable)
             command = (str(launcher), str(profile.executable)) if launcher else (str(profile.executable),)
+            environment = profile.environment
+            protocol_options = {}
+            if launcher and environment.get("CODEBUDDY_FORCE_LITE_WB_BUNDLE") == "1":
+                # The lite CLI serves ACP over stdio only in its server mode.
+                command += ("--serve", "--host", "127.0.0.1", "--port", "0", "--auth", "password")
+                environment = {**environment, "CODEBUDDY_GATEWAY_AUTH": "password",
+                               "CODEBUDDY_GATEWAY_PASSWORD": secrets.token_urlsafe(32)}
+                protocol_options = {"stdout_preamble_lines": 24}
             connection = await JsonRpcProcess.spawn((*command, "--acp",
                 "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                 "--tools", "", "--settings", '{"disableAllHooks":true,"autoMemoryEnabled":false}'),
-                cwd=profile.project_root, env=profile.environment, jsonrpc_version=True,
+                cwd=profile.project_root, env=environment, jsonrpc_version=True,
                 notification=lambda *_: None, server_request=reject_request,
-                disconnected=lambda _: None, request_timeout=20)
+                disconnected=lambda _: None, request_timeout=20, **protocol_options)
             info = await connection.request("initialize", {"protocolVersion": 1,
                 "clientInfo": {"name": "mona-model-catalog", "version": "1.8.0"},
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}})

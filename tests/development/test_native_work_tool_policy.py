@@ -1,6 +1,7 @@
 """Native primitives keep Mona authorization; private tools keep their host route."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,7 @@ from mona.agent.tools.shell import ExecTool
 from mona.config.schema import Config
 from mona.development.contracts import ExecutorId
 from mona.development.executors.base import DispatchReceipt, NativeEvent
+from mona.development.executors.codex_policy import prepare_codex_profile
 from mona.development.executors.rpc import RpcError
 from mona.providers.native_work_provider import NativeWorkProvider
 from mona.providers.native_work_tools import NATIVE_BASIC_TOOLS, NativeWorkToolPolicy
@@ -75,6 +77,61 @@ async def test_unrepresentable_command_scope_is_rejected_before_cli_dispatch(tmp
                         lambda *_: pytest.fail("An unsupported scope must not start a CLI"))
     response = await provider.chat_stream([])
     assert response.error_code == "native_policy_unavailable" and not response.error_should_retry
+
+
+async def test_saved_code_rules_do_not_block_or_expand_a_work_turn(tmp_path, monkeypatch):
+    config = Config()
+    config.agents.defaults.executor = "codex"
+    config.development.enabled_engines = ["codex"]
+    root = tmp_path / "work"
+    root.mkdir()
+    executable = tmp_path / "native.exe"
+    executable.write_bytes(b"fixture")
+    home = tmp_path / "native-home"
+    prepare_codex_profile(executable, home, root, environment={})
+    rules = home / "rules" / "default.rules"
+    rules.parent.mkdir()
+    rules.write_text("private rule fixture", encoding="utf8")
+    (home / "models_cache.json").write_text(json.dumps({"models": [{"slug": "native-test"}]}), encoding="utf8")
+    monkeypatch.setattr("mona.providers.native_work_provider.discover_executors", lambda *_: [
+        SimpleNamespace(executor=ExecutorId.CODEX, state="detected", executable=str(executable))])
+    hosts = []
+
+    class Host:
+        def __init__(self, profile, *, tool_handler):
+            self.profile, self.sends = profile, 0
+            self.shutdown = AsyncMock()
+            hosts.append(self)
+
+        async def create_session(self, start):
+            self.start = start
+            return SimpleNamespace(native_session_id="isolated-work")
+
+        async def send(self, binding, input_id, content):
+            self.sends += 1
+            return DispatchReceipt(input_id=input_id, outcome="accepted", native_turn_id="turn")
+
+        async def events(self, binding):
+            yield NativeEvent(type="agent.message.completed", payload={"text": "ready"})
+            yield NativeEvent(type="run.completed")
+
+    monkeypatch.setattr("mona.providers.native_work_provider.CodexExecutor", Host)
+    provider = NativeWorkProvider(config, root, native_home=home)
+    provider.bind_runtime(registry(root))
+
+    try:
+        response = await provider.chat_stream_with_retry([{"role": "user", "content": "Read the current slide"}])
+        assert response.content == "ready" and response.error_code is None
+        assert hosts[0].sends == 1 and hosts[0].profile.home != home
+        assert hosts[0].profile.work_auth_home == home
+        assert "exec_command" in hosts[0].start.work_native_tools
+        assert not (hosts[0].profile.home / "rules").exists()
+    finally:
+        await provider.aclose()
+    assert not hosts[0].profile.home.exists()
+    hosts[0].shutdown.assert_awaited_once()
+    assert rules.read_text(encoding="utf8") == "private rule fixture"
+    assert not list(home.glob(".mona-work-models-*.json"))
 
 
 async def test_native_permission_is_recorded_once_before_operation_and_not_replayed(tmp_path):
@@ -269,8 +326,10 @@ async def test_three_engines_execute_native_primitives_and_host_business_tools(t
     monkeypatch.setattr("mona.providers.native_work_provider.prepare_sdk_profile", lambda *_args, **_kwargs: object())
     catalog = tmp_path / "catalog.json"
     catalog.write_text("{}")
+    from mona.development.executors.codex_policy import CodexProfile
+
     monkeypatch.setattr("mona.providers.native_work_provider.prepare_codex_work_profile",
-                        lambda *_args, **_kwargs: (object(), catalog))
+                        lambda *_args, **_kwargs: (CodexProfile((), tmp_path / "fixture-home", root, {}), catalog))
     monkeypatch.setattr("mona.providers.native_work_provider.SDKExecutor", Host)
     monkeypatch.setattr("mona.providers.native_work_provider.CodexExecutor", Host)
     async with asyncio.timeout(5):

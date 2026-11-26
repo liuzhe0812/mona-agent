@@ -73,7 +73,9 @@ def _registry_with_entry(*, display_name: str, values: dict[str, str], view: int
     return _Registry({("HKLM", view): {"workbuddy-entry": {"DisplayName": display_name, **values}}})
 
 
-def _create_workbuddy_app(app_root: Path, *, run_as_node: int = 1) -> tuple[Path, Path, Path]:
+def _create_workbuddy_app(
+    app_root: Path, *, run_as_node: int = 1, bundle_name: str = "codebuddy.js",
+) -> tuple[Path, Path, Path]:
     executable = app_root / "WorkBuddy.exe"
     executable.parent.mkdir(parents=True, exist_ok=True)
     sentinel = b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX"
@@ -84,7 +86,7 @@ def _create_workbuddy_app(app_root: Path, *, run_as_node: int = 1) -> tuple[Path
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text("#!/usr/bin/env node\n", encoding="utf-8")
     (package / "dist").mkdir()
-    (package / "dist" / "codebuddy.js").write_text("// fixture\n", encoding="utf-8")
+    (package / "dist" / bundle_name).write_text("// fixture\n", encoding="utf-8")
     package_json = package / "package.json"
     package_json.write_text(json.dumps({
         "name": "@genie/agent-cli",
@@ -219,10 +221,11 @@ def test_using_managed_uses_resolved_path_containment(tmp_path: Path) -> None:
     assert not application.is_managed_executable(None, component_root)
 
 
+@pytest.mark.parametrize("bundle_name", ["codebuddy.js", "codebuddy-lite-wb.mjs"])
 def test_discover_workbuddy_cli_returns_the_verified_bundled_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bundle_name: str,
 ) -> None:
-    executable, entry, _package_json = _create_workbuddy_app(tmp_path / "WorkBuddy")
+    executable, entry, _package_json = _create_workbuddy_app(tmp_path / "WorkBuddy", bundle_name=bundle_name)
     monkeypatch.setattr(application, "locate_workbuddy_desktop_app", lambda: (executable, False))
 
     assert application.discover_workbuddy_cli() == entry.resolve()
@@ -312,16 +315,20 @@ def test_desktop_sdk_auth_transport_restores_factory_after_exception(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("account,authentication", [({}, "required"), ({"invalid": True}, "unknown")])
+@pytest.mark.parametrize("bundle_name,account,authentication", [
+    ("codebuddy.js", {}, "required"),
+    ("codebuddy.js", {"invalid": True}, "unknown"),
+    ("codebuddy-lite-wb.mjs", {}, "required"),
+])
 async def test_desktop_cli_catalog_uses_app_runtime_and_handles_omitted_user_info(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, account: dict, authentication: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bundle_name: str, account: dict, authentication: str,
 ) -> None:
     from mona.development.contracts import ExecutorId
     from mona.development.executors.codebuddy_catalog import inspect_codebuddy_catalog
     from mona.development.executors.rpc import JsonRpcProcess
     from mona.development.executors.sdk_policy import prepare_sdk_profile
 
-    app, entry, _metadata = _create_workbuddy_app(tmp_path / "WorkBuddy")
+    app, entry, _metadata = _create_workbuddy_app(tmp_path / "WorkBuddy", bundle_name=bundle_name)
     project = tmp_path / "project"
     project.mkdir()
     profile = prepare_sdk_profile(ExecutorId.CODEBUDDY, entry, tmp_path / "native-home", project)
@@ -338,11 +345,21 @@ async def test_desktop_cli_catalog_uses_app_runtime_and_handles_omitted_user_inf
     connection = Connection()
 
     async def spawn(command, **kwargs):
-        assert command[:3] == (str(app), str(entry), "--acp")
+        assert command[:2] == (str(app), str(entry))
         assert kwargs["env"]["ELECTRON_RUN_AS_NODE"] == "1"
         assert kwargs["env"]["HOME"] == str(tmp_path / "native-home")
         assert command[command.index("--tools") + 1] == ""
         assert command[command.index("--setting-sources") + 1] == ""
+        if bundle_name == "codebuddy-lite-wb.mjs":
+            assert command[2:10] == ("--serve", "--host", "127.0.0.1", "--port", "0", "--auth", "password", "--acp")
+            assert kwargs["stdout_preamble_lines"] > 0
+            assert kwargs["env"]["CODEBUDDY_FORCE_LITE_WB_BUNDLE"] == "1"
+            assert kwargs["env"]["CODEBUDDY_GATEWAY_PASSWORD"]
+            assert "CODEBUDDY_GATEWAY_PASSWORD" not in profile.environment
+        else:
+            assert command[2] == "--acp"
+            assert "stdout_preamble_lines" not in kwargs
+            assert "CODEBUDDY_FORCE_LITE_WB_BUNDLE" not in kwargs["env"]
         return connection
     monkeypatch.setattr(JsonRpcProcess, "spawn", spawn)
 

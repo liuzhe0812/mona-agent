@@ -179,6 +179,8 @@ class DevelopmentRuntime:
         self.tools: dict[str, CodingTools] = {}
         self.live: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self.work_model_selection_lock = asyncio.Lock()
+        self.work_model_selection_generation = 0
         self._closed = False
         self._deleted_runs: set[str] = set()
         self._deletion_tasks: set[asyncio.Task] = set()

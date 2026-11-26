@@ -12,7 +12,7 @@ from pathlib import Path
 from mona.development.contracts import ExecutorId
 from mona.development.executors.codex_policy import _ENV_KEYS
 from mona.development.executors.rpc import RpcError
-from mona.development.executors.workbuddy_application import workbuddy_cli_launcher
+from mona.development.executors.workbuddy_application import workbuddy_launch_env
 
 SDK_MODULES = {ExecutorId.CLAUDE: "claude_agent_sdk", ExecutorId.CODEBUDDY: "codebuddy_agent_sdk"}
 SDK_PACKAGES = {ExecutorId.CLAUDE: "claude-agent-sdk", ExecutorId.CODEBUDDY: "codebuddy-agent-sdk"}
@@ -75,8 +75,7 @@ def prepare_sdk_profile(executor: ExecutorId, executable: Path, home: Path, root
     if executor == ExecutorId.CODEBUDDY:
         # Pin one region for login, probes, main work and child work; ignore ambient overrides.
         env["CODEBUDDY_INTERNET_ENVIRONMENT"] = codebuddy_environment
-        if workbuddy_cli_launcher(executable):
-            env["ELECTRON_RUN_AS_NODE"] = "1"
+        env.update(workbuddy_launch_env(executable))
     if model_endpoint and model_token:
         if executor != ExecutorId.CLAUDE:
             raise RpcError("unsupported_model_route", "此引擎暂不支持配置的模型来源。")

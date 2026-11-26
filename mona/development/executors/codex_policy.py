@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -83,6 +85,7 @@ class CodexProfile:
     model_endpoint: str | None = None
     work_model_catalog: Path | None = None
     work_native_tools: tuple[str, ...] = ()
+    work_auth_home: Path | None = None
 
 
 def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
@@ -138,16 +141,33 @@ def prepare_codex_work_profile(executable: Path, home: Path, root: Path, *,
     if (not selected.issubset({"exec_command", "write_stdin", "apply_patch", "view_image"})
             or ("exec_command" in selected) != ("write_stdin" in selected)):
         raise RpcError("native_policy_unavailable", "当前原生工具组合不能保持会话权限，未启动任务。")
-    profile = prepare_codex_profile(executable, home, root)
-    if selected:
-        _check_empty_rule_directory(profile.home)
+    account_profile = prepare_codex_profile(executable, home, root)
     try:
-        catalog = json.loads((profile.home / "models_cache.json").read_text(encoding="utf-8"))
+        catalog = json.loads((account_profile.home / "models_cache.json").read_text(encoding="utf-8"))
         models = catalog["models"]
         if not isinstance(models, list) or not models or not all(isinstance(model, dict) and model.get("slug") for model in models):
             raise ValueError("invalid native model catalog")
     except (OSError, ValueError, KeyError) as exc:
         raise RpcError("native_catalog_unavailable", "模型目录尚未同步，请在模型设置中刷新后重试。") from exc
+    work_root = account_profile.home / "work"
+    if work_root.resolve() != work_root:
+        raise RpcError("invalid_native_home", "模型执行目录不属于当前受管来源，未启动任务。")
+    work_root.mkdir(exist_ok=True)
+    work_home = Path(tempfile.mkdtemp(prefix="turn-", dir=work_root))
+    try:
+        profile = replace(prepare_codex_profile(executable, work_home, root),
+                          work_auth_home=account_profile.home)
+        return _prepare_codex_work_catalog(profile, models, native_tools)
+    except BaseException:
+        cleanup_codex_work_profile(replace(account_profile, home=work_home,
+                                          work_auth_home=account_profile.home))
+        raise
+
+
+def _prepare_codex_work_catalog(profile: CodexProfile, models: list[dict[str, Any]],
+                                native_tools: tuple[str, ...]) -> tuple[CodexProfile, Path]:
+    selected = frozenset(native_tools)
+    _check_empty_rule_directory(profile.home)
     for model in models:
         if "exec_command" not in selected:
             model["shell_type"] = "disabled"
@@ -165,6 +185,7 @@ def prepare_codex_work_profile(executable: Path, home: Path, root: Path, *,
         "features.image_generation": False, "features.standalone_web_search": False,
         "web_search": "disabled", "features.js_repl": False, "features.code_mode": False,
         "features.code_mode_only": False,
+        "cli_auth_credentials_store": "ephemeral",
         "model_provider": "mona_work_openai", "model_providers.mona_work_openai.name": "OpenAI",
         "model_providers.mona_work_openai.requires_openai_auth": True,
         "model_providers.mona_work_openai.wire_api": "responses",
@@ -181,7 +202,23 @@ def prepare_codex_work_profile(executable: Path, home: Path, root: Path, *,
                    work_native_tools=tuple(native_tools)), path
 
 
+def cleanup_codex_work_profile(profile: CodexProfile) -> None:
+    if profile.work_auth_home is None or not profile.home.exists():
+        return
+    home = profile.home.resolve()
+    work_root = profile.work_auth_home.resolve() / "work"
+    try:
+        if (home != profile.home or work_root.resolve() != work_root or home.parent != work_root
+                or not home.name.startswith("turn-")
+                or (home / ".mona-native-home").read_text(encoding="utf-8") != "mona-development-codex-v1\n"):
+            raise ValueError("unverified Work profile directory")
+        shutil.rmtree(home)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RpcError("native_home_cleanup_failed", "模型执行目录未能清理，请稍后重试；已有任务不会重发。") from exc
+
+
 def _check_empty_rule_directory(folder: Path) -> None:
+    has_rules = False
     try:
         directory = folder / "rules"
         if not directory.exists():
@@ -189,10 +226,14 @@ def _check_empty_rule_directory(folder: Path) -> None:
         if not directory.resolve().is_relative_to(folder.resolve()):
             raise ValueError("rule directory outside configuration root")
         for path in directory.rglob("*.rules"):
-            if not path.resolve().is_relative_to(directory.resolve()) or path.stat().st_size:
-                raise ValueError("unverified native execution rules")
+            if not path.resolve().is_relative_to(directory.resolve()):
+                raise ValueError("rule file outside configuration root")
+            if path.stat().st_size:
+                has_rules = True
     except (OSError, RuntimeError, ValueError) as exc:
         raise RpcError("native_policy_unavailable", "现有原生执行规则可能绕过当前工具权限，未启动任务。") from exc
+    if has_rules:
+        raise RpcError("native_exec_rules_conflict", "现有原生命令放行规则与当前工具权限冲突，未启动任务。")
 
 
 def validate_work_rule_sources(response: dict[str, Any], profile: CodexProfile,
@@ -242,10 +283,13 @@ def validate_work_rule_sources(response: dict[str, Any], profile: CodexProfile,
 
 def validate_effective_config(response: Any, *, model_endpoint: str | None = None,
                               work_model_catalog: Path | None = None,
-                              work_native_tools: tuple[str, ...] = ()) -> None:
+                              work_native_tools: tuple[str, ...] = (),
+                              work_auth_home: Path | None = None) -> None:
     if not isinstance(response, dict) or not isinstance(response.get("config"), dict):
         raise RpcError("isolation_unverified", "原生执行者未返回有效配置，未启动开发会话。")
     config = response["config"]
+    if work_auth_home is not None and config.get("cli_auth_credentials_store") != "ephemeral":
+        raise RpcError("work_policy_unverified", "模型执行环境未启用临时账号连接，未发送会话请求。")
     if work_model_catalog is not None:
         for key, expected in {"model_catalog_json": str(work_model_catalog),
                               "features.shell_tool": "exec_command" in work_native_tools,

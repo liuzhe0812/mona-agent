@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 from loguru import logger
@@ -811,6 +812,8 @@ async def test_work_source_api_persists_native_choice_and_restores_api(tmp_path,
     source = {"id": "codex", "available": True, "probe": {"authentication": "ready"},
               "models": [{"id": "native-fixture", "reasoningEfforts": ["high"], "contextWindow": 32768}]}
     monkeypatch.setattr(runtime.native, "describe", lambda: [source])
+    preflight = AsyncMock()
+    monkeypatch.setattr(runtime.native, "preflight_work", preflight)
     try:
         body = {"executor": "codex", "model": "native-fixture", "effort": "high"}
         denied = await client.put("/api/development/work-model-source", json=body)
@@ -820,6 +823,9 @@ async def test_work_source_api_persists_native_choice_and_restores_api(tmp_path,
         saved = (await response.json())["agent"]
         assert saved["executor"] == "codex" and saved["native_model"] == "native-fixture"
         assert saved["native_context_window_tokens"] == 32768
+        assert preflight.await_count == 1
+        assert preflight.await_args.args[0].value == "codex"
+        assert {"exec_command", "write_stdin"} <= set(preflight.await_args.args[2])
         before = config_path.read_bytes()
         invalid = await client.put("/api/development/work-model-source", json={**body, "effort": "unsupported"}, headers=AUTH)
         assert invalid.status == 422 and config_path.read_bytes() == before
@@ -828,6 +834,7 @@ async def test_work_source_api_persists_native_choice_and_restores_api(tmp_path,
         assert restored.status == 200
         assert load_config().agents.defaults.executor == "mona"
         assert load_config().agents.defaults.model == "api-fixture"
+        assert preflight.await_count == 1
         assert runtime.store.list_projects() == [] and not runtime.tasks and not runtime.native.hosts
     finally:
         await client.close()
@@ -853,6 +860,8 @@ async def test_work_model_selection_refreshes_stale_account_or_catalog_before_sa
     source = {"id": "codex", "available": True, "probe": {"authentication": cached_auth},
               "models": [] if missing_model else models}
     monkeypatch.setattr(runtime.native, "describe", lambda: [source])
+    preflight = AsyncMock()
+    monkeypatch.setattr(runtime.native, "preflight_work", preflight)
     probes = []
 
     async def probe(project_id, executor):
@@ -870,9 +879,11 @@ async def test_work_model_selection_refreshes_stale_account_or_catalog_before_sa
             assert response.status == 200
             saved = load_config().agents.defaults
             assert saved.native_model == "gpt-6-sol" and saved.native_reasoning_effort == "high"
+            assert preflight.await_count == 1
         else:
             assert response.status == 422 and (await response.json())["error"]["code"] == "authentication_required"
             assert config_path.read_bytes() == before
+            preflight.assert_not_awaited()
         assert not runtime.tasks and not runtime.native.hosts and runtime.store.list_projects() == []
     finally:
         await client.close()
@@ -1020,9 +1031,10 @@ def _install_native_work_image_hosts(monkeypatch, tmp_path, executor, *, hold=Fa
     monkeypatch.setattr("mona.providers.native_work_provider.discover_executors", lambda _config: [discovery])
     catalog = tmp_path / "catalog.json"
     catalog.write_text("{}", encoding="utf-8")
+    profile = CodexProfile((executable,), tmp_path / "native-home", root, {})
     monkeypatch.setattr(
         "mona.providers.native_work_provider.prepare_codex_work_profile",
-        lambda *_args, **_kwargs: (object(), catalog),
+        lambda *_args, **_kwargs: (profile, catalog),
     )
     monkeypatch.setattr(
         "mona.providers.native_work_provider.prepare_sdk_profile",
