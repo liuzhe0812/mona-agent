@@ -399,16 +399,6 @@ export function App({ embeddedController }: { embeddedController?: EmbeddedSlide
   const [showAi, setShowAi] = useState(
     () => !embeddedController && localStorage.getItem('ai-slides-show-ai') !== '0',
   )
-  const [embeddedAiMenuOpen, setEmbeddedAiMenuOpen] = useState(false)
-  const embeddedAiMenuRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!embeddedAiMenuOpen) return
-    const dismiss = (event: PointerEvent) => {
-      if (!embeddedAiMenuRef.current?.contains(event.target as Node)) setEmbeddedAiMenuOpen(false)
-    }
-    window.addEventListener('pointerdown', dismiss)
-    return () => window.removeEventListener('pointerdown', dismiss)
-  }, [embeddedAiMenuOpen])
   const [showFormat, setShowFormat] = useState(false)
   const [showBgFormat, setShowBgFormat] = useState(false)
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
@@ -1309,6 +1299,18 @@ export function App({ embeddedController }: { embeddedController?: EmbeddedSlide
       })
     },
     [askState, askTargets, current],
+  )
+
+  const sendAskNow = useCallback(
+    (instruction: string) => {
+      askClosedAtRef.current = Date.now()
+      setAskState(null)
+      // Carry the popover's frozen durable targets into the run.
+      // The canvas keeps parse-time source ids for rendering, while
+      // the AI inventory and edit tools speak durable ids.
+      pushAiPreset(buildSelectionInstruction(current, askTargets, instruction), true, instruction)
+    },
+    [askTargets, current, pushAiPreset],
   )
 
   const focusQueueItem = useCallback(
@@ -3516,126 +3518,59 @@ export function App({ embeddedController }: { embeddedController?: EmbeddedSlide
                             : undefined
                         }
                       >
-                        <div className="stage-ai-bar">
-                          {embeddedController ? (
-                            <div className="mona-stage-ai-menu" ref={embeddedAiMenuRef}>
+                        {!embeddedController && (
+                          <div className="stage-ai-bar">
+                            <div className="stage-ai-group">
                               <button
-                                type="button"
-                                className="stage-ai-btn mona-stage-ai-trigger"
-                                aria-haspopup="menu"
-                                aria-expanded={embeddedAiMenuOpen}
-                                onClick={() => setEmbeddedAiMenuOpen((open) => !open)}
+                                className={`stage-ai-btn${showAi ? ' active' : ''}`}
+                                data-tip={t('aiOpenAssistant')}
+                                onClick={toggleAi}
                               >
                                 <GensparkMark size={14} />
-                                <span>AI 编辑</span>
+                                <span>Genspark AI</span>
                               </button>
-                              {embeddedAiMenuOpen ? (
-                                <div className="mona-stage-ai-actions" role="menu">
+                              {/* Same one-click presets as the Home tab; hidden instead of
+                          disabled while the deck has no real content */}
+                              {!deckEmpty && (
+                                <>
+                                  <span className="stage-ai-divider" aria-hidden="true" />
                                   <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() => {
-                                      setEmbeddedAiMenuOpen(false)
-                                      toggleAi()
-                                    }}
+                                    className="stage-ai-btn"
+                                    data-tip={t('aiBeautifyBtn')}
+                                    onClick={() =>
+                                      pushAiPreset(
+                                        t('aiBeautifyPrompt'),
+                                        true,
+                                        undefined,
+                                        undefined,
+                                        true,
+                                      )
+                                    }
                                   >
-                                    优化当前页
+                                    <IconAiBeautify size={14} />
+                                    <span>{t('aiBeautifyBtn')}</span>
                                   </button>
-                                  {!deckEmpty ? (
-                                    <>
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setEmbeddedAiMenuOpen(false)
-                                          pushAiPreset(
-                                            t('aiBeautifyPrompt'),
-                                            true,
-                                            undefined,
-                                            undefined,
-                                            true,
-                                          )
-                                        }}
-                                      >
-                                        {t('aiBeautifyBtn')}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setEmbeddedAiMenuOpen(false)
-                                          pushAiPreset(t('aiFactCheckPrompt'))
-                                        }}
-                                      >
-                                        {t('aiFactCheckBtn')}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setEmbeddedAiMenuOpen(false)
-                                          pushAiPreset(t('aiImagePrompt'))
-                                        }}
-                                      >
-                                        {t('aiImageBtn')}
-                                      </button>
-                                    </>
-                                  ) : null}
-                                </div>
-                              ) : null}
+                                  <button
+                                    className="stage-ai-btn"
+                                    data-tip={t('aiFactCheckBtn')}
+                                    onClick={() => pushAiPreset(t('aiFactCheckPrompt'))}
+                                  >
+                                    <IconAiFactCheck size={14} />
+                                    <span>{t('aiFactCheckBtn')}</span>
+                                  </button>
+                                  <button
+                                    className="stage-ai-btn"
+                                    data-tip={t('aiImageBtn')}
+                                    onClick={() => pushAiPreset(t('aiImagePrompt'))}
+                                  >
+                                    <IconAiImage size={14} />
+                                    <span>{t('aiImageBtn')}</span>
+                                  </button>
+                                </>
+                              )}
                             </div>
-                          ) : (
-                          <div className="stage-ai-group">
-                            <button
-                              className={`stage-ai-btn${showAi ? ' active' : ''}`}
-                              data-tip={t('aiOpenAssistant')}
-                              onClick={toggleAi}
-                            >
-                              <GensparkMark size={14} />
-                              <span>Genspark AI</span>
-                            </button>
-                            {/* Same one-click presets as the Home tab; hidden instead of
-                        disabled while the deck has no real content */}
-                            {!deckEmpty && (
-                              <>
-                                <span className="stage-ai-divider" aria-hidden="true" />
-                                <button
-                                  className="stage-ai-btn"
-                                  data-tip={t('aiBeautifyBtn')}
-                                  onClick={() =>
-                                    pushAiPreset(
-                                      t('aiBeautifyPrompt'),
-                                      true,
-                                      undefined,
-                                      undefined,
-                                      true,
-                                    )
-                                  }
-                                >
-                                  <IconAiBeautify size={14} />
-                                  <span>{t('aiBeautifyBtn')}</span>
-                                </button>
-                                <button
-                                  className="stage-ai-btn"
-                                  data-tip={t('aiFactCheckBtn')}
-                                  onClick={() => pushAiPreset(t('aiFactCheckPrompt'))}
-                                >
-                                  <IconAiFactCheck size={14} />
-                                  <span>{t('aiFactCheckBtn')}</span>
-                                </button>
-                                <button
-                                  className="stage-ai-btn"
-                                  data-tip={t('aiImageBtn')}
-                                  onClick={() => pushAiPreset(t('aiImagePrompt'))}
-                                >
-                                  <IconAiImage size={14} />
-                                  <span>{t('aiImageBtn')}</span>
-                                </button>
-                              </>
-                            )}
                           </div>
-                          )}
-                        </div>
+                        )}
                         <div
                           ref={stageScaleRef}
                           className="stage-scale"
@@ -4205,7 +4140,12 @@ export function App({ embeddedController }: { embeddedController?: EmbeddedSlide
           targets={askTargets}
           getAnchorRect={getAskAnchorRect}
           queueFull={editQueue.length >= EDIT_QUEUE_MAX}
+          sendOnly={Boolean(embeddedController)}
           onSubmit={(instruction) => {
+            if (embeddedController) {
+              sendAskNow(instruction)
+              return
+            }
             askClosedAtRef.current = Date.now()
             commitAsk(instruction)
           }}
@@ -4213,22 +4153,7 @@ export function App({ embeddedController }: { embeddedController?: EmbeddedSlide
             askClosedAtRef.current = Date.now()
             setAskState(null)
           }}
-          onSendNow={
-            askState.itemKey
-              ? undefined
-              : (instruction) => {
-                  askClosedAtRef.current = Date.now()
-                  setAskState(null)
-                  // Carry the popover's frozen durable targets into the run.
-                  // The canvas keeps parse-time source ids for rendering, while
-                  // the AI inventory and edit tools speak durable ids.
-                  pushAiPreset(
-                    buildSelectionInstruction(current, askTargets, instruction),
-                    true,
-                    instruction,
-                  )
-                }
-          }
+          onSendNow={askState.itemKey ? undefined : sendAskNow}
         />
       )}
 

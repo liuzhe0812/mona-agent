@@ -1,0 +1,14 @@
+# Mona personal Gateway for a co-located Ubuntu office installation.
+[Unit]
+Description=Mona Office Gateway
+After=network.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.mona/workspace-interaction
+ExecStart=@GATEWAY_PYTHON@ -m mona gateway --config %h/.mona/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

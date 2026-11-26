@@ -46,6 +46,8 @@ interface Props {
   onSendNow?: (text: string) => void
   /** Disables "Add to queue" only; sending now never touches the queue */
   queueFull?: boolean
+  /** Embedded editors send through the host instead of maintaining a local queue */
+  sendOnly?: boolean
 }
 
 const WIDTH = 340
@@ -157,6 +159,7 @@ export function AiAskPopover({
   onCancel,
   onSendNow,
   queueFull,
+  sendOnly = false,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [text, setText] = useState(initialText ?? '')
@@ -188,22 +191,40 @@ export function AiAskPopover({
   // A full queue blocks queueing only for new asks; edits update in place
   const queueBlocked = Boolean(queueFull && onSendNow)
 
-  /** Clicking away keeps whatever was typed: it lands in the queue, where it can still be edited or removed */
+  /** Standalone clicks queue the draft; embedded clicks keep it in the popover. */
   const commitOrCancel = useCallback(() => {
     const value = textRef.current.trim()
+    if (sendOnly) {
+      if (!value) onCancel()
+      return
+    }
     if (value && !queueBlocked) onSubmit(value)
     else onCancel()
-  }, [onSubmit, onCancel, queueBlocked])
+  }, [onSubmit, onCancel, queueBlocked, sendOnly])
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       if (boxRef.current?.contains(e.target as Node)) return
+      if (sendOnly && textRef.current.trim()) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       commitOrCancel()
+    }
+    const onClick = (e: MouseEvent) => {
+      if (!sendOnly || !textRef.current.trim() || boxRef.current?.contains(e.target as Node)) return
+      e.preventDefault()
+      e.stopPropagation()
     }
     // Capture phase: the canvas swallows pointer events on the Konva stage
     document.addEventListener('pointerdown', onPointerDown, true)
-    return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [commitOrCancel])
+    document.addEventListener('click', onClick, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('click', onClick, true)
+    }
+  }, [commitOrCancel, sendOnly])
 
   if (!rect) return null
 
@@ -283,7 +304,7 @@ export function AiAskPopover({
           if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
             e.preventDefault()
             if (!canSubmit) return
-            if (queueBlocked) onSendNow?.(text.trim())
+            if (!sendOnly && queueBlocked) onSendNow?.(text.trim())
             else onSubmit(text.trim())
           }
         }}
@@ -304,7 +325,7 @@ export function AiAskPopover({
         ))}
       </div>
       <div className="ai-ask-pop-foot">
-        {onSendNow ? (
+        {!sendOnly && onSendNow ? (
           <>
             <button
               className="ai-ask-cancel"
@@ -332,7 +353,7 @@ export function AiAskPopover({
               disabled={!canSubmit}
               onClick={() => canSubmit && onSubmit(text.trim())}
             >
-              {t('aiAskConfirm')}
+              {t(sendOnly ? 'aiSend' : 'aiAskConfirm')}
             </button>
           </>
         )}

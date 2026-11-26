@@ -62,7 +62,10 @@ const ribbonCss = await readFile(resolve(root, 'mona/ribbon-overflow.css'), 'utf
 assert.match(ribbonCss, /\.mona-docs-editor \.ribbon,[\s\S]*?overflow-x:\s*auto;/)
 assert.match(ribbonCss, /\.mona-slides-editor \.ribbon-body[\s\S]*?overflow:\s*visible;/)
 assert.match(ribbonCss, /\.mona-sheets-editor \.excel-header[\s\S]*?overflow-x:\s*auto;/)
-assert.match(ribbonCss, /\.mona-docs-editor \.ribbon:hover,[\s\S]*?margin-bottom:\s*-5px;/)
+for (const [, declarations] of ribbonCss.matchAll(/(?:\.ribbon|\.excel-header):hover\s*\{([^}]*)\}/g)) {
+  assert.doesNotMatch(declarations, /\b(?:margin(?:-[\w-]+)?|padding(?:-[\w-]+)?|height|scrollbar-width)\s*:/)
+}
+assert.doesNotMatch(ribbonCss, /:hover::-webkit-scrollbar\s*\{[^}]*\bheight\s*:/)
 assert.match(ribbonCss, /\.mona-slides-editor \.ribbon-tab[\s\S]*?white-space:\s*nowrap;/)
 assert.match(ribbonCss, /\.mona-slides-editor \.ribbon-body\s*\{[\s\S]*?width:\s*100%;/)
 assert.match(ribbonCss, /\.mona-sheets-editor \.ribbon-tabs-win\s*\{[\s\S]*?padding-right:\s*0;/)
@@ -92,7 +95,7 @@ const slidesApp = await readFile(
 )
 assert.match(slidesApp, /embeddedController\.requestAi/)
 assert.match(slidesApp, /embedded=\{Boolean\(embeddedController\)\}/)
-assert.match(slidesApp, /embeddedController \? \([\s\S]*?AI 编辑[\s\S]*?优化当前页/)
+assert.match(slidesApp, /!embeddedController && \(\s*<div className="stage-ai-bar">/)
 assert.match(slidesApp, /!embeddedController && missingFonts\.length > 0/)
 
 const slidesRibbon = await readFile(

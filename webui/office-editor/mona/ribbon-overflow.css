@@ -6,29 +6,21 @@
   width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 .mona-docs-editor .ribbon::-webkit-scrollbar,
 .mona-slides-editor .ribbon::-webkit-scrollbar,
 .mona-sheets-editor .excel-header::-webkit-scrollbar {
-  height: 0;
+  height: 5px;
 }
 
 .mona-docs-editor .ribbon:hover,
 .mona-slides-editor .ribbon:hover,
 .mona-sheets-editor .excel-header:hover {
-  scrollbar-width: thin;
   position: relative;
   z-index: 1;
-  margin-bottom: -5px;
-}
-
-.mona-docs-editor .ribbon:hover::-webkit-scrollbar,
-.mona-slides-editor .ribbon:hover::-webkit-scrollbar,
-.mona-sheets-editor .excel-header:hover::-webkit-scrollbar {
-  height: 5px;
 }
 
 .mona-docs-editor .ribbon::-webkit-scrollbar-track,
@@ -41,6 +33,12 @@
 .mona-slides-editor .ribbon::-webkit-scrollbar-thumb,
 .mona-sheets-editor .excel-header::-webkit-scrollbar-thumb {
   border-radius: 2.5px;
+  background: transparent;
+}
+
+.mona-docs-editor .ribbon:hover::-webkit-scrollbar-thumb,
+.mona-slides-editor .ribbon:hover::-webkit-scrollbar-thumb,
+.mona-sheets-editor .excel-header:hover::-webkit-scrollbar-thumb {
   background: var(--border-strong);
 }
 
@@ -98,8 +96,8 @@
 .mona-sheets-editor .excel-header {
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 .mona-sheets-editor .excel-header > .ribbon-tabs,

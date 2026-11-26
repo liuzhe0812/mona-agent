@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/providers/ClientProvider", () => ({
+  useClientContextOrNull: () => null,
   useClient: () => ({
     client: {
       newChat: mocks.newChat,
@@ -66,26 +67,34 @@ vi.mock("@/lib/tauri", async (importOriginal) => ({
 }));
 
 vi.mock("@/components/office/OfficeEditorHost", () => ({
-  OfficeEditorHost: ({ initialSession }: { initialSession: OfficeSessionState }) => (
-    <div>Office 编辑器：{initialSession.displayName}</div>
+  OfficeEditorHost: ({ initialSession, onAiRequest }: { initialSession: OfficeSessionState; onAiRequest?: (prompt: string, displayText?: string) => void }) => (
+    <div>Office 编辑器：{initialSession.displayName}<button onClick={() => onAiRequest?.("修改第 8 页表格：润色", "润色")}>模拟元素 AI 编辑</button></div>
   ),
 }));
 
 vi.mock("@/components/doc/DocChatPanel", async () => {
   const { useEffect } = await import("react");
   return {
-    DocChatPanel: ({ chatId, disabled, getSendOptions, onReadyChange }: {
+    DocChatPanel: ({ chatId, disabled, getSendOptions, onReadyChange, showWorkModelSelector, externalRequest, onExternalRequestHandled }: {
       chatId: string;
       disabled?: boolean;
       getSendOptions?: (content: string) => Record<string, unknown> | undefined;
       onReadyChange?: (chatId: string | null) => void;
+      showWorkModelSelector?: boolean;
+      externalRequest?: { id: string; content: string; options?: Record<string, unknown> };
+      onExternalRequestHandled?: (id: string) => boolean;
     }) => {
       useEffect(() => {
         onReadyChange?.(chatId);
         return () => onReadyChange?.(null);
       }, [chatId, onReadyChange]);
+      useEffect(() => {
+        if (externalRequest && onExternalRequestHandled?.(externalRequest.id)) {
+          mocks.sendMessage(chatId, externalRequest.content, undefined, externalRequest.options);
+        }
+      }, [chatId, externalRequest, onExternalRequestHandled]);
       return (
-        <div>
+        <div data-testid="doc-chat-panel" data-work-model-selector={String(showWorkModelSelector)}>
           <span>AI 对话：{chatId}</span>
           <button type="button" disabled={disabled} onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
         </div>
@@ -93,6 +102,10 @@ vi.mock("@/components/doc/DocChatPanel", async () => {
     },
   };
 });
+
+vi.mock("@/components/doc/video/VideoChatPanel", async () => ({
+  VideoChatPanel: (await import("@/components/doc/DocChatPanel")).DocChatPanel,
+}));
 
 vi.mock("@/components/doc/video/VideoMakerView", () => ({
   VideoMakerView: ({
@@ -285,6 +298,7 @@ describe("DocMakerView", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开 MONA AI" }));
     const sidebar = screen.getByRole("complementary", { name: "MONA AI 文档助手" });
     expect(within(sidebar).getByRole("img", { name: "Mona" })).toBeInTheDocument();
+    expect(within(sidebar).getByTestId("doc-chat-panel")).toHaveAttribute("data-work-model-selector", "true");
     expect(within(sidebar).queryByText("新建文档")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "发送测试消息" }));
     expect(mocks.sendMessage).toHaveBeenCalledWith("chat-1", "修改当前文档", undefined, expect.objectContaining({
@@ -292,6 +306,24 @@ describe("DocMakerView", () => {
       officeDocumentType: "docs",
       officeDisplayName: "新建文档",
     }));
+  });
+
+  it("opens the chat and routes an editor request to the matching office session", async () => {
+    mocks.createOfficeSession.mockResolvedValue(officeSession("slides", "新建演示文稿"));
+    render(<DocMakerView />);
+    fireEvent.click(screen.getByRole("button", { name: /PPT/ }));
+    await screen.findByText(/Office 编辑器：/);
+
+    expect(screen.queryByTestId("doc-chat-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模拟元素 AI 编辑" }));
+
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("chat-1", "修改第 8 页表格：润色", undefined, {
+      officeSessionId: "slides-session",
+      officeDocumentType: "slides",
+      officeDisplayName: "新建演示文稿",
+      displayContent: "润色",
+    });
   });
 
   it("refreshes the start history when an embedded video finishes exporting", async () => {
@@ -375,6 +407,7 @@ describe("DocMakerView", () => {
 
     const panel = await screen.findByRole("complementary", { name: "制作对话" });
     expect(within(panel).getByText("AI 对话：storyboard-chat")).toBeInTheDocument();
+    expect(within(panel).getByTestId("doc-chat-panel")).toHaveAttribute("data-work-model-selector", "false");
     await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith("storyboard-chat"));
     expect(screen.getByTestId("embedded-video-project-chat-id")).toHaveTextContent("storyboard-chat");
     expect(mocks.newChat).not.toHaveBeenCalled();

@@ -35,57 +35,6 @@ body {
   display: none !important;
 }
 
-.mona-slides-editor .mona-stage-ai-menu {
-  position: relative;
-  padding: 3px 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--slides-shadow-toolbar);
-}
-
-.mona-slides-editor .mona-stage-ai-trigger {
-  height: 24px;
-}
-
-.mona-slides-editor .mona-stage-ai-actions {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 10;
-  display: grid;
-  min-width: 132px;
-  padding: 4px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--slides-shadow-toolbar);
-}
-
-.mona-slides-editor .mona-stage-ai-actions button {
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.mona-slides-editor .mona-stage-ai-actions button:hover,
-.mona-slides-editor .mona-stage-ai-actions button:focus-visible {
-  background: var(--hover);
-}
-
-.mona-slides-editor .mona-stage-ai-actions button:focus-visible {
-  outline: 1px solid var(--color-brand-secondary);
-  outline-offset: -1px;
-}
-
 .mona-slides-status {
   position: absolute;
   top: 8px;

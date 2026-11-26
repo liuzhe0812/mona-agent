@@ -83,4 +83,69 @@ describe("video model binding", () => {
     await act(async () => { complete(codex); await pending; });
     expect(result.current.binding).toEqual(api);
   });
+
+  it("shares selections and prevents a second write while a selection is saving", async () => {
+    mocks.fetch.mockResolvedValue(api);
+    let complete!: (value: typeof codex) => void;
+    mocks.update.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
+    const { result } = renderHook(() => ({
+      workbench: useVideoModelBinding("video-shared"),
+      sidebar: useVideoModelBinding("video-shared"),
+    }));
+    await waitFor(() => expect(result.current.workbench.loading || result.current.sidebar.loading).toBe(false));
+    expect(result.current.workbench.binding).toEqual(api);
+    expect(result.current.sidebar.binding).toEqual(api);
+
+    let pending!: Promise<unknown>;
+    act(() => { pending = result.current.sidebar.changeBinding(codex); });
+    expect(result.current.workbench.saving).toBe(true);
+    expect(result.current.sidebar.saving).toBe(true);
+    await act(async () => {
+      await expect(result.current.workbench.changeBinding(api)).rejects.toThrow("正在切换模型");
+    });
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    await act(async () => { complete(codex); await pending; });
+    expect(result.current.workbench.binding).toEqual(codex);
+    expect(result.current.sidebar.binding).toEqual(codex);
+    expect(result.current.workbench.saving || result.current.sidebar.saving).toBe(false);
+  });
+
+  it("shares an unknown result and clears it in both instances after a successful reload", async () => {
+    mocks.fetch.mockResolvedValueOnce(api).mockResolvedValueOnce(api)
+      .mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(codex);
+    mocks.update.mockRejectedValue(new Error("response lost"));
+    const { result } = renderHook(() => ({
+      workbench: useVideoModelBinding("video-unknown"),
+      sidebar: useVideoModelBinding("video-unknown"),
+    }));
+    await waitFor(() => expect(result.current.workbench.loading || result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await expect(result.current.sidebar.changeBinding(codex)).rejects.toThrow("结果暂时无法确认");
+    });
+    expect(result.current.sidebar.error).toContain("重新读取");
+    expect(result.current.workbench.error).toContain("重新读取");
+    act(() => result.current.workbench.reload());
+    await waitFor(() => expect(result.current.workbench.binding).toEqual(codex));
+    expect(result.current.sidebar.binding).toEqual(codex);
+    expect(result.current.workbench.error).toBeNull();
+    expect(result.current.sidebar.error).toBeNull();
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let an older in-flight read replace a newer selection in another instance", async () => {
+    let finishOldRead!: (value: typeof api) => void;
+    mocks.fetch.mockImplementationOnce(() => new Promise((resolve) => { finishOldRead = resolve; }))
+      .mockResolvedValueOnce(api);
+    mocks.update.mockResolvedValue(codex);
+    const { result } = renderHook(() => ({
+      workbench: useVideoModelBinding("video-stale-read"),
+      sidebar: useVideoModelBinding("video-stale-read"),
+    }));
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    expect(result.current.workbench.loading).toBe(true);
+    await act(async () => { await result.current.sidebar.changeBinding(codex); });
+    await act(async () => finishOldRead(api));
+    expect(result.current.workbench.binding).toEqual(codex);
+    expect(result.current.sidebar.binding).toEqual(codex);
+  });
 });

@@ -77,6 +77,7 @@ import { VideoNarrationSettingsDialog } from "./VideoNarrationSettingsDialog";
 import { VoicePreviewButton } from "./VoicePreviewButton";
 import { useVideoModelBinding, useVideoSessionKind } from "./useVideoModelBinding";
 import { VideoModelControl } from "./VideoModelControl";
+import { VideoChatPanel } from "./VideoChatPanel";
 import {
   EDGE_TTS_VOICES,
   TTS_PROVIDERS,
@@ -241,6 +242,7 @@ export function VideoMakerView({
   const [createdVideoChatId, setCreatedVideoChatId] = useState<string | null>(null);
   const session = useVideoSessionKind(chatId, chatId && chatId === createdVideoChatId ? "video" : chatId === (initialProject?.chatId ?? hostChatId) ? sessionAgentKind : undefined);
   const videoSession = !chatId || session.agentKind === "video";
+  const ProjectChatPanel = videoSession ? VideoChatPanel : DocChatPanel;
   const sessionUnavailable = Boolean(chatId && session.agentKind === undefined);
   const videoModel = useVideoModelBinding(chatId, null, videoSession);
   const [projectName, setProjectName] = useState<string | null>(initialProject?.name ?? null);
@@ -268,6 +270,10 @@ export function VideoMakerView({
   const [agentStartedAt, setAgentStartedAt] = useState<number | null>(null);
   const onProjectChangeRef = useRef(onProjectChange);
   const pendingGenerationRef = useRef<PendingVideoGeneration | null>(null);
+  useEffect(() => {
+    if (pendingGenerationRef.current) pendingGenerationRef.current.modelBinding = videoModel.binding;
+  }, [videoModel.binding]);
+
   const changeVideoModel = useCallback(async (value: AgentModelBinding | null) => {
     const saved = await videoModel.changeBinding(value);
     if (pendingGenerationRef.current) pendingGenerationRef.current.modelBinding = saved;
@@ -1382,7 +1388,7 @@ export function VideoMakerView({
                   onFocusChange={handleFocusChange}
                   readOnly={approvedRevision !== null && approvedRevision === currentPlanRevision}
                   busy={isChatRunning || hostIsStreaming || confirming}
-                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
+                  chatPanel={embedded ? undefined : <ProjectChatPanel chatId={chatId} showWorkModelSelector={!videoSession} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
                 />
               </div>
               <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 px-4 py-1.5">
@@ -1413,7 +1419,7 @@ export function VideoMakerView({
               onRetryGeneration={handleContinueProduction}
               onEditContent={(section) => { if (section === "assets") setContentOpen(true); else setWorkspaceView("director"); }}
               chatPanel={embedded ? undefined : (
-                <DocChatPanel chatId={chatId} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
+                <ProjectChatPanel chatId={chatId} showWorkModelSelector={!videoSession} disabled={sessionUnavailable} getSendOptions={() => ({ ...(videoSession ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
               )}
             />
           )}

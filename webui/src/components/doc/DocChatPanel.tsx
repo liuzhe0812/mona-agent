@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
 import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { UserQuestionPanel } from "@/components/thread/UserQuestionPanel";
@@ -9,7 +10,15 @@ import { Button } from "@/components/ui/button";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { reconcileHistoryMessages, useSessionHistory } from "@/hooks/useSessions";
-import type { MessageQuote, UIMessage } from "@/lib/types";
+import { draftMessageQuote } from "@/lib/message-quote";
+import type { MessageQuoteDraft, QuoteMessageHandler } from "@/lib/types";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
+
+export interface DocChatRequest {
+  id: string;
+  content: string;
+  options?: SendOptions;
+}
 
 interface DocChatPanelProps {
   chatId: string | null;
@@ -22,6 +31,13 @@ interface DocChatPanelProps {
   onReadyChange?: (chatId: string | null) => void;
   hideStop?: boolean;
   disabled?: boolean;
+  showWorkModelSelector?: boolean;
+  modelControl?: ReactNode;
+  onOpenSettings?: (section?: string) => void;
+  onModelNameChange?: (model: string | null) => void;
+  pendingQueue?: ReturnType<typeof usePendingQueue>;
+  externalRequest?: DocChatRequest;
+  onExternalRequestHandled?: (id: string) => boolean;
 }
 
 export function DocChatPanel({
@@ -33,11 +49,26 @@ export function DocChatPanel({
   onReadyChange,
   hideStop = false,
   disabled = false,
+  showWorkModelSelector = false,
+  modelControl,
+  onOpenSettings,
+  onModelNameChange,
+  pendingQueue: sharedPendingQueue,
+  externalRequest,
+  onExternalRequestHandled,
 }: DocChatPanelProps) {
-  const [quote, setQuote] = useState<MessageQuote | null>(null);
+  const [quote, setQuote] = useState<MessageQuoteDraft | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const onStreamingChangeRef = useRef(onStreamingChange);
-  const pendingQueue = usePendingQueue(chatId);
+  const localPendingQueue = usePendingQueue(chatId);
+  const pendingQueue = sharedPendingQueue ?? localPendingQueue;
+  const context = useClientContextOrNull();
+  const workModel = useWorkModelSelection({
+    token: context?.token ?? "",
+    modelName: context?.modelName ?? null,
+    enabled: showWorkModelSelector && Boolean(context && chatId),
+    onModelNameChange,
+  });
 
   useEffect(() => {
     onStreamingChangeRef.current = onStreamingChange;
@@ -113,6 +144,12 @@ export function DocChatPanel({
     send(sendContent, images, options);
   }, [chatId, disabled, getSendOptions, isStreaming, pendingQueue, prepareContent, send]);
 
+  useEffect(() => {
+    if (!externalRequest || !chatId || disabled || loading || pendingQueue.messages.length >= 3) return;
+    if (!onExternalRequestHandled?.(externalRequest.id)) return;
+    handleSubmit(externalRequest.content, undefined, externalRequest.options);
+  }, [chatId, disabled, externalRequest, handleSubmit, isStreaming, loading, onExternalRequestHandled, pendingQueue.messages.length]);
+
   const handlePendingAppend = useCallback((id: string) => {
     const pending = pendingQueue.messages.find((message) => message.id === id);
     if (!pending || pending.locked) return;
@@ -123,9 +160,9 @@ export function DocChatPanel({
     } });
   }, [inject, pendingQueue]);
 
-  const handleQuote = useCallback((message: UIMessage, author: string) => {
-    const content = (message.role === "user" ? message.displayContent ?? message.content : message.content).trim();
-    if (content) setQuote({ author, content });
+  const handleQuote = useCallback<QuoteMessageHandler>((message, author, image) => {
+    const draft = draftMessageQuote(message, author, image);
+    if (draft) setQuote(draft);
   }, []);
 
   if (!chatId) {
@@ -168,7 +205,13 @@ export function DocChatPanel({
       </div>
 
       <div className="shrink-0 px-2 pb-2">
+        {modelControl}
         <UserQuestionPanel chatId={chatId} />
+        {externalRequest && pendingQueue.messages.length >= 3 ? (
+          <p role="status" className="px-3 py-1 text-caption text-muted-foreground">
+            待发送消息已满，请先处理队列。等待发送：{externalRequest.options?.displayContent ?? externalRequest.content}
+          </p>
+        ) : null}
         <ThreadComposer
           chatId={chatId}
           onSend={handleSubmit}
@@ -178,6 +221,11 @@ export function DocChatPanel({
           onStop={hideStop ? undefined : stop}
           disabled={!chatId || disabled}
           placeholder={placeholder ?? "输入消息..."}
+          modelLabel={showWorkModelSelector ? workModel.modelLabel ?? "选择模型" : undefined}
+          modelOptions={showWorkModelSelector ? workModel.modelOptions : undefined}
+          onModelSelect={showWorkModelSelector ? workModel.selectModel : undefined}
+          onOpenSettings={showWorkModelSelector ? onOpenSettings : undefined}
+          imageInputEnabled={showWorkModelSelector ? workModel.imageInputEnabled : undefined}
           quote={quote}
           onClearQuote={() => setQuote(null)}
           pendingMessages={pendingQueue.messages}

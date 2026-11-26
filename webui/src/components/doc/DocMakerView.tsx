@@ -14,7 +14,8 @@ import {
 import { AgentLogo } from "@/components/AgentLogo";
 import { createConversationCanvasNote } from "@/components/canvas/conversation-canvas";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
-import { DocChatPanel } from "@/components/doc/DocChatPanel";
+import { DocChatPanel, type DocChatRequest } from "@/components/doc/DocChatPanel";
+import { VideoChatPanel } from "@/components/doc/video/VideoChatPanel";
 import { VideoHistory } from "@/components/doc/video/VideoHistory";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { OfficeEditorHost } from "@/components/office/OfficeEditorHost";
@@ -58,6 +59,7 @@ import {
   type WorkspaceCanvasDocument,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { useClient } from "@/providers/ClientProvider";
 import type { EmbeddedVideoProject } from "@/components/doc/video/VideoMakerView";
@@ -271,6 +273,8 @@ export function DocMakerView({
   onVisibleConversationChange,
   sessionAgentKinds,
   onShowChatHistory,
+  onOpenSettings,
+  onModelNameChange,
 }: {
   visible?: boolean;
   videoConversationRequest?: VideoConversationRequest | null;
@@ -278,6 +282,8 @@ export function DocMakerView({
   onVisibleConversationChange?: (chatId: string | null) => void;
   sessionAgentKinds?: Readonly<Record<string, string | null>>;
   onShowChatHistory?: (chatId: string) => void;
+  onOpenSettings?: (section?: string) => void;
+  onModelNameChange?: (model: string | null) => void;
 } = {}) {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((state) => state.workspacePath);
@@ -314,8 +320,11 @@ export function DocMakerView({
   const [pendingDelete, setPendingDelete] = useState<HistoryItem | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const officeRequestsRef = useRef<Array<DocChatRequest & { tabId: string }>>([]);
+  const [officeRequests, setOfficeRequests] = useState<Array<DocChatRequest & { tabId: string }>>([]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const pendingQueue = usePendingQueue(activeTab?.kind === "office" ? activeTab.chatId : null);
   const activeVideoChatId = activeTab?.kind === "video-workflow" ? activeTab.chatId : null;
   const activeVideoAgentKind = activeVideoChatId ? knownSessionKinds[activeVideoChatId] : undefined;
   useEffect(() => client.onRunStatus((chatId, startedAt) => {
@@ -327,6 +336,7 @@ export function DocMakerView({
     });
   }), [client, tabs]);
   const activeTabIsVideo = activeTab?.kind === "video-workflow";
+  const ActiveDocChatPanel = activeTabIsVideo && activeVideoAgentKind === "video" ? VideoChatPanel : DocChatPanel;
   const activeStyleWorkspace = styleWorkspaces[activeTabId];
   const showDocumentSidebar = rightSidebarOpen && !activeStyleWorkspace && (!activeTabIsVideo || Boolean(activeTab?.chatId));
 
@@ -862,23 +872,37 @@ export function DocMakerView({
     }
   }, [workspacePath]);
 
-  const sendForTab = useCallback((tab: WorkspaceTab, content: string, displayContent?: string, modelBinding?: import("@/lib/types").AgentModelBinding | null) => {
-    if (tab.kind === "office") {
-      client.sendMessage(tab.chatId, content, undefined, {
-        officeSessionId: tab.session.sessionId, officeDocumentType: tab.officeType, officeDisplayName: tab.title, displayContent,
-      });
-      return;
-    }
-    if (tab.kind === "canvas") {
-      client.sendMessage(tab.chatId, content, undefined, { displayContent });
-      return;
-    }
+  const sendForTab = useCallback((tab: VideoWorkspaceTab, content: string, displayContent?: string, modelBinding?: import("@/lib/types").AgentModelBinding | null) => {
     const agentKind = tab.chatId ? knownSessionKinds[tab.chatId] : undefined;
     if (tab.chatId && agentKind !== undefined) client.sendMessage(tab.chatId, content, undefined, {
       displayContent,
       ...(agentKind === "video" ? { agentKind: "video", ...(modelBinding !== undefined ? { modelBinding } : {}) } : {}),
     });
   }, [client, knownSessionKinds]);
+
+  const sendOfficeRequest = useCallback((tab: OfficeWorkspaceTab, content: string, displayContent?: string) => {
+    const request: DocChatRequest & { tabId: string } = {
+      id: crypto.randomUUID(),
+      tabId: tab.id,
+      content,
+      options: {
+        officeSessionId: tab.session.sessionId,
+        officeDocumentType: tab.officeType,
+        officeDisplayName: tab.title,
+        displayContent,
+      },
+    };
+    officeRequestsRef.current = [...officeRequestsRef.current, request];
+    setOfficeRequests(officeRequestsRef.current);
+    setRightSidebarOpen(true);
+  }, []);
+
+  const handleOfficeRequest = useCallback((id: string) => {
+    if (!officeRequestsRef.current.some((request) => request.id === id)) return false;
+    officeRequestsRef.current = officeRequestsRef.current.filter((request) => request.id !== id);
+    setOfficeRequests(officeRequestsRef.current);
+    return true;
+  }, []);
 
   const historyItems = useMemo<HistoryItem[]>(() => {
     const officeItems: HistoryItem[] = recentOffice.map((office) => ({ key: office.key, kind: "office", title: office.title, createdAt: office.updatedAt, detail: OFFICE_META[office.officeType].label, office }));
@@ -1036,7 +1060,7 @@ export function DocMakerView({
                 <div key={tab.id} className={cn("absolute inset-0 flex min-h-0 flex-col bg-background", activeTabId !== tab.id && "invisible pointer-events-none")}>
                   {tab.kind === "office" ? (
                     <div className="absolute inset-0 flex min-h-0 flex-col">
-                      <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => { setRightSidebarOpen(true); sendForTab(tab, prompt, displayText); }} toolbarContainer={activeTabId === tab.id ? officeToolbarContainer : null} /></div>
+                      <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => sendOfficeRequest(tab, prompt, displayText)} toolbarContainer={activeTabId === tab.id ? officeToolbarContainer : null} /></div>
                     </div>
                   ) : tab.kind === "canvas" ? (
                     <Suspense fallback={<LoadingLabel label="正在打开画布…" />}><CanvasFileView filePath={tab.filePath} /></Suspense>
@@ -1065,7 +1089,7 @@ export function DocMakerView({
             <aside aria-label={activeTabIsVideo ? "制作对话" : "MONA AI 文档助手"} className="flex h-full min-w-0 flex-col bg-background">
               <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-3 pr-11"><div className="flex min-w-0 items-center gap-2"><AgentLogo state={activeTab && streamingByTab[activeTab.id] ? "working" : "idle"} className="h-5 w-5 shrink-0" title="Mona" /><div className="text-ui font-semibold">{activeTabIsVideo ? "制作对话" : "MONA AI"}</div></div></div>
               <div className="min-h-0 flex-1">
-{activeTab?.chatId ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} disabled={activeTabIsVideo && activeVideoAgentKind === undefined} onReadyChange={setReadyChatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { ...(activeVideoAgentKind === "video" ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(videoFocusByTab.current[activeTab.id]) } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
+{activeTab?.chatId ? <ActiveDocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} pendingQueue={activeTab.kind === "office" ? pendingQueue : undefined} externalRequest={officeRequests.find((request) => request.tabId === activeTab.id)} onExternalRequestHandled={handleOfficeRequest} showWorkModelSelector={activeTab.kind !== "video-workflow" || activeVideoAgentKind === null} onOpenSettings={onOpenSettings} onModelNameChange={onModelNameChange} disabled={activeTabIsVideo && activeVideoAgentKind === undefined} onReadyChange={setReadyChatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { ...(activeVideoAgentKind === "video" ? { agentKind: "video" as const } : {}), quote: videoFocusQuote(videoFocusByTab.current[activeTab.id]) } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
               </div>
             </aside>
           ) : null}

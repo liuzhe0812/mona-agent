@@ -237,6 +237,7 @@ export function OfficeWorkbenchView() {
               left={
                 <DocChatPanel
                   chatId={chatId}
+                  showWorkModelSelector
                   getSendOptions={getSendOptions}
                   placeholder="拖入文档后提问，或点击上方文档芯片预览..."
                 />
