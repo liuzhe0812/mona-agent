@@ -12,6 +12,93 @@ function visibleTextMatches(text: string | RegExp): HTMLElement[] {
 }
 
 describe("ThreadMessages", () => {
+  it("puts successful drawings in one image preview after their SVG retries", () => {
+    const draw = (id: string, title: string, status: "error" | "complete", width: number): UIMessage => ({
+      id, role: "assistant", kind: "widget", content: "", createdAt: 2, taskId: "draw",
+      widget: {
+        id, title, status, loadingMessages: [],
+        code: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 400"><rect width="100" height="100" fill="green" /></svg>`,
+        ...(status === "error" ? { error: "Drawing failed" } : {}),
+      },
+    });
+    render(<ThreadMessages messages={[
+      { id: "request", role: "user", content: "Draw two pictures", createdAt: 1, taskId: "draw" },
+      draw("summer-attempt", "Summer", "error", 400),
+      draw("winter-attempt", "Winter", "error", 400),
+      draw("summer-result", "Summer", "complete", 680),
+      draw("winter-result", "Winter", "complete", 680),
+      { id: "reply", role: "assistant", content: "Both drawings are ready.", createdAt: 3, taskId: "draw" },
+    ]} />);
+
+    expect(screen.queryByText("Drawing failed")).not.toBeInTheDocument();
+    expect(screen.getByText("Both drawings are ready.")).toBeInTheDocument();
+    const thumbnails = screen.getByRole("group", { name: "Image thumbnails" });
+    expect(thumbnails).toHaveClass("scrollbar-none", "overflow-y-auto");
+    expect(within(thumbnails).getAllByRole("button")).toHaveLength(2);
+    fireEvent.click(within(thumbnails).getByRole("button", { name: "Show image 2: Winter.svg" }));
+    const preview = screen.getByRole("button", { name: "View image: Winter.svg" });
+    expect(preview).toHaveClass("h-60");
+    expect(preview).not.toHaveClass("border");
+    expect(within(preview).getByRole("img").getAttribute("src")).toMatch(/^data:image\/svg\+xml;/);
+  });
+
+  it("keeps interactive drawings sandboxed and shows errors from other tasks", () => {
+    const code = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><circle r="30" /></svg>';
+    const interactiveCode = code.replace("<circle", '<circle onclick="choose()"');
+    render(<ThreadMessages messages={[
+      { id: "old-request", role: "user", content: "Draw first", createdAt: 1, taskId: "old" },
+      { id: "old", role: "assistant", kind: "widget", content: "", createdAt: 2, taskId: "old",
+        widget: { id: "old", title: "Picture", code, status: "error", loadingMessages: [], error: "Earlier drawing failed" } },
+      { id: "new-request", role: "user", content: "Draw again", createdAt: 3, taskId: "new" },
+      { id: "new", role: "assistant", kind: "widget", content: "", createdAt: 4, taskId: "new",
+        widget: { id: "new", title: "Picture", code, status: "complete", loadingMessages: [] } },
+      { id: "interactive", role: "assistant", kind: "widget", content: "", createdAt: 5, taskId: "new",
+        widget: { id: "interactive", title: "Interactive drawing", code: interactiveCode, status: "complete", loadingMessages: [] } },
+    ]} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Earlier drawing failed");
+    expect(screen.getByRole("img", { name: "Picture.svg" })).toBeInTheDocument();
+    expect(screen.getByTitle("Interactive drawing")).toHaveAttribute("sandbox", "allow-scripts");
+  });
+
+  it("presents a partner conversation as IM bubbles with one avatar for the reply and its process", () => {
+    const partner = { id: "partner.test", displayName: "学者", avatarUrl: "/brand/agents/academic-researcher.png" };
+    const messages: UIMessage[] = [
+      { id: "question", role: "user", content: "整理这份资料", createdAt: 1 },
+      { id: "reading", role: "tool", kind: "trace", content: "", traces: [], createdAt: 2,
+        media: [{ kind: "image", name: "执行预览", url: "https://example.com/preview.png" }] },
+      { id: "reply", role: "assistant", content: "## 整理结果\n\n- 第一项", createdAt: 3, latencyMs: 116_000 },
+    ];
+    const onQuote = vi.fn();
+    const onBranch = vi.fn();
+    const { container, rerender } = render(
+      <ThreadMessages messages={messages} partner={partner} onQuote={onQuote} onBranch={onBranch} />,
+    );
+
+    const question = screen.getByTestId("message-bubble-question");
+    const answer = screen.getByTestId("message-bubble-reply");
+    expect(question).toHaveClass("ml-auto");
+    expect(question.querySelector(".bg-muted")).toBeInTheDocument();
+    expect(answer).toHaveClass("self-start", "w-fit");
+    expect(answer.querySelector(".bg-muted")).toBeInTheDocument();
+    expect(answer).toHaveTextContent("整理结果");
+    expect(within(answer).queryByRole("button", { name: "Start branch task" })).not.toBeInTheDocument();
+    expect(container.querySelector("time")).toHaveClass("text-center");
+
+    const timing = screen.getByTestId("activity-timing");
+    expect(timing.parentElement?.parentElement?.querySelector(`img[src="${partner.avatarUrl}"]`)).toBeInTheDocument();
+    expect(container.querySelectorAll(`img[src="${partner.avatarUrl}"]`)).toHaveLength(1);
+    expect(screen.queryByRole("img", { name: "执行预览" })).not.toBeInTheDocument();
+    fireEvent.click(within(timing).getByRole("button", { name: "Expand process" }));
+    const preview = screen.getByRole("img", { name: "执行预览" });
+    expect(preview.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(within(answer).getByRole("button", { name: "Reply" }));
+    expect(onQuote).toHaveBeenCalledWith(messages[2], partner.displayName);
+    rerender(<ThreadMessages messages={messages} onBranch={onBranch} />);
+    expect(within(screen.getByTestId("message-bubble-reply")).getByRole("button", { name: "Start branch task" })).toBeInTheDocument();
+  });
+
   it("keeps question previews in their original process position and folds them after completion", () => {
     const media = ["A", "B", "C"].map((name) => ({ kind: "image" as const, name, url: `https://example.com/${name}.jpg` }));
     const messages: UIMessage[] = [
@@ -501,6 +588,31 @@ describe("ThreadMessages", () => {
       />,
     );
     expect(screen.getByText("Intermediate update")).toBeInTheDocument();
+  });
+
+  it("keeps a confirmed final answer visible when later activity arrives", () => {
+    const messages: UIMessage[] = [
+      { id: "u1", role: "user", content: "Inspect this project.", createdAt: 1 },
+      { id: "progress", role: "assistant", content: "Intermediate update", createdAt: 2 },
+      { id: "t1", role: "tool", kind: "trace", content: "inspect()", traces: ["inspect()"], createdAt: 3 },
+      { id: "a1", role: "assistant", content: "Confirmed answer", isFinalResponse: true, createdAt: 4 },
+      { id: "t2", role: "tool", kind: "trace", content: "late_activity()", traces: ["late_activity()"], createdAt: 5 },
+      { id: "late", role: "assistant", content: "Late update", createdAt: 6 },
+    ];
+
+    render(<ThreadMessages messages={messages} isStreaming={false} />);
+
+    expect(screen.queryByText("Intermediate update")).not.toBeInTheDocument();
+    expect(screen.queryByText("Late update")).not.toBeInTheDocument();
+    const answer = screen.getByTestId("message-bubble-a1");
+    expect(answer).toHaveTextContent("Confirmed answer");
+    expect(within(answer).getByTestId("direct-message-actions")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand process" }));
+    expect(screen.getByText("Intermediate update")).toBeInTheDocument();
+    expect(screen.getByText("Late update")).toBeInTheDocument();
+    expect(within(screen.getByTestId("message-bubble-late")).queryByTestId("direct-message-actions")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
   });
 
   it("automatically folds on completion and expands again when the same task runs", () => {

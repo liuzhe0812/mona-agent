@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MessageMedia } from "@/components/MessageBubble";
@@ -45,9 +45,9 @@ describe("hosted generated images", () => {
     renderMedia([
       { kind: "image", name: "one.png", url: first }, { kind: "image", name: "two.png", url: second },
     ]);
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(2));
-    expect(screen.getByRole("img", { name: "one.png" })).toHaveAttribute("src", "blob:first");
-    expect(screen.getByRole("img", { name: "two.png" })).toHaveAttribute("src", "blob:second");
+    expect(await screen.findByRole("img", { name: "one.png" })).toHaveAttribute("src", "blob:first");
+    fireEvent.click(screen.getByRole("button", { name: "Show image 2: two.png" }));
+    expect(await screen.findByRole("img", { name: "two.png" })).toHaveAttribute("src", "blob:second");
     expect(create).toHaveBeenCalledTimes(2);
     expect(fetcher).toHaveBeenCalledTimes(2);
     for (const [url, options] of fetcher.mock.calls) {
@@ -59,7 +59,7 @@ describe("hosted generated images", () => {
     act(() => window.dispatchEvent(new Event("mona-account-changed")));
     expect(revoke).toHaveBeenCalledWith("blob:first");
     expect(revoke).toHaveBeenCalledWith("blob:second");
-    expect(screen.queryByRole("img", { name: "one.png" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "two.png" })).not.toBeInTheDocument();
   });
 
   it("keeps an expired image unavailable without repeated requests or logging out the account", async () => {

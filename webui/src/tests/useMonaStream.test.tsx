@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import type { InboundEvent, GoalStateWsPayload, TaskPlanWsPayload } from "@/lib/types";
 import { ClientProvider } from "@/providers/ClientProvider";
+import { activeRunTools, canStartDesktopInput } from "@/lib/work-run-progress";
 
 const EMPTY_MESSAGES: import("@/lib/types").UIMessage[] = [];
 
@@ -110,6 +111,91 @@ async function flushStreamFrame() {
 }
 
 describe("useMonaStream", () => {
+  it("clears a desktop action when its failure repeats the same tool trace", () => {
+    const fake = fakeClient();
+    const chatId = "desktop-progress";
+    const { result } = renderHook(() => useMonaStream(chatId, EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    const tool = { call_id: "launch-1", name: "computer_act", arguments: { action: "launch", arguments: { name: "Chrome" } } };
+    const emitTool = (phase: "start" | "error") => fake.emit(chatId, {
+      event: "message", kind: phase === "start" ? "tool_hint" : "progress", chat_id: chatId, task_id: "task-a", text: "",
+      tool_events: [{ ...tool, phase }],
+    });
+    const active = () => activeRunTools(result.current.messages, "task-a", null);
+
+    act(() => emitTool("start"));
+    expect(active().some(canStartDesktopInput)).toBe(true);
+    const laterTurn = ((result.current.messages.at(-1)?.createdAt ?? Date.now()) + 1000) / 1000;
+    expect(activeRunTools(result.current.messages, "task-a", laterTurn)).toHaveLength(0);
+    expect(canStartDesktopInput({ ...tool, phase: "start", arguments: { action: "launch", name: "Chrome" } })).toBe(true);
+    expect(canStartDesktopInput({ ...tool, phase: "start", arguments: { ...tool.arguments, name: "Chrome" } })).toBe(false);
+    act(() => emitTool("error"));
+    expect(active()).toHaveLength(0);
+  });
+
+  it("measures output speed and reasoning from reported request samples and resets for a new turn", () => {
+    const fake = fakeClient();
+    const chatId = "measured-progress";
+    const { result } = renderHook(() => useMonaStream(chatId, EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+    const report = (index: number, elapsedMs: number, output: number, input: number, cached: number) => fake.emit(chatId, {
+      event: "context_usage", chat_id: chatId, turn_id: "measured-1",
+      token_usage: { request_stats: { index, elapsed_ms: elapsedMs, output_tokens: output, input_tokens: input, cache_read_tokens: cached } },
+    });
+
+    act(() => {
+      fake.emit(chatId, { event: "goal_status", chat_id: chatId, status: "running", turn_id: "measured-1", started_at: 10 });
+      report(0, 1000, 80, 100, 30);
+      report(1, 2000, 100, 200, 0);
+      report(1, 2000, 100, 200, 0);
+      fake.emit(chatId, { event: "context_usage", chat_id: chatId, token_usage: { context_tokens: 1700 } });
+    });
+    expect(result.current.runMetrics).toEqual({
+      latestRate: 50, averageRate: 60, outputTokens: 180, peakRate: 80,
+      reasoningRatio: undefined, samples: [80, 50],
+    });
+    act(() => fake.emit(chatId, {
+      event: "context_usage", chat_id: chatId, turn_id: "measured-1",
+      token_usage: { request_stats: { index: 2, elapsed_ms: 1000, output_tokens: 60, reasoning_tokens: 15 } },
+    }));
+    expect(result.current.runMetrics).toEqual({
+      latestRate: 60, averageRate: 60, outputTokens: 240, peakRate: 80,
+      reasoningRatio: 0.25, samples: [80, 50, 60],
+      coverage: { total: 3, reasoning: 1 },
+    });
+    expect(result.current.liveTokenUsage?.contextTokens).toBe(1700);
+    act(() => fake.emit(chatId, { event: "turn_end", chat_id: chatId, turn_id: "measured-1", latency_ms: 4100 }));
+    expect(result.current.runMetrics).toBeUndefined();
+    expect(result.current.liveTokenUsage?.contextTokens).toBe(1700);
+    act(() => fake.emit(chatId, { event: "goal_status", chat_id: chatId, status: "running", turn_id: "measured-2", started_at: 20 }));
+    expect(result.current.runMetrics).toBeUndefined();
+  });
+
+  it("updates the live display from stream deltas and clears it while tools run", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    try {
+      const fake = fakeClient();
+      const chatId = "live-rate";
+      const { result } = renderHook(() => useMonaStream(chatId, EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+      act(() => fake.emit(chatId, { event: "goal_status", chat_id: chatId, status: "running", started_at: 10 }));
+
+      act(() => {
+        for (let chunk = 0; chunk < 5; chunk += 1) {
+          fake.emit(chatId, { event: "delta", chat_id: chatId, text: "模型正在生成这段测试回复" });
+          vi.advanceTimersByTime(500);
+        }
+      });
+      expect(result.current.liveTokenRate).toBeGreaterThan(0);
+
+      act(() => fake.emit(chatId, { event: "stream_end", chat_id: chatId }));
+      expect(result.current.liveTokenRate).toBeUndefined();
+      expect(result.current.isStreaming).toBe(true);
+      act(() => fake.emit(chatId, { event: "turn_end", chat_id: chatId }));
+      expect(result.current.liveTokenRate).toBeUndefined();
+      expect(result.current.isStreaming).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps inline widget updates separate from the following answer and delivered files", async () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("widget-chat", EMPTY_MESSAGES), {
@@ -161,6 +247,11 @@ describe("useMonaStream", () => {
     expect(result.current.messages).toHaveLength(0);
     act(() => fake.emit("usage-a", { event: "context_usage", chat_id: "usage-a", job_id: "child", token_usage: { context_tokens: 99999 } }));
     expect(result.current.liveTokenUsage?.contextTokens).toBe(12000);
+    act(() => fake.emit("usage-a", { event: "context_usage", chat_id: "usage-a", token_usage: {
+      context_tokens: 49700, context_budget_tokens: 1000000, context_model: "model-a",
+    } }));
+    expect(result.current.liveTokenUsage).toMatchObject({ contextTokens: 49700, contextBudgetTokens: 1000000 });
+    expect(result.current.liveTokenUsage?.contextWindowTokens).toBeUndefined();
     rerender({ chat: "usage-b" });
     expect(result.current.liveTokenUsage).toBeUndefined();
   });
@@ -1793,6 +1884,32 @@ describe("useMonaStream", () => {
     expect(result.current.isStreaming).toBe(false);
     expect(result.current.messages.every((message) => !message.isStreaming)).toBe(true);
     expect(onTurnEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["streamed", "complete"] as const)("keeps a %s final reply confirmed after late activity", (delivery) => {
+    const chatId = "late-activity";
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream(chatId, EMPTY_MESSAGES), { wrapper: wrap(fake.client) });
+
+    act(() => {
+      if (delivery === "streamed") {
+        fake.emit(chatId, { event: "delta", chat_id: chatId, text: "Final answer", stream_id: "answer" });
+        fake.emit(chatId, { event: "stream_end", chat_id: chatId, stream_id: "answer" });
+      } else {
+        fake.emit(chatId, { event: "message", chat_id: chatId, text: "Final answer", final_response: true });
+      }
+      fake.emit(chatId, { event: "message", chat_id: chatId, text: "Late tool update", kind: "progress" });
+      fake.emit(chatId, { event: "message", chat_id: chatId, text: "Background update", job_id: "other-job" });
+      fake.emit(chatId, {
+        event: "turn_end", chat_id: chatId, latency_ms: 2400,
+        final_stream_id: delivery === "streamed" ? "answer" : undefined,
+      });
+    });
+
+    expect(result.current.messages.filter((message) => message.isFinalResponse)).toEqual([
+      expect.objectContaining({ content: "Final answer", latencyMs: 2400, isStreaming: false }),
+    ]);
+    expect(result.current.messages.find((message) => message.content === "Background update")?.latencyMs).toBeUndefined();
   });
 
   it("stamps latency on the last assistant bubble from turn_end", () => {

@@ -375,21 +375,26 @@ describe("AgentManagementView navigation surfaces", () => {
   it("confirms deletion, allows cancellation, hides it for Mona, and returns after success", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
-    const view = render(<AgentManagementView agentId="agent.demo" onBack={onBack} onStartDirect={() => {}} />);
+    const view = render(<AgentManagementView agentId="agent.demo" onBack={onBack} />);
     await screen.findByText("Demo Agent");
-    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
-    expect(screen.getAllByText(/配置、私有知识、记忆和技能会保留以便重新安装恢复/)).toHaveLength(2);
+    expect(screen.queryByRole("heading", { name: "来源" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "私有数据" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建对话" })).not.toBeInTheDocument();
+    const deleteButton = screen.getByRole("button", { name: "永久删除" });
+    expect(deleteButton.closest("header")).toContainElement(screen.getByRole("heading", { name: "Demo Agent" }));
+    await user.click(deleteButton);
+    expect(within(screen.getByRole("dialog")).getByText(/配置、私有知识、记忆和技能会保留以便重新安装恢复/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(clientMocks.deleteAgent).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    await user.click(screen.getByRole("button", { name: "永久删除" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" }));
     await waitFor(() => expect(clientMocks.deleteAgent).toHaveBeenCalledWith("agent.demo"));
     expect(onBack).toHaveBeenCalledOnce();
     view.unmount();
     const monaBack = vi.fn();
-    render(<AgentManagementView agentId="mona" onBack={monaBack} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="mona" onBack={monaBack} />);
     await screen.findByText("Mona");
-    expect(screen.queryByRole("button", { name: "删除 Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "永久删除" })).not.toBeInTheDocument();
   });
 
   it("shows deletion consequences from the backend policy and defaults to retaining private data", async () => {
@@ -419,10 +424,10 @@ describe("AgentManagementView navigation surfaces", () => {
     ];
 
     for (const item of cases) {
-      const view = render(<AgentManagementView agentId={item.agentId} onBack={() => {}} onStartDirect={() => {}} />);
+      const view = render(<AgentManagementView agentId={item.agentId} onBack={() => {}} />);
       await screen.findByText(item.displayName);
-      expect(screen.getByText(new RegExp(item.overview))).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+      expect(screen.queryByText(new RegExp(item.overview))).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "永久删除" }));
       const dialog = within(screen.getByRole("dialog"));
       expect(dialog.getByText(new RegExp(item.confirmation))).toBeInTheDocument();
       expect(dialog.getByText(new RegExp(item.history))).toBeInTheDocument();
@@ -434,9 +439,9 @@ describe("AgentManagementView navigation surfaces", () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
     clientMocks.deleteAgent.mockRejectedValueOnce(new Error("agent_delete_result timed out"));
-    render(<AgentManagementView agentId="agent.demo" onBack={onBack} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={onBack} />);
     await screen.findByText("Demo Agent");
-    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    await user.click(screen.getByRole("button", { name: "永久删除" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("删除结果尚未确认");
     expect(screen.queryByText(/agent_delete_result/)).not.toBeInTheDocument();
@@ -448,9 +453,9 @@ describe("AgentManagementView navigation surfaces", () => {
     const user = userEvent.setup();
     let resolveDelete!: () => void;
     clientMocks.deleteAgent.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveDelete = resolve; }));
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await screen.findByText("Demo Agent");
-    await user.click(screen.getByRole("button", { name: "删除 Agent" }));
+    await user.click(screen.getByRole("button", { name: "永久删除" }));
     const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: "删除 Agent" });
     await user.click(confirm);
     expect(confirm).toBeDisabled();
@@ -463,7 +468,6 @@ describe("AgentManagementView navigation surfaces", () => {
       <AgentManagementView
         agentId="agent.demo"
         onBack={() => {}}
-        onStartDirect={() => {}}
       />,
     );
 
@@ -503,7 +507,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it.each(["agent.demo", "mona"])("saves persona and memory for the selected Agent %s", async (agentId) => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId={agentId} onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId={agentId} onBack={() => {}} />);
 
     await user.click(await screen.findByRole("tab", { name: "个性化" }));
     await user.type(screen.getByRole("textbox"), "用自然口语交流");
@@ -531,7 +535,7 @@ describe("AgentManagementView navigation surfaces", () => {
       .mockResolvedValueOnce(current)
       .mockResolvedValueOnce([restoredSoul, current[1]])
       .mockResolvedValueOnce([restoredSoul, { ...current[1], content: "上一版记忆", hasPrevious: false }]);
-    render(<AgentManagementView agentId={agentId} onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId={agentId} onBack={() => {}} />);
 
     await user.click(await screen.findByRole("tab", { name: "个性化" }));
     expect(screen.getByRole("textbox")).toHaveValue("当前人设");
@@ -551,7 +555,7 @@ describe("AgentManagementView navigation surfaces", () => {
   });
 
   it("uses the human Mona avatar when the API avatar is empty", async () => {
-    render(<AgentManagementView agentId="mona" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="mona" onBack={() => {}} />);
 
     await waitFor(() => expect(screen.getByText("Mona")).toBeInTheDocument());
     expect(document.querySelectorAll(`img[src="${MONA_BRAND_AVATAR}"]`)).toHaveLength(2);
@@ -561,7 +565,7 @@ describe("AgentManagementView navigation surfaces", () => {
   it("binds a configured model preset from the overview", async () => {
     const user = userEvent.setup();
     clientMocks.updateAgentConfig.mockClear();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "绑定模型" }));
     await user.click(await screen.findByText("评审模型 · review-model"));
@@ -576,7 +580,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("lists models from other engines while keeping inherit and presets", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "绑定模型" }));
 
@@ -596,7 +600,7 @@ describe("AgentManagementView navigation surfaces", () => {
         modelBinding: update.model_binding,
       });
     });
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "绑定模型" }));
     await user.click(await screen.findByRole("menuitem", { name: "Codex · GPT Codex" }));
@@ -622,7 +626,7 @@ describe("AgentManagementView navigation surfaces", () => {
         modelBinding: update.model_binding,
       });
     });
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "绑定模型" }));
     await user.click(await screen.findByRole("menuitem", { name: "跟随全局默认模型" }));
@@ -641,7 +645,7 @@ describe("AgentManagementView navigation surfaces", () => {
     const existingBinding = { executor: "claude", model: "retired-model", provider: null, effort: "medium" };
     Object.assign(detail.config, { modelBinding: existingBinding });
     developmentMocks.providerExecutors.mockRejectedValueOnce(new Error("模型目录请求失败"));
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     expect(await screen.findByText("模型目录请求失败")).toBeInTheDocument();
     expect(screen.getByText("Claude Code · retired-model")).toBeInTheDocument();
@@ -659,7 +663,7 @@ describe("AgentManagementView navigation surfaces", () => {
     developmentMocks.providerExecutors.mockReset()
       .mockResolvedValueOnce({ executors: [] })
       .mockResolvedValueOnce({ executors: developmentMocks.executors });
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
 
     const displayName = await screen.findByLabelText("显示名称");
     await user.clear(displayName);
@@ -676,7 +680,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("renders tools as compact name-and-switch rows", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByText("图片生成")).toBeInTheDocument();
@@ -687,7 +691,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("combines webpage notes and video frame extraction into one permission", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("switch", { name: "网页转笔记工具" })).toHaveAttribute("aria-checked", "true");
@@ -699,7 +703,7 @@ describe("AgentManagementView navigation surfaces", () => {
   it("treats url2note as the authority for legacy combined permissions", async () => {
     const user = userEvent.setup();
     clientMocks.updateAgentConfig.mockClear();
-    render(<AgentManagementView agentId="agent.url-note" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.url-note" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     const permission = screen.getByRole("switch", { name: "网页转笔记工具" });
@@ -723,7 +727,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("does not enable webpage notes for a legacy frame-only grant", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.frame-only" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.frame-only" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("switch", { name: "网页转笔记工具" })).toHaveAttribute("aria-checked", "false");
@@ -731,7 +735,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("uses the Agent tool tab as the only automation permission entry", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="mona" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="mona" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("switch", { name: "浏览器自动操作工具" })).toHaveAttribute("aria-checked", "true");
@@ -773,7 +777,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("shows the tool permission overview and filters tools by search", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("heading", { name: "工具权限" })).toBeInTheDocument();
@@ -790,7 +794,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("keeps Agent knowledge out of the tool permission switches", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("heading", { name: "笔记" })).toBeInTheDocument();
@@ -815,7 +819,7 @@ describe("AgentManagementView navigation surfaces", () => {
   it("updates note permissions without changing Agent knowledge", async () => {
     const user = userEvent.setup();
     clientMocks.updateAgentConfig.mockClear();
-    render(<AgentManagementView agentId="agent.partial" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.partial" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("switch", { name: "查询笔记工具" })).toHaveAttribute("aria-checked", "true");
@@ -831,7 +835,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("shows knowledge as an Agent configuration page", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "知识" }));
 
     expect(screen.getByRole("heading", { name: "知识" })).toBeInTheDocument();
@@ -844,7 +848,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("groups skills by origin and only allows editing self-learned skills", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "技能" }));
 
     expect(screen.getByRole("heading", { name: "自我学习" })).toBeInTheDocument();
@@ -910,7 +914,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("filters both skill groups by name without rendering skill descriptions", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "技能" }));
 
     const search = screen.getByRole("searchbox", { name: /搜索.*技能|Search skills/i });
@@ -933,7 +937,7 @@ describe("AgentManagementView navigation surfaces", () => {
 
   it("prepares a package skill environment and explains optional runtimes", async () => {
     const user = userEvent.setup();
-    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "技能" }));
 
     await user.click(screen.getByRole("button", { name: "准备环境" }));
@@ -958,7 +962,7 @@ describe("AgentManagementView navigation surfaces", () => {
     const previousRuntimeReady = skill.runtimeReady;
     skill.runtimeReady = true;
     try {
-      render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+      render(<AgentManagementView agentId="agent.demo" onBack={() => {}} />);
       await user.click(await screen.findByRole("tab", { name: "技能" }));
       await user.click(await screen.findByRole("button", { name: "查看环境" }));
 

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { History, Search, Users } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { History, Search, Settings2, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import type { ConversationMeta, UIMessage } from "@/lib/types";
 
 interface ThreadHeaderProps {
   title: string;
+  avatar?: ReactNode;
+  agentSettings?: { name: string; onOpen: () => void };
   onToggleSidebar: () => void;
   sidebarOpen?: boolean;
   minimal?: boolean;
@@ -169,6 +171,8 @@ function ConversationTools({
 
 export function ThreadHeader({
   title,
+  avatar,
+  agentSettings,
   onToggleSidebar,
   sidebarOpen = true,
   minimal = false,
@@ -185,6 +189,18 @@ export function ThreadHeader({
   fullHistoryError = null,
 }: ThreadHeaderProps) {
   const { t } = useTranslation();
+  const settingsButton = agentSettings ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={t("chat.agentSettingsFor", { name: agentSettings.name })}
+      title={t("chat.agentSettingsFor", { name: agentSettings.name })}
+      onClick={agentSettings.onOpen}
+      className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <Settings2 className="h-3.5 w-3.5" aria-hidden />
+    </Button>
+  ) : null;
   if (minimal) {
     return (
       <div className="relative z-10 flex h-11 items-center justify-between gap-3 px-3 py-2">
@@ -199,18 +215,21 @@ export function ThreadHeader({
         >
           <LeftSidebarToggleIcon open={sidebarOpen} className="h-3.5 w-3.5" />
         </Button>
-      {workspaceHasContent && onToggleWorkspace ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={workspaceOpen ? "收起工作区" : "展开工作区"}
-            title={workspaceOpen ? "收起工作区" : "展开工作区"}
-            onClick={onToggleWorkspace}
-            className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <RightSidebarToggleIcon open={workspaceOpen} className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {settingsButton}
+          {workspaceHasContent && onToggleWorkspace ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={workspaceOpen ? "收起工作区" : "展开工作区"}
+              title={workspaceOpen ? "收起工作区" : "展开工作区"}
+              onClick={onToggleWorkspace}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <RightSidebarToggleIcon open={workspaceOpen} className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -232,9 +251,11 @@ export function ThreadHeader({
         >
           <LeftSidebarToggleIcon open={sidebarOpen} className="h-3.5 w-3.5" />
         </Button>
-        <div className="flex min-w-0 items-center rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground">
+          {avatar}
           <span className="max-w-[min(60vw,32rem)] truncate">{title}</span>
         </div>
+        {settingsButton}
         {isRoom && onToggleRoomPanel ? (
           <button
             type="button"

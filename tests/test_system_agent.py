@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
@@ -18,13 +19,14 @@ from mona.system_agent import (
 
 
 class FakeProvider:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, finish_reason: str = "stop") -> None:
         self.content = content
+        self.finish_reason = finish_reason
         self.calls: list[dict] = []
 
     async def chat(self, **kwargs):
         self.calls.append(kwargs)
-        return LLMResponse(content=self.content)
+        return LLMResponse(content=self.content, finish_reason=self.finish_reason)
 
     def get_default_model(self) -> str:
         return "test-model"
@@ -438,18 +440,8 @@ async def test_storage_file_analysis_rejects_mismatched_scan_evidence(scope_id, 
 @pytest.mark.parametrize("scan_incomplete", [True, False])
 @pytest.mark.asyncio
 async def test_storage_directory_analysis_uses_only_selected_scope_and_named_children(scan_incomplete):
-    provider = FakeProvider(json.dumps({
-        "summary": "目录包含多个子目录；已扫描范围内有一项可清理缓存。",
-        "findings": [{
-            "title": "清理应用缓存",
-            "detail": "确认应用不再使用后，可从 Mona 存储空间的清理入口处理；是否可重新生成取决于应用。",
-            "confidence": "medium",
-            "evidenceIds": ["cleanup-1"],
-            "action": "plan_cleanup",
-            "targetIds": ["cleanup-1"],
-        }],
-        "cautions": [],
-    }, ensure_ascii=False))
+    answer = "目录包含多个子目录；已扫描范围内有一项可清理缓存。\n确认应用不再使用后，可从存储空间的清理入口处理。" + "请先核实。" * 100
+    provider = FakeProvider(answer)
     evidence = {
         "scanId": "scan-1",
         "scope": {
@@ -508,9 +500,55 @@ async def test_storage_directory_analysis_uses_only_selected_scope_and_named_chi
     assert "预计释放量只能按这些清理项的扫描大小计算" in prompt
     assert ("扫描已中止" in prompt) is scan_incomplete
     assert provider.calls[0]["tools"] is None
-    assert result["findings"][0]["action"] == "none"
-    assert result["findings"][0]["targetIds"] == []
-    assert result["findings"][0]["risk"] == "low"
+    assert "只返回 JSON" not in prompt
+    assert provider.calls[0]["max_tokens"] >= 8192
+    assert result == {"scanId": "scan-1", "summary": answer, "findings": [], "cautions": []}
+
+
+@pytest.mark.parametrize(("content", "finish_reason"), [
+    ("不完整的模型输出", "error"),
+    ("不完整的模型输出", "length"),
+    ("", "stop"),
+])
+@pytest.mark.asyncio
+async def test_storage_directory_analysis_does_not_display_failed_or_truncated_output(content, finish_reason):
+    provider = FakeProvider(content, finish_reason=finish_reason)
+    evidence = {
+        "scanId": "scan-1",
+        "scope": {"id": "dir-root"},
+        "children": [],
+        "largeFiles": [],
+        "cleanupItems": [],
+        "selectedDirectory": {"id": "dir-root", "name": "debug", "location": "~/project", "children": []},
+    }
+
+    with pytest.raises(ValueError, match="目录占用分析"):
+        await generate_storage_assessment(provider, "分析目录", evidence)
+
+
+@pytest.mark.asyncio
+async def test_storage_directory_analysis_endpoint_returns_plain_answer_and_preserves_history():
+    provider = FakeProvider("这个目录主要保存构建产物。")
+
+    class Request:
+        app = {"agent_loop": SimpleNamespace(provider=provider, config=SimpleNamespace(model="test-model"))}
+        transport = SimpleNamespace(is_closing=lambda: False)
+
+        async def json(self):
+            return {
+                "goal": "怎么清理？",
+                "history": [{"role": "user", "content": "这是做什么的？"}, {"role": "assistant", "content": "需要查看扫描结果。"}],
+                "evidence": {
+                    "scanId": "scan-1", "scope": {"id": "dir-root"}, "children": [], "largeFiles": [], "cleanupItems": [],
+                    "selectedDirectory": {"id": "dir-root", "name": "debug", "location": "~/project", "children": []},
+                },
+            }
+
+    response = await handle_storage_analyze(Request())
+
+    assert response.status == 200
+    assert json.loads(response.text) == {"scanId": "scan-1", "summary": "这个目录主要保存构建产物。", "findings": [], "cautions": []}
+    assert [message["role"] for message in provider.calls[0]["messages"]] == ["user", "assistant", "user"]
 
 
 @pytest.mark.parametrize("invalid_selection", ["scope", "both"])
@@ -594,3 +632,65 @@ async def test_analysis_endpoint_cancels_provider_when_client_disconnects(path, 
             await request_task
 
         await asyncio.wait_for(provider.cancelled.wait(), timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("handler", "payload"),
+    [
+        (handle_system_plan, {"goal": "优化电脑", "evidence": {}}),
+        (handle_system_diagnose, {"symptom": "电脑变慢", "evidence": {}}),
+        (handle_storage_analyze, {"goal": "分析存储", "evidence": {"scanId": "scan-1"}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_analysis_uses_latest_work_selection_and_isolates_native_turn(handler, payload):
+    content = json.dumps({"summary": "完成", "findings": [], "actions": [], "hypotheses": []})
+    previous = FakeProvider(content)
+    api = FakeProvider(content)
+    api.aclose = AsyncMock()
+    native_turn = FakeProvider(content)
+    native_turn.aclose = AsyncMock()
+    native_source = SimpleNamespace(for_turn=lambda workspace: native_turn)
+    snapshot = SimpleNamespace(provider=api, model="new-api-model")
+    loop = SimpleNamespace(provider=previous, model="old-model", _provider_snapshot_loader=lambda: snapshot)
+
+    class Request:
+        app = {"agent_loop": loop}
+        transport = SimpleNamespace(is_closing=lambda: False)
+
+        async def json(self):
+            return payload
+
+    assert (await handler(Request())).status == 200
+    snapshot = SimpleNamespace(provider=native_source, model="new-native-model")
+    assert (await handler(Request())).status == 200
+
+    assert previous.calls == []
+    assert api.calls[0]["model"] == "new-api-model"
+    assert native_turn.calls[0]["model"] == "new-native-model"
+    assert api.calls[0]["tools"] is None
+    assert native_turn.calls[0]["tools"] is None
+    api.aclose.assert_awaited_once()
+    native_turn.aclose.assert_awaited_once()
+    assert loop.provider is previous
+    assert loop.model == "old-model"
+
+
+@pytest.mark.asyncio
+async def test_analysis_closes_native_turn_when_response_is_invalid():
+    native_turn = FakeProvider("无结构化结果")
+    native_turn.aclose = AsyncMock()
+    snapshot = SimpleNamespace(
+        provider=SimpleNamespace(for_turn=lambda workspace: native_turn),
+        model="native-model",
+    )
+
+    class Request:
+        app = {"agent_loop": SimpleNamespace(_provider_snapshot_loader=lambda: snapshot)}
+        transport = SimpleNamespace(is_closing=lambda: False)
+
+        async def json(self):
+            return {"goal": "优化电脑", "evidence": {}}
+
+    assert (await handle_system_plan(Request())).status == 422
+    native_turn.aclose.assert_awaited_once()

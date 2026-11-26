@@ -125,12 +125,13 @@ const predefinedCommands: CommandItem[] = [
 interface TerminalAppProps {
   sessionId: string;
   aiEnabled: boolean;
+  onOpenSettings?: (section?: string) => void;
 }
 
 const generateTerminalSessionId = () =>
   `desktop_term_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-export function TerminalApp({ sessionId, aiEnabled }: TerminalAppProps) {
+export function TerminalApp({ sessionId, aiEnabled, onOpenSettings }: TerminalAppProps) {
   const portalTarget = useDesktopPortal();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -672,7 +673,7 @@ export function TerminalApp({ sessionId, aiEnabled }: TerminalAppProps) {
 
         {showAiSidebar && (
           <div className="relative z-30 h-full w-[400px] shrink-0 border-l border-white/10 shadow-2xl">
-            <AIPanel sessionId={sessionId} sessionType="desktop" />
+            <AIPanel sessionId={sessionId} sessionType="desktop" onOpenSettings={onOpenSettings} />
             <button
               type="button"
               onClick={() => setShowAiSidebar(false)}

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -36,6 +36,44 @@ function makeLongMessages(count: number): UIMessage[] {
 }
 
 describe("ThreadViewport", () => {
+  it.each([false, true])("jumps to the selected reply's start in the current viewport (partner: %s)", (isPartner) => {
+    const transcript: UIMessage[] = [
+      ...messages,
+      { id: "a1", role: "assistant", content: "First reply", createdAt: 2 },
+      { id: "u2", role: "user", content: "Another question", createdAt: 3 },
+      { id: "a2", role: "assistant", content: "Second reply", createdAt: 4 },
+    ];
+    const { container } = render(
+      <ThreadViewport
+        messages={transcript}
+        isStreaming={false}
+        partner={isPartner ? { id: "partner.test", displayName: "Test" } : undefined}
+        composer={<div />}
+      />,
+    );
+    const scroller = container.firstElementChild?.firstElementChild as HTMLElement;
+    const scrollTo = vi.spyOn(scroller, "scrollTo");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 1800 },
+      scrollTop: { configurable: true, value: 1200, writable: true },
+    });
+    scroller.getBoundingClientRect = () => ({ top: 100 } as DOMRect);
+
+    const reply = screen.getByTestId("message-bubble-a2");
+    const replyStart = reply.querySelector<HTMLElement>('[tabindex="-1"]')!;
+    replyStart.getBoundingClientRect = () => ({ top: -500 } as DOMRect);
+    const actions = within(reply).getByTestId("direct-message-actions");
+    const jump = within(actions).getByRole("button", { name: "Back to start of reply" });
+    expect(actions.lastElementChild).toBe(jump);
+    fireEvent.click(jump);
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 576, behavior: "instant" });
+    expect(scroller.scrollTop).toBe(576);
+    expect(replyStart).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+  });
+
   it("keeps the scroll-to-bottom button above a growing composer", () => {
     const originalResizeObserver = globalThis.ResizeObserver;
     const resizeObservers: ResizeObserverInstance[] = [];

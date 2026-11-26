@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -12,19 +13,21 @@ import { useClientOptional } from "@/providers/ClientProvider";
 import { buildSystemAgentHandoffPrompt, type SystemAgentHandoffTask } from "./systemAgentHandoff";
 
 interface SystemAgentChatProps {
+  onOpenSettings?: (section?: string) => void;
   chatId: string | null;
   task: SystemAgentHandoffTask | null;
   onChatCreated: (chatId: string) => void;
   onTaskHandled: (taskId: string) => void;
 }
 
-export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: SystemAgentChatProps) {
+export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled, onOpenSettings }: SystemAgentChatProps) {
   const [creating, setCreating] = useState(false);
   const [creationError, setCreationError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const creatingTaskIdRef = useRef<string | null>(null);
   const sentTaskIdsRef = useRef(new Set<string>());
-  const { client } = useClientOptional();
+  const { client, token, modelName } = useClientOptional();
+  const workModel = useWorkModelSelection({ token, modelName });
   const historyKey = chatId ? `websocket:${chatId}` : null;
   const { messages: historical, loading, error: historyError, hasPendingToolCalls, version: historyVersion } = useSessionHistory(historyKey);
   const { messages, isStreaming, stopping, send, stop, setMessages, streamError, dismissStreamError } = useMonaStream(chatId, historical, hasPendingToolCalls);
@@ -92,6 +95,11 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
           isStreaming={isStreaming}
           stopping={stopping}
           onStop={stop}
+          modelLabel={workModel.modelLabel ?? "选择模型"}
+          modelOptions={workModel.modelOptions}
+          onModelSelect={workModel.selectModel}
+          imageInputEnabled={workModel.imageInputEnabled}
+          onOpenSettings={onOpenSettings}
         />
       </div>
     </div>

@@ -15,6 +15,7 @@ import {
   CircleAlert,
   CheckCheck,
   Clock3,
+  Ellipsis,
   Pencil,
   Pin,
   PinOff,
@@ -35,6 +36,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import {
   ConversationAvatar,
   MONA_AGENT_ID,
@@ -61,6 +63,27 @@ interface ChatSection {
 const INITIAL_VISIBLE_SESSIONS = 160;
 const VISIBLE_SESSIONS_INCREMENT = 160;
 const MIN_OVERLAY_THUMB_HEIGHT = 32;
+const ROW_ACTION_BUTTON = "h-6 w-6 text-muted-foreground group-hover/session-row:pointer-events-auto group-focus-within/session-row:pointer-events-auto";
+
+function startSessionTitleMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+  if (event.pointerType !== "mouse") return;
+  const title = event.currentTarget.querySelector<HTMLElement>("[data-session-title]");
+  const text = title?.firstElementChild;
+  const actions = event.currentTarget.querySelector("[data-session-actions]");
+  if (!title || !text || !actions) return;
+
+  const visibleWidth = Math.min(title.clientWidth, actions.getBoundingClientRect().left - title.getBoundingClientRect().left);
+  const distance = Math.ceil(text.getBoundingClientRect().width - visibleWidth);
+  if (visibleWidth <= 0 || distance <= 0) return;
+
+  title.style.setProperty("--session-title-travel", `${-distance}px`);
+  title.style.setProperty("--session-title-duration", `${Math.max(2500, distance * 22)}ms`);
+  title.setAttribute("data-marquee", "");
+}
+
+function stopSessionTitleMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+  event.currentTarget.querySelector("[data-session-title]")?.removeAttribute("data-marquee");
+}
 
 export function overlayScrollbarGeometry(
   viewportHeight: number,
@@ -110,6 +133,7 @@ interface ChatListProps {
   projectNames?: Record<string, string>;
   onRequestProjectRename?: (workspace: string, label: string) => void;
   onOpenHistory?: (key: string, title: string) => void;
+  compactTaskRows?: boolean;
 }
 
 export const ChatList = memo(function ChatList({
@@ -142,6 +166,7 @@ export const ChatList = memo(function ChatList({
   onRequestProjectRename,
   onOpenProjectFolder,
   onOpenHistory,
+  compactTaskRows = false,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -150,6 +175,7 @@ export const ChatList = memo(function ChatList({
   );
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const selectionAnchor = useRef<string | null>(null);
+  const moreMenuOpener = useRef<HTMLButtonElement | null>(null);
   const multiSelectEnabled = Boolean(onBatchPin && onBatchArchive && onRequestBatchDelete);
   const { t } = useTranslation();
   const clientCtx = useClientContextOrNull();
@@ -319,32 +345,14 @@ export const ChatList = memo(function ChatList({
     };
   }, [expandedGroups, limitedGroups, syncOverlayScrollbar]);
 
-  if (error && sessions.length === 0) {
-    return (
-      <SessionListError
-        error={error}
-        loading={loading}
-        onRetry={onRetry}
-        className="px-5 py-6"
-      />
-    );
-  }
-
-  if (loading && sessions.length === 0) {
-    return (
-      <div className="px-5 py-6 text-caption text-muted-foreground">
-        {t("chat.loading")}
-      </div>
-    );
-  }
-
-  if (sessions.length === 0) {
-    return (
-      <div className="px-5 py-6 text-caption leading-5 text-muted-foreground/80">
-        {emptyLabel ?? t("chat.noSessions")}
-      </div>
-    );
-  }
+  const emptyState = sessions.length > 0 ? null : error ? (
+    <SessionListError error={error} loading={loading} onRetry={onRetry} className="px-5 py-6" />
+  ) : (
+    <div className="px-5 py-6 text-caption leading-5 text-muted-foreground/80">
+      {loading ? t("chat.loading") : emptyLabel ?? t("chat.noSessions")}
+    </div>
+  );
+  if (emptyState) return emptyState;
 
   const pinned = new Set(pinnedKeys);
   const archived = new Set(archivedKeys);
@@ -366,7 +374,7 @@ export const ChatList = memo(function ChatList({
         onScroll={scheduleOverlayScrollbarSync}
         className="session-list-scrollbar h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain"
       >
-      <div className="min-w-0 space-y-2 py-1.5">
+      <div className={cn("min-w-0 space-y-2", compactTaskRows ? "pb-1.5" : "py-1.5")}>
         {limitedGroups.map((group) => {
           const groupKey = group.workspace ? `project:${group.workspace}` : group.kind;
           const collapsible = group.kind === "project" || group.kind === "archived";
@@ -382,7 +390,11 @@ export const ChatList = memo(function ChatList({
           <section key={groupKey} aria-label={projectLabel}>
             <ContextMenu>
               <ContextMenuTrigger asChild disabled={!isProjectGroup}>
-            <div className="group/header relative flex min-h-9 items-center gap-1 rounded-md px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]">
+            <div className={cn(
+              "group/header relative flex items-center gap-1 rounded-md px-3 py-1 text-caption font-medium text-muted-foreground/75",
+              collapsible && "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]",
+              compactTaskRows ? "min-h-7" : "min-h-9",
+            )}>
               {collapsible ? (
                 <Button
                   type="button"
@@ -435,7 +447,8 @@ export const ChatList = memo(function ChatList({
                     <FolderOpen className="mr-2 h-4 w-4" />在资源管理器中打开
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={() => {
-                    for (const session of group.sessions) onToggleArchive(session.key);
+                    if (onBatchArchive) onBatchArchive(group.sessions.map((session) => session.key), true);
+                    else for (const session of group.sessions) onToggleArchive(session.key);
                   }}>
                     <Archive className="mr-2 h-4 w-4" />归档项目
                   </ContextMenuItem>
@@ -458,7 +471,7 @@ export const ChatList = memo(function ChatList({
                 const allSelectedArchived = multipleSelected && visibleSelectedKeys.every((key) => archived.has(key));
                 const isUnread = unread.has(s.key);
                 const cleanedPreview = cleanSessionPreview(s.preview);
-                const timestamp = sessionListTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
+                const timestamp = compactTaskRows ? "" : sessionListTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
                 const persistedStatus = conversationListStatus(s);
                 // 已完成不保留永久状态图标（§8.2），行内只展示进行态
                 const activityState = persistedStatus ?? (
@@ -469,6 +482,8 @@ export const ChatList = memo(function ChatList({
                 // 无 conversation 的旧会话按 Mona 私聊处理。
                 const conv = s.conversation ?? null;
                 const isRoom = conv?.type === "room";
+                const showIdentity = !compactTaskRows || s.agentKind === "video" || isRoom
+                  || (conv?.directAgentId ?? MONA_AGENT_ID) !== MONA_AGENT_ID;
                 const agentName = isRoom
                   ? ""
                   : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
@@ -483,7 +498,6 @@ export const ChatList = memo(function ChatList({
                   (isRoom ? conv?.title?.trim() || "" : "") ||
                   taskTitle ||
                   deriveTitle(cleanedPreview, t("chat.newChat"));
-                const tooltipTitle = rowTitle;
                 // 协作群摘要标出最后发言者。
                 let speakerPrefix = "";
                 if (isRoom) {
@@ -506,10 +520,31 @@ export const ChatList = memo(function ChatList({
                       isRoom ? "" : previewText,
                     ].filter(Boolean).join(" · ");
                 const summaryText = summaryTextWithStatus.trim();
+                const unreadDot = isUnread ? (
+                  <span
+                    aria-label={t("chat.unread")}
+                    title={compactTaskRows ? undefined : t("chat.unread")}
+                    className={cn(
+                      "shrink-0 rounded-full bg-destructive",
+                      compactTaskRows ? "h-1.5 w-1.5" : "absolute -right-0.5 -top-0.5 h-2 w-2 border border-background",
+                    )}
+                  />
+                ) : null;
                 return (
                   <li key={s.key} className="min-w-0 px-2">
                     <ContextMenu>
                       <ContextMenuTrigger asChild>
+                        <div
+                          className="group/session-row relative"
+                          onPointerEnter={compactTaskRows ? startSessionTitleMarquee : undefined}
+                          onPointerLeave={compactTaskRows ? stopSessionTitleMarquee : undefined}
+                          onContextMenu={() => {
+                            if (multiSelectEnabled && !selectedKeys.has(s.key)) {
+                              selectionAnchor.current = s.key;
+                              setSelectedKeys(new Set([s.key]));
+                            }
+                          }}
+                        >
                         <button
                           type="button"
                           onClick={(event) => {
@@ -528,63 +563,57 @@ export const ChatList = memo(function ChatList({
                             setSelectedKeys(new Set([s.key]));
                             onSelect(s.key);
                           }}
-                          onContextMenu={() => {
-                            if (multiSelectEnabled && !selectedKeys.has(s.key)) {
-                              selectionAnchor.current = s.key;
-                              setSelectedKeys(new Set([s.key]));
-                            }
-                          }}
                           onMouseDown={(event) => {
                             if (multiSelectEnabled && event.shiftKey) event.preventDefault();
                           }}
-                          title={tooltipTitle}
+                          title={compactTaskRows ? undefined : rowTitle}
+                          aria-label={compactTaskRows ? rowTitle : undefined}
+                          aria-description={compactTaskRows ? [statusLabel, isUnread ? t("chat.unread") : ""].filter(Boolean).join(" · ") || undefined : undefined}
                           aria-current={active ? "page" : undefined}
                           aria-pressed={multiSelectEnabled ? selected : undefined}
                           className={cn(
-                            "group relative flex h-16 w-full min-w-0 items-center gap-3 px-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+                            "group relative flex w-full min-w-0 items-center px-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+                            compactTaskRows ? "h-8 gap-2 rounded-md" : "h-16 gap-3",
                             active || selected
                               ? "rounded-md bg-[hsl(var(--sidebar-active-surface)/0.09)] text-sidebar-foreground"
                               : "text-sidebar-foreground/82 hover:rounded-md hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                            compactTaskRows && !active && !selected && "group-hover/session-row:bg-[hsl(var(--sidebar-hover-surface)/0.04)] group-hover/session-row:text-sidebar-foreground group-focus-within/session-row:bg-[hsl(var(--sidebar-hover-surface)/0.04)] group-data-[state=open]/session-row:bg-[hsl(var(--sidebar-hover-surface)/0.04)]",
                           )}
                         >
                       {multipleSelected ? (
                         <span aria-hidden className="absolute bottom-2 left-0 top-2 w-0.5 rounded-full bg-sidebar-foreground/60" />
                       ) : null}
-                      {/* 极浅底部分隔线：与头像左沿对齐，悬停/选中时隐藏。 */}
-                      <span
+                       {!compactTaskRows ? <span
                         aria-hidden
                         className={cn(
                           "pointer-events-none absolute bottom-0 left-2 right-2 h-px bg-sidebar-border/50",
                           "group-hover:opacity-0",
                           (active || selected) && "opacity-0",
                         )}
-                      />
-                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-md">
-                        {s.agentKind === "video" ? <img src="/brand/document-video-icon.png" alt="视频项目" className="h-6 w-6 rounded-md object-contain" /> : <ConversationAvatar
+                       /> : null}
+                       {showIdentity ? <span className={cn(
+                         "relative flex shrink-0 items-center justify-center self-center rounded-md",
+                         !compactTaskRows && "h-10 w-10",
+                       )}>
+                         {s.agentKind === "video" ? <img src="/brand/document-video-icon.png" alt="视频项目" className={cn("rounded-md object-contain", compactTaskRows ? "h-4 w-4" : "h-6 w-6")} /> : <ConversationAvatar
                           conversation={conv}
                           agentsById={agentsById}
-                          className="h-10 w-10 justify-center overflow-hidden rounded-md"
-                          avatarClassName="h-6 w-6 rounded-md text-micro"
-                        />}
-                        {isUnread ? (
-                          <span
-                            aria-label={t("chat.unread")}
-                            title={t("chat.unread")}
-                            className={cn(
-                              "absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border bg-destructive",
-                              "border-background",
-                            )}
-                          />
-                        ) : null}
-                      </span>
-                      <span className="flex h-full min-w-0 flex-1 flex-col justify-center overflow-hidden py-2 text-left">
+                           className={cn("justify-center overflow-hidden rounded-md", compactTaskRows ? "h-4" : "h-10 w-10")}
+                           avatarClassName={compactTaskRows ? "h-4 w-4 rounded-sm text-micro" : "h-6 w-6 rounded-md text-micro"}
+                         />}
+                         {!compactTaskRows ? unreadDot : null}
+                       </span> : null}
+                       <span className={cn("flex h-full min-w-0 flex-1 flex-col justify-center overflow-hidden text-left", !compactTaskRows && "py-2")}>
                         <span className="flex w-full items-baseline gap-2">
-                          <span className={cn(
-                            "min-w-0 flex-1 truncate !text-body",
-                            isUnread ? "font-medium" : "font-normal",
-                            isUnread && "text-sidebar-foreground",
-                          )}>
-                            {rowTitle}
+                          <span
+                            data-session-title={compactTaskRows ? "" : undefined}
+                            className={cn(
+                              "min-w-0 flex-1 truncate !text-body",
+                              isUnread ? "font-medium" : "font-normal",
+                              isUnread && "text-sidebar-foreground",
+                            )}
+                          >
+                            <span>{rowTitle}</span>
                           </span>
                           {timestamp ? (
                             <span className={cn(
@@ -595,7 +624,7 @@ export const ChatList = memo(function ChatList({
                             </span>
                           ) : null}
                         </span>
-                        {summaryText ? (
+                        {!compactTaskRows && summaryText ? (
                           <span className={cn(
                             "flex w-full items-center gap-1 truncate !text-caption",
                             "text-muted-foreground/75",
@@ -607,11 +636,62 @@ export const ChatList = memo(function ChatList({
                           </span>
                         ) : null}
                       </span>
+                      {compactTaskRows && activityState ? (
+                        <span role="img" className="flex shrink-0 items-center" aria-label={statusLabel}>
+                          <ActivityStatusIcon state={activityState} />
+                        </span>
+                      ) : null}
+                      {compactTaskRows ? unreadDot : null}
                         </button>
+                        {compactTaskRows ? (
+                          <div
+                            data-session-actions=""
+                            data-highlighted={active || selected ? "" : undefined}
+                            className="session-row-actions pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-md pl-3 pr-1 opacity-0 group-hover/session-row:opacity-100 group-focus-within/session-row:opacity-100 group-data-[state=open]/session-row:opacity-100"
+                          >
+                            <TooltipButton
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              title={t("rail.more")}
+                              aria-haspopup="menu"
+                              className={ROW_ACTION_BUTTON}
+                              onClick={(event) => {
+                                const opener = event.currentTarget;
+                                const { right, bottom } = opener.getBoundingClientRect();
+                                moreMenuOpener.current = opener;
+                                opener.dispatchEvent(new MouseEvent("contextmenu", {
+                                  bubbles: true,
+                                  cancelable: true,
+                                  button: 2,
+                                  clientX: right,
+                                  clientY: bottom,
+                                }));
+                              }}
+                            >
+                              <Ellipsis className="h-4 w-4" aria-hidden />
+                            </TooltipButton>
+                            <TooltipButton
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              title={t(isArchived ? "chat.unarchive" : "chat.archive")}
+                              className={ROW_ACTION_BUTTON}
+                              onClick={() => onToggleArchive(s.key)}
+                            >
+                              {isArchived ? <ArchiveRestore className="h-4 w-4" aria-hidden /> : <Archive className="h-4 w-4" aria-hidden />}
+                            </TooltipButton>
+                          </div>
+                        ) : null}
+                        </div>
                       </ContextMenuTrigger>
                     <ContextMenuContent
                       portalContainer={actionMenuPortalContainer}
-                      onCloseAutoFocus={(event) => event.preventDefault()}
+                      onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        if (document.activeElement === document.body) moreMenuOpener.current?.focus();
+                        moreMenuOpener.current = null;
+                      }}
                     >
                       {!multipleSelected && onMarkAllRead ? (
                         <>
@@ -711,7 +791,10 @@ export const ChatList = memo(function ChatList({
         onPointerMove={handleThumbPointerMove}
         onPointerUp={handleThumbPointerUp}
         onPointerCancel={handleThumbPointerUp}
-        className="session-list-scrollbar-thumb pointer-events-auto absolute right-3 top-0 z-20 hidden w-1 touch-none select-none rounded-full bg-muted-foreground/40 opacity-0 transition-opacity duration-75 group-hover/session-list:opacity-100"
+        className={cn(
+          "session-list-scrollbar-thumb pointer-events-auto absolute top-0 z-20 hidden w-1 touch-none select-none rounded-full bg-muted-foreground/40 opacity-0 transition-opacity duration-75 group-hover/session-list:opacity-100",
+          compactTaskRows ? "right-1" : "right-3",
+        )}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatList } from "./ChatList";
@@ -141,21 +141,75 @@ describe("ChatList multiple selection", () => {
         activeKey={null}
         loading={false}
         onToggleArchived={vi.fn()}
+        onNewTask={vi.fn()}
         onStartDirect={vi.fn()}
-        onSelectAgent={vi.fn()}
         onOpenExpertLibrary={vi.fn()}
         onNewRoom={vi.fn()}
         {...handlers}
       />,
     );
 
-    selectRange("Other Alpha", "Keep Delta");
+    fireEvent.click(screen.getByRole("button", { name: "Other Alpha" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep Delta" }), { shiftKey: true });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), { target: { value: "Keep" } });
-    expect(screen.queryByTitle("Other Alpha")).not.toBeInTheDocument();
-    expect(screen.queryByTitle("Other Beta")).not.toBeInTheDocument();
-    fireEvent.contextMenu(screen.getByTitle("Keep Charlie"));
+    expect(screen.queryByRole("button", { name: "Other Alpha" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Other Beta" })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Keep Charlie" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
 
     expect(handlers.onBatchArchive).toHaveBeenCalledWith([key("c"), key("d")], true);
   });
+});
+
+it("labels row tools and requests archive without selecting the conversation", async () => {
+  const handlers = callbacks();
+  render(<ChatList compactTaskRows sessions={sessions} activeKey={null} {...handlers} />);
+
+  const conversation = screen.getByRole("button", { name: "Alpha" });
+  const row = within(conversation.closest("li")!);
+  expect(conversation).not.toHaveAttribute("title");
+  const more = row.getByRole("button", { name: "More" });
+  fireEvent.focus(more);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("More");
+  fireEvent.click(more);
+  const openingMenu = await screen.findByRole("menu");
+  const options = within(openingMenu).getAllByRole("menuitem").map((item) => item.textContent);
+  expect(options).toContain("Rename");
+  fireEvent.keyDown(openingMenu, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+  fireEvent.contextMenu(conversation);
+  const contextMenu = await screen.findByRole("menu");
+  expect(within(contextMenu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(options);
+  fireEvent.keyDown(contextMenu, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+  const archive = row.getByRole("button", { name: "Archive" });
+  fireEvent.focus(archive);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Archive");
+  fireEvent.click(archive);
+  expect(handlers.onToggleArchive).toHaveBeenCalledWith(key("a"));
+  expect(handlers.onSelect).not.toHaveBeenCalled();
+});
+
+it("scrolls the title far enough to clear the overlay and resets it on pointer leave", () => {
+  render(<ChatList compactTaskRows sessions={sessions} activeKey={null} {...callbacks()} />);
+
+  const row = screen.getByRole("button", { name: "Alpha" }).parentElement!;
+  const title = row.querySelector<HTMLElement>("[data-session-title]")!;
+  const actions = row.querySelector<HTMLElement>("[data-session-actions]")!;
+  Object.defineProperty(title, "clientWidth", { value: 150 });
+  vi.spyOn(title, "getBoundingClientRect").mockReturnValue({ left: 20 } as DOMRect);
+  vi.spyOn(actions, "getBoundingClientRect").mockReturnValue({ left: 120 } as DOMRect);
+  const textSize = vi.spyOn(title.firstElementChild!, "getBoundingClientRect").mockReturnValue({ width: 220 } as DOMRect);
+
+  fireEvent.pointerOver(row, { pointerType: "mouse" });
+  expect(title).toHaveAttribute("data-marquee");
+  expect(title.style.getPropertyValue("--session-title-travel")).toBe("-120px");
+  fireEvent.pointerOut(row, { pointerType: "mouse" });
+  expect(title).not.toHaveAttribute("data-marquee");
+
+  textSize.mockReturnValue({ width: 45 } as DOMRect);
+  fireEvent.pointerOver(row, { pointerType: "mouse" });
+  expect(title).not.toHaveAttribute("data-marquee");
 });

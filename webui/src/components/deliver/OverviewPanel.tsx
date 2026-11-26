@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useContext, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronRight,
@@ -11,9 +11,10 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { openExternalUrl } from "@/lib/tauri";
+import { isTauri, openExternalUrl } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile, TaskPlanWsPayload, ToolProgressEvent, UIMessage } from "@/lib/types";
+import { ConversationBrowserContext } from "./ConversationBrowserContext";
 
 export interface OverviewTodoItem {
   id: string;
@@ -193,6 +194,7 @@ function TodoList({ items }: { items: OverviewTodoItem[] }) {
 }
 
 function ReferenceList({ references }: { references: OverviewReference[] }) {
+  const openConversationBrowser = useContext(ConversationBrowserContext);
   if (references.length === 0) {
     return <p className="px-7 py-2 text-micro text-muted-foreground">任务使用的技能、搜索和网页会显示在这里。</p>;
   }
@@ -220,11 +222,13 @@ function ReferenceList({ references }: { references: OverviewReference[] }) {
               <button
                 type="button"
                 title={reference.kind === "web" ? reference.url : reference.label}
-                onClick={() => void openExternalUrl(
-                  reference.kind === "web"
+                onClick={() => {
+                  const url = reference.kind === "web"
                     ? reference.url
-                    : `https://www.bing.com/search?q=${encodeURIComponent(reference.label)}`,
-                )}
+                    : `https://www.bing.com/search?q=${encodeURIComponent(reference.label)}`;
+                  if (isTauri() && openConversationBrowser) openConversationBrowser(url);
+                  else void openExternalUrl(url);
+                }}
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui hover:bg-muted/35"
               >
                 {row}

@@ -830,7 +830,15 @@ impl IpcBridge {
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
                 let is_incognito = args.get("isIncognito").and_then(|v| v.as_bool()).unwrap_or(false);
                 let ad_block_enabled = args.get("adBlockEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled).await?;
+                let result = match args.get("conversationId") {
+                    Some(Value::String(conversation_id)) => browser_state
+                        .open_conversation_tab(&self.app_handle, id, url, conversation_id, ad_block_enabled)
+                        .await?,
+                    None | Some(Value::Null) => browser_state
+                        .create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled)
+                        .await?,
+                    Some(_) => return Err("Invalid browser conversation ID".to_string()),
+                };
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
             "browser_close_tab" => {
@@ -894,10 +902,14 @@ impl IpcBridge {
                     .get("notebookId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                let image = args.get("image").filter(|value| !value.is_null())
+                    .map(|value| serde_json::from_value(value.clone()).map_err(|e| e.to_string()))
+                    .transpose()?;
                 let note_id = crate::notes::notes_create_from_chat(
                     title,
                     content_markdown,
                     notebook_id,
+                    image,
                 )
                 .await?;
                 let _ = self.app_handle.emit(

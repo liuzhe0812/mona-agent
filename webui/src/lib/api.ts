@@ -8,6 +8,7 @@ import type {
   AutomationStatus,
   ComputerUseSettingsUpdate,
   ComputerUseStatus,
+  CustomProviderWireApi,
   ExpertCatalogPayload,
   ExpertInstallJob,
   ManagedRuntimeInstallJob,
@@ -21,6 +22,7 @@ import type {
   BrowserSettingsUpdate,
   MessageType,
   ProviderSettingsUpdate,
+  ProviderModelMetadata,
   SettingsPayload,
   SettingsUpdate,
   SidebarStatePayload,
@@ -265,6 +267,14 @@ export async function fetchExpertInstallJob(
   return request(`${effectiveBase}/api/experts/install/status?${query}`, token);
 }
 
+export async function listExpertInstallJobs(
+  token: string,
+  base?: string,
+): Promise<{ jobs: ExpertInstallJob[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request(`${effectiveBase}/api/experts/install/status`, token);
+}
+
 export async function cancelExpertInstall(
   token: string,
   jobId: string,
@@ -449,6 +459,35 @@ export async function getAgentSkill(
   return body.skill;
 }
 
+export interface SessionContextSettings {
+  windowTokens: number | null;
+  effectiveWindowTokens?: number;
+  contextTokens?: number;
+  isBudget?: boolean;
+  compacted?: boolean;
+}
+
+export async function fetchSessionContext(token: string, sessionKey: string): Promise<SessionContextSettings> {
+  return request<SessionContextSettings>(`${await getApiBase()}/api/sessions/${encodeURIComponent(sessionKey)}/context`, token);
+}
+
+export async function updateSessionContext(
+  token: string, sessionKey: string, update: { windowTokens: number | null } | { compact: true },
+): Promise<SessionContextSettings> {
+  const url = `${await getApiBase()}/api/sessions/${encodeURIComponent(sessionKey)}/context`;
+  if ("windowTokens" in update) {
+    const query = new URLSearchParams({ action: "window", window: String(update.windowTokens ?? "auto") });
+    return request<SessionContextSettings>(`${url}?${query}`, token);
+  }
+  // Session compaction may outlive the local WebSocket server's HTTP handshake.
+  let result = await request<SessionContextSettings | { pending: true }>(`${url}?action=compact`, token);
+  while ("pending" in result) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    result = await request<SessionContextSettings | { pending: true }>(`${url}?action=compact-status`, token);
+  }
+  return result;
+}
+
 export async function fetchWebuiThread(
   token: string,
   key: string,
@@ -586,14 +625,33 @@ export interface ProviderModelsResult {
     name?: string;
     type?: string | null;
     context_window?: number | null;
+    context_window_max?: number | null;
+    opaque_model_id?: boolean;
     input_modalities?: string[] | null;
     reasoning_efforts?: string[];
     default_reasoning_effort?: string | null;
     supports_adaptive_thinking?: boolean;
+    discovered_metadata?: ProviderModelMetadata;
   }>;
   /** Friendly Chinese error message from the backend; empty on success. */
   error?: string;
 }
+
+export interface GitHubCopilotLoginStatus {
+  status: "idle" | "starting" | "waiting" | "authorized" | "failed";
+  user_code?: string;
+  verification_url?: string;
+  message?: string;
+}
+
+async function githubCopilotLogin(token: string, action: "start" | "status" | "cancel"): Promise<GitHubCopilotLoginStatus> {
+  const effectiveBase = await getApiBase();
+  return request<GitHubCopilotLoginStatus>(`${effectiveBase}/api/settings/providers/github-copilot/login/${action}`, token);
+}
+
+export const startGitHubCopilotLogin = (token: string) => githubCopilotLogin(token, "start");
+export const fetchGitHubCopilotLogin = (token: string) => githubCopilotLogin(token, "status");
+export const cancelGitHubCopilotLogin = (token: string) => githubCopilotLogin(token, "cancel");
 
 export async function fetchProviderModels(
   token: string,
@@ -601,6 +659,7 @@ export async function fetchProviderModels(
     provider: string;
     apiKey?: string;
     apiBase?: string;
+    wireApi?: CustomProviderWireApi;
   },
   base?: string,
 ): Promise<ProviderModelsResult> {
@@ -608,6 +667,7 @@ export async function fetchProviderModels(
   const query = new URLSearchParams();
   query.set("provider", params.provider);
   if (params.apiBase !== undefined) query.set("api_base", params.apiBase);
+  if (params.wireApi !== undefined) query.set("wire_api", params.wireApi);
   const headers =
     params.apiKey === undefined
       ? undefined
@@ -719,12 +779,16 @@ export async function updateProviderSettings(
   if (update.customName !== undefined)
     query.set("custom_name", update.customName);
   if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
+  if (update.wireApi !== undefined) query.set("wire_api", update.wireApi);
   if (update.model !== undefined) query.set("model", update.model);
   if (update.enabledModels !== undefined) {
     query.set("enabled_models", JSON.stringify(update.enabledModels));
   }
   if (update.discoveredModels !== undefined) {
     query.set("discovered_models", JSON.stringify(update.discoveredModels));
+  }
+  if (update.modelOverrides !== undefined) {
+    query.set("model_overrides", JSON.stringify(update.modelOverrides));
   }
   if (update.delete !== undefined) query.set("delete", String(update.delete));
   const headers =

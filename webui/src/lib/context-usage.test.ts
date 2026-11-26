@@ -18,6 +18,17 @@ describe("context occupancy", () => {
     expect(workContextUsage([{ ...message({ contextTokens: 99999 }), jobId: "job" }], 200000, "a")).toBeNull();
     expect(workContextUsage([message({ contextTokens: 20000, contextWindowTokens: 100000, contextModel: "a", contextProvider: "first" })], 200000, "a", undefined, "second")).toEqual({ used: 20000, total: 200000 });
   });
+  it("uses the same route's window or budget before falling back to the configured budget", () => {
+    const budget = { contextTokens: 49700, contextBudgetTokens: 64000, contextModel: "a", contextProvider: "first" };
+    expect(workContextUsage([message(budget)], null, "a", undefined, "first", 1000000))
+      .toEqual({ used: 49700, total: 64000, isBudget: true });
+    expect(workContextUsage([message({ ...budget, contextWindowTokens: 128000 })], null, "a", undefined, "first", 1000000))
+      .toEqual({ used: 49700, total: 128000 });
+    expect(workContextUsage([message(budget)], null, "a", undefined, "second", 1000000))
+      .toEqual({ used: 49700, total: 1000000, isBudget: true });
+    expect(workContextUsage([message({ contextTokens: 49700 })], 256000, "a", undefined, "first", 1000000))
+      .toEqual({ used: 49700, total: 256000 });
+  });
   it("replays latest Code usage instead of cumulative billing, allowing compaction to reduce it", () => {
     const events = [event(2, { contextTokens: 20000, contextWindow: 258400 }), event(1, { contextTokens: 100000, contextWindow: 258400 }), event(3, { usage: { input_tokens: 900000 } })];
     expect(developmentContextUsage(events, session, 1000000)).toEqual({ used: 20000, total: 258400 });

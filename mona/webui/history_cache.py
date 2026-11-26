@@ -18,16 +18,18 @@ from urllib.parse import quote, unquote
 from loguru import logger
 
 from mona.config.paths import get_conversation_history_dir
+from mona.webui.session_usage import summarize_session_usage
 from mona.webui.transcript import (
     WEBUI_TRANSCRIPT_SCHEMA_VERSION,
     _infer_media_kind,
     _resolve_legacy_artifact_paths,
+    _ui_token_usage,
     compact_transcript_object,
     replay_transcript_to_ui_messages,
     webui_transcript_path,
 )
 
-_CACHE_VERSION = 1  # Bump when the persisted display projection changes.
+_CACHE_VERSION = 4  # Bump when the persisted display projection changes.
 _MEDIA_PREFIX = "mona-history-media:"
 _locks_guard = threading.Lock()
 _locks: dict[str, Any] = {}
@@ -130,18 +132,52 @@ def _annotate_ordinals(messages: list[dict[str, Any]]) -> None:
             message["assistantOrdinal"] = ordinal
 
 
+def _session_usage(records: list[dict[str, Any]], messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    turns = {
+        message["sourceTranscriptIndex"]: (message["tokenUsage"], message.get("latencyMs"))
+        for message in messages
+        if message.get("role") == "assistant"
+        and message.get("kind") not in {"trace", "workflowRun", "discussion"}
+        and not message.get("jobId")
+        and "sourceTranscriptIndex" in message and "tokenUsage" in message
+    }
+    # End records cover completed work even when it has no visible final reply.
+    completed: dict[str, int] = {}
+    for index, record in enumerate(records):
+        if record.get("event") != "turn_end":
+            continue
+        usage, latency = turns.get(index, (None, None))
+        usage = _ui_token_usage(record.get("token_usage")) or usage
+        duration = record.get("latency_ms", latency)
+        if usage is None and duration is None:
+            continue
+        turn_id = record.get("turn_id")
+        if isinstance(turn_id, str) and turn_id:
+            previous = completed.get(turn_id)
+            if previous is not None:
+                prior_usage, prior_duration = turns.pop(previous)
+                usage = usage or prior_usage
+                duration = prior_duration if duration is None else duration
+            completed[turn_id] = index
+        turns[index] = (usage, duration)
+    return summarize_session_usage(turns[index] for index in sorted(turns))
+
+
 def _write_cache(
     path: Path, signature: str, revision: str, messages: list[dict[str, Any]],
+    session_usage: dict[str, Any] | None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.stem + ".", suffix=".tmp", dir=path.parent)
     os.close(descriptor)
     try:
         with closing(sqlite3.connect(temporary)) as connection, connection:
-            connection.execute("CREATE TABLE metadata (version INTEGER, signature TEXT, revision TEXT, total INTEGER)")
+            connection.execute(
+                "CREATE TABLE metadata (version INTEGER, signature TEXT, revision TEXT, total INTEGER, usage TEXT)"
+            )
             connection.execute("CREATE TABLE messages (position INTEGER PRIMARY KEY, role TEXT, payload TEXT)")
-            connection.execute("INSERT INTO metadata VALUES (?, ?, ?, ?)",
-                               (_CACHE_VERSION, signature, revision, len(messages)))
+            connection.execute("INSERT INTO metadata VALUES (?, ?, ?, ?, ?)",
+                               (_CACHE_VERSION, signature, revision, len(messages), json.dumps(session_usage)))
             connection.executemany("INSERT INTO messages VALUES (?, ?, ?)", (
                 (index, message.get("role"), json.dumps(message, ensure_ascii=False, separators=(",", ":")))
                 for index, message in enumerate(messages)
@@ -155,15 +191,15 @@ def _write_cache(
 def _read_page(
     path: Path, signature: str, limit: int | None, before: int | None,
     revision: str | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any] | None] | None:
     if not path.is_file():
         return None
     connection = sqlite3.connect(path)
     try:
-        metadata = connection.execute("SELECT version, signature, revision, total FROM metadata").fetchone()
+        metadata = connection.execute("SELECT * FROM metadata").fetchone()
         if not metadata or metadata[:2] != (_CACHE_VERSION, signature):
             return None
-        _, _, current_revision, total = metadata
+        _, _, current_revision, total, summary = metadata
         if revision is not None and revision != current_revision:
             raise HistoryRevisionChangedError("History changed; reload the latest page")
         end = min(before, total) if before is not None else total
@@ -181,7 +217,7 @@ def _read_page(
             (start, end),
         )]
         return messages, {"hasMore": start > 0, "before": start if start else None,
-                          "revision": current_revision, "total": total}
+                          "revision": current_revision, "total": total}, json.loads(summary)
     finally:
         connection.close()
 
@@ -209,7 +245,7 @@ def build_cached_thread_response(
         signature = _signature(source)
         try:
             page = _read_page(cache, signature, limit, before, revision)
-        except (sqlite3.DatabaseError, json.JSONDecodeError):
+        except (sqlite3.DatabaseError, json.JSONDecodeError, TypeError):
             logger.warning("Rebuilding invalid WebUI display cache {}", cache_key[:12])
             page = None
         hit = page is not None
@@ -226,11 +262,12 @@ def build_cached_thread_response(
             messages = replay_transcript_to_ui_messages(
                 records, augment_user_media=lambda paths: _media_refs(paths, current_revision),
             )
+            session_usage = _session_usage(records, messages)
             _annotate_ordinals(messages)
             replay_ms = (time.perf_counter() - replay_started) * 1000
             if signature == _signature(source):
                 try:
-                    _write_cache(cache, signature, current_revision, messages)
+                    _write_cache(cache, signature, current_revision, messages, session_usage)
                     page = _read_page(cache, signature, limit, before, None)
                 except (OSError, sqlite3.DatabaseError) as error:
                     logger.warning("WebUI display cache unavailable: {}", type(error).__name__)
@@ -239,8 +276,8 @@ def build_cached_thread_response(
                 end = len(messages)
                 start = max(0, end - limit) if limit is not None else 0
                 page = messages[start:end], {"hasMore": start > 0, "before": start or None,
-                                            "revision": current_revision, "total": end}
-    messages, pagination = page
+                                            "revision": current_revision, "total": end}, session_usage
+    messages, pagination, session_usage = page
     _hydrate_media(messages, augment_user_media, pagination["revision"])
     _resolve_legacy_artifact_paths(messages)
     elapsed_ms = (time.perf_counter() - started) * 1000
@@ -248,4 +285,4 @@ def build_cached_thread_response(
     log("WebUI history cache_hit={} rows={}/{} read_ms={:.1f} replay_ms={:.1f} total_ms={:.1f}",
         hit, len(messages), pagination["total"], read_ms, replay_ms, elapsed_ms)
     return {"schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION, "sessionKey": session_key,
-            "messages": messages, "pagination": pagination}
+            "messages": messages, "pagination": pagination, "sessionUsage": session_usage}

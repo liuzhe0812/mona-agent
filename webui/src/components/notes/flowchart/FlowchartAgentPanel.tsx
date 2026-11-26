@@ -50,6 +50,7 @@ interface FlowchartAgentPanelProps {
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onClearChat?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
+  onOpenSettings?: (section?: string) => void;
   /**
    * 初始 prompt：用于"从笔记生成流程图"等场景（设计文档 §7.10）。
    * 当 note 切换到对应 noteId 且 requestId 是新的时，自动调用 sendPromptToAgent。
@@ -71,6 +72,7 @@ export function FlowchartAgentPanel({
   onApplyResult,
   onClearChat,
   onStreamingChange,
+  onOpenSettings,
   initialPrompt,
   onInitialPromptHandled,
 }: FlowchartAgentPanelProps) {
@@ -441,6 +443,7 @@ export function FlowchartAgentPanel({
 
       <div className="shrink-0 p-3">
         <AgentComposer
+          onOpenSettings={onOpenSettings}
           chatId={chatId}
           value={draft}
           onChange={setDraft}

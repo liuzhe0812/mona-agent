@@ -1,11 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
-import { Users } from "lucide-react";
+import { Folder, Monitor, Users } from "lucide-react";
+import { createStore, useStore, type StoreApi } from "zustand";
 
-import { AgentAvatar, resolveAgentDisplayName } from "@/components/room/AgentAvatar";
+import { AgentAvatar, MONA_AGENT_ID, resolveAgentDisplayName } from "@/components/room/AgentAvatar";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import {
   AlertDialog,
+  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -15,11 +18,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { RoomContextPanel } from "@/components/room/RoomContextPanel";
 import { useAgents } from "@/components/room/useAgents";
-import {
-  ThreadComposer,
-  type ComposerModelOption,
-} from "@/components/thread/ThreadComposer";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
+import { SessionUsagePopover } from "@/components/thread/SessionUsagePopover";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { MessageRejectionDialog } from "@/components/thread/MessageRejectionDialog";
 import { UserQuestionPanel } from "@/components/thread/UserQuestionPanel";
@@ -39,7 +40,9 @@ import {
   type DeliverablesRange,
 } from "@/components/deliver/OverviewPanel";
 import { SidebarBrowserPanel, type SidebarBrowserController } from "@/components/deliver/SidebarBrowserPanel";
+import { ConversationBrowserContext } from "@/components/deliver/ConversationBrowserContext";
 import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
+import type { ConversationBrowserOpen } from "@/hooks/useBrowserTabs";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import type { MessageAdmission } from "@/lib/mona-client";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
@@ -53,22 +56,21 @@ import {
 } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, listSlashCommands, renameArtifact } from "@/lib/api";
-import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
-import { developmentApi, type DevExecutor, type ExecutorId } from "@/lib/development-api";
-import { useNativeProviderState } from "@/lib/native-provider-state";
+import { draftMessageQuote } from "@/lib/message-quote";
+import type { BranchReplySource, ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuoteDraft, QuoteMessageHandler, RoomAgentInfo, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
 import { getHostedPlatform, HostedPlatformError } from "@/lib/hosted-platform";
-import { subscribeSettingsUpdates } from "@/lib/settings-updates";
-import { buildComposerModelOptions } from "@/components/models/model-options";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
 export { buildComposerModelOptions, buildComposerNativeOptions, buildComposerProviderOptions } from "@/components/models/model-options";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
-import { getManagedModelPrices, isTauri, type ManagedModelPrice } from "@/lib/tauri";
+import { isTauri, openWorkspaceDirectory } from "@/lib/tauri";
 import { useClient } from "@/providers/ClientProvider";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { deriveTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { workContextUsage } from "@/lib/context-usage";
+import { activeRunTools, canStartDesktopInput, workToolStatus } from "@/lib/work-run-progress";
 import type { OfficeSessionState } from "@/components/office/types";
 import { closeOfficeSession, createOfficeSession } from "@/lib/office-client";
 
@@ -90,8 +92,27 @@ const OfficeEditorHost = lazy(() =>
 
 const SIDEBAR_WORKSPACE_TAB_ID = "tool:workspace";
 const SIDEBAR_BROWSER_TAB_ID = "tool:browser";
+const SIDEBAR_BROWSER_TAB: ToolSidebarTab = { id: SIDEBAR_BROWSER_TAB_ID, kind: "tool", title: "浏览器", toolKind: "browser" };
 const SIDEBAR_TERMINAL_TAB_ID = "tool:terminal";
 const EMPTY_DOCUMENT_DRAFT: AttachedDocument[] = [];
+
+type TextDraft = { readonly value: string };
+type TextDrafts = Record<string, TextDraft | undefined>;
+type WorkThreadComposerProps = Omit<ComponentProps<typeof ThreadComposer>, "draftScope" | "value" | "onConsumeDraft"> & {
+  draftScope: string;
+  textDrafts: StoreApi<TextDrafts>;
+  onConsumeDraft?: (draft: TextDraft | undefined, documents: readonly AttachedDocument[]) => boolean;
+};
+
+function WorkThreadComposer({ draftScope, textDrafts, onConsumeDraft, ...props }: WorkThreadComposerProps) {
+  const draft = useStore(textDrafts, (drafts) => drafts[draftScope]);
+  const consumeDraft = useCallback((documents: readonly AttachedDocument[]) => (
+    onConsumeDraft?.(draft, documents) ?? false
+  ), [draft, onConsumeDraft]);
+
+  return <ThreadComposer {...props} draftScope={draftScope} value={draft?.value ?? ""}
+    onConsumeDraft={onConsumeDraft ? consumeDraft : undefined} />;
+}
 
 function isOfficeSessionState(value: unknown): value is OfficeSessionState {
   if (!value || typeof value !== "object") return false;
@@ -311,7 +332,7 @@ interface ThreadShellProps {
   recentSessions?: ChatSummary[];
   onSelectSession?: (key: string) => void;
   onCreateChat?: (workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => Promise<string | null>;
-  onBranchChat?: (sourceChatId: string, assistantOrdinal: number, sourceTaskId?: string) => Promise<string | null>;
+  onBranchChat?: (sourceChatId: string, source: BranchReplySource, sourceTaskId?: string) => Promise<string | null>;
   /** Direct Agent selected before a chat exists; persisted on first send. */
   pendingDirectAgentId?: string | null;
   /** Display name carried from the summon panel while the agent list refreshes. */
@@ -324,10 +345,12 @@ interface ThreadShellProps {
   onModelNameChange?: (modelName: string | null) => void;
   onOpenSettings?: (section?: string) => void;
   onOpenExpertLibrary?: () => void;
+  onOpenAgentSettings?: (agentId: string) => void;
   sidebarBrowser?: SidebarBrowserController;
-  onEnsureSidebarBrowser?: () => void;
+  sidebarBrowserOpen?: ConversationBrowserOpen;
+  onCloseSidebarBrowser?: () => Promise<boolean>;
   browserHostVisible?: boolean;
-  onSidebarBrowserVisibilityChange?: (visible: boolean) => void;
+  onSidebarBrowserVisibilityChange?: (tabId: string | null) => void;
   onRightWorkspaceMaximizedChange?: (maximized: boolean) => void;
   onActionError?: (error: unknown) => void;
 }
@@ -385,8 +408,10 @@ export function ThreadShell({
   onModelNameChange,
   onOpenSettings,
   onOpenExpertLibrary,
+  onOpenAgentSettings,
   sidebarBrowser,
-  onEnsureSidebarBrowser,
+  sidebarBrowserOpen,
+  onCloseSidebarBrowser,
   browserHostVisible = true,
   onSidebarBrowserVisibilityChange,
   onRightWorkspaceMaximizedChange,
@@ -414,11 +439,13 @@ export function ThreadShell({
   }, [session?.key]);
   const {
     messages: historical,
+    sessionUsage,
     loading,
     error: historyError,
     missing: historyMissing,
     hasPendingToolCalls,
     refresh: refreshHistory,
+    refreshUsage,
     version: historyVersion,
     hasMore: hasMoreHistory,
     loadingEarlier,
@@ -432,31 +459,44 @@ export function ThreadShell({
   } = useSessionHistory(historyKey, 160);
   const { client, modelName, token } = useClient();
   const conversation = session?.conversation ?? null;
+  const isRoomSession = conversation?.type === "room";
+  const canUseSidebarBrowser = !!sidebarBrowser && conversation?.type !== "room";
+  const sidebarPage = sidebarBrowser?.tab?.webviewCreated ? sidebarBrowser.tab : null;
+  const sidebarPageRef = useRef(sidebarPage);
+  sidebarPageRef.current = sidebarPage;
+  const withSidebarBrowser = useCallback((options?: SendOptions): SendOptions | undefined => {
+    if (!canUseSidebarBrowser) return options;
+    const page = sidebarPageRef.current;
+    return {
+      ...options,
+      browserSidebar: true,
+      ...(page ? { browserTabId: page.id, browserPageUrl: page.url, browserPageTitle: page.title } : {}),
+    };
+  }, [canUseSidebarBrowser]);
   const [booting, setBooting] = useState(false);
   const [firstMessageRejection, setFirstMessageRejection] = useState<{ runActive: boolean; uncertain?: boolean; inputId?: string } | null>(null);
   const liveChatRef = useRef(chatId); liveChatRef.current = chatId;
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [providerOptions, setProviderOptions] = useState<ComposerModelOption[]>([]);
-  const managedModelPricesRef = useRef<ManagedModelPrice[]>([]);
-  const settingsRef = useRef<SettingsPayload | null>(null);
-  const nativeExecutorsRef = useRef<DevExecutor[]>([]);
-  const nativeProviderRevision = useNativeProviderState((state) => state.revision);
-  // Whether the active model preset accepts image input. ``supports_vision``
-  // is tri-state server-side; only an explicit ``false`` disables upload.
-  const [imageInputEnabled, setImageInputEnabled] = useState(true);
-  /** Context window of the active model preset. Drives the composer usage
-   * pill; falls back to the model catalogue value when unset. */
-  const [contextWindowTokens, setContextWindowTokens] = useState<number | null>(null);
+  const workspacePath = useWorkspaceStore((state) => state.workspacePath);
+  const setWorkspacePath = useWorkspaceStore((state) => state.setWorkspacePath);
+  const [workspaceOpenFailed, setWorkspaceOpenFailed] = useState(false);
+  const {
+    modelOptions: activeModelOptions, modelLabel: selectedModelLabel, imageInputEnabled,
+    contextWindowTokens, contextBudgetTokens, contextModel, contextProvider, selectModel: handleModelSelect,
+  } = useWorkModelSelection({
+    token, modelName, onModelNameChange, onWorkspacePath: setWorkspacePath,
+  });
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const [focusMessage, setFocusMessage] = useState<{ id: string; requestId: number } | null>(null);
-  const [quote, setQuote] = useState<MessageQuote | null>(null);
+  const [quote, setQuote] = useState<MessageQuoteDraft | null>(null);
   const [branchCandidate, setBranchCandidate] = useState<{
-    assistantOrdinal: number;
+    source: BranchReplySource;
     taskId?: string;
   } | null>(null);
   const [branching, setBranching] = useState(false);
+  const [branchFailed, setBranchFailed] = useState(false);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const pendingFirstWorkspaceRouteChatRef = useRef<string | null>(null);
   const consumedQueuedPromptRef = useRef<string | null>(null);
@@ -482,11 +522,14 @@ export function ThreadShell({
   const [artifactsRefreshSignal, setArtifactsRefreshSignal] = useState(0);
   const handleTurnEnd = useCallback(() => {
     setArtifactsRefreshSignal((value) => value + 1);
+    if (historyKey && conversation?.type !== "room") void refreshUsage();
     onTurnEnd?.();
-  }, [onTurnEnd]);
+  }, [historyKey, conversation?.type, onTurnEnd, refreshUsage]);
   const {
     messages,
     liveTokenUsage,
+    runMetrics,
+    liveTokenRate,
     isStreaming,
     isAwaitingModelResponse,
     isCompacting,
@@ -506,32 +549,24 @@ export function ThreadShell({
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const pendingQueue = usePendingQueue(chatId);
-  const draftScope = chatId ? `chat:${chatId}` : "new";
-  const [textDrafts, setTextDrafts] = useState<Map<string, string>>(new Map());
-  const textDraftVersions = useRef(new Map<string, number>());
-  const textDraft = textDrafts.get(draftScope) ?? "";
+  const draftScope = chatId ? `chat:${chatId}` : pendingDirectAgentId ? `partner:${pendingDirectAgentId}` : "new";
+  const [textDrafts] = useState(() => createStore<TextDrafts>(() => ({})));
   const setTextDraft = useCallback((value: string) => {
     if (chatId && client.isChatDeleted(chatId)) return;
-    textDraftVersions.current.set(draftScope, (textDraftVersions.current.get(draftScope) ?? 0) + 1);
-    setTextDrafts((current) => {
-      const next = new Map(current);
-      if (value) next.set(draftScope, value);
-      else next.delete(draftScope);
-      return next;
-    });
-  }, [chatId, client, draftScope]);
+    // Snapshot identity also distinguishes edits that restore the submitted text.
+    textDrafts.setState({ [draftScope]: { value } });
+  }, [chatId, client, draftScope, textDrafts]);
   const [documentDrafts, setDocumentDrafts] = useState<Map<string, AttachedDocument[]>>(new Map());
-  const documentDraftKey = chatId ?? "";
-  const documentDraft = documentDrafts.get(documentDraftKey) ?? EMPTY_DOCUMENT_DRAFT;
+  const documentDraft = documentDrafts.get(draftScope) ?? EMPTY_DOCUMENT_DRAFT;
   const handleDocumentDraftChange = useCallback((documents: AttachedDocument[]) => {
     if (chatId && client.isChatDeleted(chatId)) return;
     setDocumentDrafts((previous) => {
       const next = new Map(previous);
-      if (documents.length > 0) next.set(documentDraftKey, documents);
-      else next.delete(documentDraftKey);
+      if (documents.length > 0) next.set(draftScope, documents);
+      else next.delete(draftScope);
       return next;
     });
-  }, [chatId, client, documentDraftKey]);
+  }, [chatId, client, draftScope]);
   useEffect(() => client.onSessionDeleted((deletedChatId) => {
     const scope = `chat:${deletedChatId}`;
     messageCacheRef.current.delete(deletedChatId);
@@ -539,9 +574,13 @@ export function ThreadShell({
     pendingCanonicalHydrateRef.current.delete(deletedChatId);
     sessionKeyByChatIdRef.current.delete(deletedChatId);
     historyRevisionByChatIdRef.current.delete(deletedChatId);
-    textDraftVersions.current.delete(scope);
-    setTextDrafts((current) => { const next = new Map(current); next.delete(scope); return next; });
-    setDocumentDrafts((current) => { const next = new Map(current); next.delete(deletedChatId); return next; });
+    textDrafts.setState((current) => {
+      if (!current[scope]) return current;
+      const next = { ...current };
+      delete next[scope];
+      return next;
+    }, true);
+    setDocumentDrafts((current) => { const next = new Map(current); next.delete(scope); return next; });
     if (prevChatIdForCacheRef.current === deletedChatId) prevChatIdForCacheRef.current = null;
     const pending = pendingFirstRef.current;
     if (pending?.targetChatId === deletedChatId) {
@@ -562,24 +601,20 @@ export function ThreadShell({
       setFocusMessage(null);
       setWidgetPrompt(undefined);
     }
-  }), [client, setMessages]);
-  const homeDraftVersion = textDraftVersions.current.get("new") ?? 0;
-  const consumeHomeDraft = useCallback((submitted: readonly AttachedDocument[]) => {
-    const unchanged = (textDraftVersions.current.get("new") ?? 0) === homeDraftVersion;
-    if (unchanged) {
-      textDraftVersions.current.set("new", homeDraftVersion + 1);
-      setTextDrafts((current) => { const next = new Map(current); next.delete("new"); return next; });
-    }
+  }), [client, setMessages, textDrafts]);
+  const consumeHomeDraft = useCallback((draft: TextDraft | undefined, submitted: readonly AttachedDocument[]) => {
+    const unchanged = textDrafts.getState()[draftScope] === draft;
+    if (unchanged) setTextDraft("");
     const paths = new Set(submitted.map((document) => document.path));
     setDocumentDrafts((current) => {
       const next = new Map(current);
-      const remaining = (next.get("") ?? []).filter((document) => !paths.has(document.path));
-      if (remaining.length) next.set("", remaining);
-      else next.delete("");
+      const remaining = (next.get(draftScope) ?? []).filter((document) => !paths.has(document.path));
+      if (remaining.length) next.set(draftScope, remaining);
+      else next.delete(draftScope);
       return next;
     });
     return unchanged;
-  }, [homeDraftVersion]);
+  }, [draftScope, setTextDraft, textDrafts]);
   const [widgetPrompt, setWidgetPrompt] = useState<{ text: string; requestId: string }>();
   useEffect(() => setWidgetPrompt(undefined), [chatId]);
   const handleWidgetPrompt = useCallback((text: string) => {
@@ -587,17 +622,26 @@ export function ThreadShell({
       setWidgetPrompt({ text, requestId: crypto.randomUUID() });
     }
   }, []);
-  const computerUseActive = useMemo(() => {
-    if (!isStreaming) return false;
-    const runStartedAtMs = runStartedAt === null ? null : runStartedAt * 1000;
-    return messages.some((message) => {
-      const belongsToCurrentRun = currentTaskId && message.taskId
-        ? message.taskId === currentTaskId
-        : runStartedAtMs !== null && message.createdAt >= runStartedAtMs;
-      return belongsToCurrentRun
-        && message.toolEvents?.some((event) => event.name === "computer_act");
-    });
-  }, [currentTaskId, isStreaming, messages, runStartedAt]);
+  const runningTools = useMemo(
+    () => isStreaming ? activeRunTools(messages, currentTaskId, runStartedAt) : [],
+    [currentTaskId, isStreaming, messages, runStartedAt],
+  );
+  const computerUseActive = runningTools.some(canStartDesktopInput);
+  const activeToolName = runningTools.at(-1)?.name;
+  const runStatus = stopping ? "stopping"
+    : isCompacting ? "compacting"
+    : activeToolName ? workToolStatus(activeToolName)
+    : isAwaitingModelResponse ? "waiting" : "running";
+  const runActivityLabel = isStreaming || stopping
+    ? runStatus === "running" && messages.at(-1)?.reasoningStreaming
+      ? t("message.reasoningStreaming")
+      : t(`thread.composer.runStatus.${runStatus}`)
+    : undefined;
+  const runOverview = conversation?.type === "room" ? undefined : {
+    label: runActivityLabel,
+    metrics: runMetrics,
+    liveRate: liveTokenRate,
+  };
 
   useEffect(() => {
     setQuote(null);
@@ -605,22 +649,17 @@ export function ThreadShell({
   }, [chatId]);
   useEffect(() => setFocusMessage(null), [historyKey]);
 
-  const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
-  const selectedModelLabel = activeModelOptions.find((option) => option.active)?.label
-    ?? (settingsRef.current?.agent.executor && settingsRef.current.agent.executor !== "mona"
-      ? settingsRef.current.agent.native_model
-      : null)
-    ?? modelName;
-
   // Compaction invalidates the previous request's occupancy until remeasured.
   const composerContextUsage = useMemo(() => {
     if (isCompacting) return null;
-    const total = contextWindowTokens
-      ?? activeModelOptions.find((option) => option.active)?.contextWindow
-      ?? null;
     const selected = activeModelOptions.find((option) => option.active);
-    return workContextUsage(messages, total, selected?.model ?? modelName, liveTokenUsage, selected?.provider);
-  }, [messages, activeModelOptions, contextWindowTokens, modelName, liveTokenUsage, isCompacting]);
+    const reference = selected?.contextWindowSource === "reference";
+    const total = contextWindowTokens ?? (reference ? null : selected?.contextWindow) ?? null;
+    return workContextUsage(
+      messages, total, selected?.model ?? contextModel ?? modelName,
+      liveTokenUsage, selected?.provider ?? contextProvider, contextBudgetTokens ?? (reference ? selected?.contextWindow : null),
+    );
+  }, [messages, activeModelOptions, contextWindowTokens, contextBudgetTokens, contextModel, contextProvider, modelName, liveTokenUsage, isCompacting]);
 
   useEffect(() => {
     if (chatId && historyKey && !client.isChatDeleted(chatId)) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -827,9 +866,9 @@ export function ThreadShell({
       if (cancelled || client.isChatDeleted(chatId) || pendingFirstRef.current !== pending) return;
       pending.dispatched = true;
       pending.state = "sent";
-      send(pending.prepared.content, pending.images, {
+      send(pending.prepared.content, pending.images, withSidebarBrowser({
         ...pending.prepared.options, inputId: pending.inputId, onAdmission: pending.observe,
-      });
+      }));
       setBooting(false);
     })();
     return () => {
@@ -841,7 +880,7 @@ export function ThreadShell({
       }
       setBooting(false);
     };
-  }, [chatId, send, session?.conversation?.type]);
+  }, [chatId, send, session?.conversation?.type, withSidebarBrowser]);
   useEffect(() => () => {
     pendingFirstRef.current?.finish(false);
     pendingFirstRef.current = null;
@@ -862,135 +901,14 @@ export function ThreadShell({
     };
   }, [token]);
 
-  const setWorkspacePath = useWorkspaceStore((s) => s.setWorkspacePath);
-
-  useEffect(() => {
-    let cancelled = false;
-    let settingsUpdated = false;
-    let managedPriceTimer: number | undefined;
-    const applySettings = (settings: SettingsPayload) => {
-      settingsRef.current = settings;
-      setProviderOptions(buildComposerModelOptions(settings, nativeExecutorsRef.current, managedModelPricesRef.current));
-      const activePreset = settings.model_presets.find((p) => p.active);
-      const native = (settings.agent.executor ?? "mona") !== "mona";
-      setImageInputEnabled(native || activePreset?.capabilities?.supports_vision !== false);
-      setContextWindowTokens(native
-        ? settings.agent.native_context_window_tokens ?? null
-        : settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null);
-      if (settings.runtime?.workspace_path) setWorkspacePath(settings.runtime.workspace_path);
-    };
-    const unsubscribe = subscribeSettingsUpdates(token, (settings) => {
-      settingsUpdated = true;
-      applySettings(settings);
-    });
-    const refreshManagedPrices = async () => {
-      try {
-        const { prices } = await getManagedModelPrices();
-        if (cancelled) return;
-        managedModelPricesRef.current = prices;
-        const priceByModel = new Map(prices.map((price) => [price.model, price]));
-        setProviderOptions((current) => current.map((option) => {
-          const price = option.isBuiltin ? priceByModel.get(option.model) : undefined;
-          return price ? {
-            ...option,
-            inputAmountPerMillion: price.input_amount_per_million,
-            cachedInputAmountPerMillion: price.cached_input_amount_per_million,
-            outputAmountPerMillion: price.output_amount_per_million,
-            promotionLabel: price.promotion_label,
-            promotionName: price.promotion_name,
-            discountPercent: price.discount_percent,
-            originalInputAmountPerMillion: price.original_input_amount_per_million,
-            originalCachedInputAmountPerMillion: price.original_cached_input_amount_per_million,
-            originalOutputAmountPerMillion: price.original_output_amount_per_million,
-          } : option;
-        }));
-      } catch {
-        // Pricing is optional and must not block the model selector.
-      }
-    };
-    (async () => {
-      try {
-        const settings = await fetchSettings(token);
-        if (!cancelled && !settingsUpdated) applySettings(settings);
-        if (isTauri()) {
-          await refreshManagedPrices();
-          if (!cancelled) {
-            managedPriceTimer = window.setInterval(() => {
-              void refreshManagedPrices();
-            }, 30_000);
-          }
-        }
-      } catch {
-        if (!cancelled && !settingsUpdated) setProviderOptions([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unsubscribe();
-      if (managedPriceTimer !== undefined) window.clearInterval(managedPriceTimer);
-    };
-  }, [token, setWorkspacePath, nativeProviderRevision]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void developmentApi.providerExecutors().then(({ executors }) => {
-      if (cancelled) return;
-      nativeExecutorsRef.current = executors;
-      const settings = settingsRef.current;
-      if (settings) {
-        setProviderOptions(buildComposerModelOptions(settings, executors, managedModelPricesRef.current));
-      }
-    }).catch(() => {
-      // A local model catalog failure must not hide the configured API models.
-    });
-    return () => { cancelled = true; };
-  }, [nativeProviderRevision]);
-
-  const handleModelSelect = useCallback(
-    async (option: ComposerModelOption, reasoningEffort?: string | null) => {
-      if (option.disabledReason) return;
-      try {
-        const executor = (option.executor ?? "mona") as ExecutorId;
-        const payload = await developmentApi.selectWorkModelSource({
-          executor,
-          model: option.model,
-          ...(executor === "mona" ? { provider: option.provider } : {}),
-          effort: reasoningEffort ?? null,
-        });
-        settingsRef.current = payload;
-        const options = buildComposerModelOptions(payload, nativeExecutorsRef.current, managedModelPricesRef.current);
-        setProviderOptions(options);
-        const native = (payload.agent.executor ?? "mona") !== "mona";
-        const newModel = native
-          ? payload.agent.native_model || option.model
-          : payload.agent.model || null;
-        onModelNameChange?.(newModel);
-        if (native) {
-          setImageInputEnabled(true);
-          setContextWindowTokens(payload.agent.native_context_window_tokens ?? options.find((item) => item.active)?.contextWindow ?? null);
-        } else {
-          const activePreset = payload.model_presets?.find(
-            (p: { active: boolean; context_window_tokens?: number | null }) => p.active,
-          );
-          setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
-          setContextWindowTokens(
-            payload.agent.context_window_source === "default" ? null : payload.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
-          );
-        }
-      } catch (error) {
-        console.error("Failed to switch chat model:", error);
-        throw error;
-      }
-    },
-    [onModelNameChange],
-  );
-
   // Multi-agent: room members offered by the composer ``@`` picker. The
   // registry provides display names; unknown ids degrade to the raw id.
   const agentsById = useAgents(token);
   const directAgentId = conversation?.type === "direct"
     ? conversation.directAgentId?.trim() || null
     : pendingDirectAgentId?.trim() || null;
+  const isPartnerConversation = Boolean(directAgentId && directAgentId !== "mona"
+    && (!session || conversation?.partnerConversation));
   const isPartnerNewChat = showHeroComposer && !!directAgentId && directAgentId !== "mona";
   const partnerAgent = directAgentId ? agentsById.get(directAgentId) : undefined;
   const missingInstalledPartner = Boolean(
@@ -1002,6 +920,7 @@ export function ThreadShell({
   );
   const partnerAgentName = partnerAgent?.displayName
     ?? pendingDirectAgentName
+    ?? (conversation?.partnerConversation ? conversation.title || null : null)
     ?? (directAgentId ? resolveAgentDisplayName(agentsById, directAgentId) : null)
     ?? "Mona";
   const mentionableAgents = useMemo<RoomAgentInfo[]>(() => {
@@ -1025,7 +944,7 @@ export function ThreadShell({
         && (images ?? []).every((image, index) => image.media.data_url === previous?.images?.[index].media.data_url
           && image.preview.name === previous?.images?.[index].preview.name);
       if (previous?.dispatched && previous.requestKey === requestKey && sameImages
-        && (!directAgentId || directAgentId === previous.agentId)
+        && directAgentId === previous.agentId
         && (!selectedWorkspace || selectedWorkspace === previous.workspace)
         && previous.state !== "accepted") {
         if (previous.state === "rejected" && previous.targetChatId && onSelectSession) {
@@ -1113,49 +1032,62 @@ export function ThreadShell({
         );
         return;
       }
+      const requestOptions = withSidebarBrowser(_options);
       setScrollToBottomSignal((value) => value + 1);
       const routed = conversation?.type === "room"
         ? { content }
         : canvasRouteMessageRef.current(content);
       const routedCanvasPath = routed.canvasPath
         ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
-      const baseDisplayContent = _options?.displayContent ?? routed.displayContent;
+      const baseDisplayContent = requestOptions?.displayContent ?? routed.displayContent;
       const options = baseDisplayContent
-        ? { ..._options, displayContent: baseDisplayContent, canvasId: routed.canvasId ?? _options?.canvasId, canvasPath: routedCanvasPath ?? _options?.canvasPath }
+        ? { ...requestOptions, displayContent: baseDisplayContent, canvasId: routed.canvasId ?? requestOptions?.canvasId, canvasPath: routedCanvasPath ?? requestOptions?.canvasPath }
         : routed.canvasId || routedCanvasPath
-          ? { ..._options, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
-          : _options;
+          ? { ...requestOptions, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
+          : requestOptions;
       send(
         routed.content,
         _images,
-        officeContext ? { ...(options ?? {}), ...officeContext } : options,
+        officeContext ? { ...options, ...officeContext } : options,
       );
     },
-    [chatId, client, conversation?.type, isStreaming, missingInstalledPartner, pendingQueue, send],
+    [chatId, client, conversation?.type, isStreaming, missingInstalledPartner, pendingQueue, send, withSidebarBrowser],
   );
 
-  const handleQuote = useCallback((message: UIMessage, author: string) => {
-    const content = (message.role === "user" ? message.displayContent ?? message.content : message.content).trim();
-    if (!content) return;
-    setQuote({ author, content });
+  const handleQuote = useCallback<QuoteMessageHandler>((message, author, image) => {
+    const draft = draftMessageQuote(message, author, image);
+    if (draft) setQuote(draft);
   }, []);
 
   const handleBranchMessage = useCallback((message: UIMessage) => {
+    setBranchFailed(false);
+    if (!message.content.trim() && message.media?.some((item) => item.kind === "image")) {
+      const source: BranchReplySource = { kind: "image", transcriptIndex: message.sourceTranscriptIndex };
+      const index = source.transcriptIndex == null && !message.taskId
+        ? transcriptMessages.findIndex((item) => item.id === message.id) : -1;
+      const request = index > 0 ? transcriptMessages.slice(0, index).findLast((item) => item.role === "user" && !item.isInjected) : undefined;
+      setBranchCandidate({ source, taskId: message.taskId ?? request?.taskId });
+      return;
+    }
     const assistantOrdinal = assistantOrdinalForMessage(transcriptMessages, message.id);
     if (assistantOrdinal == null) return;
-    setBranchCandidate({ assistantOrdinal, taskId: message.taskId });
+    setBranchCandidate({ source: assistantOrdinal, taskId: message.taskId });
   }, [transcriptMessages]);
 
   const confirmBranchMessage = useCallback(async () => {
     if (!chatId || !branchCandidate || !onBranchChat || branching) return;
+    setBranchFailed(false);
     setBranching(true);
     try {
       const created = await onBranchChat(
         chatId,
-        branchCandidate.assistantOrdinal,
+        branchCandidate.source,
         branchCandidate.taskId,
       );
       if (created) setBranchCandidate(null);
+      else if (liveChatRef.current === chatId) setBranchFailed(true);
+    } catch {
+      if (liveChatRef.current === chatId) setBranchFailed(true);
     } finally {
       setBranching(false);
     }
@@ -1193,12 +1125,12 @@ export function ThreadShell({
       const msg = pendingQueue.messages.find((m) => m.id === id);
       if (!msg || msg.locked) return;
       pendingQueue.setDeliveryState(id, "pending");
-      inject(msg.content, msg.images, { ...msg.options, inputId: id, resumeInput: msg.deliveryState === "paused", onAdmission: (state) => {
+      inject(msg.content, msg.images, withSidebarBrowser({ ...msg.options, inputId: id, resumeInput: msg.deliveryState === "paused", onAdmission: (state) => {
         if (state === "consumed") pendingQueue.remove(id);
         else pendingQueue.setDeliveryState(id, state === "accepted" ? "accepted" : state === "unknown" ? "unknown" : state === "paused" || state === "cancelled" ? "paused" : undefined);
-      } });
+      } }));
     },
-    [inject, pendingQueue],
+    [inject, pendingQueue, withSidebarBrowser],
   );
 
   useEffect(() => {
@@ -1230,22 +1162,40 @@ export function ThreadShell({
       send(
         routed.content,
         undefined,
-        officeContext ? { ...(options ?? {}), ...officeContext } : options,
+        withSidebarBrowser(officeContext ? { ...options, ...officeContext } : options),
       );
       onQueuedPromptConsumed?.(queuedPrompt.id);
     })();
     return () => {
       cancelled = true;
     };
-  }, [booting, chatId, conversation?.type, isStreaming, missingInstalledPartner, onQueuedPromptConsumed, queuedPrompt, send]);
+  }, [booting, chatId, conversation?.type, isStreaming, missingInstalledPartner, onQueuedPromptConsumed, queuedPrompt, send, withSidebarBrowser]);
 
-  const composerPlaceholder = showHeroComposer
-    ? "与 Mona 协作"
-    : t("thread.composer.placeholderThread");
+  const composerPlaceholder = isPartnerConversation
+    ? t("thread.composer.placeholderPartner", { name: partnerAgentName })
+    : showHeroComposer ? "与 Mona 协作" : t("thread.composer.placeholderThread");
 
   const openingPlaceholder = booting
     ? t("thread.composer.placeholderOpening")
     : composerPlaceholder;
+  const showComposerDetails = !!session && !showHeroComposer && !isRoomSession;
+  const projectWorkspace = session?.workspace?.trim();
+  // Cloud keys can start with a vault ID shared by several conversations.
+  const shortChatId = chatId?.replace(/^(?:cloud-(?:[0-9a-f]{12}-)?|restored-)(?=[0-9a-f]{32}$)/i, "").slice(0, 8);
+  const workspaceLabel = projectWorkspace
+    ? projectWorkspace.split(/[\\/]/).filter(Boolean).at(-1) ?? projectWorkspace
+    : shortChatId ? t("thread.composer.workspace.conversationId", { id: shortChatId })
+      : t("thread.composer.workspace.conversation");
+  const WorkspaceIcon = projectWorkspace ? Folder : Monitor;
+  const openComposerWorkspace = async () => {
+    try {
+      const path = projectWorkspace || workspacePath.trim() || (await fetchSettings(token)).runtime?.workspace_path?.trim();
+      if (!path) throw new Error("Missing workspace directory");
+      await openWorkspaceDirectory(path);
+    } catch {
+      setWorkspaceOpenFailed(true);
+    }
+  };
 
   const composer = (
     <div
@@ -1263,10 +1213,10 @@ export function ThreadShell({
         />
       ) : null}
       {session ? (
-        <ThreadComposer
+        <WorkThreadComposer
           chatId={chatId}
           draftScope={draftScope}
-          value={textDraft}
+          textDrafts={textDrafts}
           onValueChange={setTextDraft}
           onSend={handleThreadSend}
           documentDraft={documentDraft}
@@ -1283,15 +1233,40 @@ export function ThreadShell({
           modelOptions={activeModelOptions}
           onModelSelect={handleModelSelect}
           contextUsage={composerContextUsage}
+          contextAction={showComposerDetails ? (
+            <SessionUsagePopover
+              key={session?.key}
+              usage={sessionUsage}
+              contextUsage={composerContextUsage}
+              liveMeasurement={liveTokenUsage}
+              contextSession={!getHostedPlatform() && !isRoomSession && session?.key
+                ? { token, key: session.key, disabled: isStreaming || stopping || isCompacting || booting }
+                : undefined}
+            />
+          ) : undefined}
           imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
           showHeroPromptChips={!isPartnerNewChat}
           slashCommands={slashCommands}
           onStop={stop}
           runStartedAt={runStartedAt}
+          runOverview={runOverview}
           goalState={goalState}
           leadingActions={(
             <>
+              {showComposerDetails && isTauri() ? (
+                <TooltipButton
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  title={t("thread.composer.workspace.openFolder")}
+                  className="composer-icon-control min-w-0 max-w-40 justify-start gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+                  onClick={() => void openComposerWorkspace()}
+                >
+                  <WorkspaceIcon className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="composer-control-label truncate">{workspaceLabel}</span>
+                </TooltipButton>
+              ) : null}
               {session.conversation?.type === "room" ? (
                 <DiscussionDialog
                   members={mentionableAgents}
@@ -1311,14 +1286,14 @@ export function ThreadShell({
           onClearQuote={() => setQuote(null)}
         />
       ) : (
-        <ThreadComposer
+        <WorkThreadComposer
           onSend={handleWelcomeSend}
           awaitSendResult
           onConsumeDraft={consumeHomeDraft}
           documentDraft={documentDraft}
           onDocumentDraftChange={handleDocumentDraftChange}
           draftScope={draftScope}
-          value={textDraft}
+          textDrafts={textDrafts}
           onValueChange={setTextDraft}
           disabled={booting}
           isStreaming={isStreaming}
@@ -1334,13 +1309,14 @@ export function ThreadShell({
           slashCommands={slashCommands}
           onStop={stop}
           runStartedAt={runStartedAt}
+          runOverview={runOverview}
           goalState={goalState}
           pendingMessages={pendingQueue.messages}
           onPendingAppend={handlePendingAppend}
           onPendingRemove={pendingQueue.remove}
           isPendingFull={pendingQueue.messages.length >= 3}
           workspace={selectedWorkspace}
-          onWorkspaceChange={setSelectedWorkspace}
+          onWorkspaceChange={isPartnerConversation ? undefined : setSelectedWorkspace}
           showHeroPromptChips={!isPartnerNewChat}
           onOpenSettings={onOpenSettings}
         />
@@ -1456,13 +1432,11 @@ export function ThreadShell({
   const setWorkspaceCollapsed = useFilePreviewStore(
     (s) => s.setWorkspaceCollapsed,
   );
-  const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const terminalWorkingDirectory = session?.workspace?.trim() || workspacePath.trim() || undefined;
 
   // Rooms are a separate projection: they never fall back to an Agent's
   // workspace. Project sessions keep their bound root; ordinary Agent
   // sessions use the active Agent's durable output directory.
-  const isRoomSession = conversation?.type === "room";
   const isProjectSession = !isRoomSession && !!session?.workspace;
   const canvasWorkspaceRoot = getHostedPlatform() ? "/workspace" : session?.workspace?.trim()
     || buildSharedOutputDir(workspacePath, conversation?.directAgentId);
@@ -1989,7 +1963,6 @@ export function ThreadShell({
     if (tab.kind === "tool") {
       closePreview();
       conversationCanvases.selectCanvas(null);
-      if (tab.toolKind === "browser") onEnsureSidebarBrowser?.();
       return;
     }
     if (tab.kind === "office") {
@@ -2004,8 +1977,8 @@ export function ThreadShell({
       sessionKey,
       isRoomSession ? chatId : null,
     );
-  }, [chatId, closePreview, conversationCanvases.selectCanvas, isRoomSession, onEnsureSidebarBrowser, sessionKey, workspaceScope]);
-  const handleCloseRightTab = useCallback((id: string) => {
+  }, [chatId, closePreview, conversationCanvases.selectCanvas, isRoomSession, sessionKey, workspaceScope]);
+  const handleCloseRightTab = useCallback(async (id: string) => {
     if (id.startsWith("canvas:")) {
       conversationCanvases.closeCanvas(id);
       setRightTabOrder((current) => current.filter((tabId) => tabId !== id));
@@ -2013,12 +1986,18 @@ export function ThreadShell({
       return;
     }
     if (id.startsWith("tool:")) {
+      if (id === SIDEBAR_BROWSER_TAB_ID && onCloseSidebarBrowser) {
+        const closingPageId = sidebarPageRef.current?.id;
+        if (!(await onCloseSidebarBrowser()) || liveChatRef.current !== chatId) return;
+        const currentPageId = sidebarPageRef.current?.id;
+        if (currentPageId && currentPageId !== closingPageId) return;
+      }
       const target = toolTabs.find((tab) => tab.id === id);
       terminalTabRequestsRef.current.delete(id);
       if (target?.terminalSessionId) disposeSidebarTerminalSession(target.terminalSessionId);
       setToolTabs((current) => current.filter((tab) => tab.id !== id));
       setRightTabOrder((current) => current.filter((tabId) => tabId !== id));
-      if (activeRightTabId === id) setActiveRightTabId(OVERVIEW_TAB_ID);
+      setActiveRightTabId((current) => current === id ? OVERVIEW_TAB_ID : current);
       return;
     }
     if (id.startsWith("office:")) {
@@ -2046,10 +2025,28 @@ export function ThreadShell({
       setActiveRightTabId(OVERVIEW_TAB_ID);
       closePreview();
     }
-  }, [activeRightTabId, closePreview, conversationCanvases.closeCanvas, sessionKey, toolTabs]);
+  }, [activeRightTabId, chatId, closePreview, conversationCanvases.closeCanvas, onCloseSidebarBrowser, sessionKey, toolTabs]);
+  const showSidebarBrowser = useCallback(() => {
+    setToolTabs((current) => current.some((tab) => tab.id === SIDEBAR_BROWSER_TAB_ID)
+      ? current : [...current, SIDEBAR_BROWSER_TAB]);
+    setRightTabOrder((current) => current.includes(SIDEBAR_BROWSER_TAB_ID)
+      ? current : [...current, SIDEBAR_BROWSER_TAB_ID]);
+    setActiveRightTabId(SIDEBAR_BROWSER_TAB_ID);
+    conversationCanvases.selectCanvas(null);
+    closePreview();
+    setWorkspaceCollapsed(false);
+  }, [closePreview, conversationCanvases.selectCanvas, setWorkspaceCollapsed]);
+  const sidebarPageId = sidebarPage?.id;
+  useEffect(() => {
+    if (chatId && sidebarPageId) showSidebarBrowser();
+  }, [chatId, sidebarBrowserOpen, sidebarPageId, showSidebarBrowser]);
   const handleCreateRightTab = useCallback(async (kind: SidebarNewTabKind) => {
     if (getHostedPlatform() && (kind === "browser" || kind === "terminal")) {
       throw new HostedPlatformError("线上工作台暂不支持此操作，请使用桌面端。", 501);
+    }
+    if (kind === "browser") {
+      showSidebarBrowser();
+      return;
     }
     if (kind === "flowchart" || kind === "mindmap") {
       conversationCanvases.createBlankCanvas(kind);
@@ -2069,9 +2066,7 @@ export function ThreadShell({
     }
     const tab: ToolSidebarTab = kind === "workspace"
       ? { id: SIDEBAR_WORKSPACE_TAB_ID, kind: "tool", title: "工作区", toolKind: "workspace" }
-      : kind === "browser"
-        ? { id: SIDEBAR_BROWSER_TAB_ID, kind: "tool", title: "浏览器", toolKind: "browser" }
-        : { id: SIDEBAR_TERMINAL_TAB_ID, kind: "tool", title: "终端", toolKind: "terminal", terminalStatus: "opening" };
+      : { id: SIDEBAR_TERMINAL_TAB_ID, kind: "tool", title: "终端", toolKind: "terminal", terminalStatus: "opening" };
     const existing = toolTabs.find((item) => item.id === tab.id);
     setToolTabs((current) => existing ? current : [...current, tab]);
     setRightTabOrder((current) => current.includes(tab.id) ? current : [...current, tab.id]);
@@ -2079,11 +2074,10 @@ export function ThreadShell({
     conversationCanvases.selectCanvas(null);
     closePreview();
     setWorkspaceCollapsed(false);
-    if (kind === "browser") onEnsureSidebarBrowser?.();
     if (kind === "terminal" && (!existing || existing.terminalStatus === "error")) {
       startSidebarTerminal(tab.id);
     }
-  }, [closePreview, conversationCanvases, onEnsureSidebarBrowser, openOfficeEditor, sessionKey, setWorkspaceCollapsed, startSidebarTerminal, toolTabs]);
+  }, [closePreview, conversationCanvases, openOfficeEditor, sessionKey, setWorkspaceCollapsed, showSidebarBrowser, startSidebarTerminal, toolTabs]);
   // Right panel shows the file list by default, or the in-pane preview
   // when a file is selected. Sessions with zero artifact activity hide the
   // panel by default but keep the collapsed edge button as an
@@ -2110,9 +2104,9 @@ export function ThreadShell({
     && rightVisible
     && activeRightTabId === SIDEBAR_BROWSER_TAB_ID;
   useEffect(() => {
-    onSidebarBrowserVisibilityChange?.(sidebarBrowserVisible);
-  }, [onSidebarBrowserVisibilityChange, sidebarBrowserVisible]);
-  useEffect(() => () => onSidebarBrowserVisibilityChange?.(false), [onSidebarBrowserVisibilityChange]);
+    onSidebarBrowserVisibilityChange?.(sidebarBrowserVisible ? sidebarPageId ?? null : null);
+    return () => onSidebarBrowserVisibilityChange?.(null);
+  }, [onSidebarBrowserVisibilityChange, sidebarBrowserVisible, sidebarPageId]);
 
   // Multi-agent phase 2d: rooms get a context panel (goal / members /
   // workflow summary) sharing the right-hand pane with the workspace panel.
@@ -2211,16 +2205,24 @@ export function ThreadShell({
   }, [onCollapseSessionList, sessionListOpen]);
 
   return (
-    <>
+    <ConversationBrowserContext.Provider value={sidebarBrowser?.navigate ?? null}>
       <SplitPane
       left={
         <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {showHeader ? (
             <ThreadHeader
-              title={title}
+              title={isPartnerConversation && !conversation?.partnerConversationCopy ? partnerAgentName : title}
+              avatar={isPartnerConversation && directAgentId ? (
+                <AgentAvatar agentId={directAgentId} displayName={partnerAgentName}
+                  avatarUrl={partnerAgent?.avatarUrl} className="h-5 w-5 shrink-0" />
+              ) : undefined}
+              agentSettings={!isRoomSession && !conversation?.partnerConversationCopy && onOpenAgentSettings && !missingInstalledPartner ? {
+                name: partnerAgentName,
+                onOpen: () => onOpenAgentSettings(directAgentId ?? MONA_AGENT_ID),
+              } : undefined}
               onToggleSidebar={onToggleSidebar}
               sidebarOpen={sessionListOpen}
-              minimal={!session && !loading}
+              minimal={!session && !loading && !isPartnerConversation}
               conversation={conversation}
               onToggleRoomPanel={
                 isRoomSession ? () => setRoomPanelOpen((open) => !open) : undefined
@@ -2265,8 +2267,14 @@ export function ThreadShell({
           <ThreadViewport
             messages={transcriptMessages}
             isStreaming={isStreaming}
+            runActivityLabel={runActivityLabel}
             runStartedAt={runStartedAt}
             isGroupChat={isRoomSession}
+            partner={isPartnerConversation && directAgentId ? {
+              id: directAgentId,
+              displayName: partnerAgentName,
+              avatarUrl: partnerAgent?.avatarUrl,
+            } : undefined}
             emptyState={emptyState}
             composer={composer}
             scrollToBottomSignal={scrollToBottomSignal}
@@ -2480,6 +2488,7 @@ export function ThreadShell({
             <AlertDialogTitle>{t("message.branchDialogTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("message.branchDialogDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
+          {branchFailed ? <p role="alert" className="text-caption text-destructive">{t("message.branchTaskFailed")}</p> : null}
           <AlertDialogFooter className="mt-2 gap-2 sm:justify-center sm:space-x-0">
             <Button
               disabled={branching}
@@ -2494,10 +2503,19 @@ export function ThreadShell({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog open={workspaceOpenFailed} onOpenChange={setWorkspaceOpenFailed}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("thread.composer.workspace.openFailed")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("thread.composer.workspace.openFailedDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogAction>{t("common.dismiss")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <MessageRejectionDialog rejection={messageRejection ?? (browserHostVisible && !chatId ? firstMessageRejection : null)} onDismiss={() => {
         dismissMessageRejection();
         setFirstMessageRejection(null);
       }} />
-    </>
+    </ConversationBrowserContext.Provider>
   );
 }

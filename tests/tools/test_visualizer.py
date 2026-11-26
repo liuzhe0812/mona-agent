@@ -172,18 +172,42 @@ def test_show_widget_rejects_unsafe_markup_and_script_sources(widget_code: str) 
     assert isinstance(result, str) and result.startswith("Error:")
 
 
-def test_show_widget_rejects_invalid_svg_count_and_viewbox() -> None:
+@pytest.mark.parametrize("viewbox", [
+    "0 0 400 400",
+    "0 0 680 200",
+    "-10, -20, 400, 400",
+    "+.5 1. 4e2 2.5E+2",
+    "  0,0 680,420  ",
+])
+def test_show_widget_accepts_valid_svg_viewboxes(viewbox: str) -> None:
+    code = f'<svg viewBox="{viewbox}"><circle cx="1" cy="1" r="1"/></svg>'
+    result = _payload(_run(ShowWidgetTool().execute(
+        title="SVG", widget_code=code, loading_messages=["Loading"],
+    )))
+    assert result["success"] is True
+    assert result["render_mode"] == "svg"
+    assert result["widget_code"] == code
+
+
+@pytest.mark.parametrize("viewbox", [
+    "", "0 0 400", "0 0 400 400 1", "0,0,,400,400", "0 0 400 400,",
+    "NaN 0 400 400", "0 0 infinity 400", "0 0 1e999 400", "1e999 0 400 400",
+    "0 0 0 400", "0 0 400 -1", "0 0 4.0.0 400",
+])
+def test_show_widget_rejects_invalid_svg_viewboxes(viewbox: str) -> None:
+    result = _run(ShowWidgetTool().execute(
+        title="SVG", widget_code=f'<svg viewBox="{viewbox}"></svg>', loading_messages=["Loading"],
+    ))
+    assert "viewBox" in result
+
+
+def test_show_widget_rejects_multiple_svg_elements() -> None:
     tool = ShowWidgetTool()
     args = {"title": "SVG", "loading_messages": ["Loading"]}
-    bad_viewbox = _run(tool.execute(
-        **args,
-        widget_code='<svg viewBox="0 0 500 200"></svg>',
-    ))
     multiple = _run(tool.execute(
         **args,
         widget_code='<svg viewBox="0 0 680 200"><svg></svg></svg>',
     ))
-    assert "viewBox" in bad_viewbox
     assert "exactly one SVG" in multiple
 
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
 
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useMonaStream } from "@/hooks/useMonaStream";
@@ -19,6 +20,7 @@ interface MdAiPanelProps {
   width: number;
   onClose: () => void;
   onStreamingChange?: (streaming: boolean) => void;
+  onOpenSettings?: (section?: string) => void;
   onFileEdited: () => void;
   /** AI 编辑前先把编辑器里未保存的内容落盘，避免 reloadTab 丢失用户输入 */
   onPrepareEdit: () => Promise<void>;
@@ -33,6 +35,7 @@ export function MdAiPanel({
   width,
   onClose,
   onStreamingChange,
+  onOpenSettings,
   onFileEdited,
   onPrepareEdit,
 }: MdAiPanelProps) {
@@ -333,6 +336,9 @@ export function MdAiPanel({
               <Send className="h-3 w-3" />
             )}
           </Button>
+        </div>
+        <div className="flex justify-end pt-1">
+          <WorkModelSelector disabled={isStreaming || creatingChat} onOpenSettings={onOpenSettings} />
         </div>
       </div>
     </aside>

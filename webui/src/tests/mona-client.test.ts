@@ -131,6 +131,27 @@ describe("MonaClient", () => {
     client.close();
   });
 
+  it("uses the partner conversation returned by the gateway and supports lookup without creating one", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect();
+    const socket = lastSocket();
+    socket.fakeOpen();
+    const agentId = "local.custom.cindy";
+    const lookup = client.openPartnerConversation(agentId, false);
+    const lookupRequest = JSON.parse(socket.sent.at(-1)!);
+    expect(lookupRequest).toMatchObject({ type: "open_partner_conversation", agent_id: agentId, create: false });
+    socket.fakeMessage({ event: "open_partner_conversation_result", ok: true, request_id: lookupRequest.request_id });
+    await expect(lookup).resolves.toBeNull();
+
+    const open = client.openPartnerConversation(agentId, true);
+    const openRequest = JSON.parse(socket.sent.at(-1)!);
+    expect(openRequest).toMatchObject({ type: "open_partner_conversation", agent_id: agentId, create: true });
+    const conversation = { type: "direct", title: "Cindy", agentIds: [agentId], directAgentId: agentId, partnerConversation: true };
+    socket.fakeMessage({ event: "open_partner_conversation_result", ok: true, request_id: openRequest.request_id, chat_id: "cindy-chat", conversation });
+    await expect(open).resolves.toEqual({ chatId: "cindy-chat", conversation });
+    client.close();
+  });
+
   it("keeps an accepted guide observable through pause and resumes the same ID against a new turn", () => {
     const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
     client.connect(); lastSocket().fakeOpen();
@@ -849,12 +870,39 @@ describe("MonaClient", () => {
       assistant_ordinal: 2,
       source_task_id: "task-2",
     });
+    expect(request).not.toHaveProperty("source_image_reply");
     expect(request.request_id).toEqual(expect.any(String));
     lastSocket().fakeMessage({
       event: "attached",
       chat_id: "branch-chat",
       request_id: request.request_id,
     });
+    await expect(promise).resolves.toBe("branch-chat");
+  });
+
+  it.each([
+    [{ kind: "image" as const, transcriptIndex: 0 }, { transcript_index: 0 }],
+    [{ kind: "image" as const }, {}],
+  ])("requests an image reply branch with selector %o", async (source, selector) => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const promise = client.branchChat("source-chat", source, "task-2", 1_000);
+    const request = JSON.parse(lastSocket().sent.at(-1) ?? "{}") as Record<string, unknown>;
+    expect(request).toMatchObject({
+      type: "branch_chat",
+      source_chat_id: "source-chat",
+      source_image_reply: selector,
+      source_task_id: "task-2",
+    });
+    expect(request).not.toHaveProperty("assistant_ordinal");
+    expect(request.request_id).toEqual(expect.any(String));
+    lastSocket().fakeMessage({ event: "attached", chat_id: "branch-chat", request_id: request.request_id });
     await expect(promise).resolves.toBe("branch-chat");
   });
 

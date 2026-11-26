@@ -31,8 +31,10 @@ import {
 } from "@/lib/materials-api";
 import { cn } from "@/lib/utils";
 import { useClientOptional } from "@/providers/ClientProvider";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 
 interface MaterialsLintPanelProps {
+  onOpenSettings?: (section?: string) => void;
   report: MaterialsLintReport | null;
   running: boolean;
   /** lint 请求失败原因（无数据时展示） */
@@ -108,6 +110,7 @@ function buildLintFixPrompt(issues: MaterialsLintIssue[]): string {
 }
 
 export function MaterialsLintPanel({
+  onOpenSettings,
   report,
   running,
   error,
@@ -383,6 +386,7 @@ export function MaterialsLintPanel({
 
           {/* 底部：自动处理与人工确认 */}
           <div className="shrink-0 border-t border-border/70 p-2.5">
+            <WorkModelSelector disabled={running || creatingChat || isStreaming || autoRepairing} onOpenSettings={onOpenSettings} />
             {autoNotice ? (
               <p className="mb-1.5 text-[11px] text-muted-foreground">{autoNotice}</p>
             ) : null}
@@ -446,6 +450,7 @@ export function MaterialsLintPanel({
             </div>
           </div>
           <div className="shrink-0 p-2">
+            <WorkModelSelector disabled={creatingChat || isStreaming} onOpenSettings={onOpenSettings} />
             {notice ? (
               <p className="mb-1.5 px-1 text-[11px] text-destructive">{notice}</p>
             ) : null}

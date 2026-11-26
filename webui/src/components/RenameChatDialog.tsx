@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 interface RenameChatDialogProps {
   open: boolean;
   title: string;
+  partnerAlias?: boolean;
   onCancel: () => void;
   onConfirm: (title: string) => void;
 }
@@ -22,6 +23,7 @@ interface RenameChatDialogProps {
 export function RenameChatDialog({
   open,
   title,
+  partnerAlias = false,
   onCancel,
   onConfirm,
 }: RenameChatDialogProps) {
@@ -43,20 +45,20 @@ export function RenameChatDialog({
           className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!trimmed) return;
+            if (!trimmed && !partnerAlias) return;
             onConfirm(trimmed);
           }}
         >
           <DialogHeader className="text-left">
-            <DialogTitle>{t("chat.renameTitle")}</DialogTitle>
+            <DialogTitle>{t(partnerAlias ? "sidebar.partnerAlias" : "chat.renameTitle")}</DialogTitle>
             <DialogDescription>
-              {t("chat.renameDescription")}
+              {t(partnerAlias ? "sidebar.partnerAliasDescription" : "chat.renameDescription")}
             </DialogDescription>
           </DialogHeader>
           <Input
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder={t("chat.renamePlaceholder")}
+            placeholder={t(partnerAlias ? "sidebar.partnerAliasPlaceholder" : "chat.renamePlaceholder")}
             autoFocus
             maxLength={160}
           />
@@ -64,7 +66,7 @@ export function RenameChatDialog({
             <Button type="button" variant="outline" onClick={onCancel}>
               {t("deleteConfirm.cancel")}
             </Button>
-            <Button type="submit" disabled={!trimmed}>
+            <Button type="submit" disabled={!trimmed && !partnerAlias}>
               {t("chat.renameSave")}
             </Button>
           </DialogFooter>

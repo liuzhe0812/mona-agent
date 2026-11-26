@@ -27,7 +27,10 @@ import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
 import { systemTabs, type SystemTab } from "./systemTabs";
 import { formatStorage, useSoftwareManagement, useStorageScan, useSystemDiagnostics, type CleanupItem, type DirectorySize, type TopFileInfo } from "./useSystemData";
 
-export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab }) {
+export function SystemView({ initialTab = "overview", onOpenSettings }: {
+  initialTab?: SystemTab;
+  onOpenSettings?: (section?: string) => void;
+}) {
   const [activeTab, setActiveTab] = useState<SystemTab>(initialTab);
   const [hasVisitedStorage, setHasVisitedStorage] = useState(initialTab === "storage");
   const [hasVisitedSoftware, setHasVisitedSoftware] = useState(initialTab === "software");
@@ -261,6 +264,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
           }}
         >
           <SystemAssistant
+            onOpenSettings={onOpenSettings}
             tab={activeTab}
             storage={storage}
             diagnosticChecks={diagnostics.checks}

@@ -25,6 +25,8 @@ export interface ConversationMeta {
   goal?: string | null;
   agentIds: string[];
   directAgentId?: string | null;
+  partnerConversation?: boolean;
+  partnerConversationCopy?: boolean;
   activeWorkflowId?: string | null;
   activeWorkflowRevision?: number | null;
   archived?: boolean;
@@ -218,6 +220,7 @@ export interface ExpertInstallJob {
   totalBytes: number;
   detail: string;
   error?: string | null;
+  errorCode?: "catalog_version_unavailable" | null;
   cachedDownload?: boolean | null;
   installedVersion?: string | null;
   createdAt: number;
@@ -618,6 +621,15 @@ export interface MessageQuote {
   content: string;
 }
 
+/** Local draft only. The quoted image is sent through the existing attachment channel. */
+export interface MessageQuoteDraft extends MessageQuote {
+  image?: { url: string; name?: string };
+}
+
+export type QuoteMessageHandler = (message: UIMessage, author: string, image?: MessageQuoteDraft["image"]) => void;
+
+export type BranchReplySource = number | { kind: "image"; transcriptIndex?: number };
+
 export interface UITokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -628,6 +640,7 @@ export interface UITokenUsage {
    * iteration, so it overstates the window on tool-heavy turns. */
   contextTokens?: number;
   contextWindowTokens?: number;
+  contextBudgetTokens?: number;
   contextModel?: string;
   contextProvider?: string;
 }
@@ -635,7 +648,17 @@ export interface UITokenUsage {
 export interface RawTokenUsage {
   prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number;
   cache_read_input_tokens?: number; total_tokens?: number; context_tokens?: number;
-  context_window_tokens?: number; context_model?: string; context_provider?: string;
+  context_window_tokens?: number; context_budget_tokens?: number; context_model?: string; context_provider?: string;
+  request_stats?: WorkRequestStats;
+}
+
+export interface WorkRequestStats {
+  index: number;
+  elapsed_ms: number;
+  output_tokens: number;
+  input_tokens?: number;
+  cache_read_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export interface UIMessage {
@@ -650,6 +673,8 @@ export interface UIMessage {
   taskId?: string;
   /** Identity of one streamed assistant segment, shared with transcript replay. */
   streamId?: string;
+  /** Assistant reply confirmed by the turn's completed response. */
+  isFinalResponse?: boolean;
   /** Local input awaiting admission or explicitly rejected; retain it until the user retries. */
   sendState?: "pending" | "rejected";
   /** Short display text for user messages (e.g. action label). Falls back to ``content``. */
@@ -841,6 +866,8 @@ export interface SidebarStatePayload {
   schema_version: number;
   pinned_keys: string[];
   archived_keys: string[];
+  partner_pinned_keys: string[];
+  partner_hidden_keys: string[];
   title_overrides: Record<string, string>;
   project_names: Record<string, string>;
     /** IM unread derivation (schema v5): last-read marker per
@@ -858,6 +885,26 @@ export interface BootstrapResponse {
   model_name?: string | null;
 }
 
+export type CustomProviderWireApi = "auto" | "openai-completions" | "openai-responses" | "anthropic-messages";
+
+export interface ProviderModelMetadata {
+  name?: string;
+  type?: string | null;
+  context_window?: number | null;
+  context_window_max?: number | null;
+  input_modalities?: string[] | null;
+  opaque_model_id?: boolean;
+  reasoning_efforts?: string[];
+  default_reasoning_effort?: string | null;
+  supports_adaptive_thinking?: boolean;
+}
+
+export interface ProviderModelOverride {
+  context_window?: number;
+  reasoning_efforts?: string[];
+  default_reasoning_effort?: string | null;
+}
+
 export interface SettingsPayload {
   agent: {
     model: string;
@@ -872,6 +919,7 @@ export interface SettingsPayload {
     max_tokens: number;
     context_window_tokens: number;
     context_window_source?: string;
+    context_budget_tokens?: number;
     auto_compact_token_limit: number | null;
     temperature: number;
     reasoning_effort: string | null;
@@ -918,16 +966,23 @@ export interface SettingsPayload {
     configured: boolean;
     api_key_required: boolean;
     api_key_hint?: string | null;
+    auth_method?: "apiKey" | "none" | "aws" | "google-adc" | "github-copilot";
+    wire_api?: string;
+    model_discovery_supported?: boolean;
+    catalog_candidates?: Array<{ id: string; name: string; type?: string | null; discovered_metadata?: ProviderModelMetadata }>;
     image_api_key_hint?: string | null;
     api_base: string;
     default_api_base: string;
     model?: string | null;
+    model_overrides?: Record<string, ProviderModelOverride>;
     models: Array<{
       id: string;
       name: string;
       engine?: "mona" | "codex" | "claude";
       type?: string | null;
       context_window?: number | null;
+      context_window_source?: string | null;
+      discovered_metadata?: ProviderModelMetadata;
       input_modalities?: string[] | null;
       enabled: boolean;
       recommended: boolean;
@@ -1128,13 +1183,17 @@ export interface ProviderSettingsUpdate {
   customName?: string;
   apiKey?: string;
   apiBase?: string;
+  wireApi?: CustomProviderWireApi;
   model?: string;
   enabledModels?: string[] | null;
+  modelOverrides?: Record<string, ProviderModelOverride | null>;
   discoveredModels?: Array<{
     id: string;
     name?: string;
     type?: string | null;
     contextWindow?: number | null;
+    contextWindowMax?: number | null;
+    opaque_model_id?: boolean;
     inputModalities?: string[] | null;
     reasoningEfforts?: string[];
     defaultReasoningEffort?: string | null;
@@ -1242,6 +1301,7 @@ export type InboundEvent =
       context_compacting?: boolean;
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
+      final_response?: boolean;
       task_id?: string;
       token_usage?: RawTokenUsage;
       /** Optional structured payload on progress frames (channel-specific). */
@@ -1310,12 +1370,13 @@ export type InboundEvent =
       stop_confirmed?: boolean;
       turn_state?: "running" | "stopping" | "unknown";
       latency_ms?: number;
+      final_stream_id?: string;
       task_id?: string;
       token_usage?: RawTokenUsage;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
     }
-  | { event: "context_usage"; chat_id: string; token_usage?: RawTokenUsage; job_id?: string | null }
+  | { event: "context_usage"; chat_id: string; token_usage?: RawTokenUsage; job_id?: string | null; turn_id?: string; input_id?: string }
   | {
       event: "goal_status";
       chat_id: string;
@@ -1380,6 +1441,7 @@ export type InboundEvent =
   | ({ event: "update_room_result" } & RoomCommandResult)
   | ({ event: "room_state_result" } & RoomCommandResult)
   | ({ event: "create_direct_conversation_result" } & RoomCommandResult)
+  | ({ event: "open_partner_conversation_result" } & RoomCommandResult)
   | {
       event: "room_updated";
       chat_id: string;
@@ -1494,12 +1556,24 @@ export interface WebuiThreadPagination {
   total: number;
 }
 
+export interface SessionUsageSummary {
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheHitRate: number | null;
+  latencyMs: number | null;
+  outputTokensPerSecond: number | null;
+  models: string[];
+}
+
 export interface WebuiThreadPersistedPayload {
   schemaVersion: number;
   sessionKey?: string;
   savedAt?: string;
   messages: UIMessage[];
   pagination?: WebuiThreadPagination;
+  sessionUsage?: SessionUsageSummary | null;
 }
 
 export type Outbound =
@@ -1518,13 +1592,15 @@ export type Outbound =
       model_binding?: AgentModelBinding | null;
       request_id?: string;
     }
-  | {
+  | ({
       type: "branch_chat";
       source_chat_id: string;
       source_task_id?: string;
-      assistant_ordinal: number;
       request_id?: string;
-    }
+    } & (
+      | { assistant_ordinal: number; source_image_reply?: never }
+      | { source_image_reply: { transcript_index?: number }; assistant_ordinal?: never }
+    ))
   | { type: "attach"; chat_id: string }
   | { type: "stop_work_turn"; chat_id: string; request_id: string; expected_turn_id: string }
   | {
@@ -1574,6 +1650,7 @@ export type Outbound =
       db_current_sql?: string;
       db_last_error?: string;
       browser_tab_id?: string;
+      browser_sidebar?: boolean;
       browser_page_url?: string;
       browser_page_title?: string;
       office_session_id?: string;
@@ -1608,6 +1685,13 @@ export type Outbound =
       chat_id: string;
       agent_id: string;
       title?: string;
+      request_id?: string;
+    }
+  | {
+      type: "open_partner_conversation";
+      agent_id: string;
+      create: boolean;
+      copy?: boolean;
       request_id?: string;
     }
   | {

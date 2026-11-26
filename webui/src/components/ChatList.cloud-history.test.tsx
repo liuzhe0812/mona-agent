@@ -15,6 +15,7 @@ beforeEach(() => {
 
 it("opens the selected Work conversation history outside the row menu", async () => {
   render(<SessionListPanel
+    onNewTask={vi.fn()}
     sessions={[
       { key: "websocket:first", channel: "websocket", chatId: "first", createdAt: null, updatedAt: null, title: "First", preview: "" },
       { key: "websocket:second", channel: "websocket", chatId: "second", createdAt: null, updatedAt: null, title: "Second", preview: "" },
@@ -22,17 +23,17 @@ it("opens the selected Work conversation history outside the row menu", async ()
     ]}
     activeKey={null} loading={false} onSelect={vi.fn()} onRequestDelete={vi.fn()} onTogglePin={vi.fn()}
     onRequestRename={vi.fn()} onToggleArchive={vi.fn()} onMarkAllRead={vi.fn()} onToggleArchived={vi.fn()}
-    onStartDirect={vi.fn()} onSelectAgent={vi.fn()} onOpenExpertLibrary={vi.fn()} onNewRoom={vi.fn()}
+    onStartDirect={vi.fn()} onOpenExpertLibrary={vi.fn()} onNewRoom={vi.fn()}
   />);
   expect(api.status).not.toHaveBeenCalled();
-  fireEvent.contextMenu(screen.getByTitle("Second"));
+  fireEvent.contextMenu(screen.getByRole("button", { name: "Second" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Version history" }));
   expect(await screen.findByRole("dialog")).toHaveTextContent("Second");
   expect(api.status).toHaveBeenCalledOnce();
   expect(await screen.findByText("暂无历史版本")).toBeInTheDocument();
   expect(api.history).toHaveBeenCalledWith("b".repeat(32), undefined, expect.any(AbortSignal));
   fireEvent.click(screen.getByRole("button", { name: "关闭", exact: true }));
-  fireEvent.contextMenu(screen.getByTitle("Code"));
+  fireEvent.contextMenu(screen.getByRole("button", { name: "Code" }));
   expect(screen.queryByRole("menuitem", { name: "Version history" })).not.toBeInTheDocument();
   expect(api.status).toHaveBeenCalledOnce();
 });

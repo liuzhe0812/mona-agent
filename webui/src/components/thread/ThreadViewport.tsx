@@ -10,18 +10,20 @@ import {
 import { ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { ThreadMessages, type ThreadPartner } from "@/components/thread/ThreadMessages";
 import { isAgentActivityMember } from "@/components/thread/AgentActivityCluster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIMessage } from "@/lib/types";
+import type { QuoteMessageHandler, UIMessage } from "@/lib/types";
 
 interface ThreadViewportProps {
   messages: UIMessage[];
   isStreaming: boolean;
+  runActivityLabel?: string;
   runStartedAt?: number | null;
   /** Rooms render assistant turns as a group-chat conversation. */
   isGroupChat?: boolean;
+  partner?: ThreadPartner;
   composer: ReactNode;
   emptyState?: ReactNode;
   scrollToBottomSignal?: number;
@@ -34,12 +36,13 @@ interface ThreadViewportProps {
   loadingEarlier?: boolean;
   earlierError?: string | null;
   onLoadEarlier?: () => Promise<boolean>;
-  onQuote?: (message: UIMessage, author: string) => void;
+  onQuote?: QuoteMessageHandler;
   onBranch?: (message: UIMessage, author: string) => void;
   onWidgetPrompt?: (text: string) => void;
 }
 
 const NEAR_BOTTOM_PX = 48;
+const REPLY_START_INSET_PX = 24;
 const DEFAULT_SCROLL_BUTTON_BOTTOM_PX = 192;
 const SCROLL_BUTTON_COMPOSER_GAP_PX = 16;
 export const INITIAL_HISTORY_WINDOW = 160;
@@ -61,8 +64,10 @@ export function windowMessages(messages: UIMessage[], visibleCount: number): UIM
 export function ThreadViewport({
   messages,
   isStreaming,
+  runActivityLabel,
   runStartedAt,
   isGroupChat = false,
+  partner,
   composer,
   emptyState,
   scrollToBottomSignal = 0,
@@ -149,6 +154,19 @@ export function ThreadViewport({
     },
     [cancelScheduledBottomScroll, scrollToBottomNow],
   );
+
+  const jumpToReplyStart = useCallback((target: HTMLElement) => {
+    const scroller = scrollRef.current;
+    if (!scroller?.contains(target)) return;
+    cancelScheduledBottomScroll();
+    const top = Math.max(0, scroller.scrollTop + target.getBoundingClientRect().top
+      - scroller.getBoundingClientRect().top - REPLY_START_INSET_PX);
+    const nearBottom = scroller.scrollHeight - scroller.clientHeight - top < NEAR_BOTTOM_PX;
+    userReadingHistoryRef.current = !nearBottom;
+    setAtBottom(nearBottom);
+    target.focus({ preventScroll: true });
+    scroller.scrollTo({ top, behavior: "instant" });
+  }, [cancelScheduledBottomScroll]);
 
   const loadEarlierMessages = useCallback(() => {
     const remote = hiddenMessageCount === 0;
@@ -343,9 +361,11 @@ export function ThreadViewport({
                 <ThreadMessages
                   messages={visibleMessages}
                   isStreaming={isStreaming}
+                  runActivityLabel={runActivityLabel}
                   runStartedAt={runStartedAt}
                   focusMessage={focusMessage}
                   isGroupChat={isGroupChat}
+                  partner={partner}
                   hiddenMessageCount={hiddenMessageCount}
                   hasMoreHistory={hasMoreHistory}
                   loadingEarlier={loadingEarlier}
@@ -354,6 +374,7 @@ export function ThreadViewport({
                   onQuote={onQuote}
                   onBranch={onBranch}
                   onWidgetPrompt={onWidgetPrompt}
+                  onJumpToReplyStart={jumpToReplyStart}
                 />
               </div>
             </div>

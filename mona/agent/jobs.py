@@ -24,12 +24,16 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import Field, field_validator
 
-from mona.agent.partners import normalize_agent_id
+from mona.agent.partners import STOCK_RESEARCH_AGENT_ID, normalize_agent_id
 from mona.config.schema import Base
 
 
+def is_retired_stock_agent(agent_id: str) -> bool:
+    return agent_id.startswith("com.mona.stock") or agent_id == STOCK_RESEARCH_AGENT_ID
+
+
 def is_retired_stock_job(agent_id: str, room_id: str) -> bool:
-    return agent_id.startswith("com.mona.stock") or agent_id == "com.mona.a-share-analyst" or room_id in {
+    return is_retired_stock_agent(agent_id) or room_id in {
         "stock_research", "stock_ai_diagnosis",
     }
 

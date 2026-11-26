@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from contextvars import ContextVar
 from html.parser import HTMLParser
@@ -117,10 +118,17 @@ def _validate_widget(widget_code: str) -> tuple[str | None, str | None]:
         if len(parser.svg_viewboxes) != 1:
             return "Error: an SVG widget must contain exactly one SVG element.", None
         viewbox = parser.svg_viewboxes[0] or ""
-        match = re.fullmatch(r"\s*0\s+0\s+680\s+(\d+(?:\.\d+)?)\s*", viewbox)
-        if not match or float(match.group(1)) <= 0:
-            return "Error: SVG widgets must use viewBox='0 0 680 H' with a positive height.", None
-        return None, "svg"
+        number = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+        separator = r"(?:[ \t\r\n]*,[ \t\r\n]*|[ \t\r\n]+)"
+        match = re.fullmatch(
+            rf"[ \t\r\n]*({number}){separator}({number}){separator}({number}){separator}({number})[ \t\r\n]*",
+            viewbox,
+        )
+        if match:
+            values = tuple(map(float, match.groups()))
+            if all(map(math.isfinite, values)) and values[2] > 0 and values[3] > 0:
+                return None, "svg"
+        return "Error: SVG widgets must use a valid viewBox with positive width and height.", None
     return None, "html"
 
 

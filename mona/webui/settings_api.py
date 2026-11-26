@@ -6,27 +6,39 @@ settings payload shape and the allowlisted config mutations exposed to WebUI.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import unicodedata
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
 from loguru import logger
+from pydantic import ValidationError
 
 from mona.config.loader import get_config_path, load_config, save_config
-from mona.config.schema import ModelGenerationParameters, ProviderConfig
+from mona.config.schema import ModelGenerationParameters, ProviderConfig, ProviderModelOverride
 from mona.providers.capabilities import resolve_capabilities
 from mona.providers.context_window import (
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
     resolve_model_context_window,
     resolve_model_context_window_details,
 )
+from mona.providers.factory import resolve_work_context_budget
 from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.managed_catalog import managed_model_catalog as _managed_model_catalog
+from mona.providers.model_metadata import (
+    canonical_model_endpoint,
+    catalog_api_for_endpoint,
+    configured_model_metadata,
+    model_selection_row,
+    positive_token_count,
+    resolve_route_model_metadata,
+)
 from mona.providers.model_sources import (
     CHAT_SOURCE_PROVIDER_BY_ID,
     CHAT_SOURCE_PROVIDERS,
@@ -705,14 +717,7 @@ def _preset_capabilities_payload(config: Any, preset: Any) -> dict[str, Any]:
         provider_name = preset.provider
     spec = find_by_name(provider_name) if provider_name else None
     provider_config = config.get_provider(preset.model, preset=preset)
-    input_modalities: list[str] | None = None
-    for item in (provider_config.discovered_models if provider_config else None) or []:
-        if not isinstance(item, dict) or str(item.get("id") or "") != preset.model:
-            continue
-        raw_modalities = item.get("input_modalities", item.get("inputModalities"))
-        if isinstance(raw_modalities, list):
-            input_modalities = [str(value) for value in raw_modalities]
-        break
+    input_modalities = configured_model_metadata(provider_name, preset.model, provider_config).get("input_modalities")
     return resolve_capabilities(
         spec,
         preset.model,
@@ -745,6 +750,11 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
         effective_preset,
         provider_name=selected_provider,
         managed_catalog=managed_catalog,
+    )
+    context_budget = (
+        (defaults.native_context_window_tokens or DEFAULT_CONTEXT_WINDOW_TOKENS)
+        if defaults.executor != "mona"
+        else resolve_work_context_budget(config, effective_preset, managed_catalog=managed_catalog)[0]
     )
 
     providers = []
@@ -854,7 +864,7 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
         )
 
     exec_config = config.tools.exec
-    chat_providers = _chat_provider_rows(config)
+    chat_providers = _chat_provider_rows(config, include_candidates=True)
     return {
         "agent": {
             "model": effective_preset.model,
@@ -869,6 +879,7 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
             "max_tokens": effective_preset.max_tokens,
             "context_window_tokens": effective_context_window.tokens,
             "context_window_source": effective_context_window.source,
+            "context_budget_tokens": context_budget,
             "auto_compact_token_limit": effective_preset.auto_compact_token_limit,
             "temperature": effective_preset.temperature,
             "reasoning_effort": effective_preset.reasoning_effort,
@@ -979,9 +990,10 @@ def settings_payload(*, requires_restart: bool = False, config: Any = None) -> d
     }
 
 
-def update_agent_settings(query: QueryParams) -> dict[str, Any]:
+def update_agent_settings(query: QueryParams, *, include_payload: bool = True) -> dict[str, Any]:
     config = load_config()
     defaults = config.agents.defaults
+    previous_route = (defaults.provider, defaults.model)
     changed = False
     restart_required = False
 
@@ -1035,6 +1047,8 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             (row for row in _chat_provider_rows(config) if row["name"] == provider),
             None,
         )
+        if chat_provider is not None and not chat_provider["configured"]:
+            raise WebUISettingsError("provider is not configured")
         if model is not None and chat_provider is not None and model not in {
             item["id"] for item in chat_provider["models"] if item["enabled"]
         }:
@@ -1061,12 +1075,15 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             changed = True
 
     reasoning_effort = _query_first_alias(query, "reasoning_effort", "reasoningEffort")
+    if reasoning_effort is None and previous_route != (defaults.provider, defaults.model):
+        reasoning_effort = "none"
     if reasoning_effort is not None:
         reasoning_effort = reasoning_effort.strip().lower()
-        current_model = next((item for row in _chat_provider_rows(config) if row["name"] == defaults.provider
+        source_name = config.get_provider_name(defaults.model, preset=config.resolve_default_preset()) or defaults.provider
+        current_model = next((item for row in _chat_provider_rows(config) if row["name"] == source_name
                               for item in row["models"] if item["id"] == defaults.model), {})
         declared_efforts = current_model.get("reasoning_efforts")
-        allowed_efforts = declared_efforts if declared_efforts is not None else {"low", "medium", "high", "max", "adaptive"}
+        allowed_efforts = declared_efforts or []
         if reasoning_effort != "none" and reasoning_effort not in allowed_efforts:
             raise WebUISettingsError("当前模型不支持所选思考强度，请重新选择。")
         normalized_effort = None if reasoning_effort == "none" else reasoning_effort
@@ -1153,7 +1170,7 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             ws = Path(workspace).expanduser()
             ws.mkdir(parents=True, exist_ok=True)
             sync_workspace_templates(ws)
-    return settings_payload(requires_restart=restart_required)
+    return settings_payload(requires_restart=restart_required) if include_payload else {}
 
 
 def update_jev_settings(query: QueryParams) -> dict[str, Any]:
@@ -1297,6 +1314,47 @@ def update_computer_use_settings(query: QueryParams) -> dict[str, Any]:
     return settings_payload(requires_restart=False)
 
 
+def _apply_model_overrides(provider: ProviderConfig, provider_name: str, raw: str) -> bool:
+    try:
+        patch = json.loads(raw)
+    except ValueError:
+        patch = None
+    if not isinstance(patch, dict):
+        raise WebUISettingsError("模型能力设置必须是按模型 ID 索引的对象")
+    discovered = {item["id"]: item for item in provider.discovered_models or []
+                  if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    overrides = dict(provider.model_overrides)
+    for model_id, values in patch.items():
+        if values is None:
+            overrides.pop(model_id, None)
+            continue
+        if model_id not in discovered:
+            raise WebUISettingsError("请先将模型添加到此供应商")
+        try:
+            override = ProviderModelOverride.model_validate(values)
+        except ValidationError as exc:
+            location = exc.errors(include_input=False)[0]["loc"]
+            field = location[0] if location else ""
+            if field in ("context_window", "contextWindow"):
+                raise WebUISettingsError(f"模型 {model_id} 的上下文窗口必须是正整数") from None
+            if field in ("default_reasoning_effort", "defaultReasoningEffort"):
+                raise WebUISettingsError(f"模型 {model_id} 的默认思考档位必须属于支持列表") from None
+            raise WebUISettingsError(f"模型 {model_id} 的思考档位格式无效") from None
+        declared = override.model_dump(exclude_none=True)
+        if not declared:
+            overrides.pop(model_id, None)
+            continue
+        effective = resolve_route_model_metadata(provider_name, model_id, api_base=provider.api_base,
+                                                discovered=discovered[model_id], override=declared, wire_api=provider.wire_api)
+        if override.default_reasoning_effort and override.default_reasoning_effort not in (effective.get("reasoning_efforts") or []):
+            raise WebUISettingsError(f"模型 {model_id} 的默认思考档位必须属于支持列表")
+        overrides[model_id] = override
+    if overrides == provider.model_overrides:
+        return False
+    provider.model_overrides = overrides
+    return True
+
+
 def update_provider_settings(query: QueryParams) -> dict[str, Any]:
     raw_provider_name = (_query_first(query, "provider") or "").strip()
     if not raw_provider_name:
@@ -1335,7 +1393,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         provider_config = ProviderConfig(display_name=display_name)
     else:
         spec = find_by_name(raw_provider_name)
-        if spec is None or spec.is_oauth:
+        if spec is None or (spec.is_oauth and raw_provider_name != "github-copilot"):
             raise WebUISettingsError("unknown provider")
         provider_name = spec.name
         custom_entry = is_custom_provider_name(provider_name)
@@ -1345,6 +1403,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         provider_config = None
 
     managed_entry = provider_name == "mona_managed"
+    raw_overrides = _query_first_alias(query, "model_overrides", "modelOverrides")
+    if raw_overrides is not None and not custom_entry:
+        raise WebUISettingsError("模型能力覆盖仅用于自定义供应商")
     if managed_entry:
         if _parse_bool(_query_first(query, "delete") or "false", "delete"):
             raise WebUISettingsError("Mona AI 是内置供应商，不能删除")
@@ -1366,7 +1427,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
     delete_requested = (catalog_entry is not None or custom_entry) and _parse_bool(
         _query_first(query, "delete") or "false", "delete"
     )
-    legacy_config = getattr(config.providers, provider_name, None)
+    legacy_field = config.providers.legacy_field(provider_name)
+    legacy_config = getattr(config.providers, legacy_field, None)
     if delete_requested:
         was_default = config.agents.defaults.provider == provider_name
         if not was_default and config.agents.defaults.provider == "auto":
@@ -1381,7 +1443,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         # Clear a legacy fixed-field entry with the same public ID as well;
         # otherwise a deleted dynamic provider would reappear as configured.
         if isinstance(legacy_config, ProviderConfig):
-            setattr(config.providers, provider_name, ProviderConfig())
+            setattr(config.providers, legacy_field, ProviderConfig())
         if was_default:
             remaining = [
                 row
@@ -1469,14 +1531,33 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             provider_config.api_key = api_key
             changed = True
 
+    previous_wire = provider_config.wire_api
+    raw_wire = _query_first_alias(query, "wire_api", "wireApi")
+    if raw_wire is not None:
+        if not custom_entry or raw_wire not in {"auto", "", "openai-completions", "openai-responses", "anthropic-messages"}:
+            raise WebUISettingsError("请选择此自定义连接支持的 API 协议")
+        selected_wire = None if raw_wire in {"", "auto"} else raw_wire
+        if selected_wire != previous_wire:
+            provider_config.wire_api = selected_wire
+            changed = True
+    old_base = provider_config.api_base or (catalog_entry.api_base if catalog_entry else None)
     if "api_base" in query or "apiBase" in query:
         api_base = _query_first_alias(query, "api_base", "apiBase")
         api_base = (api_base or "").strip() or None
-        if custom_entry:
+        if custom_entry or (catalog_entry and catalog_entry.api_base_editable):
             if not api_base and creating_custom:
                 raise WebUISettingsError("API Base 不能为空")
             if api_base:
                 api_base = _validate_custom_api_base(api_base)
+                if any(character in api_base for character in "{}<>"):
+                    raise WebUISettingsError("请先填写此连接的实际 API Base")
+                if catalog_entry and catalog_entry.auth_method == "google-adc":
+                    from mona.providers.vertex_provider import validate_vertex_base
+
+                    try:
+                        validate_vertex_base(api_base)
+                    except ValueError as exc:
+                        raise WebUISettingsError(str(exc)) from None
         if catalog_entry is not None and not catalog_entry.api_base_editable:
             if api_base and api_base.rstrip("/") != catalog_entry.api_base.rstrip("/"):
                 raise WebUISettingsError("该 Cindy 供应商的 API Base 不可编辑")
@@ -1484,6 +1565,15 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         if provider_config.api_base != api_base:
             provider_config.api_base = api_base
             changed = True
+    new_base = provider_config.api_base or (catalog_entry.api_base if catalog_entry else None)
+    if previous_wire != provider_config.wire_api or (
+        old_base and (canonical_model_endpoint(old_base) or old_base) != (canonical_model_endpoint(new_base) or new_base)
+    ):
+        provider_config.discovered_models = [
+            {key: item[key] for key in ("id", "type") if key in item}
+            for item in provider_config.discovered_models or [] if isinstance(item, dict) and item.get("id")
+        ]
+        provider_config.model_overrides = {}
 
     if custom_entry and custom_name is not None and not creating_custom:
         display_name = (custom_name or "").strip()
@@ -1497,6 +1587,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
     if custom_entry and creating_custom and not provider_config.api_base:
         raise WebUISettingsError("API Base 不能为空")
+
+    if catalog_entry and "{" in (provider_config.api_base or catalog_entry.api_base):
+        raise WebUISettingsError("请先填写此连接的实际 API Base")
 
     model = _query_first_alias(query, "model", "model")
     if model is not None:
@@ -1519,6 +1612,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         if managed_entry and enabled is not None:
             raise WebUISettingsError("Mona AI 模型由官方统一提供，全部显示。")
         known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+        if catalog_entry:
+            known_models.update(item.id for item in catalog_entry.catalog_models)
         if provider_name in {"openai", "anthropic"} and provider_config.model:
             known_models.add(provider_config.model)
         if managed_entry:
@@ -1574,7 +1669,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             model_id = str(item.get("id") or "").strip()
             if not model_id:
                 continue
-            context_window = item.get("contextWindow")
+            context_window = item.get("contextWindow", item.get("context_window"))
+            context_max = item.get("contextWindowMax", item.get("context_window_max"))
             if context_window is not None and (
                 isinstance(context_window, bool)
                 or not isinstance(context_window, int)
@@ -1583,6 +1679,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 raise WebUISettingsError(
                     "discovered_models.contextWindow must be a positive integer"
                 )
+            if context_max is not None and (type(context_max) is not int or context_max <= 0):
+                raise WebUISettingsError("discovered_models.contextWindowMax must be a positive integer")
             model_type = item.get("type")
             if model_type is not None and not isinstance(model_type, str):
                 raise WebUISettingsError("discovered_models.type must be a string")
@@ -1635,6 +1733,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                         if context_window is not None
                         else {}
                     ),
+                    **({"context_window_max": context_max} if context_max is not None else {}),
+                    **({"opaque_model_id": True} if item.get("opaque_model_id") is True else {}),
                     **(
                         {"input_modalities": input_modalities}
                         if input_modalities is not None
@@ -1656,10 +1756,16 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             existing_ids.add(model_id)
             incoming = incoming_by_id.get(model_id)
             updates: dict[str, Any] = {}
+            if incoming and incoming.get("name") and incoming["name"] != model_id and item.get("name") in (None, "", model_id):
+                updates["name"] = incoming["name"]
             if incoming and incoming.get("type"):
                 updates["type"] = incoming["type"]
             if incoming and "context_window" in incoming:
                 updates["context_window"] = incoming["context_window"]
+            if incoming and "context_window_max" in incoming:
+                updates["context_window_max"] = incoming["context_window_max"]
+            if incoming and incoming.get("opaque_model_id"):
+                updates["opaque_model_id"] = True
             if incoming and "input_modalities" in incoming:
                 updates["input_modalities"] = incoming["input_modalities"]
             merged_item = {**item, **updates}
@@ -1686,6 +1792,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
         if provider_config.enabled_models is not None:
             known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+            if catalog_entry:
+                known_models.update(item.id for item in catalog_entry.catalog_models)
             if provider_name in {"openai", "anthropic"} and provider_config.model:
                 known_models.add(provider_config.model)
             known_models.update(
@@ -1711,6 +1819,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 provider_config.enabled_models = reconciled_enabled
                 changed = True
             models_updated = True
+
+    if raw_overrides is not None:
+        changed = _apply_model_overrides(provider_config, provider_name, raw_overrides) or changed
 
     if creating_custom:
         # Only expose a new provider in the config map after all required
@@ -1759,6 +1870,14 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
     if models_updated:
         changed = _ensure_enabled_model_default(config) or changed
+
+    if (models_updated or raw_overrides is not None) and config.agents.defaults.provider == provider_name:
+        defaults = config.agents.defaults
+        current = configured_model_metadata(provider_name, defaults.model, provider_config)
+        efforts = current.get("reasoning_efforts")
+        if efforts is not None and defaults.reasoning_effort is not None and defaults.reasoning_effort not in efforts:
+            defaults.reasoning_effort = None
+            changed = True
 
     if changed:
         save_config(config)
@@ -2121,62 +2240,44 @@ def _chat_provider_config(config: Any, provider_name: str) -> Any:
         return dynamic
     # Read legacy fixed fields for backwards compatibility; first mutation
     # above migrates a copy into the dynamic map.
-    return getattr(config.providers, provider_name, None)
+    return _provider_config(config, provider_name)
 
 
-def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
+def _chat_provider_rows(config: Any, *, include_candidates: bool = False) -> list[dict[str, Any]]:
     """Return official and user-added model sources without credential values."""
     rows: list[dict[str, Any]] = []
     for entry in CHAT_SOURCE_PROVIDERS:
         provider_config = _chat_provider_config(config, entry.id)
-        configured = bool(provider_config) and (
-            bool(provider_config.api_key) or not entry.api_key_required
-        )
+        configured = bool(provider_config and (
+            provider_config.api_key or (not entry.api_key_required and (
+                entry.id in config.providers.cindy or provider_config.api_base or provider_config.model
+                or provider_config.enabled_models or provider_config.discovered_models
+            ))
+        ))
+        if configured and entry.auth_method == "github-copilot":
+            from mona.webui.copilot_login import github_copilot_authorized
+
+            configured = github_copilot_authorized()
         selected = (
             list(provider_config.enabled_models)
             if provider_config and provider_config.enabled_models is not None
             else None
         )
-        catalog_models: list[dict[str, Any]] = [
-            {
-                "id": model.id,
-                "name": model.name,
-                "type": "chat",
-                "context_window": model.context_window,
-                "input_modalities": model.input_modalities,
-            }
-            for model in entry.models
-        ]
+        base = (provider_config.api_base if provider_config and entry.api_base_editable else None) or entry.api_base
+        model_ids = dict.fromkeys(model.id for model in entry.models)
         if entry.id in {"openai", "anthropic"} and provider_config and provider_config.model:
-            catalog_models.append({"id": provider_config.model, "name": provider_config.model, "type": "chat", "context_window": None})
-        catalog_by_id = {model["id"]: model for model in catalog_models}
-        seen_ids = set(catalog_by_id)
-        for model in (provider_config.discovered_models if provider_config else None) or []:
-            model_id = str(model.get("id") or "").strip()
-            if not model_id:
-                continue
-            reasoning_metadata = normalize_reasoning_metadata(model)
-            if model_id in seen_ids:
-                declared_type = str(model.get("type") or "").strip().lower()
-                if declared_type:
-                    catalog_by_id[model_id]["type"] = declared_type
-                if model.get("context_window") is not None:
-                    catalog_by_id[model_id]["context_window"] = model[
-                        "context_window"
-                    ]
-                catalog_by_id[model_id].update(reasoning_metadata)
-                continue
-            seen_ids.add(model_id)
-            catalog_models.append(
-                {
-                    "id": model_id,
-                    "name": str(model.get("name") or model_id),
-                    "type": str(model.get("type") or "").strip().lower() or None,
-                    "context_window": model.get("context_window"),
-                    "input_modalities": model.get("input_modalities"),
-                    **reasoning_metadata,
-                }
-            )
+            model_ids[provider_config.model] = None
+        preset_ids = set(model_ids)
+        candidates = {candidate.id: candidate for candidate in entry.catalog_models}
+        model_ids.update(dict.fromkeys(model for model in (selected or []) if model in candidates))
+        discovered = {item["id"]: item for item in (provider_config.discovered_models if provider_config else None) or []
+                      if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]}
+        model_ids.update(dict.fromkeys(discovered))
+        catalog_models = [
+            model_selection_row(entry.id, model_id, discovered.get(model_id, {}), api_base=base,
+                                default_type="chat" if model_id in preset_ids or model_id in candidates else None)
+            for model_id in model_ids
+        ]
         rows.append(
             {
                 "name": entry.id,
@@ -2190,12 +2291,7 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 **({"image_api_key_hint": _mask_secret_hint(
                     config.providers.openai_images.api_key
                 )} if entry.id == "openai" else {}),
-                "api_base": (
-                    provider_config.api_base
-                    if provider_config and entry.api_base_editable
-                    else None
-                )
-                or entry.api_base,
+                "api_base": base,
                 "default_api_base": entry.api_base,
                 "model": provider_config.model if provider_config else None,
                 "models": [
@@ -2210,6 +2306,12 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "region": entry.region,
                 "api_base_editable": entry.api_base_editable,
                 "is_custom": False,
+                "auth_method": entry.auth_method,
+                "wire_api": entry.wire_api,
+                "model_discovery_supported": entry.id != "cloudflare-ai-gateway",
+                **({"catalog_candidates": [{"id": item.id, "name": item.name, "type": "chat", "discovered_metadata": {}}
+                                          for item in candidates.values() if item.id not in model_ids]}
+                   if include_candidates and candidates else {}),
             }
         )
     managed = find_by_name("mona_managed")
@@ -2293,16 +2395,13 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
             if not model_id or model_id in seen_ids:
                 continue
             seen_ids.add(model_id)
-            discovered_models.append(
-                {
-                    "id": model_id,
-                    "name": str(model.get("name") or model_id),
-                    "type": str(model.get("type") or "").strip().lower() or None,
-                    "context_window": model.get("context_window"),
-                    "input_modalities": model.get("input_modalities"),
-                    **normalize_reasoning_metadata(model),
-                }
+            override = provider_config.model_overrides.get(model_id)
+            resolved = model_selection_row(
+                provider_name, model_id, model, api_base=provider_config.api_base,
+                override=override.model_dump(exclude_none=True) if override else None,
+                wire_api=provider_config.wire_api,
             )
+            discovered_models.append(resolved)
         selected = list(provider_config.enabled_models) if provider_config.enabled_models is not None else [
             model["id"] for model in discovered_models if model.get("type") in {"chat", "language", "text", "llm"}
         ]
@@ -2333,6 +2432,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "region": None,
                 "api_base_editable": True,
                 "is_custom": True,
+                "wire_api": provider_config.wire_api or "auto",
+                "model_overrides": {model_id: value.model_dump(exclude_none=True)
+                                    for model_id, value in provider_config.model_overrides.items()},
             }
         )
     for row in rows:
@@ -2422,15 +2524,15 @@ def _models_url_for(backend: str, api_base: str, provider_name: str = "") -> str
             return f"{base.rstrip('/')}/models"
         return f"{base.rstrip('/')}/compatible-mode/v1/models"
 
-    # Official and compatible APIs expose their catalog at /v1/models.
-    if backend_l in ("openai_compat", "anthropic"):
-        # Normalise: strip trailing /v1/chat/completions, /chat/completions,
-        # or /v1 so we can re-append a canonical /v1/models.
-        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+    if backend_l in ("openai_compat", "anthropic", "azure_openai"):
+        for suffix in ("/chat/completions", "/responses", "/messages", "/models"):
             if base.endswith(suffix):
-                base = base[: -len(suffix)]
+                base = base[:-len(suffix)]
                 break
-        return f"{base}/v1/models"
+        path = urlparse(base).path.rstrip("/")
+        if not path or (backend_l == "anthropic" and not path.endswith("/v1")):
+            base += "/v1"
+        return f"{base}/models"
 
     return None
 
@@ -2467,10 +2569,19 @@ def _model_context_window(item: dict[str, Any]) -> int | None:
         "max_input_tokens",
         "inputTokenLimit",
         "input_token_limit",
+        "max_model_len",
     ):
-        value = item.get(field)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        value = positive_token_count(item.get(field))
+        if value is not None:
             return value
+    for container, key in (("model_info", "max_input_tokens"), ("limit", "context")):
+        nested = item.get(container)
+        if isinstance(nested, dict) and (value := positive_token_count(nested.get(key))):
+            return value
+    capabilities = item.get("capabilities")
+    limits = capabilities.get("limits") if isinstance(capabilities, dict) else None
+    if isinstance(limits, dict):
+        return positive_token_count(limits.get("max_context_window_tokens"))
     return None
 
 
@@ -2487,7 +2598,7 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
     """
     items: list[Any] = []
     if isinstance(payload, dict):
-        for key in ("data", "models", "list"):
+        for key in ("data", "models", "list", "publisherModels", "result"):
             value = payload.get(key)
             if isinstance(value, list):
                 items = value
@@ -2504,13 +2615,27 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
             model_type = None
             input_modalities = None
             context_window = None
+            context_max = None
         elif isinstance(item, dict):
-            name = str(item.get("id") or item.get("name") or "").strip()
-            label = str(item.get("name") or name).strip() or name
-            raw_type = item.get("type")
+            name = next((item[key].strip() for key in ("id", "slug", "key", "model_name", "model_id", "name")
+                         if isinstance(item.get(key), str) and item[key].strip()), "")
+            if name.startswith("models/") and "supportedGenerationMethods" in item:
+                name = name.removeprefix("models/")
+            if isinstance(payload, dict) and "publisherModels" in payload and name.startswith("publishers/google/models/"):
+                name = name.removeprefix("publishers/google/models/")
+            if isinstance(payload, dict) and "result" in payload and str(item.get("name", "")).startswith(("@cf/", "@hf/")):
+                name = item["name"]
+            label = item.get("display_name") or item.get("displayName") or item.get("name") or name
+            label = label.strip() if isinstance(label, str) else name
+            if label.startswith(("models/", "publishers/google/models/")):
+                label = name
+            raw_type = item.get("type") or item.get("mode")
             model_type = raw_type.strip().lower() if isinstance(raw_type, str) else None
+            if not model_type and isinstance(item.get("supportedGenerationMethods"), list):
+                model_type = "chat" if "generateContent" in item["supportedGenerationMethods"] else "other"
             input_modalities = _model_input_modalities(item)
             context_window = _model_context_window(item)
+            context_max = positive_token_count(item.get("max_context_window", item.get("contextWindowMax")))
         else:
             continue
         if not name or name in seen:
@@ -2527,6 +2652,8 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
                     if context_window is not None
                     else {}
                 ),
+                **({"context_window_max": context_max} if context_max else {}),
+                **({"opaque_model_id": True} if isinstance(item, dict) and item.get("opaqueModelId") is True else {}),
                 **(
                     normalize_reasoning_metadata(item)
                     if isinstance(item, dict)
@@ -2537,11 +2664,49 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _next_catalog_page(payload: Any, current: str, original: str) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for field, param in (("nextPageToken", "pageToken"), ("next_page_token", "page_token"), ("next_cursor", "cursor")):
+        token = payload.get(field)
+        if isinstance(token, str) and token:
+            return str(httpx.URL(current).copy_set_param(param, token))
+    if payload.get("has_more") is True and isinstance(payload.get("last_id"), str) and payload["last_id"]:
+        return str(httpx.URL(current).copy_set_param("after_id", payload["last_id"]))
+    pages = payload.get("result_info")
+    if isinstance(pages, dict) and type(pages.get("page")) is int and type(pages.get("total_pages")) is int:
+        if 0 < pages["page"] < pages["total_pages"]:
+            return str(httpx.URL(current).copy_set_param("page", pages["page"] + 1))
+    links = payload.get("links")
+    link = payload.get("next") or (links.get("next") if isinstance(links, dict) else None)
+    if isinstance(link, str) and link:
+        target = urljoin(current, link)
+        dest, start = urlparse(target), urlparse(original)
+        if (dest.scheme, dest.netloc, dest.path) == (start.scheme, start.netloc, start.path) and not dest.fragment:
+            return target
+    return None
+
+
+def _bedrock_catalog(region: str, profile: str | None, key: str | None) -> list[dict[str, Any]]:
+    from mona.providers.bedrock_provider import make_bedrock_client
+
+    client = make_bedrock_client("bedrock", region=region, profile=profile, api_key=key,
+                                 endpoint_url=f"https://bedrock.{region}.amazonaws.com")
+    try:
+        response = client.list_foundation_models(byOutputModality="TEXT")
+        return [{"id": item["modelId"], "name": item.get("modelName") or item["modelId"], "type": "chat",
+                 "input_modalities": [str(mode).lower() for mode in item.get("inputModalities", [])]}
+                for item in response.get("modelSummaries", []) if isinstance(item, dict) and item.get("modelId")]
+    finally:
+        client.close()
+
+
 async def probe_provider_model_details(
     *,
     provider_name: str,
     api_key: str | None = None,
     api_base: str | None = None,
+    wire_api: str | None = None,
     timeout: float = 15.0,
 ) -> list[dict[str, Any]]:
     """Fetch the model catalog for one provider.
@@ -2555,8 +2720,10 @@ async def probe_provider_model_details(
         raise WebUISettingsError("unknown provider")
     catalog_entry = CHAT_SOURCE_PROVIDER_BY_ID.get(spec.name)
 
-    if spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai"):
+    if (spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai")) and not catalog_entry:
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
+    if spec.name == "cloudflare-ai-gateway":
+        raise WebUISettingsError("请从此网关的目录中选择模型，或填写已配置的路由 ID。")
 
     config = load_config()
     provider_config = _provider_config(config, spec.name)
@@ -2579,54 +2746,137 @@ async def probe_provider_model_details(
         ).strip()
     if not effective_base:
         raise WebUISettingsError("请先填写 API Base 后再拉取模型")
+    if any(character in effective_base for character in "{}<>"):
+        raise WebUISettingsError("请先填写此连接的实际 API Base")
 
     custom_endpoint = provider_name.strip() == "custom" or is_custom_provider_name(
         provider_name
     )
-    if custom_endpoint:
+    if custom_endpoint or (catalog_entry and catalog_entry.api_base_editable):
         effective_base = _validate_custom_api_base(effective_base)
+    if wire_api is not None and (not custom_endpoint or wire_api not in {"auto", "openai-completions", "openai-responses", "anthropic-messages"}):
+        raise WebUISettingsError("请选择此自定义连接支持的 API 协议")
+    preferred_wire = (wire_api or provider_config.wire_api) if custom_endpoint else None
+    if preferred_wire == "auto":
+        preferred_wire = None
+    discovery_wire = preferred_wire or (catalog_entry.wire_api if catalog_entry else catalog_api_for_endpoint(effective_base))
 
     # ``custom`` is the create-form sentinel, not a persisted provider.  Do
     # not borrow the legacy fixed ``providers.custom`` key for a new endpoint;
     # only an explicitly supplied request key may be used.  Persisted
     # ``custom-*`` providers retain the normal saved-key fallback for edits.
-    effective_key = (
-        (api_key or "").strip()
-        if provider_name.strip() == "custom"
-        else (api_key or provider_config.api_key or "").strip()
-    )
+    effective_key = (api_key or (provider_config.api_key if provider_name != "custom" else None) or "").strip()
+    allow_private = custom_endpoint or bool(catalog_entry and catalog_entry.allow_private)
+    auth = catalog_entry.auth_method if catalog_entry else "apiKey"
+    if auth == "aws":
+        region = urlparse(catalog_entry.api_base).hostname.split(".")[1]
+        try:
+            rows = await asyncio.wait_for(asyncio.to_thread(
+                _bedrock_catalog, region, getattr(provider_config, "profile", None), effective_key or None,
+            ), timeout=timeout)
+        except Exception as exc:
+            logger.warning("Bedrock model list failed for {} ({})", region, type(exc).__name__)
+            raise WebUISettingsError("未能读取此区域的 Bedrock 模型，请核对 AWS 凭据和列模型权限，或选择目录中的型号。") from None
+        return [model_selection_row(spec.name, item["id"], item, api_base=effective_base) for item in rows]
 
-    url = (
-        catalog_entry.models_url
-        if catalog_entry and catalog_entry.models_url
-        else _models_url_for(spec.backend, effective_base, spec.name)
-    )
+    headers = {"Accept": "application/json"}
+    explicit = catalog_entry.models_url if catalog_entry else None
+    url = _models_url_for(spec.backend, effective_base, spec.name)
+    if custom_endpoint and discovery_wire == "anthropic-messages":
+        url = _models_url_for("anthropic", effective_base, spec.name)
+    base = urlparse(effective_base)
+    if explicit and (urlparse(explicit).scheme, urlparse(explicit).netloc) == (base.scheme, base.netloc):
+        url = explicit
+    if spec.name == "sub2api":
+        url = str(httpx.URL(_models_url_for("openai_compat", effective_base)).copy_set_param("client_version", "0.147.0"))
+    if auth == "github-copilot":
+        from mona.providers.github_copilot_provider import GitHubCopilotProvider
+
+        try:
+            url, headers = await GitHubCopilotProvider().catalog_request()
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("Copilot model list authentication failed ({})", type(exc).__name__)
+            raise WebUISettingsError("请先完成 GitHub Copilot 登录，并核对账号的 Copilot 权限。") from None
+    elif auth == "google-adc":
+        from mona.providers.vertex_provider import VertexAccess
+
+        try:
+            url, headers = await VertexAccess(effective_base).catalog_request()
+        except Exception as exc:
+            logger.warning("Vertex model list authentication failed ({})", type(exc).__name__)
+            raise WebUISettingsError("请核对 Vertex AI 项目、区域和 Google 应用默认凭据。") from None
+    elif spec.name == "cloudflare-workers-ai":
+        if base.hostname != "api.cloudflare.com" or not re.fullmatch(r"/client/v4/accounts/[A-Za-z0-9_-]+/ai/v1/?", base.path):
+            raise WebUISettingsError("请填写 Cloudflare Workers AI 的实际账户 API Base。")
+        url = f"{effective_base.rstrip('/').removesuffix('/v1')}/models/search?task=Text+Generation"
+    elif base.hostname == "generativelanguage.googleapis.com" and base.path.rstrip("/") in ("/v1beta/openai", "/v1/openai"):
+        url = f"https://{base.netloc}{base.path.rstrip('/').removesuffix('/openai')}/models"
+        if effective_key:
+            headers["x-goog-api-key"] = effective_key
+    elif catalog_entry and catalog_entry.wire_api == "azure-openai-responses":
+        url = f"{effective_base.rstrip('/')}/models" if base.path.rstrip("/").endswith("/openai/v1") else f"{effective_base.rstrip('/')}/openai/v1/models"
+        if effective_key:
+            headers["api-key"] = effective_key
+    elif spec.backend == "anthropic" or discovery_wire == "anthropic-messages":
+        headers["anthropic-version"] = "2023-06-01"
+        if effective_key:
+            headers["x-api-key"] = effective_key
+    if effective_key and auth not in {"google-adc", "github-copilot"} and "x-goog-api-key" not in headers and "api-key" not in headers:
+        headers["Authorization"] = f"Bearer {effective_key}"
     if not url:
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
 
     # SSRF 红线：所有出站 HTTP 必须过 validate_url_target
-    ok, err = validate_url_target(url, allow_private=custom_endpoint)
+    ok, err = validate_url_target(url, allow_private=allow_private)
     if not ok:
         raise WebUISettingsError(f"API Base 不允许访问：{err}")
 
-    headers: dict[str, str] = {"Accept": "application/json"}
-    if effective_key:
-        # Send both Bearer and x-api-key so we don't branch per provider;
-        # an extra header an endpoint ignores is harmless.
-        headers["Authorization"] = f"Bearer {effective_key}"
-        headers["x-api-key"] = effective_key
-        headers["anthropic-version"] = "2023-06-01"
-
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             resp = await client.get(url, headers=headers)
-    except httpx.TimeoutException:
+            if spec.name == "sub2api" and resp.status_code in (404, 405):
+                url = str(httpx.URL(url).copy_remove_param("client_version"))
+                resp = await client.get(url, headers=headers)
+            payload = _catalog_response_payload(resp)
+            models = _parse_model_details_payload(payload)
+            merged = {item["id"]: item for item in models}
+            visited = {url}
+            current = url
+            deadline = asyncio.get_running_loop().time() + timeout
+            for _ in range(99):
+                page_url = _next_catalog_page(payload, current, url)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if not page_url or page_url in visited or remaining <= 0 or len(merged) >= 10_000:
+                    break
+                if not validate_url_target(page_url, allow_private=allow_private)[0]:
+                    break
+                visited.add(page_url)
+                try:
+                    resp = await asyncio.wait_for(client.get(page_url, headers=headers), remaining)
+                    payload = _catalog_response_payload(resp)
+                    incoming = _parse_model_details_payload(payload)
+                except (TimeoutError, httpx.HTTPError, WebUISettingsError):
+                    if not merged:
+                        raise
+                    break
+                for item in incoming:
+                    previous = merged.get(item["id"], {})
+                    fields = {key: value for key, value in item.items() if value is not None}
+                    if fields.get("name") == item["id"] and previous.get("name"):
+                        fields.pop("name")
+                    merged[item["id"]] = {**previous, **fields}
+                current = page_url
+    except (TimeoutError, httpx.TimeoutException):
         raise WebUISettingsError(
             f"探测超时（>{timeout:.0f}s），请检查网络或 API Base 是否可达"
         ) from None
     except httpx.HTTPError as exc:
-        raise WebUISettingsError(f"无法访问该 API Base：{exc}") from exc
+        logger.warning("Model discovery failed for {} ({})", spec.name, type(exc).__name__)
+        raise WebUISettingsError("无法访问此供应商的模型目录，请检查 API Base 和网络连接。") from None
+    return [model_selection_row(spec.name, item["id"], item, api_base=effective_base, wire_api=preferred_wire) for item in merged.values()]
 
+
+def _catalog_response_payload(resp: httpx.Response) -> dict | list:
     body = resp.text or ""
     status = resp.status_code
 
@@ -2636,8 +2886,8 @@ async def probe_provider_model_details(
         )
     if status == 404:
         raise WebUISettingsError("该 endpoint 没有 /v1/models 路由，无法拉取模型列表")
-    if status >= 400:
-        raise WebUISettingsError(f"拉取失败 HTTP {status}：{body[:120]}")
+    if status >= 300:
+        raise WebUISettingsError(f"模型目录请求失败（HTTP {status}），请核对连接地址和账号权限。")
 
     # Some expired relays return an HTML 200 login page — treat as unsupported.
     head = body.lstrip()[:64].lower()
@@ -2646,17 +2896,15 @@ async def probe_provider_model_details(
 
     try:
         payload = resp.json() if body else None
-    except ValueError as exc:
-        raise WebUISettingsError(f"endpoint 返回内容不是 JSON: {body[:100]}") from exc
+    except ValueError:
+        raise WebUISettingsError("模型目录返回的内容不是 JSON，请核对 API Base。") from None
 
     if not isinstance(payload, (dict, list)):
         raise WebUISettingsError("endpoint 返回内容格式无法识别")
 
-    models = _parse_model_details_payload(payload)
-    if not models and isinstance(payload, dict) and payload.get("error"):
-        err_msg = str(payload["error"])[:200]
-        raise WebUISettingsError(f"endpoint 返回错误: {err_msg}")
-    return models
+    if isinstance(payload, dict) and (payload.get("error") or payload.get("success") is False):
+        raise WebUISettingsError("供应商返回了错误，请检查此连接的账号权限和 API Base。")
+    return payload
 
 
 async def probe_provider_models(

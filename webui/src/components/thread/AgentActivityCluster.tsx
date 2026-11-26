@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ChevronRight, Pencil, SquareTerminal, Wrench } from "lucide-react";
+import { AlertCircle, ChevronRight, Layers, Pencil, SquareTerminal, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { FileReferenceChip } from "@/components/FileReferenceChip";
@@ -12,7 +12,7 @@ import type { UIFileEdit, UIMessage } from "@/lib/types";
 export function isReasoningOnlyAssistant(m: UIMessage): boolean {
   if (m.role !== "assistant" || m.kind === "trace" || m.kind === "widget") return false;
   if (m.content.trim().length > 0) return false;
-  if (m.deliveredFiles?.length) return false;
+  if (m.deliveredFiles?.length || m.media?.length) return false;
   return !!(m.reasoning?.length || m.reasoningStreaming || m.isStreaming);
 }
 
@@ -106,9 +106,10 @@ interface ActivityTimingHeaderProps {
   startedAt: number;
   expanded?: boolean;
   onToggle?: () => void;
+  inline?: boolean;
 }
 
-export function ActivityTimingHeader({ isTurnStreaming, runStartedAt, latencyMs, startedAt, expanded, onToggle }: ActivityTimingHeaderProps) {
+export function ActivityTimingHeader({ isTurnStreaming, runStartedAt, latencyMs, startedAt, expanded, onToggle, inline = false }: ActivityTimingHeaderProps) {
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -126,26 +127,34 @@ export function ActivityTimingHeader({ isTurnStreaming, runStartedAt, latencyMs,
     : latencyMs != null
       ? t("message.agentActivityDuration", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
       : t("message.agentActivityFinished");
-  return <div data-testid="activity-timing" className="mb-2.5 border-b border-border/60 pb-1 text-caption text-muted-foreground">
+  const labelContent = <>
+    {inline && <Layers className="h-4 w-4 shrink-0" aria-hidden />}
+    <span>{label}</span>
+  </>;
+  return <div data-testid="activity-timing" className={cn(
+    "text-caption text-muted-foreground",
+    inline ? "flex min-h-7 items-center" : "mb-2.5 border-b border-border/60 pb-1",
+  )}>
     {onToggle ? <Button type="button" variant="ghost" size="sm" onClick={onToggle} aria-expanded={expanded}
       aria-label={t(expanded ? "message.collapseProcess" : "message.expandProcess")}
       className="relative h-auto justify-start gap-1.5 p-0 font-normal text-muted-foreground before:absolute before:inset-x-0 before:-inset-y-2 hover:bg-transparent hover:text-foreground">
-      <span>{label}</span>
+      {labelContent}
       <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", expanded && "rotate-90")} />
-    </Button> : <span>{label}</span>}
+    </Button> : inline ? <span className="inline-flex items-center gap-1.5">{labelContent}</span> : labelContent}
   </div>;
 }
 
 interface AgentActivityClusterProps {
   messages: UIMessage[];
   isTurnStreaming: boolean;
+  runActivityLabel?: string;
   hasBodyBelow: boolean;
   runStartedAt?: number | null;
   latencyMs?: number;
   showTiming?: boolean;
 }
 
-export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, runStartedAt, latencyMs, showTiming = true }: AgentActivityClusterProps) {
+export function AgentActivityCluster({ messages, isTurnStreaming, runActivityLabel, hasBodyBelow, runStartedAt, latencyMs, showTiming = true }: AgentActivityClusterProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const activityGroups = useMemo(() => {
@@ -171,6 +180,7 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
   const summary = fileCount > 0 && hasCommands
     ? t("message.activityFilesAndCommands")
     : fileCount > 0 ? fileSummary : t(hasCommands ? "message.activityCommands" : "message.activityDetails");
+  const title = (isTurnStreaming && runActivityLabel) || summary;
   const previews = messages.filter((message) => message.kind === "trace" && message.media?.length);
   if (reasoningSteps === 0 && toolCalls === 0 && fileCount === 0 && previews.length === 0) return null;
   const Icon = fileCount > 0 ? Pencil : hasCommands ? SquareTerminal : Wrench;
@@ -178,10 +188,10 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
     {showTiming && <ActivityTimingHeader isTurnStreaming={isTurnStreaming} runStartedAt={runStartedAt}
       startedAt={messages[0]?.createdAt ?? Date.now()}
       latencyMs={latencyMs ?? messages.find((message) => message.latencyMs != null)?.latencyMs} />}
-    <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-label={summary}
+    <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-label={title}
       className="flex max-w-full items-center gap-2 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
       <Icon className="h-4 w-4 shrink-0" aria-hidden />
-      <StreamingLabelSheen active={isTurnStreaming} className="min-w-0 text-left">{summary}</StreamingLabelSheen>
+      <StreamingLabelSheen active={isTurnStreaming} className="min-w-0 text-left">{title}</StreamingLabelSheen>
       {fileCount > 0 && hasDiffStats && <DiffPair added={added} deleted={deleted} />}
       <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", expanded && "rotate-90")} />
     </button>
@@ -195,7 +205,7 @@ export function AgentActivityCluster({ messages, isTurnStreaming, hasBodyBelow, 
         if (isReasoningOnlyAssistant(message)) return <ReasoningBubble key={message.id} text={message.reasoning ?? ""}
           streaming={isTurnStreaming && !!message.reasoningStreaming} hasBodyBelow={false} embeddedInCluster />;
         if (message.kind === "trace") {
-          return <TraceGroup key={message.id} message={group} animClass="" inline />;
+          return <TraceGroup key={message.id} message={group} animClass="" inline active={isTurnStreaming} />;
         }
         return null;
       })}

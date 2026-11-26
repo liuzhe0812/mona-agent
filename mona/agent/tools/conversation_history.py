@@ -8,8 +8,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from mona.agent.partners import MONA_AGENT_ID
 from mona.agent.tools.base import Tool
+from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from mona.config.paths import get_agent_output_dir
 from mona.session.conversation_history import ConversationHistoryStore
 
 
@@ -19,11 +22,19 @@ def _enabled(ctx: Any) -> bool:
 
 
 class _ConversationHistoryTool(Tool):
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     system_managed = True
 
     def __init__(self, workspace: str, agent_id: str, sessions: Any) -> None:
         self._store = ConversationHistoryStore(Path(workspace), agent_id, sessions)
+
+    def _active_store(self) -> ConversationHistoryStore:
+        if self._store.agent_id == MONA_AGENT_ID:
+            return self._store
+        workspace = get_current_workspace() or get_agent_output_dir(
+            self._store.sessions.workspace, self._store.agent_id
+        )
+        return ConversationHistoryStore(workspace, self._store.agent_id, self._store.sessions)
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -93,13 +104,14 @@ class ConversationSearchTool(_ConversationHistoryTool):
     ) -> str:
         try:
             result = await asyncio.to_thread(
-                self._store.search,
-                query or "",
-                limit=limit,
-                cursor=cursor,
-                session_key=session_key,
-                date_from=date_from,
-                date_to=date_to,
+                lambda: self._active_store().search(
+                    query or "",
+                    limit=limit,
+                    cursor=cursor,
+                    session_key=session_key,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
             )
         except ValueError as exc:
             result = {"status": "error", "error": str(exc)}
@@ -161,12 +173,13 @@ class ConversationReadTool(_ConversationHistoryTool):
     ) -> str:
         try:
             result = await asyncio.to_thread(
-                self._store.read,
-                ref or "",
-                before=before,
-                after=after,
-                max_chars=max_chars,
-                cursor=cursor,
+                lambda: self._active_store().read(
+                    ref or "",
+                    before=before,
+                    after=after,
+                    max_chars=max_chars,
+                    cursor=cursor,
+                )
             )
         except ValueError as exc:
             result = {"status": "error", "error": str(exc)}

@@ -9,6 +9,7 @@ import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
+from os.path import normcase
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,7 +20,7 @@ from mona.agent.partners import (
     ConversationMetadata,
     normalize_agent_id,
 )
-from mona.config.paths import get_conversation_history_dir
+from mona.config.paths import get_agent_output_dir, get_conversation_history_dir
 from mona.session.manager import SessionManager
 from mona.webui.transcript import webui_transcript_path
 
@@ -169,7 +170,7 @@ class ConversationHistoryStore:
         self._transcript_path = transcript_path
         if index_path is None:
             workspace_hash = hashlib.sha256(
-                str(self.workspace).casefold().encode("utf-8")
+                normcase(str(self.workspace)).encode("utf-8")
             ).hexdigest()[:16]
             index_path = (
                 get_conversation_history_dir()
@@ -218,6 +219,10 @@ class ConversationHistoryStore:
 
     def _eligible_sessions(self) -> dict[str, str]:
         eligible: dict[str, str] = {}
+        default_partner_workspace = (
+            get_agent_output_dir(self.sessions.workspace, self.agent_id).resolve()
+            if self.agent_id != MONA_AGENT_ID else None
+        )
         for info in self.sessions.list_sessions():
             key = info.get("key")
             if not isinstance(key, str) or not key.startswith("websocket:"):
@@ -245,6 +250,18 @@ class ConversationHistoryStore:
                 or conversation.hidden
             ):
                 continue
+            if default_partner_workspace is not None:
+                bound = metadata.get("workspace")
+                try:
+                    workspace = (
+                        Path(bound).expanduser().resolve()
+                        if isinstance(bound, str) and bound.strip()
+                        else default_partner_workspace
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if workspace != self.workspace:
+                    continue
             title = metadata.get("title") or conversation.title or info.get("title") or ""
             eligible[key] = str(title)
         return eligible

@@ -282,6 +282,24 @@ class ModelGenerationParameters(Base):
     values: dict[str, str | int | float] = Field(default_factory=dict)
 
 
+class ProviderModelOverride(Base):
+    """Optional capabilities declared for a model on one custom connection."""
+
+    model_config = ConfigDict(extra="forbid")
+    context_window: int | None = Field(default=None, gt=0, le=2**53 - 1, strict=True)
+    reasoning_efforts: list[str] | None = Field(default=None, max_length=16)
+    default_reasoning_effort: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+
+    @field_validator("reasoning_efforts")
+    @classmethod
+    def validate_efforts(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        from mona.providers.reasoning import normalize_reasoning_metadata
+
+        return normalize_reasoning_metadata({"reasoning_efforts": value}, strict=True)["reasoning_efforts"]
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -289,12 +307,14 @@ class ProviderConfig(Base):
     display_name: str | None = None
     api_key: str | None = None
     api_base: str | None = None
+    wire_api: Literal["openai-completions", "openai-responses", "anthropic-messages"] | None = None
     model: str | None = None  # Last-used model for this provider
     # Chat settings only: None follows catalog defaults; an empty list hides all
     # models, while a populated list is the explicit visible-model selection.
     enabled_models: list[str] | None = None
     model_engines: dict[str, Literal["mona", "codex", "claude"]] = Field(default_factory=dict)
     discovered_models: list[dict[str, Any]] | None = None
+    model_overrides: dict[str, ProviderModelOverride] = Field(default_factory=dict)
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
 
@@ -359,10 +379,14 @@ class ProvidersConfig(Base):
         dynamic = self.cindy.get(name)
         if isinstance(dynamic, ProviderConfig):
             return dynamic
-        value = getattr(self, name, None)
+        value = getattr(self, self.legacy_field(name), None)
         if isinstance(value, ProviderConfig):
             return value
         return None
+
+    @staticmethod
+    def legacy_field(name: str) -> str:
+        return {"lmstudio": "lm_studio", "azure-openai-responses": "azure_openai"}.get(name, name.replace("-", "_"))
 
 
 StockVibeDataSource = Literal[

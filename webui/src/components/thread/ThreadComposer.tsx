@@ -44,6 +44,8 @@ import {
 import { useTranslation } from "react-i18next";
 import { Popover } from "radix-ui";
 
+import { MonaWordmark } from "@/components/MonaWordmark";
+import { AgentAvatar, MONA_AGENT_ID } from "@/components/room/AgentAvatar";
 import { Button } from "@/components/ui/button";
 import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { Tooltip, TooltipButton, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -59,9 +61,10 @@ import { useAttachedDocuments, type AttachedDocument } from "@/hooks/useAttached
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
-import type { MessageQuote, RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import type { ContextUsage } from "@/lib/context-usage";
+import { loadQuotedImage } from "@/lib/message-quote";
+import type { MessageQuoteDraft, RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
 import { getHostedPlatform } from "@/lib/hosted-platform";
-import { MonaComposerPeek } from "@/components/thread/MonaComposerPeek";
 import {
   getDesktopSettings,
   isTauri,
@@ -70,9 +73,16 @@ import {
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
+import { RunMetricsPopover, type RunMetricsDisplay } from "@/components/thread/RunMetricsPopover";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 const MAX_QUOTE_CONTENT_CHARS = 4_000;
+
+interface ComposerRunOverview {
+  label?: string;
+  metrics?: RunMetricsDisplay;
+  liveRate?: number;
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -85,26 +95,42 @@ function formatContextTokens(value: number): string {
   return `${(value / 1000).toFixed(1)}K`;
 }
 
-function resolvedContextUsage(usage?: ThreadComposerProps["contextUsage"]): {
-  percent: number;
-  label: string;
-} {
-  if (!usage) return { percent: 0, label: "暂无上下文用量" };
-  if (!usage.total || usage.total <= 0 || usage.used < 0) {
-    return {
-      percent: 0,
-      label: `已使用 ${formatContextTokens(Math.max(0, usage.used))}，模型上下文窗口未知`,
-    };
-  }
-  const percent = (usage.used / usage.total) * 100;
-  return {
-    percent: Math.min(100, percent),
-    label: `${percent.toFixed(1)}% · ${formatContextTokens(usage.used)} / ${formatContextTokens(usage.total)} 上下文已使用`,
-  };
+export function ContextUsageRing({ ratio }: { ratio: number | null }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+      <circle cx="12" cy="12" r="9" fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
+      <circle
+        cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+        pathLength="100" strokeDasharray={`${Math.min(1, ratio ?? 0) * 100} 100`} transform="rotate(-90 12 12)"
+      />
+    </svg>
+  );
 }
 
-function ContextUsageIndicator({ usage }: { usage?: ThreadComposerProps["contextUsage"] }) {
-  const { percent, label } = resolvedContextUsage(usage);
+export function ContextUsageIndicator({
+  usage,
+  showPercentage = false,
+}: {
+  usage?: ThreadComposerProps["contextUsage"];
+  showPercentage?: boolean;
+}) {
+  const { t, i18n } = useTranslation();
+  const used = usage?.used ?? 0;
+  const total = usage?.total ?? 0;
+  const ratio = total > 0 && used >= 0 ? used / total : null;
+  const formatPercent = (value: number, digits: number) => new Intl.NumberFormat(i18n.resolvedLanguage, {
+    style: "percent",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value);
+  const amounts = ratio === null ? null : {
+    percent: formatPercent(ratio, 1),
+    used: formatContextTokens(used),
+    total: formatContextTokens(total),
+  };
+  const label = !usage ? t("thread.composer.contextUsage.empty")
+    : amounts ? t(usage.isBudget ? "thread.composer.contextUsage.budgetDetail" : "thread.composer.contextUsage.detail", amounts)
+    : t("thread.composer.contextUsage.unknown", { used: formatContextTokens(Math.max(0, used)) });
   return (
     <TooltipProvider delayDuration={100}>
       <Tooltip>
@@ -113,27 +139,17 @@ function ContextUsageIndicator({ usage }: { usage?: ThreadComposerProps["context
             role="img"
             tabIndex={0}
             aria-label={label}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className={cn(
+              "inline-flex shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              showPercentage ? "h-8 min-w-8 gap-1 px-1 text-caption tabular-nums" : "h-7 w-7",
+            )}
           >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
-              <circle cx="12" cy="12" r="9" fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                pathLength="100"
-                strokeDasharray={`${percent} 100`}
-                transform="rotate(-90 12 12)"
-              />
-            </svg>
+            <ContextUsageRing ratio={ratio} />
+            {showPercentage && ratio !== null ? <span aria-hidden>{formatPercent(ratio, 0)}</span> : null}
           </span>
         </TooltipTrigger>
         <TooltipContent side="top" sideOffset={8} className="whitespace-nowrap">
-          {label}
+          {showPercentage && amounts ? `${amounts.percent} · ${amounts.used} / ${amounts.total}` : label}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -160,7 +176,7 @@ interface ThreadComposerProps {
   stopLabel?: string;
   autoFocus?: boolean;
   isStreaming?: boolean;
-  /** True after a computer_act tool has started in the active run. */
+  /** True while a desktop input call in the active run remains in flight. */
   computerUseActive?: boolean;
   /** True after a message is sent and before Mona emits visible activity. */
   isAwaitingModelResponse?: boolean;
@@ -174,12 +190,9 @@ interface ThreadComposerProps {
   onModelSelect?: (option: ComposerModelOption, effort?: string | null) => void | Promise<void>;
   modelDisabled?: boolean;
   currentExecutor?: string;
-  /** Latest turn context usage vs the active model's context window.
-   * ``total`` is ``null`` when the active model has no known context window. */
-  contextUsage?: {
-    used: number;
-    total: number | null;
-  } | null;
+  /** Latest turn context usage vs the active model's window or working budget. */
+  contextUsage?: ContextUsage | null;
+  contextAction?: ReactNode;
   /** Server-resolved capability of the active preset. When false, image
    * attach/paste/drop is rejected with an inline hint. Default true. */
   imageInputEnabled?: boolean;
@@ -188,6 +201,7 @@ interface ThreadComposerProps {
   onStop?: () => void;
   /** Unix seconds from server; turn elapsed timer above input while set. */
   runStartedAt?: number | null;
+  runOverview?: ComposerRunOverview;
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
   leadingActions?: ReactNode;
@@ -208,7 +222,7 @@ interface ThreadComposerProps {
   /** Room members offered by the ``@`` picker (multi-agent guide 7.5). When
    * empty the picker is disabled (direct chats). */
   mentionableAgents?: RoomAgentInfo[];
-  quote?: MessageQuote | null;
+  quote?: MessageQuoteDraft | null;
   onClearQuote?: () => void;
 }
 
@@ -368,11 +382,13 @@ function RunElapsedStrip({
   goalState,
   isAwaitingModelResponse = false,
   isCompacting = false,
+  overview,
 }: {
   startedAt: number | null;
   goalState?: GoalStateWsPayload;
   isAwaitingModelResponse?: boolean;
   isCompacting?: boolean;
+  overview?: ComposerRunOverview;
 }) {
   const { t } = useTranslation();
   const [goalPanelOpen, setGoalPanelOpen] = useState(false);
@@ -391,7 +407,6 @@ function RunElapsedStrip({
   const showTimer = startedAt != null;
   const stripLabel = goalStateStripPreview(goalState, t);
   const showGoal = !!stripLabel?.trim();
-  if (!showTimer && !showGoal) return null;
 
   const objectiveFull = goalState?.objective?.trim() ?? "";
   const summaryFull = goalState?.ui_summary?.trim() ?? "";
@@ -454,15 +469,16 @@ function RunElapsedStrip({
     };
   }, [goalPanelOpen]);
 
-  const elapsed =
-    startedAt != null ? Math.max(0, Math.floor(Date.now() / 1000 - startedAt)) : 0;
+  if (!showTimer && !showGoal && !overview?.label && !overview?.metrics && overview?.liveRate === undefined) return null;
+
+  const elapsed = startedAt != null ? Math.max(0, Math.floor(Date.now() / 1000 - startedAt)) : 0;
   const m = Math.floor(elapsed / 60);
   const sec = elapsed % 60;
   const shortElapsed = m > 0 ? `${m}:${sec.toString().padStart(2, "0")}` : `${sec}s`;
   const timerTitle = showTimer
     ? t("thread.composer.runRuntimeTitle", { elapsed: shortElapsed })
     : null;
-  const activityTitle = isCompacting && timerTitle
+  const activityTitle = overview ? overview.label : isCompacting && timerTitle
     ? t("thread.composer.compactingRuntimeTitle", { elapsed: shortElapsed })
     : isAwaitingModelResponse && timerTitle
       ? t("thread.composer.awaitingResponseRuntimeTitle", { elapsed: shortElapsed })
@@ -519,17 +535,19 @@ function RunElapsedStrip({
         </div>
       ) : null}
       <div
-        className="flex min-h-[36px] items-center gap-2 border-b border-black/[0.04] px-3 py-2 dark:border-white/[0.06]"
-        role="status"
-        aria-label={ariaLabel}
+        className={cn("flex items-center gap-2", overview
+          ? "min-h-8 px-2 text-caption"
+          : "min-h-[36px] border-b border-black/[0.04] px-3 py-2 dark:border-white/[0.06]")}
+        role={ariaLabel ? "status" : undefined}
+        aria-label={ariaLabel || undefined}
       >
-        {showTimer ? (
+        {showTimer || overview?.label ? (
           <FlowingActivityIcon className="ai-activity-gradient h-4 w-4 shrink-0" />
-        ) : (
+        ) : showGoal ? (
           <Target className="h-4 w-4 shrink-0 text-primary/75" aria-hidden />
-        )}
+        ) : null}
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-medium text-foreground/75">
-          {activityTitle ? <span className="shrink-0">{activityTitle}</span> : null}
+          {activityTitle ? <span className={overview ? "truncate" : "shrink-0"}>{activityTitle}</span> : null}
           {activityTitle && showGoal ? (
             <span className="shrink-0 text-muted-foreground/45" aria-hidden>
               ·
@@ -562,6 +580,15 @@ function RunElapsedStrip({
               <ChevronUp className="h-4 w-4" aria-hidden />
             )}
           </button>
+        ) : null}
+        {overview?.metrics || overview?.liveRate !== undefined ? (
+          <RunMetricsPopover
+            elapsedLabel={showTimer ? shortElapsed : null}
+            metrics={overview?.metrics}
+            liveRate={overview?.liveRate}
+          />
+        ) : overview && showTimer ? (
+          <span className="shrink-0 tabular-nums text-muted-foreground">{shortElapsed}</span>
         ) : null}
       </div>
     </div>
@@ -598,11 +625,13 @@ export function ThreadComposer({
   modelDisabled = false,
   currentExecutor,
   contextUsage = null,
+  contextAction,
   imageInputEnabled = true,
   variant = "thread",
   slashCommands = [],
   onStop,
   runStartedAt = null,
+  runOverview,
   goalState,
   leadingActions,
   pendingMessages = [],
@@ -710,20 +739,11 @@ export function ThreadComposer({
   }, [quote]);
 
   useLayoutEffect(() => {
-    if (isControlled) return;
-    // Clear stale inline sizing after hot reload without measuring on ordinary value changes.
     const el = textareaRef.current;
-    if (!el || valueRef.current.trim()) return;
-    el.style.removeProperty("height");
-  }, [isControlled]);
-
-  useLayoutEffect(() => {
-    if (!isControlled) return;
-    const el = textareaRef.current;
-    if (!el) return;
+    if (!el || (!isControlled && !value && !el.style.height)) return;
     el.style.height = "auto";
-    if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  }, [isControlled, value]);
+    if (value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+  }, [isControlled, isHero, value]);
 
   useEffect(() => {
     let cancelled = false;
@@ -859,6 +879,37 @@ export function ThreadComposer({
     [images],
   );
   const hasErrors = images.some((img) => img.status === "error");
+  const quoteImage = quote?.image;
+  const [quoteImageResult, setQuoteImageResult] = useState<{
+    source: NonNullable<MessageQuoteDraft["image"]>;
+    attachment: SendImage | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!quoteImage || !imageInputEnabled) {
+      setQuoteImageResult(null);
+      return;
+    }
+    const controller = new AbortController();
+    const finish = (attachment: SendImage | null) => {
+      if (!controller.signal.aborted) setQuoteImageResult({ source: quoteImage, attachment });
+    };
+    const clearOnAccountChange = () => {
+      finish(null);
+      controller.abort();
+    };
+    window.addEventListener("mona-account-changed", clearOnAccountChange);
+    void loadQuotedImage(quoteImage, controller.signal).then(finish, () => finish(null));
+    return () => {
+      window.removeEventListener("mona-account-changed", clearOnAccountChange);
+      controller.abort();
+    };
+  }, [imageInputEnabled, quoteImage]);
+  const quotedImageAttachment = quoteImageResult?.source === quoteImage ? quoteImageResult?.attachment : undefined;
+  const quoteImageError = quoteImage && (!imageInputEnabled
+    ? t("thread.composer.imageNotSupported")
+    : images.length >= MAX_IMAGES_PER_MESSAGE
+      ? formatRejection("too_many_images")
+      : quotedImageAttachment === null ? t("message.quoteImageFailed") : null);
 
   const canSend =
     !disabled
@@ -867,6 +918,7 @@ export function ThreadComposer({
     && !encoding
     && !documentsUploading
     && !hasErrors
+    && (!quoteImage || (!!quotedImageAttachment && !quoteImageError))
     && (value.trim().length > 0 || readyImages.length > 0 || documents.length > 0);
 
   const slashQuery = useMemo(() => {
@@ -963,14 +1015,8 @@ export function ThreadComposer({
     };
   }, [filteredSlashCommands.length, showSlashMenu]);
 
-  const resizeTextarea = useCallback(() => {
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.style.height = "auto";
-      if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-      el.focus();
-    });
+  const focusTextarea = useCallback(() => {
+    requestAnimationFrame(() => textareaRef.current?.focus());
   }, []);
 
   const chooseSlashCommand = useCallback(
@@ -978,9 +1024,9 @@ export function ThreadComposer({
       setValue(command.argHint ? `${command.command} ` : command.command);
       setSlashMenuDismissed(true);
       setInlineError(null);
-      resizeTextarea();
+      focusTextarea();
     },
-    [resizeTextarea],
+    [focusTextarea, setValue],
   );
 
   const applyHeroChip = useCallback((chip: HeroPromptChip) => {
@@ -993,13 +1039,11 @@ export function ThreadComposer({
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
       el.focus();
       const pos = markerIdx >= 0 ? markerIdx : text.length;
       el.setSelectionRange(pos, pos);
     });
-  }, []);
+  }, [setValue]);
 
   const filteredMentionAgents = useMemo(() => {
     if (!mention) return [];
@@ -1064,13 +1108,11 @@ export function ThreadComposer({
       requestAnimationFrame(() => {
         const ta = textareaRef.current;
         if (!ta) return;
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
         ta.focus();
         ta.setSelectionRange(pos, pos);
       });
     },
-    [mention, value],
+    [mention, setValue, value],
   );
 
   const submit = useCallback(async () => {
@@ -1092,7 +1134,7 @@ export function ThreadComposer({
         setSlashMenuDismissed(false);
         setMention(null);
         onClearQuote?.();
-        resizeTextarea();
+        focusTextarea();
       }
     };
     const trimmed = value.trim();
@@ -1100,16 +1142,11 @@ export function ThreadComposer({
     // the optimistic bubble preview: data URLs are self-contained (no blob
     // lifetime, safe under React StrictMode double-mount) and keep the
     // bubble in sync with whatever the backend actually sees.
-    const payload: SendImage[] | undefined =
-      readyImages.length > 0
-        ? readyImages.map((img) => ({
-            media: {
-              data_url: img.dataUrl,
-              name: img.file.name,
-            },
-            preview: { url: img.dataUrl, name: img.file.name },
-          }))
-        : undefined;
+    const payload: SendImage[] = readyImages.map((img) => ({
+      media: { data_url: img.dataUrl, name: img.file.name },
+      preview: { url: img.dataUrl, name: img.file.name },
+    }));
+    if (quotedImageAttachment) payload.unshift(quotedImageAttachment);
     const targetAgentIds = [
       ...new Set(
         [...mentionedRef.current.entries()]
@@ -1143,7 +1180,7 @@ export function ThreadComposer({
     if (draftScope === undefined) submitting.current = true;
     else scopedSubmissions.current.set(draftScope, { token: submission, consumer: onConsumeDraft });
     try {
-      const result = onSend(content, payload, sendOptions);
+      const result = onSend(content, payload.length ? payload : undefined, sendOptions);
       if (awaitSendResult && await result !== true) return;
       if (owner && client?.isChatDeleted(owner)) return;
       if (scopedConsumption) { consumeSubmitted(); return; }
@@ -1166,8 +1203,8 @@ export function ThreadComposer({
     setSlashMenuDismissed(false);
     setMention(null);
     onClearQuote?.();
-    resizeTextarea();
-  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, client, documents, draftScope, onClearQuote, onConsumeDraft, onSend, quote, readyImages, remove, removeDocument, resizeTextarea, setValue, value]);
+    focusTextarea();
+  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, client, documents, draftScope, focusTextarea, onClearQuote, onConsumeDraft, onSend, quote, quotedImageAttachment, readyImages, remove, removeDocument, setValue, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionMenu) {
@@ -1236,12 +1273,6 @@ export function ThreadComposer({
     }
   };
 
-  const onInput: React.FormEventHandler<HTMLTextAreaElement> = (e) => {
-    const el = e.currentTarget;
-    el.style.height = "auto";
-    if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  };
-
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
@@ -1298,11 +1329,11 @@ export function ThreadComposer({
         setValue(message.content);
         onPendingRemove?.(id);
       }
-      resizeTextarea();
+      focusTextarea();
     } catch (error) {
       setInlineError(error instanceof Error ? error.message : "无法编辑这条待发消息。");
     }
-  }, [onPendingEdit, onPendingRemove, pendingMessages, resizeTextarea, setValue]);
+  }, [focusTextarea, onPendingEdit, onPendingRemove, pendingMessages, setValue]);
 
   const onChipKey = useCallback(
     (id: string) => (e: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -1325,6 +1356,16 @@ export function ThreadComposer({
     ? t("thread.composer.stopping")
     : stopLabel ?? t("thread.composer.stop");
   const resolvedSendLabel = sendLabel ?? t("thread.composer.send");
+  const elapsedStrip = runStartedAt != null || goalState?.active || runOverview?.label
+    || runOverview?.metrics || runOverview?.liveRate !== undefined ? (
+    <RunElapsedStrip
+      startedAt={runStartedAt}
+      goalState={goalState}
+      isAwaitingModelResponse={isAwaitingModelResponse}
+      isCompacting={isCompacting}
+      overview={runOverview}
+    />
+  ) : null;
 
   return (
     <form
@@ -1427,78 +1468,83 @@ export function ThreadComposer({
       {isHero && showHeroPromptChips && !getHostedPlatform() ? (
         <div
           data-testid="hero-composer-prelude"
-          className="pointer-events-none absolute bottom-full left-1/2 z-20 flex w-full max-w-[58rem] -translate-x-1/2 justify-end"
+          className="mx-auto mb-3 flex w-full max-w-[58rem] pl-5"
         >
-          <div className="pointer-events-auto relative mr-10 translate-y-0.5">
-            <Popover.Root open={heroPromptPopoverOpen} onOpenChange={setHeroPromptPopoverOpen} modal={false}>
-              <TooltipProvider delayDuration={300}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Popover.Trigger asChild>
-                      <button
-                        type="button"
-                        aria-label="Mona 快捷提示词"
-                        disabled={disabled}
-                        className="group flex min-h-11 w-12 items-end border-0 bg-transparent p-0 leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <MonaComposerPeek paused={disabled || isStreaming || heroPromptPopoverOpen || value.trim().length > 0} />
-                      </button>
-                    </Popover.Trigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" sideOffset={8}>
-                    Mona 快捷提示词
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <Popover.Portal>
-                <Popover.Content
-                  align="end"
-                  side="left"
-                  sideOffset={12}
-                  className={cn(
-                    "relative isolate z-50 aspect-[3/2] w-[216px] max-w-[min(216px,var(--radix-popover-content-available-width,calc(100vw-1rem)),calc(100vw-1rem))]",
-                    "bg-transparent p-0 text-foreground outline-none",
-                    "data-[state=open]:motion-safe:animate-in data-[state=open]:motion-safe:fade-in-0 data-[state=open]:motion-safe:slide-in-from-right-2 data-[state=open]:motion-safe:zoom-in-95 motion-reduce:animate-none",
-                  )}
-                  aria-label="Mona 快捷提示词"
-                  onCloseAutoFocus={(event) => {
-                    if (!suppressHeroPopoverTriggerFocusRef.current) return;
-                    suppressHeroPopoverTriggerFocusRef.current = false;
-                    event.preventDefault();
-                  }}
+          <Popover.Root open={heroPromptPopoverOpen} onOpenChange={setHeroPromptPopoverOpen} modal={false}>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Popover.Trigger asChild>
+                    <Button
+                      type="button"
+                      variant="text"
+                      aria-label="Mona 快捷提示词"
+                      disabled={disabled}
+                      className="h-12 gap-3 px-0"
+                    >
+                      <AgentAvatar agentId={MONA_AGENT_ID} className="h-12 w-12" />
+                      <MonaWordmark />
+                    </Button>
+                  </Popover.Trigger>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={8}>
+                  Mona 快捷提示词
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <Popover.Portal>
+              <Popover.Content
+                align="end"
+                side="right"
+                sideOffset={12}
+                className={cn(
+                  "group relative isolate z-50 aspect-[3/2] w-[216px] max-w-[min(216px,var(--radix-popover-content-available-width,calc(100vw-1rem)),calc(100vw-1rem))]",
+                  "bg-transparent p-0 text-foreground outline-none",
+                  "data-[state=open]:motion-safe:animate-in data-[state=open]:motion-safe:fade-in-0 data-[state=open]:motion-safe:zoom-in-95 motion-reduce:animate-none",
+                )}
+                aria-label="Mona 快捷提示词"
+                onCloseAutoFocus={(event) => {
+                  if (!suppressHeroPopoverTriggerFocusRef.current) return;
+                  suppressHeroPopoverTriggerFocusRef.current = false;
+                  event.preventDefault();
+                }}
+              >
+                <svg
+                  viewBox="0 0 216 144"
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 h-full w-full fill-muted group-data-[side=right]:-scale-x-100 dark:fill-foreground/10"
                 >
-                  <svg
-                    viewBox="0 0 216 144"
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 h-full w-full fill-muted dark:fill-foreground/10"
-                  >
-                    <path d="M184 88C188 100 198 105 212 106C200 116 183 111 176 103C160 124 130 136 96 136C43 136 4 110 4 72C4 34 43 8 96 8C149 8 188 34 188 72C188 78 187 84 184 88Z" />
-                  </svg>
-                  <div className="relative flex h-full w-[calc(100%-1.5rem)] flex-col justify-center pl-4 pr-3">
-                    {HERO_PROMPT_CHIPS.map((chip) => (
-                      <button
-                        key={chip.label}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => {
-                          suppressHeroPopoverTriggerFocusRef.current = true;
-                          setHeroPromptPopoverOpen(false);
-                          applyHeroChip(chip);
-                        }}
-                        className={cn(
-                          "block min-h-8 border-0 bg-transparent py-1.5 text-center text-body text-foreground/85",
-                          "transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4",
-                          "disabled:cursor-not-allowed disabled:opacity-50",
-                        )}
-                      >
-                        {chip.label}
-                      </button>
-                    ))}
-                  </div>
-                </Popover.Content>
-              </Popover.Portal>
-            </Popover.Root>
-          </div>
+                  <path d="M184 88C188 100 198 105 212 106C200 116 183 111 176 103C160 124 130 136 96 136C43 136 4 110 4 72C4 34 43 8 96 8C149 8 188 34 188 72C188 78 187 84 184 88Z" />
+                </svg>
+                <div className="relative flex h-full w-[calc(100%-1.5rem)] flex-col justify-center px-4 group-data-[side=right]:ml-auto">
+                  {HERO_PROMPT_CHIPS.map((chip) => (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        suppressHeroPopoverTriggerFocusRef.current = true;
+                        setHeroPromptPopoverOpen(false);
+                        applyHeroChip(chip);
+                      }}
+                      className={cn(
+                        "block min-h-8 border-0 bg-transparent py-1.5 text-center text-body text-foreground/85",
+                        "transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+        </div>
+      ) : null}
+      {runOverview && elapsedStrip ? (
+        <div className={cn("mx-auto w-full", isHero ? "max-w-[58rem]" : "max-w-[49.5rem]")}>
+          {elapsedStrip}
         </div>
       ) : null}
       <div
@@ -1550,14 +1596,7 @@ export function ThreadComposer({
             ))}
           </div>
         ) : null}
-        {runStartedAt != null || goalState?.active ? (
-          <RunElapsedStrip
-            startedAt={runStartedAt}
-            goalState={goalState}
-            isAwaitingModelResponse={isAwaitingModelResponse}
-            isCompacting={isCompacting}
-          />
-        ) : null}
+        {runOverview ? null : elapsedStrip}
         <PendingQueueStrip
           messages={pendingMessages}
           onAppend={onPendingAppend}
@@ -1570,11 +1609,17 @@ export function ThreadComposer({
             data-testid="composer-quote-preview"
             className="mx-3 mt-2 flex min-w-0 items-center gap-2 border-l-2 border-foreground/15 bg-muted/45 px-2.5 py-1.5"
           >
+            {quoteImage && quotedImageAttachment !== null ? (
+              <img src={quotedImageAttachment?.preview.url ?? quoteImage.url} alt={quoteImage.name ?? t("message.imageAttachment")}
+                className="h-9 w-9 shrink-0 rounded-md object-cover" />
+            ) : null}
             <div className="min-w-0 flex-1">
               <div className="text-caption font-medium text-muted-foreground">
                 {t("message.quotedMessage", { author: quote.author })}
               </div>
               <div className="truncate text-caption text-muted-foreground">{quote.content}</div>
+              {quoteImageError ? <div role="status" className="text-caption text-destructive">{quoteImageError}</div>
+                : quoteImage && !quotedImageAttachment ? <div role="status" className="text-caption text-muted-foreground">{t("thread.composer.encoding")}</div> : null}
             </div>
             <button
               type="button"
@@ -1601,7 +1646,6 @@ export function ThreadComposer({
           onClick={(e) => {
             trackMention(e.currentTarget.value, e.currentTarget.selectionStart);
           }}
-          onInput={onInput}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           rows={1}
@@ -1638,7 +1682,7 @@ export function ThreadComposer({
           <div className="mona-composer-leading flex min-w-0 items-center gap-2">
             {attachmentsEnabled && <>
               <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePick} />
-              <Button
+              <TooltipButton
                 type="button"
                 size="icon"
                 variant="ghost"
@@ -1654,7 +1698,7 @@ export function ThreadComposer({
                 )}
               >
                 <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
-              </Button>
+              </TooltipButton>
             </>}
             {onAttach && <Button
               type="button"
@@ -1680,7 +1724,7 @@ export function ThreadComposer({
             ) : null}
           </div>
           <div className="mona-composer-trailing flex min-w-0 items-center gap-2">
-            {triggerModelLabel ? <ContextUsageIndicator usage={contextUsage} /> : null}
+            {contextAction ?? (triggerModelLabel ? <ContextUsageIndicator usage={contextUsage} /> : null)}
             {triggerModelLabel ? (
               modelOptions.length > 0 && (onModelSelect || onModelSwitch) ? (
                 <ModelSelector options={modelOptions} label={triggerModelLabel} disabled={disabled || modelDisabled} currentExecutor={currentExecutor}
@@ -1690,26 +1734,18 @@ export function ThreadComposer({
                     : onModelSwitch?.(option.provider, option.model, effort)}
                   onManage={onOpenSettings ? () => onOpenSettings("models_providers") : undefined} />
               ) : (
-                <TooltipProvider delayDuration={300}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        role="img"
-                        tabIndex={0}
-                        aria-label={triggerModelLabel}
-                        className={cn(
-                          "composer-icon-control inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1",
-                          "font-medium text-caption text-foreground/85",
-                          isHero ? "max-w-[13rem]" : "max-w-[10rem]",
-                        )}
-                      >
-                        <Cpu className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className="composer-control-label min-w-0 truncate">{triggerModelLabel}</span>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">{triggerModelLabel}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <span
+                  role="img"
+                  aria-label={triggerModelLabel}
+                  className={cn(
+                    "composer-icon-control inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1",
+                    "font-medium text-caption text-foreground/85",
+                    isHero ? "max-w-[13rem]" : "max-w-[10rem]",
+                  )}
+                >
+                  <Cpu className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="composer-control-label min-w-0 truncate">{triggerModelLabel}</span>
+                </span>
               )
             ) : null}
           <Button

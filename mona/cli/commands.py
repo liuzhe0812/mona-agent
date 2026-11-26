@@ -512,6 +512,7 @@ def _run_gateway(
         webui_runtime_model_name=_webui_runtime_model_name,
         subagent_manager=agent.subagents,
         runtime_tool_registry=agent.tools,
+        session_context_handler=agent.manage_session_context,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:

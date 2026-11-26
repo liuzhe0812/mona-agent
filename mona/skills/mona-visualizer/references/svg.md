@@ -1,8 +1,8 @@
 # SVG Setup Rules
 
-- viewBox fixed to `"0 0 680 H"`, **680 must not change**, it is the basis for all coordinate calculations. `width="100%"` on root `<svg>`.
+- Choose a viewBox suited to the content with positive width and height, for example `"0 0 680 H"`. Set `width="100%"` on the root `<svg>`.
 - H = bottommost element + 20px, do not guess.
-- Safe area: x=40 to x=640, y=40 to y=(H-40). Background transparent.
+- For a 680-unit canvas, use x=40 to x=640 and y=40 to y=(H-40) as the safe area. Adjust margins proportionally for other viewBoxes. Background transparent.
 - One SVG per tool call.
 - No rotated text.
 - Use 0.5px strokes for diagram borders and edges.

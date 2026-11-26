@@ -11,6 +11,8 @@ export const DEFAULT_SIDEBAR_STATE: SidebarStatePayload = {
   schema_version: 5,
   pinned_keys: [],
   archived_keys: [],
+  partner_pinned_keys: [],
+  partner_hidden_keys: [],
   title_overrides: {},
   project_names: {},
   last_read_at_by_key: {},
@@ -96,6 +98,8 @@ export function normalizeSidebarState(raw: unknown): SidebarStatePayload {
     schema_version: 5,
     pinned_keys: uniqueStrings(value.pinned_keys),
     archived_keys: uniqueStrings(value.archived_keys),
+    partner_pinned_keys: uniqueStrings(value.partner_pinned_keys),
+    partner_hidden_keys: uniqueStrings(value.partner_hidden_keys),
     title_overrides: stringMap(value.title_overrides),
     project_names: stringMap(value.project_names),
     last_read_at_by_key: stringMap(value.last_read_at_by_key),
@@ -118,6 +122,7 @@ function pruneMissingSessions(
 ): SidebarStatePayload {
   const valid = new Set(sessions.map((session) => session.key));
   const filterKeys = (keys: string[]) => keys.filter((key) => valid.has(key));
+  const filterPartnerKeys = (keys: string[]) => keys.filter((key) => !key.startsWith("websocket:") || valid.has(key));
   const filterMap = <T,>(map: Record<string, T>): Record<string, T> => {
     const out: Record<string, T> = {};
     for (const [key, value] of Object.entries(map)) {
@@ -130,6 +135,8 @@ function pruneMissingSessions(
     ...state,
     pinned_keys: filterKeys(state.pinned_keys),
     archived_keys: filterKeys(state.archived_keys),
+    partner_pinned_keys: filterPartnerKeys(state.partner_pinned_keys),
+    partner_hidden_keys: filterPartnerKeys(state.partner_hidden_keys),
     title_overrides: filterMap(state.title_overrides),
     tags_by_key: filterMap(state.tags_by_key),
   };
@@ -155,6 +162,17 @@ export function isSessionUnread(
   if (session.previewAuthorType === "user") return false;
   if (!lastReadAt) return true;
   return session.previewAt > lastReadAt;
+}
+
+export function countUnreadAiConversations(
+  sessions: ChatSummary[],
+  lastReadAtByKey: SidebarStatePayload["last_read_at_by_key"],
+): number {
+  return sessions.filter((session) =>
+    session.previewAuthorType === "agent"
+    && (session.previewMessageType == null || session.previewMessageType === "message")
+    && isSessionUnread(session, lastReadAtByKey[session.key]),
+  ).length;
 }
 
 /** IM plan 11.2: advance the last-read marker to a seen ``previewAt``.

@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FolderOpen, GitFork, MoreHorizontal, Share2, Sparkles, SquareTerminal, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { ArrowUpToLine, Check, ChevronRight, Copy, CornerDownLeft, Download, FolderOpen, GitFork, Loader2, MoreHorizontal, Share2, Sparkles, SquareTerminal, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
 import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { useTranslation } from "react-i18next";
 
@@ -16,6 +16,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
 import { ConversationFileContext } from "@/components/deliver/ConversationFileContext";
+import { ConversationBrowserContext } from "@/components/deliver/ConversationBrowserContext";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
@@ -40,11 +41,11 @@ import { cn } from "@/lib/utils";
 import { copyImageToClipboard } from "@/lib/copy-image";
 import { formatTurnLatency } from "@/lib/format";
 import { deriveNoteTitle } from "@/lib/note-title";
+import { saveReplyImageAsNote } from "@/lib/reply-image-note";
 import { formatToolCallTrace, isCommandTrace } from "@/lib/tool-traces";
-import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
-import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+import { createNoteFromChat, downloadMediaUrl, isTauri, openExternalUrl, revealItemInDir } from "@/lib/tauri";
+import type { QuoteMessageHandler, UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 import { InlineWidget } from "@/components/visualizer/InlineWidget";
-import { openExternalUrl } from "@/lib/tauri";
 import { fetchGeneratedMedia, isGeneratedMediaUrl } from "@/hosted-work/generated-media";
 import { duplicateGeneratedImageSources } from "@/hosted-work/duplicate-generated-images";
 
@@ -82,22 +83,25 @@ function suggestMediaFilename(
 
 interface MessageBubbleProps {
   message: UIMessage;
+  widgetImages?: UIMediaAttachment[];
   /** Render assistant turns as left-aligned IM bubbles for collaboration groups. */
   isGroupChat?: boolean;
+  partnerChat?: boolean;
   /** Queue this message as the source for a follow-up reply. */
-  onQuote?: (message: UIMessage, author: string) => void;
+  onQuote?: QuoteMessageHandler;
   /** User-visible author name for a quoted assistant turn. */
   authorName?: string;
   /** Start a new task using this reply as its branch context. */
   onBranch?: (message: UIMessage, author: string) => void;
   onWidgetPrompt?: (text: string) => void;
+  onJumpToReplyStart?: (target: HTMLElement) => void;
   showTurnActions?: boolean;
 }
 
 const LONG_REPLY_CHAR_THRESHOLD = 1_600;
 const LONG_REPLY_LINE_THRESHOLD = 24;
-const IMAGE_GALLERY_PREVIEW_LIMIT = 4;
 const LEGACY_ATTACHED_FILES_PREFIX = "\n\n[已附文件: ";
+const PARTNER_BUBBLE = "rounded-xl border border-border/70 bg-muted px-4 py-3";
 
 function visibleUserContent(message: UIMessage, media: UIMediaAttachment[]): string {
   const content = message.displayContent ?? message.content;
@@ -199,14 +203,18 @@ function MessageActionTooltip({ label, children }: { label: string; children: Re
  */
 export function MessageBubble({
   message,
+  widgetImages,
   isGroupChat = false,
+  partnerChat = false,
   onQuote,
   authorName,
   onBranch,
   onWidgetPrompt,
+  onJumpToReplyStart,
   showTurnActions = true,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
+  const openConversationBrowser = useContext(ConversationBrowserContext);
   const duplicateImageSources = useMemo(
     () => message.role === "assistant" && !message.isStreaming
       ? duplicateGeneratedImageSources(message.inlineMediaFiles ?? message.deliveredFiles, message.media) : [],
@@ -221,6 +229,16 @@ export function MessageBubble({
   const copyResetRef = useRef<number | null>(null);
   const saveResetRef = useRef<number | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const empty = message.content.trim().length === 0;
+  const resolvedMedia = useResolvedMessageMedia(
+    message.role !== "user" && message.kind !== "trace" && (!empty || !message.isStreaming)
+      ? message.media : undefined,
+  );
+  const media = resolvedMedia.media;
+  const singleReplyImage = message.role === "assistant" && empty && media.length === 1 && media[0].kind === "image"
+    ? media[0] : undefined;
+  const replyImage = singleReplyImage?.url ? singleReplyImage : undefined;
+  const imageActions = useImageActions(replyImage);
   const baseAnim = "animate-in fade-in-0 slide-in-from-bottom-1 duration-300";
 
   useEffect(() => {
@@ -257,9 +275,12 @@ export function MessageBubble({
 
   const onSaveAsNote = useCallback(() => {
     if (message.role !== "assistant" || !isTauri() || saved || saving) return;
-    const title = deriveNoteTitle(message.content);
     setSaving(true);
-    createNoteFromChat(title, message.content)
+    const imageUrl = replyImage?.url;
+    const note = imageUrl
+      ? saveReplyImageAsNote(imageUrl, replyImage.name, t("message.imageAttachment"))
+      : createNoteFromChat(deriveNoteTitle(message.content), message.content);
+    note
       .then(() => {
         setSaved(true);
         if (saveResetRef.current !== null) {
@@ -271,10 +292,10 @@ export function MessageBubble({
         }, 2_000);
       })
       .catch((err) => {
-        window.alert(`保存笔记失败：${err instanceof Error ? err.message : String(err)}`);
+        window.alert(imageUrl ? t("message.saveImageAsNoteFailed") : `保存笔记失败：${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => setSaving(false));
-  }, [message.content, saved, saving]);
+  }, [message.content, message.role, replyImage, saved, saving, t]);
 
   const onShareAsImage = useCallback(async () => {
     const target = messageContentRef.current;
@@ -316,9 +337,35 @@ export function MessageBubble({
   }, [sharingImage, t]);
 
   const quoteAuthor = authorName ?? (message.role === "user" ? t("message.you") : "Mona");
-  const canQuote = !message.isStreaming && message.content.trim().length > 0;
-  const quoteMessage = onQuote && canQuote ? () => onQuote(message, quoteAuthor) : undefined;
-  const canSaveAsNote = message.role === "assistant" && !message.isStreaming && message.content.trim().length > 0 && isTauri();
+  const canQuote = !message.isStreaming && (!empty || replyImage);
+  const quoteMessage = onQuote && canQuote ? () => {
+    if (replyImage?.url) onQuote(message, quoteAuthor, { url: replyImage.url, name: replyImage.name });
+    else onQuote(message, quoteAuthor);
+  } : undefined;
+  const canSaveAsNote = message.role === "assistant" && !message.isStreaming && (!empty || replyImage) && isTauri();
+  const hasCopied = replyImage ? imageActions.copied : copied;
+  const copyLabel = t(replyImage ? "message.copyImage" : "message.copyMessage");
+  const copyAction = (
+    <MessageActionTooltip label={copyLabel}>
+      <button
+        type="button"
+        onClick={replyImage ? imageActions.handleCopy : onCopyMessage}
+        disabled={replyImage && imageActions.busy}
+        aria-label={hasCopied ? t(replyImage ? "message.imageCopied" : "message.copiedMessage") : copyLabel}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      >
+        {hasCopied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+      </button>
+    </MessageActionTooltip>
+  );
+  const quoteAction = partnerChat && quoteMessage ? (
+    <MessageActionTooltip label={t("message.quoteMessage")}>
+      <Button type="button" variant="ghost" size="icon" aria-label={t("message.quoteMessage")}
+        className="h-7 w-7" onClick={quoteMessage}>
+        <CornerDownLeft className="h-4 w-4" aria-hidden />
+      </Button>
+    </MessageActionTooltip>
+  ) : null;
 
   if (message.kind === "trace") {
     return <TraceGroup message={message} animClass={baseAnim} />;
@@ -342,13 +389,13 @@ export function MessageBubble({
           baseAnim,
         )}
         >
-          {hasImages ? <UserImages images={images} align="right" /> : null}
+          {hasImages ? <MessageImages images={images} align="right" /> : null}
         {visibleMedia.length > 0 ? <MessageMedia media={visibleMedia} align="right" /> : null}
         {hasText ? (
           <div
             className={cn(
-              "ml-auto max-w-full rounded-2xl bg-secondary/70 px-4 py-2",
-              "text-left select-text",
+              "ml-auto max-w-full select-text text-left",
+              partnerChat ? PARTNER_BUBBLE : "rounded-2xl bg-secondary/70 px-4 py-2",
             )}
           >
             {message.quote ? <QuotedMessagePreview quote={message.quote} /> : null}
@@ -367,33 +414,44 @@ export function MessageBubble({
             {t("thread.composer.pendingQueue.injectedBadge")}
           </span>
         )}
+        {partnerChat && hasText ? (
+          <TooltipProvider delayDuration={250}>
+            <div className="flex min-h-7 items-center gap-0.5 text-muted-foreground">
+              {copyAction}
+              {quoteAction}
+            </div>
+          </TooltipProvider>
+        ) : null}
         </div>
       </MessageContextMenu>
     );
   }
 
   if (message.kind === "widget" && message.widget) {
+    if (widgetImages?.length) return <MessageMedia media={widgetImages} align="left" />;
     const widget = message.widget;
     return <InlineWidget id={message.id} title={widget.title} code={widget.code}
       loadingMessages={widget.loadingMessages} streaming={widget.status === "streaming"}
       error={widget.error} onSendPrompt={onWidgetPrompt}
-      onOpenLink={(url) => { if (/^https?:\/\//i.test(url)) void openExternalUrl(url); }} />;
+      onOpenLink={(url) => {
+        if (!/^https?:\/\//i.test(url)) return;
+        if (isTauri() && openConversationBrowser) openConversationBrowser(url);
+        else void openExternalUrl(url);
+      }} />;
   }
 
-  const empty = message.content.trim().length === 0;
   const hasDeliveredFiles = !!(message.deliveredFiles && message.deliveredFiles.length > 0);
   const showDeliveredFiles = hasDeliveredFiles && !message.isStreaming;
-  const media = message.media ?? [];
   const reasoning = message.role === "assistant" ? message.reasoning ?? "" : "";
   const reasoningStreaming = !!(message.role === "assistant" && message.reasoningStreaming);
   const hasReasoning = reasoning.length > 0 || reasoningStreaming;
-  const isAssistantBubble = isGroupChat && message.role === "assistant";
+  const isAssistantBubble = (isGroupChat || partnerChat) && message.role === "assistant";
   const showDirectActions =
     !isGroupChat
     && message.role === "assistant"
     && showTurnActions
     && !message.isStreaming
-    && !empty;
+    && (!empty || showDeliveredFiles || media.length > 0);
 
   const latencyMs = message.latencyMs;
   const showLatencyFooter =
@@ -419,7 +477,8 @@ export function MessageBubble({
       <div
       data-testid={`message-bubble-${message.id}`}
       className={cn(
-        "group/message w-full min-w-0 text-[15px]",
+        "group/message w-full min-w-0",
+        partnerChat ? "text-body-lg" : "text-[15px]",
         isAssistantBubble && "w-fit max-w-[min(85%,48rem)] self-start",
         baseAnim,
       )}
@@ -427,8 +486,11 @@ export function MessageBubble({
     >
       <div
         ref={messageContentRef}
+        tabIndex={showDirectActions && onJumpToReplyStart ? -1 : undefined}
         className={cn(
-          isAssistantBubble && "rounded-2xl border border-border/70 bg-muted/55 px-4 py-3",
+          isAssistantBubble && (partnerChat
+            ? cn(PARTNER_BUBBLE, "w-fit max-w-full")
+            : "rounded-2xl border border-border/70 bg-muted/55 px-4 py-3"),
         )}
       >
       {hasReasoning ? (
@@ -456,7 +518,7 @@ export function MessageBubble({
               className="mt-2"
             />
           ) : null}
-          {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
+          {media.length > 0 ? <ResolvedMessageMedia {...resolvedMedia} align="left" /> : null}
           {canCollapseReply ? (
             <button
               type="button"
@@ -486,31 +548,23 @@ export function MessageBubble({
           data-testid="direct-message-actions"
           className={cn(
             "mt-1 flex min-h-7 items-center gap-0.5 text-muted-foreground transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100",
-            moreActionsOpen ? "opacity-100" : "opacity-0",
+            partnerChat || moreActionsOpen ? "opacity-100" : "opacity-0",
           )}
         >
-          <MessageActionTooltip label={t("message.copyMessage")}>
-          <button
-            type="button"
-            onClick={onCopyMessage}
-            aria-label={copied ? t("message.copiedMessage") : t("message.copyMessage")}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
-          </button>
-          </MessageActionTooltip>
+          {!empty || replyImage ? copyAction : null}
+          {quoteAction}
           <MessageActionTooltip label={t("message.shareAsImage")}>
           <button
             type="button"
             onClick={() => void onShareAsImage()}
-            disabled={sharingImage}
+            disabled={sharingImage || Boolean(singleReplyImage && !replyImage)}
             aria-label={t("message.shareAsImage")}
             className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <Share2 className="h-4 w-4" aria-hidden />
           </button>
           </MessageActionTooltip>
-          {onBranch ? (
+          {onBranch && (!empty || singleReplyImage) ? (
             <MessageActionTooltip label={t("message.branchTask")}>
             <button
               type="button"
@@ -522,7 +576,7 @@ export function MessageBubble({
             </button>
             </MessageActionTooltip>
           ) : null}
-          <DropdownMenu open={moreActionsOpen} onOpenChange={setMoreActionsOpen}>
+          {quoteMessage || canSaveAsNote ? <DropdownMenu open={moreActionsOpen} onOpenChange={setMoreActionsOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -551,16 +605,35 @@ export function MessageBubble({
                 </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
-          </DropdownMenu>
-          <span className="ml-1 text-[11px] tabular-nums text-muted-foreground/70">
-            {formatMessageTime(message.createdAt)}
-          </span>
+          </DropdownMenu> : null}
+          <ImageActionErrorDialog error={imageActions.actionError} onDismiss={imageActions.dismissError} />
+          {partnerChat ? null : (
+            <span className="ml-1 text-[11px] tabular-nums text-muted-foreground/70">
+              {formatMessageTime(message.createdAt)}
+            </span>
+          )}
           {message.tokenUsage?.totalTokens ? (
             <span className="text-[11px] tabular-nums text-muted-foreground/70">
               {t("message.tokenUsage", {
                 count: formatMessageTokenCount(message.tokenUsage.totalTokens),
               })}
             </span>
+          ) : null}
+          {onJumpToReplyStart ? (
+            <MessageActionTooltip label={t("message.jumpToReplyStart")}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="ml-auto h-7 w-7 shrink-0 hover:bg-muted/60"
+                aria-label={t("message.jumpToReplyStart")}
+                onClick={() => {
+                  if (messageContentRef.current) onJumpToReplyStart(messageContentRef.current);
+                }}
+              >
+                <ArrowUpToLine className="h-4 w-4" aria-hidden />
+              </Button>
+            </MessageActionTooltip>
           ) : null}
         </div>
         </TooltipProvider>
@@ -577,6 +650,11 @@ export function MessageMedia({
   media: UIMediaAttachment[];
   align: "left" | "right";
 }) {
+  const resolvedMedia = useResolvedMessageMedia(media);
+  return <ResolvedMessageMedia {...resolvedMedia} align={align} />;
+}
+
+function useResolvedMessageMedia(media: UIMediaAttachment[] = []) {
   const sessionKey = useContext(ConversationFileContext)?.sessionKey ?? "";
   const generatedKey = JSON.stringify({ sessionKey, sources: [...new Set(media
     .filter((item) => item.kind === "image" && isGeneratedMediaUrl(item.url))
@@ -621,19 +699,22 @@ export function MessageMedia({
       window.removeEventListener("mona-account-changed", accountChanged);
     };
   }, [generatedKey]);
+  const current = generated.key === generatedKey ? generated : undefined;
+  return {
+    media: media.map((item) => item.kind === "image" && item.url && isGeneratedMediaUrl(item.url)
+      ? { ...item, url: current?.urls[item.url] } : item),
+    hasFailedImages: Boolean(current?.failed.length),
+  };
+}
+
+function ResolvedMessageMedia({
+  media,
+  hasFailedImages,
+  align,
+}: ReturnType<typeof useResolvedMessageMedia> & { align: "left" | "right" }) {
   if (media.length === 0) return null;
-  const images: UIImage[] = [];
-  const nonImages: UIMediaAttachment[] = [];
-  for (const item of media) {
-    if (item.kind === "image") {
-      const url = isGeneratedMediaUrl(item.url)
-        ? generated.key === generatedKey && item.url ? generated.urls[item.url] : undefined
-        : item.url;
-      images.push({ url, name: item.name });
-    } else {
-      nonImages.push(item);
-    }
-  }
+  const images = media.filter((item) => item.kind === "image");
+  const nonImages = media.filter((item) => item.kind !== "image");
 
   return (
     <div
@@ -643,9 +724,9 @@ export function MessageMedia({
       )}
     >
       {images.length > 0 ? (
-        <UserImages images={images} align={align} size={align === "left" ? "large" : "compact"} />
+        <MessageImages images={images} align={align} />
       ) : null}
-      {generated.key === generatedKey && generated.failed.length > 0 && (
+      {hasFailedImages && (
         <span role="status" className="text-caption text-muted-foreground">图片暂时无法查看，请刷新会话后重试。</span>
       )}
       {nonImages.map((item, i) => (
@@ -715,174 +796,109 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
   );
 }
 
-/**
- * Right-aligned preview row for images attached to a user turn.
- *
- * Visual follows agent-chat-ui: a single wrapping row of fixed-size square
- * thumbnails that stay modest next to the text pill regardless of how many
- * images are attached.
- *
- * The URL is expected to be a self-contained ``data:`` URL (the Composer
- * hands the normalized base64 payload to the optimistic bubble so that the
- * preview survives React StrictMode double-mount — blob URLs would be
- * revoked by the Composer's cleanup before remount). Historical replays
- * have no URL (the backend strips data URLs before persisting), so we
- * render a labelled placeholder tile instead of a broken ``<img>``.
- */
-function UserImages({
+function MessageImages({
   images,
-  align = "right",
-  size = "compact",
+  align,
 }: {
   images: UIImage[];
-  align?: "left" | "right";
-  size?: "compact" | "large";
+  align: "left" | "right";
 }) {
   const { t } = useTranslation();
-  // Only real-URL images can open in the lightbox; historical-replay
-  // placeholders (no URL) have nothing to zoom into.
-  const viewableImages: UIImage[] = [];
-  const originalToViewable = new Map<number, number>();
-  for (let i = 0; i < images.length; i += 1) {
-    const img = images[i];
-    if (typeof img.url !== "string" || img.url.length === 0) continue;
-    originalToViewable.set(i, viewableImages.length);
-    viewableImages.push(img);
-  }
+  const [imageIndex, setImageIndex] = useState(0);
+  const [openedIndex, setOpenedIndex] = useState<number | null>(null);
+  const preview = align === "left";
+  const showThumbnails = preview && images.length > 1;
+  const selectedIndex = Math.min(imageIndex, images.length - 1);
+  const viewableIndexes = images.flatMap((image, index) => image.url ? [index] : []);
+  const lightboxIndex = openedIndex === null ? -1 : viewableIndexes.indexOf(openedIndex);
 
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [galleryExpanded, setGalleryExpanded] = useState(false);
-  const isGallery = size === "large" && images.length > 1;
-  const displayedImages = isGallery && !galleryExpanded
-    ? images.slice(0, IMAGE_GALLERY_PREVIEW_LIMIT)
-    : images;
-  const hiddenImageCount = images.length - displayedImages.length;
-  const galleryColumns = Math.min(displayedImages.length, IMAGE_GALLERY_PREVIEW_LIMIT);
+  useEffect(() => {
+    if (openedIndex !== null && lightboxIndex < 0) setOpenedIndex(null);
+  }, [lightboxIndex, openedIndex]);
+
+  const displayedIndexes = preview ? [selectedIndex] : images.map((_, index) => index);
+  const attachmentLabel = t("message.imageAttachment");
 
   return (
     <>
       <div
         className={cn(
-          isGallery
-            ? "grid w-full max-w-[34rem] gap-2"
-            : "flex flex-wrap items-end gap-2",
-          size === "large" && !isGallery && "gap-3",
-          align === "right" ? "ml-auto justify-end" : "mr-auto justify-start",
+          preview ? "grid min-w-0 max-w-full" : "ml-auto flex flex-wrap items-end justify-end gap-2",
+          showThumbnails ? "w-96 grid-cols-[minmax(0,1fr)_3.5rem] gap-2" : preview && "w-80",
         )}
-        data-image-gallery={isGallery ? "true" : undefined}
-        style={isGallery
-          ? { gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))` }
-          : undefined}
+        data-image-gallery={showThumbnails ? "true" : undefined}
       >
-        {displayedImages.map((img, i) => {
-          const coveredByExpand =
-            hiddenImageCount > 0 && i === displayedImages.length - 1;
+        {displayedIndexes.map((index) => {
+          const image = images[index];
           return (
-            <div
-              key={`${img.url ?? "placeholder"}-${i}`}
-              className={cn("group/image relative", isGallery && "min-w-0")}
-            >
-              <UserImageCell
-                image={img}
-                size={isGallery ? "gallery" : size}
-                placeholderLabel={t("message.imageAttachment")}
+            <div key={preview ? "preview" : index} className="group/image relative min-w-0">
+              <MessageImageCell
+                image={image}
+                size={preview ? "preview" : "compact"}
+                placeholderLabel={attachmentLabel}
                 openLabel={t("lightbox.open")}
-                showActions={align === "left"}
-                covered={coveredByExpand}
-                onOpen={
-                  originalToViewable.has(i)
-                    ? () => setLightboxIndex(originalToViewable.get(i)!)
-                    : undefined
-                }
+                showActions={preview}
+                onOpen={() => setOpenedIndex(index)}
               />
-              {coveredByExpand ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label={`${t("message.showAll")} (+${hiddenImageCount})`}
-                  onClick={() => setGalleryExpanded(true)}
-                  className="absolute inset-0 h-full w-full flex-col gap-1 rounded-xl bg-black/55 text-white hover:bg-black/65 hover:text-white"
-                >
-                  <span className="text-title-sm font-semibold tabular-nums">
-                    +{hiddenImageCount}
-                  </span>
-                  <span className="text-micro">{t("message.showAll")}</span>
-                </Button>
-              ) : null}
             </div>
           );
         })}
+        {showThumbnails ? (
+          <div role="group" aria-label={t("message.imageThumbnails")}
+            className="scrollbar-none flex h-60 min-w-0 flex-col gap-2 overflow-y-auto overflow-x-hidden overscroll-contain">
+            {images.map((image, index) => (
+              <Button
+                key={index}
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("message.selectImage", { number: index + 1, name: image.name || attachmentLabel })}
+                aria-pressed={selectedIndex === index}
+                onClick={() => setImageIndex(index)}
+                className={cn(
+                  "h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 bg-muted/40 p-0 focus-visible:ring-inset",
+                  selectedIndex === index ? "border-primary" : "border-transparent hover:border-border",
+                )}
+              >
+                {image.url ? <img src={image.url} alt="" loading="lazy" decoding="async" draggable={false} className="h-full w-full object-cover" />
+                  : <FileSystemIcon name={image.name ?? "image.png"} />}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </div>
-      {isGallery && galleryExpanded && images.length > IMAGE_GALLERY_PREVIEW_LIMIT ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          onClick={() => setGalleryExpanded(false)}
-          className={cn(
-            "mt-1 gap-1 text-muted-foreground",
-            align === "right" ? "ml-auto" : "mr-auto",
-          )}
-        >
-          <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-          {t("message.collapse")}
-        </Button>
-      ) : null}
       <ImageLightbox
-        images={viewableImages}
-        index={lightboxIndex}
-        onIndexChange={setLightboxIndex}
+        images={viewableIndexes.map((index) => images[index])}
+        index={lightboxIndex < 0 ? null : lightboxIndex}
+        onIndexChange={(index) => setOpenedIndex(viewableIndexes[index] ?? null)}
         onOpenChange={(open) => {
-          if (!open) setLightboxIndex(null);
+          if (!open) setOpenedIndex(null);
         }}
       />
     </>
   );
 }
 
-function UserImageCell({
-  image,
-  size,
-  placeholderLabel,
-  openLabel,
-  onOpen,
-  showActions = false,
-  covered = false,
-}: {
-  image: UIImage;
-  size: "compact" | "large" | "gallery";
-  placeholderLabel: string;
-  openLabel: string;
-  onOpen?: () => void;
-  showActions?: boolean;
-  covered?: boolean;
-}) {
-  const { t } = useTranslation();
-  const hasUrl = typeof image.url === "string" && image.url.length > 0;
+type ImageActionError = "copy" | "export";
+
+function useImageActions(image?: UIImage) {
+  const url = image?.url;
+  const name = image?.name;
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [actionError, setActionError] = useState<"copy" | "export" | null>(null);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ImageActionError | null>(null);
   const copyResetRef = useRef<number | null>(null);
   useEffect(() => () => {
     if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
   }, []);
-  const tileClasses = cn(
-    "relative overflow-hidden border border-border/60 bg-muted/40",
-    size === "large"
-      ? "w-[min(100%,34rem)] rounded-2xl bg-transparent"
-      : size === "gallery"
-        ? "aspect-square w-full rounded-xl"
-        : "h-24 w-24 rounded-xl",
-    "shadow-sm",
-  );
 
   const handleSave = useCallback(
     async (reveal: boolean) => {
-      if (!image.url || busy) return;
+      if (!url || busy) return;
       setBusy(true);
       try {
-        const filename = suggestMediaFilename(image.url, image.name, "image");
-        const saved = await downloadMediaUrl(image.url, filename);
+        const filename = suggestMediaFilename(url, name, "image");
+        const saved = await downloadMediaUrl(url, filename);
         if (reveal && saved) await revealItemInDir(saved);
       } catch (error) {
         console.error("[MessageBubble] image export failed:", error instanceof Error ? error.name : "Error");
@@ -891,26 +907,68 @@ function UserImageCell({
         setBusy(false);
       }
     },
-    [busy, image.name, image.url],
+    [busy, name, url],
   );
 
   const handleCopy = useCallback(async () => {
-    if (!image.url || busy) return;
+    if (!url || busy) return;
     setBusy(true);
     try {
-      await copyImageToClipboard(image.url);
-      setCopied(true);
+      await copyImageToClipboard(url);
+      setCopiedUrl(url);
       if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
-      copyResetRef.current = window.setTimeout(() => setCopied(false), 2000);
+      copyResetRef.current = window.setTimeout(() => setCopiedUrl(null), 2000);
     } catch (error) {
       console.error("[MessageBubble] image copy failed:", error instanceof Error ? error.name : "Error");
       setActionError("copy");
     } finally {
       setBusy(false);
     }
-  }, [busy, image.url]);
+  }, [busy, url]);
 
-  if (hasUrl && onOpen) {
+  return { busy, copied: copiedUrl === url, actionError, handleSave, handleCopy, dismissError: () => setActionError(null) };
+}
+
+function ImageActionErrorDialog({ error, onDismiss }: { error: ImageActionError | null; onDismiss: () => void }) {
+  const { t } = useTranslation();
+  if (!error) return null;
+  return (
+    <AlertDialog open onOpenChange={(open) => { if (!open) onDismiss(); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(error === "copy" ? "message.copyImageFailed" : "message.exportImageFailed")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("message.imageActionRetry")}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogAction>{t("common.dismiss")}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function MessageImageCell({
+  image,
+  size,
+  placeholderLabel,
+  openLabel,
+  onOpen,
+  showActions = false,
+}: {
+  image: UIImage;
+  size: "compact" | "preview";
+  placeholderLabel: string;
+  openLabel: string;
+  onOpen: () => void;
+  showActions?: boolean;
+}) {
+  const { t } = useTranslation();
+  const hasUrl = typeof image.url === "string" && image.url.length > 0;
+  const { busy, copied, actionError, handleSave, handleCopy, dismissError } = useImageActions(image);
+  const tileClasses = cn(
+    "relative overflow-hidden bg-muted/40",
+    size === "preview" ? "h-60 w-full rounded-2xl" : "h-24 w-24 rounded-xl border border-border/60 shadow-sm",
+  );
+
+  if (hasUrl) {
     return (
       <>
       <ContextMenu>
@@ -919,14 +977,11 @@ function UserImageCell({
             type="button"
             onClick={onOpen}
             aria-label={image.name ? `${openLabel}: ${image.name}` : openLabel}
-            aria-hidden={covered || undefined}
-            tabIndex={covered ? -1 : undefined}
             className={cn(
               tileClasses,
-              "block cursor-zoom-in p-0 transition-transform duration-150 motion-reduce:transition-none",
-              "hover:scale-[1.01] hover:ring-2 hover:ring-primary/25",
+              "block cursor-zoom-in p-0",
+              size === "compact" && "transition-transform duration-150 hover:scale-[1.01] hover:ring-2 hover:ring-primary/25 motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
-              covered && "pointer-events-none",
             )}
           >
             <img
@@ -936,10 +991,8 @@ function UserImageCell({
               decoding="async"
               draggable={false}
               className={cn(
-                "block",
-                size === "large"
-                  ? "h-auto max-h-[36rem] w-full rounded-[inherit] object-contain"
-                  : "h-full w-full object-cover",
+                "block h-full w-full",
+                size === "preview" ? "object-contain" : "object-cover",
               )}
             />
           </button>
@@ -961,7 +1014,7 @@ function UserImageCell({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {showActions && !covered ? (
+      {showActions ? (
         <TooltipProvider delayDuration={250}>
           <div className="absolute right-2 top-2 z-10 flex items-center rounded-md border border-border/60 bg-background/95 p-0.5 text-foreground opacity-0 shadow-sm transition-opacity group-hover/image:opacity-100 group-focus-within/image:opacity-100">
             <MessageActionTooltip label={t(copied ? "message.imageCopied" : "message.copyImage")}>
@@ -981,15 +1034,7 @@ function UserImageCell({
           </div>
         </TooltipProvider>
       ) : null}
-      {actionError !== null ? <AlertDialog open onOpenChange={(open) => { if (!open) setActionError(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(actionError === "copy" ? "message.copyImageFailed" : "message.exportImageFailed")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("message.imageActionRetry")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogAction>{t("common.dismiss")}</AlertDialogAction></AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog> : null}
+      <ImageActionErrorDialog error={actionError} onDismiss={dismissError} />
       </>
     );
   }
@@ -1180,6 +1225,7 @@ interface TraceGroupProps {
   message: UIMessage | UIMessage[];
   animClass: string;
   inline?: boolean;
+  active?: boolean;
 }
 
 /**
@@ -1187,7 +1233,7 @@ interface TraceGroupProps {
  * collapsed because tool traces are supporting evidence, not the answer.
  * A single click expands the exact calls when the user wants details.
  */
-export function TraceGroup({ message, animClass, inline = false }: TraceGroupProps) {
+export function TraceGroup({ message, animClass, inline = false, active = false }: TraceGroupProps) {
   const { t } = useTranslation();
   const messages = Array.isArray(message) ? message : [message];
   const lines = messages.flatMap((message) => message.traces ?? [message.content]);
@@ -1209,7 +1255,8 @@ export function TraceGroup({ message, animClass, inline = false }: TraceGroupPro
     }
     if (groups.length === 0) return null;
     return <ul className="space-y-2">
-      {groups.map((group, index) => <TraceActivityRow key={index} lines={group.lines} phase={group.phase} error={group.error} />)}
+      {groups.map((group, index) => <TraceActivityRow key={index} lines={group.lines}
+        phase={group.phase === "start" && !active ? undefined : group.phase} error={group.error} />)}
     </ul>;
   }
   return (
@@ -1263,7 +1310,7 @@ function TraceActivityRow({ lines, phase, error }: { lines: string[]; phase?: st
   const [open, setOpen] = useState(false);
   const line = lines[0];
   const command = isCommandTrace(line);
-  const Icon = command ? SquareTerminal : Wrench;
+  const Icon = phase === "start" ? Loader2 : command ? SquareTerminal : Wrench;
   const label = lines.length > 1
     ? t(phase === "start" ? "message.activityToolRunningMany" : "message.activityToolMany", { count: lines.length })
     : !phase && !/^[\w.:/-]+\s*\(/.test(line.trim())
@@ -1272,7 +1319,7 @@ function TraceActivityRow({ lines, phase, error }: { lines: string[]; phase?: st
   return <li className="text-caption text-muted-foreground">
     <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}
       className="flex max-w-full items-center gap-2 py-1.5 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+      <Icon className={cn("h-4 w-4 shrink-0", phase === "start" && "motion-safe:animate-spin")} aria-hidden />
       <span>{label}</span>
       {lines.length > 1 && <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-200", open && "rotate-90")} />}
     </button>

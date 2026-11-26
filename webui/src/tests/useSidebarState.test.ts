@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  countUnreadAiConversations,
   DEFAULT_SIDEBAR_STATE,
   isSessionUnread,
   markAllSessionsRead,
   markSessionRead,
   normalizeSidebarState,
 } from "@/hooks/useSidebarState";
+import type { ChatSummary } from "@/lib/types";
 
 describe("normalizeSidebarState (IM plan 12.4 schema v5)", () => {
   it("defaults to schema v5 with an empty last-read map", () => {
@@ -74,6 +76,33 @@ describe("isSessionUnread (IM plan 11.1)", () => {
       isSessionUnread({ previewAt: null, previewAuthorType: "agent" }, null),
     ).toBe(false);
   });
+});
+
+it("counts only sessions whose latest AI reply is unread for the desktop badge", () => {
+  const chat = (id: string, overrides: Partial<ChatSummary> = {}): ChatSummary => ({
+    key: `websocket:${id}`,
+    channel: "websocket",
+    chatId: id,
+    createdAt: null,
+    updatedAt: null,
+    preview: "Message",
+    previewAt: "2026-11-24T12:00:00",
+    previewAuthorType: "agent",
+    previewMessageType: "message",
+    ...overrides,
+  });
+  const sessions = [
+    chat("reply"),
+    chat("read"),
+    chat("user", { previewAuthorType: "user" }),
+    chat("system", { previewAuthorType: "system" }),
+    chat("approval", { previewMessageType: "approval", waitingApproval: true }),
+    chat("progress", { previewMessageType: "job_status" }),
+  ];
+  const markers = { "websocket:read": "2026-11-24T12:00:00" };
+  expect(countUnreadAiConversations(sessions, markers)).toBe(1);
+  const read = markSessionRead({ ...DEFAULT_SIDEBAR_STATE, last_read_at_by_key: markers }, sessions[0].key, sessions[0].previewAt);
+  expect(countUnreadAiConversations(sessions, read.last_read_at_by_key)).toBe(0);
 });
 
 describe("markSessionRead (IM plan 11.2)", () => {

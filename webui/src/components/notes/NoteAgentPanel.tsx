@@ -23,6 +23,7 @@ import { AgentLogo } from "@/components/AgentLogo";
 import { AgentActivityCluster } from "@/components/thread/AgentActivityCluster";
 import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadMessages";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
 import { deriveNoteTitle } from "@/lib/note-title";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -75,6 +76,7 @@ interface NoteAgentPanelProps {
   onTransformationsChange: (transformations: NoteTransformation[]) => void;
   onClearChat?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function NoteAgentPanel({
@@ -88,6 +90,7 @@ export function NoteAgentPanel({
   onTransformationsChange,
   onClearChat,
   onStreamingChange,
+  onOpenSettings,
 }: NoteAgentPanelProps) {
   const collapsed = collapsedProp ?? false;
   const [notice, setNotice] = useState<string | null>(null);
@@ -110,7 +113,8 @@ export function NoteAgentPanel({
     () => new Map(),
   );
   const lastNoteIdRef = useRef<string | null | undefined>(note?.id);
-  const { client } = useClientOptional();
+  const { client, token, modelName } = useClientOptional();
+  const workModel = useWorkModelSelection({ token, modelName });
 
   const chatId = note?.agentChatId ?? null;
   const historyKey = chatId ? `websocket:${chatId}` : null;
@@ -656,6 +660,11 @@ export function NoteAgentPanel({
           placeholder="输入问题，AI 将基于当前笔记回答..."
           isStreaming={isStreaming}
           onStop={stop}
+          modelLabel={workModel.modelLabel ?? "选择模型"}
+          modelOptions={workModel.modelOptions}
+          onModelSelect={workModel.selectModel}
+          imageInputEnabled={workModel.imageInputEnabled}
+          onOpenSettings={onOpenSettings}
         />
       </div>
     </aside>

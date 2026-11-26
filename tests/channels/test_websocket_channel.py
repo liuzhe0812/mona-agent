@@ -14,6 +14,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
+from mona.agent.tools.context import BROWSER_SIDEBAR_CONVERSATION_META
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.channels.websocket import (
@@ -626,6 +627,33 @@ async def test_webui_message_envelope_marks_inbound_metadata(bus: MagicMock) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("host, expected", [("127.0.0.1", "browser-chat"), ("192.0.2.1", None)])
+async def test_desktop_webui_binds_browser_sidebar_to_the_inbound_chat(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, expected: str | None,
+) -> None:
+    from mona.session.manager import SessionManager
+
+    bus.user_questions.snapshot.return_value = []
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path)
+    channel = _ch(bus)
+    channel._session_manager = SessionManager(tmp_path)
+    conn = MagicMock()
+    conn.send = AsyncMock()
+    conn.remote_address = (host, 50123)
+    await channel._dispatch_envelope(conn, "webui-client", {
+        "type": "message",
+        "chat_id": "browser-chat",
+        "content": "open a page",
+        "webui": True,
+        "browser_sidebar": True,
+        BROWSER_SIDEBAR_CONVERSATION_META: "another-chat",
+    })
+
+    msg = bus.publish_inbound.await_args.args[0]
+    assert msg.metadata.get(BROWSER_SIDEBAR_CONVERSATION_META) == expected
+
+
+@pytest.mark.asyncio
 async def test_webui_message_envelope_forwards_a_bounded_quote_preview(bus: MagicMock) -> None:
     channel = _ch(bus)
     conn = MagicMock()
@@ -649,18 +677,26 @@ async def test_webui_message_envelope_forwards_a_bounded_quote_preview(bus: Magi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("partner", [False, True])
 async def test_branch_chat_copies_history_through_selected_assistant_turn(
     bus: MagicMock,
     tmp_path,
     monkeypatch,
+    partner: bool,
 ) -> None:
+    from mona.agent.partners import CONVERSATION_METADATA_KEY, ConversationMetadata
     from mona.session.manager import SessionManager
     from mona.webui.transcript import read_transcript_lines, write_transcript_objects
 
+    bus.user_questions.snapshot.return_value = []
     monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path / "webui")
     sessions = SessionManager(tmp_path / "workspace")
     source = sessions.get_or_create("websocket:source-chat")
     source.metadata.update({"webui": True, "workspace": "D:/work", "title": "原任务"})
+    if partner:
+        conversation = ConversationMetadata.direct("com.example.partner", title="Partner")
+        conversation.partner_conversation = True
+        source.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
     source.messages = [
         {"role": "user", "content": "问题一", "task_id": "task-1"},
         {"role": "assistant", "content": "回答一", "task_id": "task-1"},
@@ -698,9 +734,146 @@ async def test_branch_chat_copies_history_through_selected_assistant_turn(
     assert [message["content"] for message in branched.messages] == ["问题一", "回答一"]
     assert source.messages[-1]["content"] == "回答二"
     assert branched.metadata["title"] == "原任务 · 分支"
+    if partner:
+        assert source.conversation_metadata.partner_conversation is True
+        assert branched.conversation_metadata.partner_conversation is False
+        assert branched.conversation_metadata.direct_agent_id == "com.example.partner"
     copied = read_transcript_lines(f"websocket:{branch_id}")
     assert [record["event"] for record in copied] == ["user", "delta", "stream_end", "turn_end"]
     assert {record["chat_id"] for record in copied} == {branch_id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["message", "deliver_files"])
+@pytest.mark.parametrize("historical", [False, True])
+async def test_branch_chat_copies_image_only_reply_and_its_tool_history(
+    bus: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    event: str,
+    historical: bool,
+) -> None:
+    from mona.session.manager import SessionManager
+    from mona.webui.transcript import (
+        read_transcript_lines,
+        replay_transcript_to_ui_messages,
+        write_transcript_objects,
+    )
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    image_path = media_dir / "generated.png"
+    image_path.write_bytes(bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
+    ))
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path / "webui")
+    monkeypatch.setattr("mona.channels.websocket.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("mona.channels.websocket.get_media_dir", lambda *_: media_dir)
+    bus.user_questions.snapshot.return_value = []
+
+    sessions = SessionManager(tmp_path / "workspace")
+    source = sessions.get_or_create("websocket:image-source")
+    source.metadata.update({"webui": True, "title": "原任务"})
+    task_messages = [
+        {"role": "user", "content": "之前的问题", "task_id": "task-0"},
+        {"role": "assistant", "content": "之前的回答", "task_id": "task-0"},
+        {"role": "user", "content": "生成图片", "task_id": "task-1"},
+        {
+            "role": "assistant",
+            "content": None,
+            "task_id": "task-1",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "generate_image", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "content": "图片已生成", "tool_call_id": "call-1", "task_id": "task-1"},
+    ]
+    later_messages = [
+        {"role": "user", "content": "之后的问题", "task_id": "task-2"},
+        {"role": "assistant", "content": "之后的回答", "task_id": "task-2"},
+    ] if historical else []
+    source.messages = task_messages + later_messages
+    sessions.save(source)
+
+    if event == "message":
+        image_event = {"event": "message", "text": "", "media": [str(image_path)], "task_id": "task-1"}
+    else:
+        image_event = {
+            "event": "deliver_files",
+            "files": [{
+                "path": "generated.png",
+                "absolute_path": str(image_path),
+                "name": "generated.png",
+                "size": image_path.stat().st_size,
+                "size_human": "1 B",
+                "mime": "image/png",
+            }],
+        }
+    records = [
+        {"event": "user", "text": "之前的问题", "task_id": "task-0"},
+        {"event": "message", "text": "之前的回答", "task_id": "task-0"},
+        {"event": "turn_end", "task_id": "task-0"},
+        {"event": "user", "text": "生成图片", "task_id": "task-1"},
+        image_event,
+        {"event": "turn_end", "task_id": "task-1"},
+    ]
+    image_turn_end = len(records) - 1
+    if historical:
+        records.extend([
+            {"event": "user", "text": "之后的问题", "task_id": "task-2"},
+            {"event": "message", "text": "之后的回答", "task_id": "task-2"},
+            {"event": "turn_end", "task_id": "task-2"},
+        ])
+    for record in records:
+        record["chat_id"] = "image-source"
+    write_transcript_objects("websocket:image-source", records)
+    original_records = read_transcript_lines("websocket:image-source")
+
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "websocketRequiresToken": False},
+        bus,
+        session_manager=sessions,
+    )
+    conn = MagicMock()
+    conn.send = AsyncMock()
+    await channel._dispatch_envelope(conn, "client", {
+        "type": "branch_chat",
+        "source_chat_id": "image-source",
+        "source_task_id": "task-1",
+        "source_image_reply": {"transcript_index": image_turn_end} if historical else {},
+    })
+
+    sent = [json.loads(call.args[0]) for call in conn.send.await_args_list]
+    attached = next(item for item in sent if item.get("event") == "attached")
+    branch_id = attached["chat_id"]
+    branched = sessions.get_or_create(f"websocket:{branch_id}")
+    assert branched.messages == task_messages
+    assert source.messages == task_messages + later_messages
+    copied = read_transcript_lines(f"websocket:{branch_id}")
+    assert copied == [
+        {**record, "chat_id": branch_id, "_session_key": f"websocket:{branch_id}"}
+        for record in original_records[:image_turn_end + 1]
+    ]
+    replayed = replay_transcript_to_ui_messages(copied, augment_user_media=channel._augment_transcript_user_media)
+    assert replayed[-1]["role"] == "assistant"
+    assert replayed[-1]["content"] == ""
+    assert replayed[-1]["media"][0]["name"] == "generated.png"
+
+    if historical:
+        rejected = MagicMock()
+        rejected.send = AsyncMock()
+        await channel._dispatch_envelope(rejected, "client", {
+            "type": "branch_chat",
+            "source_chat_id": "image-source",
+            "source_task_id": "task-2",
+            "source_image_reply": {"transcript_index": image_turn_end},
+        })
+        rejected_events = [json.loads(call.args[0]) for call in rejected.send.await_args_list]
+        assert any(item.get("event") == "error" for item in rejected_events)
+        assert not any(item.get("event") == "attached" for item in rejected_events)
 
 
 @pytest.mark.asyncio
@@ -2901,3 +3074,127 @@ def test_transcript_reader_does_not_reject_history_by_total_file_size(
 
     assert len(persisted) == 8_100
     assert persisted[-1]["text"] == "x" * 1_024
+
+
+@pytest.fixture
+def partner_sessions(tmp_path, monkeypatch):
+    from mona.session.manager import SessionManager
+
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path / "webui")
+    monkeypatch.setattr("mona.session.manager.get_legacy_sessions_dir", lambda: tmp_path / "legacy")
+    return SessionManager(tmp_path / "workspace")
+
+
+def test_partner_copies_are_independent_and_never_become_the_fixed_chat(partner_sessions):
+    from mona.session.manager import SessionManager
+
+    manager = partner_sessions
+    kwargs = {"agent_id": "com.example.partner", "title": "Partner", "archived_keys": set()}
+
+    first = manager.open_partner_conversation(**kwargs, create=True, copy=True)
+    second = manager.open_partner_conversation(**kwargs, create=True, copy=True)
+    assert first is not None and second is not None
+    assert first.key != second.key
+    assert manager.open_partner_conversation(**kwargs, create=False) is None
+
+    fixed = manager.open_partner_conversation(**kwargs, create=True)
+    assert fixed is not None
+    first.add_message("user", "Independent message")
+    manager.save(first)
+    assert manager.open_partner_conversation(**kwargs, create=False).key == fixed.key
+
+    restored = SessionManager(manager.workspace)
+    copy_session = restored.get_existing(first.key)
+    fixed_session = restored.get_existing(fixed.key)
+    assert copy_session is not None and fixed_session is not None
+    assert copy_session.conversation_metadata.direct_agent_id == "com.example.partner"
+    assert copy_session.conversation_metadata.partner_conversation_copy is True
+    assert fixed_session.messages == []
+    assert "partnerConversationCopy" not in fixed_session.metadata["conversation"]
+    assert restored.open_partner_conversation(**kwargs, create=False).key == fixed.key
+    assert restored.get_existing(second.key).messages == []
+
+
+@pytest.mark.asyncio
+async def test_copy_command_and_rebinding_preserve_partner_identity(partner_sessions, monkeypatch):
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(enabled=True, display_name="Partner")
+    monkeypatch.setattr("mona.agent.user_config.load_agent_user_config", lambda _agent_id: config)
+    monkeypatch.setattr("mona.channels.websocket.read_webui_sidebar_state", lambda: {"archived_keys": []})
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "websocketRequiresToken": False},
+        MagicMock(), session_manager=partner_sessions,
+    )
+    channel._room_registry = MagicMock()
+    channel._room_registry.get.return_value = SimpleNamespace(
+        id="com.example.partner", display_name="Partner", visibility="partner",
+    )
+    connection = MagicMock()
+    connection.send = AsyncMock()
+
+    await channel._dispatch_envelope(connection, "client", {
+        "type": "open_partner_conversation", "agent_id": "com.example.partner",
+        "create": True, "copy": True, "request_id": "copy",
+    })
+    result = json.loads(connection.send.await_args.args[0])
+    assert result["event"] == "open_partner_conversation_result" and result["ok"]
+    assert result["conversation"]["partnerConversationCopy"] is True
+    chat_id = result["chat_id"]
+
+    await channel._dispatch_envelope(connection, "client", {
+        "type": "create_direct_conversation", "chat_id": chat_id,
+        "agent_id": "com.example.partner", "request_id": "bind",
+    })
+    rebound = json.loads(connection.send.await_args.args[0])
+    assert rebound["ok"] and rebound["conversation"]["partnerConversationCopy"] is True
+    saved = partner_sessions.get_existing(f"websocket:{chat_id}")
+    assert saved.conversation_metadata.direct_agent_id == "com.example.partner"
+
+    config.enabled = False
+    await channel._dispatch_envelope(connection, "client", {
+        "type": "open_partner_conversation", "agent_id": "com.example.partner",
+        "create": True, "copy": True, "request_id": "disabled",
+    })
+    rejected = json.loads(connection.send.await_args.args[0])
+    assert not rejected["ok"] and rejected["code"] == "agent_disabled"
+    assert len(partner_sessions.list_sessions()) == 1
+
+
+@pytest.mark.asyncio
+async def test_branch_from_copy_is_a_regular_task(partner_sessions):
+    from mona.webui.transcript import write_transcript_objects
+
+    source = partner_sessions.open_partner_conversation(
+        "com.example.partner", "Partner", create=True, archived_keys=set(), copy=True,
+    )
+    assert source is not None
+    chat_id = source.key.split(":", 1)[1]
+    source.messages = [
+        {"role": "user", "content": "Question", "task_id": "task-1"},
+        {"role": "assistant", "content": "Answer", "task_id": "task-1"},
+    ]
+    partner_sessions.save(source)
+    write_transcript_objects(source.key, [
+        {"event": "user", "chat_id": chat_id, "text": "Question", "task_id": "task-1"},
+        {"event": "message", "chat_id": chat_id, "text": "Answer", "task_id": "task-1"},
+    ])
+    bus = MagicMock()
+    bus.user_questions.snapshot.return_value = []
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "websocketRequiresToken": False},
+        bus, session_manager=partner_sessions,
+    )
+    connection = MagicMock()
+    connection.send = AsyncMock()
+    await channel._dispatch_envelope(connection, "client", {
+        "type": "branch_chat", "source_chat_id": chat_id,
+        "source_task_id": "task-1", "assistant_ordinal": 1,
+    })
+    events = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    branch_id = next(event["chat_id"] for event in events if event.get("event") == "attached")
+    branch = partner_sessions.get_existing(f"websocket:{branch_id}")
+    assert branch is not None
+    assert branch.conversation_metadata.partner_conversation is False
+    assert branch.conversation_metadata.partner_conversation_copy is False
+    assert "partnerConversationCopy" not in branch.metadata["conversation"]

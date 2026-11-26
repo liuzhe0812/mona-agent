@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,17 +44,179 @@ def _ui_token_usage(value: Any) -> dict[str, Any] | None:
         "cachedTokens": max(0, cached),
         "totalTokens": max(0, total),
     }
+    for field, aliases in (
+        ("cacheReadTokens", ("cached_tokens", "cache_read_input_tokens", "reported_cache_read_tokens")),
+        ("cacheWriteTokens", ("cache_creation_input_tokens", "cache_write_input_tokens")),
+    ):
+        reported = [value[key] for key in aliases if type(value.get(key)) is int and value[key] >= 0]
+        if reported:
+            usage[field] = max(reported)
     context = value.get("context_tokens")
     if isinstance(context, int) and not isinstance(context, bool) and context >= 0:
         usage["contextTokens"] = context
-    window = value.get("context_window_tokens")
-    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
-        usage["contextWindowTokens"] = window
+    for field, key in (("contextWindowTokens", "context_window_tokens"), ("contextBudgetTokens", "context_budget_tokens")):
+        window = value.get(key)
+        if type(window) is int and window > 0:
+            usage[field] = window
     if isinstance(value.get("context_model"), str):
         usage["contextModel"] = value["context_model"]
     if isinstance(value.get("context_provider"), str):
         usage["contextProvider"] = value["context_provider"]
     return usage
+
+
+def _projected_last_turn(messages: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    if not isinstance(messages, list):
+        return None
+    user_index = next((i for i in range(len(messages) - 1, -1, -1)
+                       if isinstance(messages[i], dict) and messages[i].get("role") == "user"), None)
+    if user_index is None:
+        return None
+    user = messages[user_index]
+    answer = next((item for item in reversed(messages[user_index + 1:])
+                   if isinstance(item, dict) and item.get("role") == "assistant"
+                   and item.get("kind") not in {"trace", "workflowRun", "discussion"}
+                   and item.get("messageType", "message") == "message"
+                   and not item.get("jobId") and isinstance(item.get("content"), str)
+                   and item["content"].strip()), None)
+    if answer is None or not isinstance(user.get("taskId"), str) or not user["taskId"]:
+        return None
+    if answer.get("taskId") != user["taskId"]:
+        return None
+    usage = answer.get("tokenUsage")
+    context = usage.get("contextTokens") if isinstance(usage, dict) else None
+    if isinstance(context, int) and not isinstance(context, bool) and context >= 0:
+        return None
+    return user, answer
+
+
+def _transcript_turn_times(
+    session_key: str, user: dict[str, Any], answer: dict[str, Any],
+) -> tuple[float, float] | None:
+    """Confirm the cached page still refers to the latest completed source turn."""
+    user_index = user.get("sourceTranscriptIndex")
+    answer_index = answer.get("sourceTranscriptIndex")
+    if (not isinstance(user_index, int) or isinstance(user_index, bool) or user_index < 0
+            or not isinstance(answer_index, int) or isinstance(answer_index, bool)
+            or answer_index <= user_index):
+        return None
+    path = webui_transcript_path(session_key)
+    projected_user = projected_end = latest_user = latest_end = None
+    try:
+        with path.open("rb") as stream:
+            initial = os.fstat(stream.fileno())
+            for index, line in enumerate(stream):
+                if (index not in (user_index, answer_index)
+                        and b'"user"' not in line and b'"turn_end"' not in line):
+                    continue
+                try:
+                    record = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if index == user_index:
+                    projected_user = record
+                if index == answer_index:
+                    projected_end = record
+                if record.get("event") == "user":
+                    latest_user, latest_end = record, None
+                elif record.get("event") == "turn_end" and latest_user is not None:
+                    latest_end = record
+            final = os.fstat(stream.fileno())
+        current = path.stat()
+    except OSError:
+        return None
+    if (initial.st_size != final.st_size or initial.st_mtime_ns != final.st_mtime_ns
+            or final.st_size != current.st_size or final.st_mtime_ns != current.st_mtime_ns
+            or final.st_ino != current.st_ino):
+        return None
+    if not all(isinstance(item, dict) for item in (projected_user, projected_end, latest_user, latest_end)):
+        return None
+    task_id = user["taskId"]
+    for projected, latest, event in ((projected_user, latest_user, "user"),
+                                      (projected_end, latest_end, "turn_end")):
+        event_id = projected.get("_event_id")
+        if (projected.get("event") != event or projected.get("task_id") != task_id
+                or not isinstance(event_id, str) or not event_id
+                or event_id != latest.get("_event_id")):
+            return None
+    start = latest_user.get("_recorded_at")
+    end = latest_end.get("_recorded_at")
+    if (not isinstance(start, (int, float)) or isinstance(start, bool) or not math.isfinite(start)
+            or not isinstance(end, (int, float)) or isinstance(end, bool) or not math.isfinite(end)
+            or start > end):
+        return None
+    return float(start), float(end)
+
+
+def restore_latest_context_usage(
+    session_key: str,
+    messages: Any,
+    read_session: Callable[[str], dict[str, Any] | None],
+) -> None:
+    """Restore missing request-local context only for an identified completed turn."""
+    projected = _projected_last_turn(messages)
+    if projected is None:
+        return
+    user, answer = projected
+    try:
+        session = read_session(session_key)
+    except (OSError, RuntimeError) as error:
+        logger.debug("Could not read session context usage: {}", type(error).__name__)
+        return
+    if not isinstance(session, dict) or session.get("key") != session_key:
+        return
+    metadata = session.get("metadata")
+    if isinstance(metadata, dict) and (metadata.get("pending_user_turn") or metadata.get("runtime_checkpoint")):
+        return
+    records = session.get("messages")
+    if not isinstance(records, list):
+        return
+    last_user_index = next((i for i in range(len(records) - 1, -1, -1)
+                            if isinstance(records[i], dict) and records[i].get("role") == "user"), None)
+    if last_user_index is None:
+        return
+    saved_user = records[last_user_index]
+    saved_answer = next((item for item in reversed(records[last_user_index + 1:])
+                         if isinstance(item, dict) and item.get("role") == "assistant"
+                         and isinstance(item.get("content"), str) and item["content"].strip()
+                         and not item.get("tool_calls") and not item.get("job_id")
+                         and not item.get("injected_event") and not item.get("_ui_only")
+                         and item.get("message_type", "message") == "message"), None)
+    if (saved_answer is None or saved_user.get("task_id") != user["taskId"]
+            or saved_answer.get("task_id") != user["taskId"]
+            or saved_answer["content"] != answer["content"]):
+        return
+    saved_author = saved_answer.get("author_id")
+    projected_author = answer.get("authorId")
+    if saved_author and projected_author and saved_author != projected_author:
+        conversation = metadata.get("conversation") if isinstance(metadata, dict) else None
+        # Older fixed-partner transcripts can label the streamed reply as Mona.
+        if not (isinstance(conversation, dict) and conversation.get("type") == "direct"
+                and conversation.get("partnerConversation") is True
+                and conversation.get("directAgentId") == saved_author
+                and projected_author == MONA_AGENT_ID):
+            return
+    try:
+        usage = _ui_token_usage(saved_answer.get("token_usage"))
+    except (TypeError, ValueError, OverflowError):
+        return
+    if usage is None or "contextTokens" not in usage:
+        return
+    times = _transcript_turn_times(session_key, user, answer)
+    if times is None:
+        return
+    try:
+        saved_at = datetime.fromisoformat(saved_answer["timestamp"]).timestamp()
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return
+    if not math.isfinite(saved_at) or not times[0] <= saved_at <= times[1] + 2:
+        return
+    context_keys = ("contextTokens", "contextWindowTokens", "contextBudgetTokens", "contextModel", "contextProvider")
+    context = {key: usage[key] for key in context_keys if key in usage}
+    existing = answer.get("tokenUsage")
+    answer["tokenUsage"] = {**existing, **context} if isinstance(existing, dict) else usage
 
 
 def _infer_media_kind(name: str, url: str) -> str:
@@ -68,6 +232,91 @@ def _infer_media_kind(name: str, url: str) -> str:
     if ext in _VIDEO_EXTS:
         return "video"
     return "file"
+
+
+def image_reply_branch_boundary(
+    transcript: list[dict[str, Any]],
+    session_messages: list[dict[str, Any]],
+    *,
+    task_id: str | None,
+    transcript_index: int | None,
+) -> tuple[int, int] | None:
+    """Locate a completed image reply in both the display and model histories."""
+    if task_id is None and transcript_index is None:
+        return None
+
+    start: int | None = None
+    matched: tuple[int, int, str | None] | None = None
+    for index, record in enumerate(transcript):
+        if record.get("event") == "user":
+            if start is None or not record.get("task_id") or record.get("task_id") != transcript[start].get("task_id"):
+                start = index
+        elif start is not None and record.get("event") == "turn_end":
+            start_task = transcript[start].get("task_id")
+            end_task = record.get("task_id")
+            completed_task = end_task or start_task
+            if (
+                (not start_task or not end_task or start_task == end_task)
+                and (task_id is None or task_id == completed_task)
+                and (transcript_index is None or start < transcript_index <= index)
+            ):
+                if matched is not None:
+                    return None
+                matched = start, index, completed_task
+            start = None
+    if matched is None:
+        return None
+    start, transcript_end, completed_task = matched
+
+    # Reuse the display projection without reading files or signing media URLs.
+    def media_types(paths: list[str]) -> list[dict[str, str]]:
+        return [{"kind": _infer_media_kind(Path(path).name, path), "url": path} for path in paths]
+
+    replayed = replay_transcript_to_ui_messages(transcript[:transcript_end + 1], augment_user_media=media_types)
+    answer = next((
+        message for message in reversed(replayed)
+        if message.get("role") == "assistant"
+        and message.get("kind") not in {"trace", "widget", "workflowRun", "discussion"}
+        and message.get("messageType") in {None, "message"}
+        and start < message.get("sourceTranscriptIndex", -1) <= transcript_end
+        and (str(message.get("content") or "").strip() or message.get("media") or message.get("deliveredFiles"))
+    ), None)
+    if (
+        answer is None or str(answer.get("content") or "").strip()
+        or not any(item.get("kind") == "image" for item in answer.get("media", []))
+        or (transcript_index is not None and answer.get("sourceTranscriptIndex") != transcript_index)
+    ):
+        return None
+
+    if completed_task:
+        if (
+            any(record.get("event") == "user" and record.get("task_id") == completed_task
+                for record in transcript[transcript_end + 1:])
+            or sum(record.get("event") == "turn_end" and record.get("task_id") == completed_task
+                   for record in transcript) > 1
+        ):
+            return None
+        session_end = next((
+            index for index in range(len(session_messages) - 1, -1, -1)
+            if session_messages[index].get("task_id") == completed_task
+        ), None)
+        if session_end is not None:
+            return transcript_end, session_end
+
+    # Older model histories may lack task IDs. Verify the neighboring user
+    # boundary before copying this turn's complete model context.
+    user_rows = [(index, message.get("content")) for index, message in enumerate(session_messages)
+                 if message.get("role") == "user" and not message.get("injected_event") and not message.get("_ui_only")]
+    starts = [offset for offset, (_, content) in enumerate(user_rows) if content == transcript[start].get("text")]
+    if len(starts) != 1:
+        return None
+    next_user = next((record for record in transcript[transcript_end + 1:] if record.get("event") == "user"), None)
+    next_offset = starts[0] + 1
+    if next_offset == len(user_rows):
+        return (transcript_end, len(session_messages) - 1) if next_user is None else None
+    if next_user is None or user_rows[next_offset][1] != next_user.get("text"):
+        return None
+    return transcript_end, user_rows[next_offset][0] - 1
 
 
 def webui_transcript_path(session_key: str) -> Path:
@@ -513,27 +762,40 @@ def replay_transcript_to_ui_messages(
         latency_ms: int | None = None,
         token_usage: dict[str, int] | None = None,
         task_id: str | None = None,
+        final_stream_id: str | None = None,
     ) -> None:
-        fallback_index: int | None = None
-        for i in range(len(messages) - 1, -1, -1):
-            candidate = messages[i]
-            if candidate.get("role") == "user":
-                break
-            if candidate.get("role") != "assistant" or candidate.get("kind") == "trace":
-                continue
-            candidate_task_id = candidate.get("taskId")
-            if task_id and candidate_task_id not in (None, task_id):
-                continue
-            if fallback_index is None:
-                fallback_index = i
-            if str(candidate.get("content") or "").strip():
-                fallback_index = i
-                break
-        if fallback_index is None:
+        final_stream_index = None
+        if final_stream_id:
+            final_stream_index = next((
+                i for i, message in enumerate(messages)
+                if message.get("role") == "assistant" and message.get("streamId") == final_stream_id
+            ), None)
+        answer_index = final_stream_index
+        if answer_index is None:
+            fallback_index: int | None = None
+            for i in range(len(messages) - 1, -1, -1):
+                candidate = messages[i]
+                if candidate.get("role") == "user":
+                    break
+                if candidate.get("role") != "assistant" or candidate.get("kind") == "trace":
+                    continue
+                if task_id and candidate.get("taskId") not in (None, task_id):
+                    continue
+                if candidate.get("isFinalResponse"):
+                    answer_index = i
+                    break
+                if fallback_index is None or (
+                    not str(messages[fallback_index].get("content") or "").strip()
+                    and str(candidate.get("content") or "").strip()
+                ):
+                    fallback_index = i
+            if answer_index is None:
+                answer_index = fallback_index
+        if answer_index is None:
             return
         for i, candidate in enumerate(messages):
             if (
-                i != fallback_index
+                i != answer_index
                 and token_usage is not None
                 and task_id
                 and candidate.get("role") == "assistant"
@@ -542,7 +804,7 @@ def replay_transcript_to_ui_messages(
             ):
                 candidate.pop("tokenUsage", None)
         update: dict[str, Any] = {
-            **messages[fallback_index],
+            **messages[answer_index],
             "sourceTranscriptIndex": idx,
             "isStreaming": False,
         }
@@ -552,7 +814,9 @@ def replay_transcript_to_ui_messages(
             update["tokenUsage"] = token_usage
         if task_id:
             update["taskId"] = task_id
-        messages[fallback_index] = update
+        if answer_index == final_stream_index:
+            update["isFinalResponse"] = True
+        messages[answer_index] = update
 
     def _delivered_file_key(file: dict[str, Any]) -> str:
         return str(file.get("absolute_path") or file.get("path") or file.get("name") or "")
@@ -1122,6 +1386,8 @@ def replay_transcript_to_ui_messages(
                             },
                         )
             extra: dict[str, Any] = {"content": content_s}
+            if rec.get("final_response") is True:
+                extra["isFinalResponse"] = True
             rec_author_id = rec.get("author_id")
             extra["authorType"] = "agent"
             extra["authorId"] = (
@@ -1177,11 +1443,13 @@ def replay_transcript_to_ui_messages(
             flush_pending_delivered_files(idx)
             lat = rec.get("latency_ms")
             turn_task_id = rec.get("task_id")
+            final_stream_id = rec.get("final_stream_id")
             stamp_turn_end(
                 idx,
                 int(lat) if isinstance(lat, (int, float)) and lat >= 0 else None,
                 _ui_token_usage(rec.get("token_usage")),
                 turn_task_id if isinstance(turn_task_id, str) else None,
+                final_stream_id if isinstance(final_stream_id, str) else None,
             )
             buffer_message_index = None
             buffer_parts = []

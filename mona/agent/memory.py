@@ -665,12 +665,13 @@ class Consolidator:
         *,
         current_message: str = "[token-probe]",
         message_metadata: dict[str, Any] | None = None,
+        session_summary: str | None = None,
     ) -> tuple[int, str]:
         """Estimate prompt size from the full unconsolidated session tail."""
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
-        summary = self._summary_text(session)
+        summary = session_summary if session_summary is not None else self._summary_text(session)
         probe_messages = self._build_messages(
             history=history,
             current_message=current_message,
@@ -817,7 +818,7 @@ class Consolidator:
                 tools=tools,
                 tool_choice="none" if tools else None,
             )
-            if response.finish_reason == "error":
+            if response.finish_reason in ("error", "length", "max_tokens", "incomplete"):
                 logger.warning(
                     "Consolidation LLM call failed (status={}, kind={}); preserving session history",
                     response.error_status_code,
@@ -848,6 +849,7 @@ class Consolidator:
         current_message: str | None = None,
         message_metadata: dict[str, Any] | None = None,
         on_compaction: Callable[[bool], Awaitable[None]] | None = None,
+        force: bool = False,
     ) -> int | None:
         """Loop: archive old messages until prompt fits within safe budget.
 
@@ -873,6 +875,10 @@ class Consolidator:
             self._retry_after.pop(session.key, None)
 
             trigger = self._auto_compact_trigger_budget
+            window = session.context_window_override
+            if type(window) is int and 0 < window < self.context_window_tokens:
+                reserved = min(self.max_completion_tokens, window // 2)
+                trigger = min(trigger, int(window * 0.8), window - reserved - self._SAFETY_BUFFER)
             target = int(trigger * self.consolidation_ratio)
             estimate_kwargs = (
                 {
@@ -891,7 +897,9 @@ class Consolidator:
             if estimated <= 0:
                 self._persist_last_summary(session, last_summary)
                 return
-            if estimated < trigger:
+            if force:
+                target = max(1, min(target, estimated // 2))
+            elif estimated < trigger:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, msgs={}",
@@ -904,7 +912,7 @@ class Consolidator:
                 self._persist_last_summary(session, last_summary)
                 return estimated
 
-            for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
+            for round_num in range(1 if force else self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
                     break
 
@@ -950,11 +958,30 @@ class Consolidator:
                 last_summary = summary
                 previous_cursor = session.last_consolidated
                 session.last_consolidated = end_idx
+                previous_metadata = None
+                if force:
+                    try:
+                        estimated, _ = self.estimate_session_prompt_tokens(
+                            session, session_summary=summary, **estimate_kwargs,
+                        )
+                    except Exception:
+                        logger.exception("Token estimation failed for {}", session.key)
+                        estimated = 0
+                    previous_metadata = session.metadata.copy()
+                    session.metadata["_manual_compaction"] = {
+                        "messages": len(session.messages),
+                        "cursor": end_idx,
+                        "tokens": estimated if estimated > 0 else None,
+                    }
                 try:
                     self._persist_last_summary(session, last_summary)
                 except BaseException:
                     session.last_consolidated = previous_cursor
+                    if previous_metadata is not None:
+                        session.metadata = previous_metadata
                     raise
+                if force:
+                    return estimated if estimated > 0 else None
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(

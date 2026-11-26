@@ -12,6 +12,7 @@ import { ChatChart } from "@/components/ChatChart";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
 import { ConversationFileContext } from "@/components/deliver/ConversationFileContext";
+import { ConversationBrowserContext } from "@/components/deliver/ConversationBrowserContext";
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/common/mermaid-diagram";
 import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
@@ -86,6 +87,7 @@ export default function MarkdownTextRenderer({
 }: MarkdownTextRendererProps) {
   const context = useMarkdownContext();
   const conversationFiles = useContext(ConversationFileContext);
+  const openConversationBrowser = useContext(ConversationBrowserContext);
   const conversation = context !== null;
   const source = useMemo(() => conversation ? normalizeConversationMarkdown(children, streaming) : children, [children, streaming, conversation]);
   const plugins = useMemo(() => [
@@ -225,15 +227,12 @@ export default function MarkdownTextRenderer({
             rel="noreferrer noopener"
             className="text-primary underline underline-offset-2 hover:opacity-80"
             onClick={(e) => {
-              // In Tauri desktop, <a target="_blank"> opens an empty app
-              // window instead of the system browser. Intercept and route
-              // through the opener plugin so http(s) links launch the
-              // user's default browser.
               if (!isTauri()) return;
               const url = typeof href === "string" ? href : "";
               if (!url || !/^https?:\/\//i.test(url)) return;
               e.preventDefault();
-              void openExternalUrl(url);
+              if (openConversationBrowser) openConversationBrowser(url);
+              else void openExternalUrl(url);
             }}
             {...props}
           >
@@ -242,7 +241,7 @@ export default function MarkdownTextRenderer({
         );
       },
     }),
-    [highlightCode, conversation, conversationFiles],
+    [highlightCode, conversation, conversationFiles, openConversationBrowser],
   );
 
   const rendered = (

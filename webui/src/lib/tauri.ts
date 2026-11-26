@@ -471,11 +471,13 @@ export async function createNoteFromChat(
   title: string,
   contentMarkdown: string,
   notebookId?: string,
+  image?: { data: string; extension: string },
 ): Promise<string> {
   const noteId = await invoke<string>("notes_create_from_chat", {
     title,
     contentMarkdown,
     notebookId: notebookId ?? null,
+    ...(image ? { image } : {}),
   });
   window.dispatchEvent(new CustomEvent("mona:notes-changed"));
   return noteId;
@@ -652,6 +654,10 @@ export async function openPathWithSystemApp(path: string): Promise<void> {
       console.error("[tauri] shell.open also failed:", err2);
     }
   }
+}
+
+export async function openWorkspaceDirectory(path: string): Promise<void> {
+  await invoke<boolean>("system_open_in_explorer", { path, directoryOnly: true });
 }
 
 export async function quickAskHide(): Promise<void> {

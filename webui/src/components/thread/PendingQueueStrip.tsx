@@ -54,7 +54,7 @@ export function PendingQueueStrip({
             >
               <ListStart className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
               <span className="min-w-0 flex-1 truncate text-caption text-foreground/75">
-                {msg.content || msg.options?.documentNames?.join("、") || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
+                {msg.options?.displayContent || msg.content || msg.options?.documentNames?.join("、") || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
               </span>
               {msg.deliveryState === "unknown" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("errors.messageRejected.unknownTitle")}</span>}
               {msg.deliveryState === "accepted" && <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("thread.composer.pendingQueue.accepted")}</span>}

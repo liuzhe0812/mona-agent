@@ -837,6 +837,31 @@ span[class*="rounded"][class*="px-"] {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3'/%3E%3C/g%3E%3Cg fill='none' stroke='%23fff' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3'/%3E%3C/g%3E%3C/svg%3E") 12 12, grab;
 }
 
+.session-row-actions {
+  --session-row-action-surface: color-mix(in srgb, hsl(var(--sidebar-hover-surface)) 4%, hsl(var(--background)));
+  background: linear-gradient(to right, transparent, var(--session-row-action-surface) 0.75rem);
+}
+
+.session-row-actions[data-highlighted] {
+  --session-row-action-surface: color-mix(in srgb, hsl(var(--sidebar-active-surface)) 9%, hsl(var(--background)));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-session-title][data-marquee] {
+    text-overflow: clip;
+  }
+
+  [data-session-title][data-marquee] > span {
+    display: inline-block;
+    animation: session-title-marquee var(--session-title-duration) linear infinite alternate;
+  }
+}
+
+@keyframes session-title-marquee {
+  0%, 15% { transform: translateX(0); }
+  85%, 100% { transform: translateX(var(--session-title-travel)); }
+}
+
 .session-list-scrollbar-thumb:active {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3'/%3E%3C/g%3E%3Cg fill='none' stroke='%23fff' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3'/%3E%3C/g%3E%3C/svg%3E") 12 12, grabbing;
 }

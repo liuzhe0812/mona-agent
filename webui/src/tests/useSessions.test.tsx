@@ -85,6 +85,13 @@ function wrap(client: ReturnType<typeof fakeClient>, getToken: () => string = ()
   };
 }
 
+function sessionUsage(promptTokens: number) {
+  return {
+    promptTokens, completionTokens: 10, cacheReadTokens: null, cacheWriteTokens: null,
+    cacheHitRate: null, latencyMs: null, outputTokensPerSecond: null, models: ["test-model"],
+  };
+}
+
 describe("useSessions", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -563,9 +570,14 @@ describe("useSessions", () => {
   });
 
   it("requests a bounded first page and prepends older pages in transcript order", async () => {
+    const sessionUsage = {
+      promptTokens: 400, completionTokens: 60, cacheReadTokens: 120, cacheWriteTokens: 40,
+      cacheHitRate: 0.3, latencyMs: 6000, outputTokensPerSecond: 10, models: ["test-model"],
+    };
     vi.mocked(api.fetchWebuiThread)
       .mockResolvedValueOnce({
         schemaVersion: 3,
+        sessionUsage,
         messages: [
           { id: "u3", role: "user", content: "third", createdAt: 3, historyPosition: 2 },
           { id: "a3", role: "assistant", content: "answer", createdAt: 4, historyPosition: 3, assistantOrdinal: 2 },
@@ -586,6 +598,7 @@ describe("useSessions", () => {
     });
 
     await waitFor(() => expect(result.current.messages.map((message) => message.id)).toEqual(["u3", "a3"]));
+    expect(result.current.sessionUsage).toEqual(sessionUsage);
     expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
       1,
       "tok",
@@ -602,6 +615,7 @@ describe("useSessions", () => {
     expect(result.current.messages.map((message) => message.id)).toEqual(["u1", "a1", "u3", "a3"]);
     expect(result.current.hasMore).toBe(false);
     expect(result.current.messages[1]?.assistantOrdinal).toBe(1);
+    expect(result.current.sessionUsage).toEqual(sessionUsage);
     expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
       2,
       "tok",
@@ -609,6 +623,93 @@ describe("useSessions", () => {
       undefined,
       expect.objectContaining({ limit: 2, before: 2, revision: "rev-1" }),
     );
+  });
+
+  it("refreshes usage without replacing loaded messages or pagination", async () => {
+    let finish!: (value: import("@/lib/types").WebuiThreadPersistedPayload) => void;
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        sessionUsage: sessionUsage(10),
+        messages: [{ id: "old", role: "user", content: "Earlier", createdAt: 1 }],
+        pagination: { hasMore: true, before: 5, revision: "rev-1", total: 6 },
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useSessionHistory("websocket:usage", 160), {
+      wrapper: wrap(fakeClient()),
+    });
+    await waitFor(() => expect(result.current.messages[0]?.id).toBe("old"));
+    const originalVersion = result.current.version;
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.refreshUsage(); });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.messages[0]?.id).toBe("old");
+    expect(api.fetchWebuiThread).toHaveBeenLastCalledWith(
+      "tok", "websocket:usage", undefined, expect.objectContaining({ limit: 1, signal: expect.any(AbortSignal) }),
+    );
+    await act(async () => {
+      finish({
+        schemaVersion: 3,
+        sessionUsage: sessionUsage(30),
+        messages: [{ id: "replacement", role: "assistant", content: "New", createdAt: 2 }],
+        pagination: { hasMore: false, before: null, revision: "rev-2", total: 1 },
+      });
+      await pending;
+    });
+    expect(result.current.sessionUsage).toEqual(sessionUsage(30));
+    expect(result.current.messages.map((message) => message.id)).toEqual(["old"]);
+    expect(result.current.revision).toBe("rev-1");
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.version).toBe(originalVersion);
+  });
+
+  it("keeps history usable when usage refresh fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.mocked(api.fetchWebuiThread)
+        .mockResolvedValueOnce({
+          schemaVersion: 3, sessionUsage: sessionUsage(10),
+          messages: [{ id: "old", role: "user", content: "Earlier", createdAt: 1 }],
+        })
+        .mockRejectedValueOnce(new api.ApiError(503, "private details"));
+      const { result } = renderHook(() => useSessionHistory("websocket:usage", 160), {
+        wrapper: wrap(fakeClient()),
+      });
+      await waitFor(() => expect(result.current.messages[0]?.id).toBe("old"));
+      await act(async () => { await result.current.refreshUsage(); });
+      expect(result.current.sessionUsage).toEqual(sessionUsage(10));
+      expect(result.current.messages[0]?.id).toBe("old");
+      expect(result.current.loading).toBe(false);
+      expect(result.current.error).toBeNull();
+      expect(result.current.missing).toBe(false);
+      expect(warn).toHaveBeenCalledWith("[useSessionHistory] Session usage refresh failed:", "HTTP 503");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("ignores a usage response from the previous session after switching", async () => {
+    let finish!: (value: import("@/lib/types").WebuiThreadPersistedPayload) => void;
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({ schemaVersion: 3, sessionUsage: sessionUsage(10), messages: [] })
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce({ schemaVersion: 3, sessionUsage: sessionUsage(20), messages: [] });
+    const { result, rerender } = renderHook(({ sessionKey }) => useSessionHistory(sessionKey, 160), {
+      initialProps: { sessionKey: "websocket:a" },
+      wrapper: wrap(fakeClient()),
+    });
+    await waitFor(() => expect(result.current.sessionUsage).toEqual(sessionUsage(10)));
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.refreshUsage(); });
+    const oldSignal = vi.mocked(api.fetchWebuiThread).mock.calls[1]![3]!.signal!;
+    rerender({ sessionKey: "websocket:b" });
+    await waitFor(() => expect(result.current.sessionUsage).toEqual(sessionUsage(20)));
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => {
+      finish({ schemaVersion: 3, sessionUsage: sessionUsage(99), messages: [] });
+      await pending;
+    });
+    expect(result.current.sessionUsage).toEqual(sessionUsage(20));
   });
 
   it("keeps the earliest loaded cursor when refreshing within the same revision", async () => {

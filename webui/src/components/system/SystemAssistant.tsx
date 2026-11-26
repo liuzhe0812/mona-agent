@@ -1,4 +1,5 @@
 import { Check, HardDrive, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -37,6 +38,7 @@ import {
 type AssistantViewMode = "planner" | "agent";
 
 interface SystemAssistantProps {
+  onOpenSettings?: (section?: string) => void;
   tab: SystemTab;
   storage: ReturnType<typeof useStorageScan>;
   diagnosticChecks: DiagnosticCheck[];
@@ -68,6 +70,7 @@ const CONFIDENCE_STYLES: Record<SystemDiagnosisResult["hypotheses"][number]["con
 };
 
 export function SystemAssistant({
+  onOpenSettings,
   tab,
   storage,
   diagnosticChecks,
@@ -290,7 +293,7 @@ export function SystemAssistant({
       </header>
 
       <div hidden={tab !== "storage" || viewMode !== "planner"} className={cn("min-h-0 flex-1 flex-col", tab === "storage" && viewMode === "planner" ? "flex" : "hidden")}>
-        <StorageConversation storage={storage} selection={storageSelection} analysisRequest={tab === "storage" ? analysisRequest : null} onFileAnalysisChange={onFileAnalysisChange} />
+        <StorageConversation storage={storage} selection={storageSelection} analysisRequest={tab === "storage" ? analysisRequest : null} onFileAnalysisChange={onFileAnalysisChange} onOpenSettings={onOpenSettings} />
       </div>
       <div className={cn("min-h-0 flex-1 overflow-y-auto scrollbar-hover", tab === "storage" && viewMode === "planner" && "hidden")}>
         {viewMode === "agent" ? (
@@ -299,6 +302,7 @@ export function SystemAssistant({
               Mona 正在接管维护任务，可继续对话补充要求
             </p>
             <SystemAgentChat
+              onOpenSettings={onOpenSettings}
               chatId={agentChatId}
               task={agentTask}
               onChatCreated={setAgentChatId}
@@ -489,6 +493,7 @@ export function SystemAssistant({
 
       {viewMode === "planner" && tab !== "storage" ? (
         <div className="shrink-0 p-3">
+          <WorkModelSelector disabled={planning || executing} onOpenSettings={onOpenSettings} />
           <ThreadComposer
             value={goal}
             onValueChange={setGoal}

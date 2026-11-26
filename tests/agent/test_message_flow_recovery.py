@@ -279,6 +279,39 @@ async def test_runner_does_not_retry_when_learning_a_limit_did_not_reduce_the_re
     assert (tmp_path / "tool-side-effect.txt").read_text(encoding="utf-8") == "completed\n"
 
 
+@pytest.mark.parametrize(("has_history", "reject_again"), [(True, False), (True, True), (False, False)])
+async def test_work_recovers_from_context_rejection_without_a_reported_window(
+    tmp_path: Path, has_history: bool, reject_again: bool,
+) -> None:
+    overflow = LLMResponse(content="prompt is too long", finish_reason="error")
+    success = LLMResponse(content="Finished.", finish_reason="stop", usage={"prompt_tokens": 30, "completion_tokens": 8})
+    provider = _SequencedProvider([
+        _append_call(), overflow, *([overflow if reject_again else success] if has_history else []),
+    ])
+
+    async def learn_context_limit(_tokens: int) -> bool:
+        pytest.fail("An error without a window must not be learned as a capacity")
+
+    target = tmp_path / "tool-side-effect.txt"
+    spec = _runner_spec(
+        tmp_path, _tool_registry(target), context_window_tokens=1_000_000,
+        context_window_verified=False, context_limit_callback=learn_context_limit,
+    )
+    if not has_history:
+        spec.initial_messages = [_SYSTEM, _INITIAL_MESSAGES[-1]]
+
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == ("completed" if has_history and not reject_again else "context_limit")
+    assert len(provider.requests) == (3 if has_history else 2)
+    assert result.messages[:len(spec.initial_messages)] == spec.initial_messages
+    assert result.detected_context_window_tokens is None
+    assert "context_window_tokens" not in result.final_usage
+    assert target.read_text(encoding="utf-8") == "completed\n"
+    if has_history:
+        assert provider.requests[2] == [provider.requests[1][0], *provider.requests[1][3:]]
+
+
 async def test_runner_does_not_send_when_the_final_budget_check_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

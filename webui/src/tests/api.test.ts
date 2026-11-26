@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelExpertInstall,
+  cancelGitHubCopilotLogin,
   cancelManagedRuntimeInstall,
   cleanupManagedRuntimes,
   confirmVideoProjectPlan,
   deleteSession,
   fetchProviderModels,
+  fetchGitHubCopilotLogin,
   fetchSceneNarrationBytes,
   fetchVoicePreviewBytes,
   fetchSidebarState,
@@ -17,6 +19,7 @@ import {
   listSlashCommands,
   removeProject,
   startExpertInstall,
+  startGitHubCopilotLogin,
   startManagedRuntimeInstall,
   updateSidebarState,
   updateImageGenerationSettings,
@@ -302,6 +305,37 @@ describe("webui API helpers", () => {
         },
       }),
     );
+  });
+
+  it("sends custom protocol for discovery and clears it with auto on save", async () => {
+    await fetchProviderModels("tok", { provider: "custom", apiBase: "https://relay.example/v1", wireApi: "anthropic-messages" });
+    await updateProviderSettings("tok", { provider: "custom-relay", wireApi: "auto" });
+    const [probe, save] = vi.mocked(fetch).mock.calls.map(([url]) => new URL(String(url), "http://localhost"));
+    expect(probe.searchParams.get("wire_api")).toBe("anthropic-messages");
+    expect(save.searchParams.get("wire_api")).toBe("auto");
+  });
+
+  it("serializes only the supplied per-model override patch", async () => {
+    await updateProviderSettings("tok", {
+      provider: "custom-relay",
+      modelOverrides: { "model/a": { context_window: 240_000, reasoning_efforts: ["low", "high"] }, "model/b": null },
+    });
+    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://localhost");
+    expect(JSON.parse(url.searchParams.get("model_overrides")!)).toEqual({
+      "model/a": { context_window: 240_000, reasoning_efforts: ["low", "high"] }, "model/b": null,
+    });
+  });
+
+  it("uses authenticated requests for GitHub device login actions", async () => {
+    await fetchGitHubCopilotLogin("tok");
+    await startGitHubCopilotLogin("tok");
+    await cancelGitHubCopilotLogin("tok");
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+      "/api/settings/providers/github-copilot/login/status",
+      "/api/settings/providers/github-copilot/login/start",
+      "/api/settings/providers/github-copilot/login/cancel",
+    ]);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: { Authorization: "Bearer tok" } }));
   });
 
   it("serializes web search settings updates", async () => {

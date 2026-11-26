@@ -3,14 +3,16 @@ import { useEffect, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import * as threadMessages from "@/components/thread/ThreadMessages";
 import i18n from "@/i18n";
 import { DeliveredFileCard } from "@/components/deliver/DeliveredFileCard";
 import { invalidateAgents } from "@/components/room/useAgents";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { ClientProvider } from "@/providers/ClientProvider";
+import { MONA_BRAND_AVATAR } from "@/lib/brand-assets";
 import type { SettingsPayload, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
-import { saveWorkspaceCanvas } from "@/lib/tauri";
+import { openWorkspaceDirectory, saveWorkspaceCanvas } from "@/lib/tauri";
 import * as api from "@/lib/api";
 import { fetchFilePreviewBlob } from "@/lib/api";
 import { developmentApi, type DevExecutor } from "@/lib/development-api";
@@ -52,6 +54,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
   return {
     ...actual,
     isTauri: () => true,
+    hasWorkspaceStorage: () => true,
     // Base-URL resolution in api.ts goes through these when isTauri() is
     // true; keep them on fixed loopback ports so stubbed fetch still matches.
     getGatewayStatus: async () => ({ running: true, port: 17173, ws_port: 8765 }),
@@ -60,6 +63,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
     startServices: async () => 17174,
     moveToTrash: vi.fn(),
     openPathWithSystemApp: vi.fn(),
+    openWorkspaceDirectory: vi.fn(),
     revealItemInDir: vi.fn(),
     saveWorkspaceCanvas: vi.fn(async (_root: string, canvas: unknown) => ({
       canvas,
@@ -73,6 +77,10 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => undefined),
+}));
+
+vi.mock("@/components/browser/BrowserTabView", () => ({
+  BrowserTabView: () => null,
 }));
 
 vi.mock("@/components/canvas/ConversationCanvasPanel", () => ({
@@ -423,6 +431,7 @@ describe("ThreadShell", () => {
     localStorage.clear();
     useNativeProviderState.setState({ revision: 0 });
     useWorkspaceStore.setState({ workspacePath: "D:\\workspace" });
+    vi.mocked(openWorkspaceDirectory).mockReset().mockResolvedValue(undefined);
     officePreviewState.fetchFilePreviewBlob.mockReset();
     officePreviewState.importOfficeSession.mockReset();
     officePreviewState.createOfficeSession.mockReset();
@@ -707,6 +716,7 @@ describe("ThreadShell", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Stop and take over" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Searching the web" })).toBeInTheDocument();
 
     act(() => {
       client._emitChat(chatId, {
@@ -715,13 +725,15 @@ describe("ThreadShell", () => {
         text: "computer_act",
         kind: "tool_hint",
         task_id: "task-current",
-        tool_events: [{ phase: "start", call_id: "current-act", name: "computer_act" }],
+        tool_events: [{ phase: "start", call_id: "current-act", name: "computer_act", arguments: { action: "launch", arguments: { name: "Calculator" } } }],
       });
     });
 
     expect(screen.getByText(
       "AI is controlling the computer. Please avoid using the mouse and keyboard for now.",
     )).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Processing a desktop action" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Searching the web" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Stop and take over" }));
     expect(client.stopWorkTurn).toHaveBeenCalledWith(chatId, "current-turn");
     expect(client.sendMessage).not.toHaveBeenCalled();
@@ -733,6 +745,103 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("AI is controlling the computer. Please avoid using the mouse and keyboard for now.")).not.toBeInTheDocument();
     expect(screen.queryByText("Stopping computer control. Please wait before taking over.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop and take over" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Processing a desktop action" })).not.toBeInTheDocument();
+  });
+
+  it("shows task statistics and context in the composer toolbar and refreshes usage after a turn", async () => {
+    const client = makeClient();
+    const chatId = "5320b200-session-usage";
+    let usage = {
+      promptTokens: 100, completionTokens: 10, cacheReadTokens: 20, cacheWriteTokens: null,
+      cacheHitRate: 0.2, latencyMs: 2000, outputTokensPerSecond: 5, models: ["test-model"],
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(`websocket%3A${chatId}/context`)) {
+        return httpJson({ windowTokens: null, effectiveWindowTokens: 1_000_000, isBudget: true });
+      }
+      if (url.includes("/api/settings")) {
+        return httpJson({
+          agent: { model: "test-model", provider: "example", context_window_tokens: 1_000_000,
+            context_window_source: "default", context_budget_tokens: 1_000_000 },
+          model_presets: [],
+        });
+      }
+      if (url.includes(`websocket%3A${chatId}/webui-thread`)) {
+        return httpJson({
+          schemaVersion: 3,
+          messages: [{ id: "a1", role: "assistant", content: "Earlier answer", createdAt: 1,
+            tokenUsage: { contextTokens: 49_700 } }],
+          sessionUsage: usage,
+        });
+      }
+      return { ok: false, status: 404 };
+    }));
+    render(wrap(client, <ThreadShell session={session(chatId)} title="Task" onToggleSidebar={() => {}} />));
+
+    await screen.findByText("Earlier answer");
+    const composer = screen.getByTestId("mona-composer");
+    const workspace = within(composer).getByRole("button", { name: "Open workspace" });
+    expect(workspace).toHaveTextContent("Conversation 5320b200");
+    expect(workspace.closest("form")).not.toBeNull();
+    fireEvent.click(workspace);
+    await waitFor(() => expect(openWorkspaceDirectory).toHaveBeenCalledWith("D:\\workspace"));
+
+    const stats = within(composer).getByRole("button", { name: "Context and task usage" });
+    expect(stats).toHaveTextContent("");
+    expect(stats.closest("form")).toBe(workspace.closest("form"));
+    fireEvent.click(stats);
+    const summary = await screen.findByRole("dialog", { name: "Context and task usage" });
+    expect(within(summary).getByText(/5%.*work budget used/i)).toBeInTheDocument();
+    expect(within(summary).getByText("20%")).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Compact context" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Session window settings" })).toBeInTheDocument();
+
+    usage = { ...usage, promptTokens: 200, cacheReadTokens: 80, cacheHitRate: 0.4 };
+    act(() => client._emitChat(chatId, { event: "turn_end", chat_id: chatId }));
+    expect(await within(summary).findByText("40%")).toBeInTheDocument();
+  });
+
+  it("opens the bound workspace directory from its folder name", async () => {
+    const client = makeClient();
+    const projectWorkspace = "E:\\projects\\Mona Project\\";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/webui-thread")) {
+        return httpJson(transcriptFromSimpleMessages([{ role: "assistant", content: "Project answer" }]));
+      }
+      return { ok: false, status: 404 };
+    }));
+    render(wrap(client, <ThreadShell
+      session={{ ...session("workspace-footer"), workspace: projectWorkspace }}
+      title="Task"
+      onToggleSidebar={() => {}}
+    />));
+    await screen.findByText("Project answer");
+    const workspace = within(screen.getByTestId("mona-composer")).getByRole("button", { name: "Open workspace" });
+    expect(workspace).toHaveTextContent("Mona Project");
+    fireEvent.focus(workspace);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/^Open workspace$/);
+    fireEvent.click(workspace);
+    await waitFor(() => expect(openWorkspaceDirectory).toHaveBeenCalledWith(projectWorkspace));
+  });
+
+  it.each([
+    ["cloud-e11234567890-0123456789abcdef0123456789abcdef", "01234567"],
+    ["cloud-e11234567890-89abcdef0123456789abcdef01234567", "89abcdef"],
+    ["cloud-abcdef0123456789abcdef0123456789", "abcdef01"],
+    ["restored-1234567890abcdef1234567890abcdef", "12345678"],
+  ])("shows a short conversation ID for %s without its sync prefix", async (chatId, shortId) => {
+    const client = makeClient();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/webui-thread")) {
+        return httpJson(transcriptFromSimpleMessages([{ role: "assistant", content: "Synced reply" }]));
+      }
+      return { ok: false, status: 404 };
+    }));
+    render(wrap(client, <ThreadShell session={session(chatId)} title="Task" onToggleSidebar={() => {}} />));
+    await screen.findByText("Synced reply");
+    expect(within(screen.getByTestId("mona-composer")).getByRole("button", { name: "Open workspace" }))
+      .toHaveTextContent(`Conversation ${shortId}`);
   });
 
   it("shows a retryable error instead of the welcome page when established history fails", async () => {
@@ -1291,6 +1400,39 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("restores the owning conversation browser and sends its page as context", async () => {
+    const client = makeClient();
+    const onVisibilityChange = vi.fn();
+    const thread = (chatId: string, tabId: string) => wrap(client, (
+      <ThreadShell
+        session={session(chatId)}
+        onToggleSidebar={() => {}}
+        sidebarBrowser={{
+          tab: {
+            id: tabId, conversationId: chatId, type: "browser", title: "Example",
+            url: "https://example.com/", webviewCreated: true, isAiControlled: false,
+          },
+          navigate: vi.fn(), goBack: vi.fn(), goForward: vi.fn(), reload: vi.fn(), updateUrl: vi.fn(),
+        }}
+        onSidebarBrowserVisibilityChange={onVisibilityChange}
+      />
+    ));
+    const view = render(thread("chat-a", "page-a"));
+    await waitFor(() => expect(onVisibilityChange).toHaveBeenLastCalledWith("page-a"));
+    view.rerender(thread("chat-b", "page-b"));
+    await waitFor(() => expect(onVisibilityChange).toHaveBeenLastCalledWith("page-b"));
+    view.rerender(thread("chat-a", "page-a"));
+    await waitFor(() => expect(onVisibilityChange).toHaveBeenLastCalledWith("page-a"));
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "Continue with this page" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "chat-a", "Continue with this page", undefined,
+      expect.objectContaining({ browserSidebar: true, browserTabId: "page-a" }),
+    ));
+  });
+
   it("applies the main conversation flowchart result and hides its internal patch", async () => {
     const client = makeClient();
     render(wrap(
@@ -1731,6 +1873,51 @@ describe("ThreadShell", () => {
 
     await waitFor(() => expect(onBranchChat).toHaveBeenCalledWith("chat-a", 1, undefined));
     expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("branches and quotes a completed image-only reply", async () => {
+    const client = makeClient();
+    const onBranchChat = vi.fn().mockResolvedValue("chat-branch");
+    const source = "/api/media/sig/generated.png";
+    const encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/hX8AAAAASUVORK5CYII=";
+    const image = Uint8Array.from(atob(encoded), (byte) => byte.charCodeAt(0));
+    const history = {
+      schemaVersion: 3,
+      messages: [
+        { id: "request", role: "user", content: "Draw a picture", createdAt: 1, sourceTranscriptIndex: 0, taskId: "image-task" },
+        { id: "drawing", role: "assistant", content: "", createdAt: 2, sourceTranscriptIndex: 2, taskId: "image-task",
+          media: [{ kind: "image", name: "generated.png", url: source }] },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("websocket%3Achat-a/webui-thread")) return httpJson(history);
+      if (url.endsWith(source)) return new Response(image, { headers: { "Content-Type": "image/png" } });
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+
+    render(wrap(client, <ThreadShell session={session("chat-a")} title="Image task" onToggleSidebar={() => {}} onBranchChat={onBranchChat} />));
+    const reply = await screen.findByTestId("message-bubble-drawing");
+    fireEvent.click(within(reply).getByRole("button", { name: "Start branch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start new task" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(onBranchChat).toHaveBeenCalledWith("chat-a", { kind: "image", transcriptIndex: 2 }, "image-task");
+    expect(client.sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(within(reply).getByRole("button", { name: "More actions" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
+    const quote = screen.getByTestId("composer-quote-preview");
+    expect(within(quote).getByRole("img", { name: "generated.png" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "Describe this image" } });
+    const send = screen.getByRole("button", { name: "Send message" });
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "chat-a",
+      "引用 Mona 的消息：\nImage attachment · generated.png\n\nDescribe this image",
+      [{ data_url: `data:image/png;base64,${encoded}`, name: "generated.png" }],
+      expect.objectContaining({ quote: { author: "Mona", content: "Image attachment · generated.png" }, displayContent: "Describe this image" }),
+    ));
   });
 
   it("sends arbitrary file references with the first message from the landing", async () => {
@@ -2222,11 +2409,51 @@ describe("ThreadShell", () => {
     ));
 
     expect(await screen.findByTestId("partner-agent-welcome")).toHaveTextContent("小红书运营");
+    const composerDock = screen.getByTestId("thread-composer-dock");
+    expect(composerDock).toHaveClass("bg-background/95");
+    expect(composerDock.parentElement?.parentElement).not.toHaveClass("bg-muted");
     expect(screen.queryByTestId("mona-welcome-shell")).not.toBeInTheDocument();
     expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "帮我写一篇小红书文案" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(onCreateDirectChat).toHaveBeenCalledWith("com.mona.xiaohongshu", null, expect.any(Function)));
+  });
+
+  it.each([true, false])("uses the shared conversation surface (fixed partner: %s)", async (fixedPartner) => {
+    const client = makeClient();
+    invalidateAgents();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/agents")) {
+        return httpJson({ agents: [{ id: "com.mona.academic-researcher", displayName: "学者", enabled: true }] });
+      }
+      if (url.includes("/webui-thread")) return httpJson(transcriptFromSimpleMessages([
+        { role: "user", content: "问题" },
+        { role: "assistant", content: "伙伴回复" },
+      ]));
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    const partnerId = "com.mona.academic-researcher";
+    render(wrap(client, <ThreadShell
+      session={{
+        ...session(`partner-surface-${fixedPartner}`),
+        conversation: {
+          type: "direct",
+          title: "学者",
+          agentIds: [partnerId],
+          directAgentId: partnerId,
+          partnerConversation: fixedPartner,
+        },
+      }}
+      title="学者"
+      onToggleSidebar={() => {}}
+      onNewChat={() => {}}
+    />));
+
+    expect(await screen.findByText("伙伴回复")).toBeInTheDocument();
+    const composerDock = screen.getByTestId("thread-composer-dock");
+    expect(composerDock).toHaveClass("bg-background");
+    expect(composerDock.parentElement?.parentElement).not.toHaveClass("bg-muted");
   });
 
   it("uses the summoned display name while the agent list is refreshing", async () => {
@@ -2259,7 +2486,7 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("com.mona.academic-researcher")).not.toBeInTheDocument();
   });
 
-  it("keeps only Mona's interactive companion above the empty landing composer", async () => {
+  it("shows Mona's avatar and wordmark above the empty landing composer", async () => {
     const client = makeClient();
 
     render(
@@ -2279,10 +2506,10 @@ describe("ThreadShell", () => {
     );
 
     const heroComposer = screen.getByTestId("mona-hero-composer");
-    const companion = within(heroComposer).getByRole("button", { name: "Mona 快捷提示词" });
-    expect(companion.querySelector("svg.mona-composer-peek")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByTestId("thread-composer-footer")).not.toBeInTheDocument();
+    const brand = within(heroComposer).getByRole("button", { name: "Mona 快捷提示词" });
+    expect(within(brand).getByRole("img", { name: "MONA" })).toBeInTheDocument();
     expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
-    expect(within(heroComposer).queryByText("MONA")).not.toBeInTheDocument();
     expect(within(heroComposer).queryByText("网页生成笔记")).not.toBeInTheDocument();
     expect(screen.queryByText("WORKSPACE")).not.toBeInTheDocument();
     expect(screen.queryByTestId("mona-brand-marker")).not.toBeInTheDocument();
@@ -2298,7 +2525,7 @@ describe("ThreadShell", () => {
     );
   });
 
-  it("keeps the interactive companion distinct from a custom Mona avatar", async () => {
+  it("uses the default Mona avatar in the landing brand row", async () => {
     const client = makeClient();
     const customAvatar = "data:image/png;base64,dXNlci1hdmF0YXI=";
     invalidateAgents();
@@ -2324,9 +2551,9 @@ describe("ThreadShell", () => {
       />,
     ));
 
-    const companion = await within(screen.getByTestId("mona-hero-composer"))
+    const brand = await within(screen.getByTestId("mona-hero-composer"))
       .findByRole("button", { name: "Mona 快捷提示词" });
-    expect(companion.querySelector("svg.mona-composer-peek")).toBeInTheDocument();
+    expect(within(brand).getByAltText("")).toHaveAttribute("src", MONA_BRAND_AVATAR);
     expect(document.querySelector(`img[src="${customAvatar}"]`)).not.toBeInTheDocument();
   });
 
@@ -2431,6 +2658,29 @@ describe("ThreadShell", () => {
     const input = screen.getByRole("textbox", { name: i18n.t("thread.composer.inputAria") });
     expect(input.className).toContain("min-h-[78px]");
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
+  });
+
+  it("updates the typed draft without rendering the unchanged message history", async () => {
+    const client = makeClient();
+    const renderHistory = vi.spyOn(threadMessages, "ThreadMessages");
+    try {
+      render(wrap(client, <ThreadShell session={session("typing")} onToggleSidebar={() => {}} />));
+      await waitFor(() => expect(screen.getByLabelText("Message input")).toBeEnabled());
+      act(() => client._emitChat("typing", { event: "message", chat_id: "typing", text: "Earlier answer" }));
+      await screen.findByText("Earlier answer");
+      expect(renderHistory).toHaveBeenCalled();
+      renderHistory.mockClear();
+
+      const input = screen.getByLabelText("Message input");
+      fireEvent.input(input, { target: { value: "h" } });
+      fireEvent.input(input, { target: { value: "he" } });
+      fireEvent.input(input, { target: { value: "hey" } });
+
+      expect(input).toHaveValue("hey");
+      expect(renderHistory).toHaveBeenCalledTimes(0);
+    } finally {
+      renderHistory.mockRestore();
+    }
   });
 
   it("keeps independent unsent text drafts while switching conversations and home", async () => {
@@ -2710,11 +2960,16 @@ describe("ThreadShell", () => {
   it("does not refetch thread history on turn_end", async () => {
     const client = makeClient();
     let historyCalls = 0;
+    let usageCalls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("websocket%3Achat-a/webui-thread")) {
+          if (new URL(url).searchParams.get("limit") === "1") {
+            usageCalls += 1;
+            return httpJson(transcriptFromSimpleMessages([{ role: "assistant", content: "canonical markdown answer" }]));
+          }
           historyCalls += 1;
           return httpJson(
             transcriptFromSimpleMessages(
@@ -2763,6 +3018,7 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByText("live half-parsed | markdown")).toBeInTheDocument());
     expect(screen.queryByText("canonical markdown answer")).not.toBeInTheDocument();
     expect(historyCalls).toBe(1);
+    expect(usageCalls).toBe(1);
   });
 
   it("does not refetch thread history for metadata-only session updates", async () => {

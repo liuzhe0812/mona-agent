@@ -16,6 +16,9 @@ import {
 import { ImageIcon, Loader2, Plus, Send, Square, X } from "lucide-react";
 
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
+import { ModelSelector } from "@/components/models/ModelSelector";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,6 +43,7 @@ interface AgentComposerProps {
   isStreaming?: boolean;
   creatingChat?: boolean;
   onStop?: () => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function AgentComposer({
@@ -52,7 +56,10 @@ export function AgentComposer({
   isStreaming = false,
   creatingChat = false,
   onStop,
+  onOpenSettings,
 }: AgentComposerProps) {
+  const context = useClientContextOrNull();
+  const model = useWorkModelSelection({ token: context?.token ?? "", modelName: context?.modelName ?? null, enabled: Boolean(context) });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -83,12 +90,17 @@ export function AgentComposer({
     && !encoding
     && !documentsUploading
     && !hasErrors
+    && (model.imageInputEnabled || readyImages.length === 0)
     && (value.trim().length > 0 || readyImages.length > 0 || documents.length > 0);
 
   const addFiles = useCallback(
     (files: File[]) => {
       if (files.length === 0 || disabled || documentsUploading) return;
       const imageFiles = files.filter(isInlineImage);
+      if (imageFiles.length > 0 && !model.imageInputEnabled) {
+        setInlineError("当前模型不支持图片，请先切换模型。");
+        return;
+      }
       const documentFiles = files.filter((file) => !isInlineImage(file));
       const { rejected } = enqueue(imageFiles);
       if (rejected.length > 0) {
@@ -98,7 +110,7 @@ export function AgentComposer({
       }
       if (documentFiles.length > 0) void addDocuments(documentFiles);
     },
-    [addDocuments, disabled, documentsUploading, enqueue],
+    [addDocuments, disabled, documentsUploading, enqueue, model.imageInputEnabled],
   );
 
   const addDroppedFiles = useCallback(
@@ -215,6 +227,9 @@ export function AgentComposer({
         </div>
       ) : null}
 
+      <ModelSelector options={model.modelOptions} label={model.modelLabel ?? "选择模型"} onSelect={model.selectModel}
+        disabled={disabled || creatingChat || isStreaming || !context} className="max-w-full rounded-md border-0 bg-transparent px-2"
+        onManage={onOpenSettings ? () => onOpenSettings("models_providers") : undefined} />
       <div className="flex items-end gap-1.5">
         <Textarea
           ref={textareaRef}

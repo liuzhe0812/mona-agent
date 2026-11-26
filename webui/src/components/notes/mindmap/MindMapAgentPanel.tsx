@@ -32,6 +32,7 @@ interface MindMapAgentPanelProps {
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onClearChat?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function MindMapAgentPanel({
@@ -42,6 +43,7 @@ export function MindMapAgentPanel({
   onApplyResult,
   onClearChat,
   onStreamingChange,
+  onOpenSettings,
 }: MindMapAgentPanelProps) {
   const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
@@ -407,6 +409,7 @@ export function MindMapAgentPanel({
 
       <div className="shrink-0 p-3">
         <AgentComposer
+          onOpenSettings={onOpenSettings}
           chatId={chatId}
           value={draft}
           onChange={setDraft}

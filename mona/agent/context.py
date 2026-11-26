@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from mona.agent.memory import MemoryStore
 from mona.agent.partners import MONA_AGENT_ID, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
+from mona.agent.tools.context import BROWSER_SIDEBAR_CONVERSATION_META
 from mona.session.goal_state import goal_state_runtime_lines
 from mona.session.task_plan import task_plan_runtime_lines
 from mona.utils.helpers import (
@@ -336,6 +337,14 @@ class ContextBuilder:
             browser_page_url = message_metadata.get("browser_page_url")
             browser_page_title = message_metadata.get("browser_page_title")
             browser_tab_id = message_metadata.get("browser_tab_id")
+            if (
+                channel == "websocket" and chat_id
+                and message_metadata.get(BROWSER_SIDEBAR_CONVERSATION_META) == chat_id
+            ):
+                extra.append(
+                    "Browser destination: the current conversation's right sidebar. "
+                    "Load the browser capability to open a visible webpage or perform live browser actions."
+                )
             office_session_id = message_metadata.get("office_session_id")
             office_document_type = message_metadata.get("office_document_type")
             office_display_name = message_metadata.get("office_display_name")

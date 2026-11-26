@@ -132,6 +132,26 @@ describe("StorageConversation", () => {
     storageConversationMock.invoke.mockResolvedValue(undefined);
   });
 
+  it("renders Work message bubbles and copies the displayed analysis", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    storageConversationMock.analyze.mockResolvedValue({
+      ...assessment("scan-1"),
+      summary: "### 占用分析\n\ndir-c 主要是 **构建产物**。\n\n- 可以重新生成",
+    });
+    renderConversation();
+
+    await ask("分析 **这个目录**");
+
+    expect(await screen.findByRole("heading", { name: "占用分析", level: 3 }, { timeout: 15000 })).toBeInTheDocument();
+    expect(screen.getByText("构建产物").tagName).toBe("STRONG");
+    expect(screen.getByRole("listitem")).toHaveTextContent("可以重新生成");
+    expect(screen.getByText("分析 **这个目录**")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^message-bubble-/)).toHaveLength(2);
+    fireEvent.click(within(screen.getByTestId("direct-message-actions")).getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("### 占用分析\n\nData 主要是 **构建产物**。\n\n- 可以重新生成"));
+  }, 20000);
+
   it("answers a chosen nested directory directly and keeps its context for follow-ups", async () => {
     const result = makeResult();
     const child = { id: "dir-nested", path: "C:\\Data\\Cache", sizeGb: 2, fileCount: 3, directSizeGb: 2 };
@@ -172,7 +192,8 @@ describe("StorageConversation", () => {
     expect(storageConversationMock.analyze).not.toHaveBeenCalled();
     const request = { goal: STORAGE_FILE_ANALYSIS_PROMPT, nonce: 1, fileId: "file-c", scanId: "scan-1" };
     rerender(<StorageConversation storage={storage} selection={null} analysisRequest={request} onFileAnalysisChange={onBusy} />);
-    await screen.findByText(/占用主要来自用户目录。.*这项操作只处理扫描确认的清理项。/s);
+    await screen.findByText("占用主要来自用户目录。");
+    expect(screen.getByText("这项操作只处理扫描确认的清理项。")).toBeInTheDocument();
     expect(storageConversationMock.analyze).toHaveBeenCalledTimes(1);
     expect(storageConversationMock.analyze.mock.calls[0][0]).toBe(STORAGE_FILE_ANALYSIS_PROMPT);
     expect(storageConversationMock.analyze.mock.calls[0][1].selectedFile).toMatchObject({ id: "file-c", name: "backup.zip" });
@@ -279,6 +300,7 @@ describe("StorageConversation", () => {
 
     await act(async () => finishClean({ freedGb: 1.2, cleanedIds: ["temp"], failures: [] }));
     expect(await screen.findByText(/清理完成，实际释放 1.2 GB/)).toBeInTheDocument();
+    expect(screen.getAllByTestId("direct-message-actions")).toHaveLength(1);
   });
 
   it("rejects cleanup confirmation if the scan changes while the dialog is open", async () => {

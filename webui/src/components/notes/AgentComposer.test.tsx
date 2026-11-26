@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentComposer } from "./AgentComposer";
 
 const attachmentMocks = vi.hoisted(() => ({ add: vi.fn(), remove: vi.fn(), clear: vi.fn() }));
+const model = vi.hoisted(() => ({ imageInputEnabled: true, modelOptions: [], modelLabel: "测试模型", selectModel: vi.fn() }));
+vi.mock("@/components/models/useWorkModelSelection", () => ({ useWorkModelSelection: () => model }));
 
 vi.mock("@/hooks/useAttachedDocuments", () => ({
   useAttachedDocuments: () => ({
@@ -17,6 +19,17 @@ vi.mock("@/hooks/useAttachedDocuments", () => ({
 }));
 
 describe("AgentComposer", () => {
+  it("rejects pasted images when the selected model has no image support", () => {
+    model.imageInputEnabled = false;
+    const onSend = vi.fn();
+    render(<AgentComposer value="解释图片" onChange={vi.fn()} onSend={onSend} />);
+    const file = new File(["image"], "screenshot.png", { type: "image/png" });
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => file }], files: [file] } });
+    expect(screen.getByText("当前模型不支持图片，请先切换模型。")).toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
+    model.imageInputEnabled = true;
+  });
+
   it("uses the terminal sidebar composer layout and keeps the native file input hidden", () => {
     const { container } = render(
       <AgentComposer value="" onChange={vi.fn()} onSend={vi.fn()} placeholder="输入问题..." />,

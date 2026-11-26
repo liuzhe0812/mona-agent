@@ -1,0 +1,9 @@
+{
+  "identifier": "main-unread-badge",
+  "description": "Allow the main webview to display AI conversation unread counts",
+  "webviews": ["main"],
+  "permissions": [
+    "core:window:allow-set-overlay-icon",
+    "core:window:allow-set-badge-label"
+  ]
+}

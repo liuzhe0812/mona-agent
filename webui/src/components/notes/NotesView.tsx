@@ -164,6 +164,7 @@ function activateWorkspaceNote(workspace: WorkspaceState, noteId: string | null)
 }
 
 interface NotesViewProps {
+  onOpenSettings?: (section?: string) => void;
   onOpenSubscribe?: () => void;
   initialNoteId?: string;
   createOnOpen?: boolean;
@@ -171,6 +172,7 @@ interface NotesViewProps {
 }
 
 export function NotesView({
+  onOpenSettings,
   initialNoteId,
   createOnOpen = false,
   onCreateOnOpenHandled,
@@ -2826,6 +2828,7 @@ export function NotesView({
             <>
               {activeNote?.type === "mindmap" ? (
                 <MindMapAgentPanel
+                  onOpenSettings={onOpenSettings}
                   note={activeNote}
                   collapsed={agentPanelCollapsed}
                   width={rightSidebarWidth}
@@ -2836,6 +2839,7 @@ export function NotesView({
                 />
               ) : activeNote?.type === "flowchart" ? (
                 <FlowchartAgentPanel
+                  onOpenSettings={onOpenSettings}
                   note={activeNote}
                   collapsed={agentPanelCollapsed}
                   width={rightSidebarWidth}
@@ -2856,6 +2860,7 @@ export function NotesView({
                 />
               ) : (
                 <NoteAgentPanel
+                  onOpenSettings={onOpenSettings}
                   note={activeNote}
                   transformations={transformations}
                   collapsed={agentPanelCollapsed}

@@ -721,6 +721,23 @@ class _ComputerFacadeTool(Tool):
             return f"Error: Computer action is unavailable: {action}"
         if arguments is not None and not isinstance(arguments, dict):
             return "Error: arguments must be an object"
+        is_action = self.name == "computer_act"
+        if is_action and _kwargs:
+            if action == "launch" and arguments is None and set(_kwargs) <= {"name", "urls"}:
+                arguments = dict(_kwargs)
+            else:
+                return _computer_error(
+                    "INVALID_COMPUTER_ARGUMENTS",
+                    "Put action parameters inside arguments; do not mix argument formats.",
+                )
+        if is_action and action == "launch" and not any(
+            (arguments or {}).get(key)
+            for key in ("bundle_id", "name", "aumid", "path", "launch_path", "urls")
+        ):
+            return _computer_error(
+                "INVALID_COMPUTER_ARGUMENTS",
+                "Launch requires an application name, identifier, path, or URL inside arguments.",
+            )
         from mona.computer_use.actions import validate_action
         from mona.computer_use.session import claim_computer_turn, get_computer_turn
 
@@ -734,7 +751,6 @@ class _ComputerFacadeTool(Tool):
         args = dict(arguments or {})
         if "session" in args or "screenshot_out_file" in args:
             return _computer_error("INVALID_COMPUTER_ARGUMENTS", "Session and screenshot paths are managed by Mona.")
-        is_action = self.name == "computer_act"
         source_observation = turn.observation
         uses_coordinates = any(key in args for key in ("x", "y", "from_x", "from_y", "to_x", "to_y"))
         if is_action:
@@ -1053,6 +1069,11 @@ class ComputerActTool(_ComputerFacadeTool):
     ) -> Any:
         if action != "run":
             return await super().execute(action=action, arguments=arguments, **kwargs)
+        if kwargs:
+            return _computer_error(
+                "INVALID_COMPUTER_ARGUMENTS",
+                "Put action parameters inside arguments; do not mix argument formats.",
+            )
         from mona.computer_use.executor import run_computer_goal
         from mona.computer_use.session import claim_computer_turn, get_computer_turn
 

@@ -34,6 +34,7 @@ from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
 from mona.agent.partners import MONA_AGENT_ID
+from mona.agent.tools.context import BROWSER_SIDEBAR_CONVERSATION_META
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.bus.user_questions import USER_QUESTIONS_META
@@ -73,6 +74,7 @@ from mona.webui.sidebar_state import (
 from mona.webui.thread_disk import delete_webui_thread
 from mona.webui.transcript import (
     append_transcript_object,
+    image_reply_branch_boundary,
     read_transcript_lines,
     replay_transcript_to_ui_messages,
     write_transcript_objects,
@@ -573,6 +575,7 @@ class WebSocketChannel(BaseChannel):
         runtime_model_name: Callable[[], str | None] | None = None,
         subagent_manager: Any | None = None,
         runtime_tool_registry: Any | None = None,
+        session_context_handler: Any | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -605,6 +608,8 @@ class WebSocketChannel(BaseChannel):
         )
         self._subagent_manager = subagent_manager
         self._runtime_tool_registry = runtime_tool_registry
+        self._session_context_handler = session_context_handler
+        self._session_compactions: dict[str, asyncio.Task] = {}
         if subagent_manager is not None:
             # Tool-proposed workflow drafts surface as workflow_updated pushes.
             subagent_manager.workflow_draft_observer = self._on_workflow_draft_proposed
@@ -629,6 +634,7 @@ class WebSocketChannel(BaseChannel):
         self._skill_setup_jobs: Any = None
         # Process-local WeChat QR login session (single-use, replaced on each start).
         self._weixin_login_session: Any = None
+        self._copilot_login_session: Any = None
         # HMAC secret for signing media URLs. Persisted to disk so signed
         # URLs survive gateway restarts (historical session media stays
         # accessible). Falls back to a fresh random secret on any read error.
@@ -1021,6 +1027,15 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/provider/models":
             return await self._handle_settings_provider_models(request)
 
+        if got == "/api/settings/providers/github-copilot/login/start":
+            return self._handle_copilot_login(request, "start")
+
+        if got == "/api/settings/providers/github-copilot/login/status":
+            return self._handle_copilot_login(request, "status")
+
+        if got == "/api/settings/providers/github-copilot/login/cancel":
+            return self._handle_copilot_login(request, "cancel")
+
         if got == "/api/settings/jev/update":
             return self._handle_settings_jev_update(request)
 
@@ -1079,6 +1094,10 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
         if m:
             return await asyncio.to_thread(self._handle_webui_thread_get, request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/context$", got)
+        if m:
+            return await self._handle_session_context(request, m.group(1))
 
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
@@ -1720,6 +1739,7 @@ class WebSocketChannel(BaseChannel):
                 provider_name=provider_name,
                 api_key=api_key,
                 api_base=api_base,
+                **({"wire_api": _query_first(query, "wire_api") or _query_first(query, "wireApi")} if "wire_api" in query or "wireApi" in query else {}),
             )
         except WebUISettingsError as e:
             return _http_json_response({"error": e.message, "models": []})
@@ -1779,6 +1799,22 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload))
+
+    def _handle_copilot_login(self, request: WsRequest, action: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._copilot_login_session is None:
+            from mona.webui.copilot_login import CopilotLoginSession
+
+            self._copilot_login_session = CopilotLoginSession()
+        session = self._copilot_login_session
+        if action == "start":
+            status = session.start()
+        elif action == "cancel":
+            status = session.cancel()
+        else:
+            status = session.get_status()
+        return _http_json_response(status)
 
     def _get_weixin_config(self) -> Any:
         """Load the current WeChat channel config (or defaults)."""
@@ -2116,12 +2152,66 @@ class WebSocketChannel(BaseChannel):
             return "检查模型来源失败，请在模型设置中检查程序连接后重试。"
         return str(exc)
 
+    async def _handle_session_context(self, request: WsRequest, key: str) -> Response:
+        from mona.session.manager import SessionContextError
+
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(key)
+        if not decoded or not self._is_websocket_channel_session_key(decoded):
+            return _http_error(404, "找不到此对话。")
+        if self._session_context_handler is None:
+            return _http_error(503, "当前连接暂不支持上下文操作。")
+        query = _parse_query(request.path)
+        action = _query_first(query, "action") or "read"
+        if action not in {"read", "compact", "compact-status", "window"}:
+            return _http_error(400, "无效的上下文操作。")
+        value = _query_first(query, "window")
+        window = None
+        if action == "window" and value != "auto":
+            try:
+                window = int(value or "")
+            except ValueError:
+                return _http_error(400, "请输入有效的窗口值。")
+        try:
+            if action.startswith("compact"):
+                task = self._session_compactions.get(decoded)
+                if task is None:
+                    if action == "compact-status":
+                        return _http_error(404, "找不到这次压缩操作。")
+                    task = asyncio.create_task(asyncio.wait_for(self._session_context_handler(decoded, "compact", None), timeout=240))
+                    self._session_compactions[decoded] = task
+                    task.add_done_callback(lambda done: self._retain_session_compaction(decoded, done))
+                if not task.done():
+                    payload = {"pending": True}
+                else:
+                    self._session_compactions.pop(decoded, None)
+                    payload = task.result()
+            else:
+                payload = await self._session_context_handler(decoded, action, window)
+        except SessionContextError as exc:
+            return _http_error(400, str(exc))
+        except Exception:
+            self.logger.exception("Session context operation failed")
+            return _http_error(500, "上下文操作失败，请重试。")
+        response = _http_json_response(payload)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def _retain_session_compaction(self, key: str, task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()
+        def expire() -> None:
+            if self._session_compactions.get(key) is task:
+                self._session_compactions.pop(key)
+        asyncio.get_running_loop().call_later(60, expire)
+
     def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
         from mona.webui.history_cache import (
             HistoryRevisionChangedError,
             build_cached_thread_response,
         )
-        from mona.webui.transcript import ensure_transcript_owner
+        from mona.webui.transcript import ensure_transcript_owner, restore_latest_context_usage
 
         started = time.perf_counter()
         if not self._check_api_token(request):
@@ -2143,6 +2233,10 @@ class WebSocketChannel(BaseChannel):
                 revision=_query_first(query, "revision") or None,
                 augment_user_media=self._augment_transcript_user_media,
             )
+            if data is not None and before is None and self._session_manager is not None:
+                restore_latest_context_usage(
+                    decoded_key, data.get("messages"), self._session_manager.read_session_file,
+                )
         except HistoryRevisionChangedError as error:
             return _http_error(409, str(error))
         except (ValueError, TypeError) as error:
@@ -3920,6 +4014,8 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(title, str) or not title.strip():
             title = definition.display_name if definition is not None else agent_id
         conversation = ConversationMetadata.direct(agent_id, title=title.strip())
+        conversation.partner_conversation = existing.partner_conversation
+        conversation.partner_conversation_copy = existing.partner_conversation_copy
         session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
         self._session_manager.save(session)
         await self._send_event(
@@ -3929,6 +4025,54 @@ class WebSocketChannel(BaseChannel):
             chat_id=chat_id,
             request_id=request_id,
             conversation=conversation.to_session_metadata(),
+        )
+
+    async def _handle_open_partner_conversation(
+        self, connection: Any, envelope: dict[str, Any],
+    ) -> None:
+        from mona.agent.partners import normalize_agent_id
+        from mona.agent.user_config import load_agent_user_config
+        from mona.session.manager import SessionDeletedError, SessionLoadError
+
+        event = "open_partner_conversation_result"
+        request_id = self._room_request_id(envelope)
+        raw_agent_id = envelope.get("agent_id")
+        try:
+            agent_id = normalize_agent_id(raw_agent_id) if isinstance(raw_agent_id, str) else ""
+        except ValueError:
+            agent_id = ""
+        definition = self._room_agent_registry().get(agent_id) if agent_id else None
+        if agent_id == MONA_AGENT_ID or definition is None or definition.visibility != "partner":
+            await self._send_event(connection, event, ok=False, code="unknown_partner", request_id=request_id)
+            return
+        if self._session_manager is None:
+            await self._send_event(connection, event, ok=False, code="unavailable", request_id=request_id)
+            return
+        try:
+            config = load_agent_user_config(agent_id)
+            if not config.enabled:
+                await self._send_event(connection, event, ok=False, code="agent_disabled", request_id=request_id)
+                return
+            # Resolve and save without yielding so concurrent clients share the same session.
+            archived_keys = set(read_webui_sidebar_state()["archived_keys"])
+            session = self._session_manager.open_partner_conversation(
+                agent_id,
+                config.display_name or definition.display_name,
+                create=envelope.get("create") is True,
+                archived_keys=archived_keys,
+                copy=envelope.get("copy") is True,
+            )
+        except (OSError, SessionDeletedError, SessionLoadError):
+            self.logger.exception("Could not open partner conversation for {}", agent_id)
+            await self._send_event(connection, event, ok=False, code="unavailable", request_id=request_id)
+            return
+        if session is None:
+            await self._send_event(connection, event, ok=True, request_id=request_id)
+            return
+        chat_id = session.key.split(":", 1)[1]
+        await self._send_event(
+            connection, event, ok=True, chat_id=chat_id, request_id=request_id,
+            conversation=session.conversation_metadata.to_session_metadata(),
         )
 
     async def _broadcast_agent_event(self, event: str, *, agent_id: str, **fields: Any) -> None:
@@ -6103,85 +6247,105 @@ class WebSocketChannel(BaseChannel):
         source_chat_id = envelope.get("source_chat_id")
         assistant_ordinal = envelope.get("assistant_ordinal")
         source_task_id = envelope.get("source_task_id")
+        image_reply = envelope.get("source_image_reply")
+        reply_fields = {"request_id": request_id} if request_id is not None else {}
         if not _is_valid_chat_id(source_chat_id):
-            await self._send_event(connection, "error", detail="invalid source_chat_id")
+            await self._send_event(connection, "error", detail="invalid source_chat_id", **reply_fields)
             return
-        if (
+        image_index = None
+        if image_reply is not None:
+            if not isinstance(image_reply, dict) or assistant_ordinal is not None:
+                await self._send_event(connection, "error", detail="invalid image branch source", **reply_fields)
+                return
+            image_index = image_reply.get("transcript_index")
+            if image_index is not None and (type(image_index) is not int or image_index < 0):
+                await self._send_event(connection, "error", detail="invalid image branch source", **reply_fields)
+                return
+        elif (
             not isinstance(assistant_ordinal, int)
             or isinstance(assistant_ordinal, bool)
             or assistant_ordinal <= 0
         ):
-            await self._send_event(connection, "error", detail="invalid assistant_ordinal")
+            await self._send_event(connection, "error", detail="invalid assistant_ordinal", **reply_fields)
             return
         if source_task_id is not None and (
             not isinstance(source_task_id, str)
             or not _API_KEY_RE.fullmatch(source_task_id.strip())
         ):
-            await self._send_event(connection, "error", detail="invalid source_task_id")
+            await self._send_event(connection, "error", detail="invalid source_task_id", **reply_fields)
             return
         if self._session_manager is None:
-            await self._send_event(connection, "error", detail="session manager unavailable")
+            await self._send_event(connection, "error", detail="session manager unavailable", **reply_fields)
             return
 
         source_key = f"websocket:{source_chat_id}"
         source_session = self._session_manager.get_or_create(source_key)
         transcript = read_transcript_lines(source_key)
         if not source_session.messages or not transcript:
-            await self._send_event(connection, "error", detail="source chat not found")
+            await self._send_event(connection, "error", detail="source chat not found", **reply_fields)
             return
 
-        replayed = replay_transcript_to_ui_messages(transcript)
-        assistants = [
-            message
-            for message in replayed
-            if message.get("role") == "assistant"
-            and message.get("kind") not in {"trace", "workflowRun", "discussion"}
-            and str(message.get("content") or "").strip()
-        ]
         normalized_task_id = source_task_id.strip() if isinstance(source_task_id, str) else None
-        if assistant_ordinal > len(assistants):
-            await self._send_event(connection, "error", detail="branch message not found")
-            return
-        selected = assistants[assistant_ordinal - 1]
-        selected_task_id = selected.get("taskId")
-        if normalized_task_id and selected_task_id and selected_task_id != normalized_task_id:
-            await self._send_event(connection, "error", detail="stale branch message")
-            return
-        transcript_end = selected.get("sourceTranscriptIndex")
-        if not isinstance(transcript_end, int) or not 0 <= transcript_end < len(transcript):
-            await self._send_event(connection, "error", detail="branch boundary unavailable")
-            return
-
-        selected_content = str(selected.get("content") or "")
-        candidates = [
-            (index, message)
-            for index, message in enumerate(source_session.messages)
-            if message.get("role") == "assistant"
-            and not message.get("tool_calls")
-            and not message.get("_command")
-            and isinstance(message.get("content"), str)
-            and message["content"].strip()
-        ]
-        session_end: int | None = None
-        if assistant_ordinal <= len(candidates):
-            candidate_index, candidate = candidates[assistant_ordinal - 1]
-            if candidate.get("content") == selected_content:
-                session_end = candidate_index
-        if session_end is None:
-            matching = [
-                index
-                for index, message in candidates
-                if message.get("content") == selected_content
-                and (
-                    normalized_task_id is None
-                    or message.get("task_id") == normalized_task_id
-                )
+        if image_reply is not None:
+            boundary = image_reply_branch_boundary(
+                transcript, source_session.messages, task_id=normalized_task_id, transcript_index=image_index,
+            )
+            if boundary is None:
+                await self._send_event(connection, "error", detail="image branch boundary unavailable", **reply_fields)
+                return
+            transcript_end, session_end = boundary
+        else:
+            replayed = replay_transcript_to_ui_messages(transcript)
+            assistants = [
+                message
+                for message in replayed
+                if message.get("role") == "assistant"
+                and message.get("kind") not in {"trace", "workflowRun", "discussion"}
+                and str(message.get("content") or "").strip()
             ]
-            if matching:
-                session_end = matching[-1]
-        if session_end is None:
-            await self._send_event(connection, "error", detail="session branch boundary unavailable")
-            return
+            if assistant_ordinal > len(assistants):
+                await self._send_event(connection, "error", detail="branch message not found", **reply_fields)
+                return
+            selected = assistants[assistant_ordinal - 1]
+            selected_task_id = selected.get("taskId")
+            if normalized_task_id and selected_task_id and selected_task_id != normalized_task_id:
+                await self._send_event(connection, "error", detail="stale branch message", **reply_fields)
+                return
+            transcript_end = selected.get("sourceTranscriptIndex")
+            if not isinstance(transcript_end, int) or not 0 <= transcript_end < len(transcript):
+                await self._send_event(connection, "error", detail="branch boundary unavailable", **reply_fields)
+                return
+
+            selected_content = str(selected.get("content") or "")
+            candidates = [
+                (index, message)
+                for index, message in enumerate(source_session.messages)
+                if message.get("role") == "assistant"
+                and not message.get("tool_calls")
+                and not message.get("_command")
+                and isinstance(message.get("content"), str)
+                and message["content"].strip()
+            ]
+            session_end = None
+            if assistant_ordinal <= len(candidates):
+                candidate_index, candidate = candidates[assistant_ordinal - 1]
+                if candidate.get("content") == selected_content:
+                    session_end = candidate_index
+            if session_end is None:
+                matching = [
+                    index
+                    for index, message in candidates
+                    if message.get("content") == selected_content
+                    and (
+                        normalized_task_id is None
+                        or message.get("task_id") == normalized_task_id
+                    )
+                ]
+                if matching:
+                    session_end = matching[-1]
+            if session_end is None:
+                await self._send_event(connection, "error", detail="session branch boundary unavailable", **reply_fields)
+                return
 
         from mona.session.manager import Session
 
@@ -6193,6 +6357,14 @@ class WebSocketChannel(BaseChannel):
             if key in source_session.metadata
         }
         metadata["webui"] = True
+        branch_conversation = metadata.get("conversation")
+        source_conversation = source_session.conversation_metadata
+        if (isinstance(branch_conversation, dict) and source_conversation.type == "direct"
+                and source_conversation.direct_agent_id != MONA_AGENT_ID):
+            branch_conversation.pop("partner_conversation", None)
+            branch_conversation.pop("partner_conversation_copy", None)
+            branch_conversation.pop("partnerConversationCopy", None)
+            branch_conversation["partnerConversation"] = False
         source_title = source_session.metadata.get("title")
         if isinstance(source_title, str) and source_title.strip():
             metadata["title"] = f"{source_title.strip()} · 分支"[:60]
@@ -6213,7 +6385,7 @@ class WebSocketChannel(BaseChannel):
             delete_webui_thread(new_key)
             self._session_manager.delete_session(new_key)
             self.logger.exception("Failed to branch chat {}", source_chat_id)
-            await self._send_event(connection, "error", detail="branch chat failed")
+            await self._send_event(connection, "error", detail="branch chat failed", **reply_fields)
             return
 
         self._attach(connection, new_chat_id)
@@ -6346,6 +6518,9 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "create_direct_conversation":
             await self._handle_create_direct_conversation_envelope(connection, envelope)
+            return
+        if t == "open_partner_conversation":
+            await self._handle_open_partner_conversation(connection, envelope)
             return
         if t == "agent_config_update":
             await self._handle_agent_config_update_envelope(connection, envelope)
@@ -6643,6 +6818,15 @@ class WebSocketChannel(BaseChannel):
             browser_tab_id = envelope.get("browser_tab_id")
             if isinstance(browser_tab_id, str) and browser_tab_id:
                 metadata["browser_tab_id"] = browser_tab_id
+            if (
+                envelope.get("browser_sidebar") is True
+                and envelope.get("webui") is True
+                and _is_localhost(connection)
+                and session is not None
+                and session.conversation_metadata.type == "direct"
+                and session_agent_kind is None
+            ):
+                metadata[BROWSER_SIDEBAR_CONVERSATION_META] = cid
             office_session_id = envelope.get("office_session_id")
             if isinstance(office_session_id, str):
                 office_session_id = office_session_id.strip()
@@ -6755,6 +6939,11 @@ class WebSocketChannel(BaseChannel):
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def stop(self) -> None:
+        for task in self._session_compactions.values():
+            task.cancel()
+        self._session_compactions.clear()
+        if self._copilot_login_session is not None:
+            self._copilot_login_session.cancel()
         if not self._running:
             return
         self._running = False
@@ -7014,6 +7203,7 @@ class WebSocketChannel(BaseChannel):
                 task_id=msg.metadata.get("task_id"),
                 **_work_turn_identity(msg.metadata),
                 token_usage=token_usage if isinstance(token_usage, dict) else None,
+                final_stream_id=msg.metadata.get("final_stream_id"),
             )
             get_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
             if callable(get_count) and get_count(f"websocket:{msg.chat_id}") > 0:
@@ -7066,6 +7256,8 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        if msg.metadata.get("_final_response") is True:
+            payload["final_response"] = True
         # Multi-agent phase 0: every assistant message names its author.
         # Senders without an explicit author_id default to the reserved Mona
         # agent; older clients simply ignore the unknown fields.
@@ -7238,6 +7430,7 @@ class WebSocketChannel(BaseChannel):
         turn_id: str | None = None,
         input_id: str | None = None,
         token_usage: dict[str, Any] | None = None,
+        final_stream_id: str | None = None,
     ) -> None:
         """Signal that the agent has fully finished processing the current turn."""
         conns = list(self._subs.get(chat_id, ()))
@@ -7256,6 +7449,8 @@ class WebSocketChannel(BaseChannel):
             body["input_id"] = input_id
         if token_usage:
             body["token_usage"] = token_usage
+        if final_stream_id:
+            body["final_stream_id"] = final_stream_id
         self._try_append_webui_transcript(chat_id, body)
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:

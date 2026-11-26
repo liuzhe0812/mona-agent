@@ -66,7 +66,7 @@ def test_loop_stop_notice_survives_an_earlier_message_tool_reply(tmp_path, stop_
 
     outbound = loop._assemble_outbound(
         InboundMessage(channel="cli", sender_id="user", chat_id="c", content="start"),
-        notice, [], stop_reason, False, None,
+        notice, [], stop_reason, False, False,
     )
 
     if stop_reason == "loop_detected":

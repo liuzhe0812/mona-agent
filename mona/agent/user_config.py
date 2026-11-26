@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, normalize_agent_id
+from mona.agent.partners import MONA_AGENT_ID, STOCK_RESEARCH_AGENT_ID, AgentDefinition, normalize_agent_id
 from mona.config.schema import AgentModelBinding, Base
 
 AGENT_USER_CONFIG_SCHEMA_VERSION = 4
@@ -100,13 +100,14 @@ AGENT_EXCLUSIVE_TOOLS: dict[str, frozenset[str]] = {
         "scientific_tool",
     }),
     "com.mona.musician": frozenset({"guitar_tab", "music_score"}),
+    STOCK_RESEARCH_AGENT_ID: frozenset({"stock_vibe_task"}),
 }
 TOOL_AGENT_OWNERS: dict[str, frozenset[str]] = {
     "development_workbench": frozenset({"mona"}),
     **{
         name: frozenset({agent_id})
-        for agent_id in ("com.mona.academic-researcher", "com.mona.musician")
-        for name in AGENT_EXCLUSIVE_TOOLS[agent_id]
+        for agent_id, tools in AGENT_EXCLUSIVE_TOOLS.items()
+        for name in tools
     },
 }
 
@@ -426,6 +427,13 @@ def save_agent_user_config(
     return saved
 
 
+def _exclusive_tools(definition: AgentDefinition) -> frozenset[str]:
+    tools = AGENT_EXCLUSIVE_TOOLS.get(definition.id, frozenset())
+    if definition.id == STOCK_RESEARCH_AGENT_ID:
+        return tools.intersection(definition.tool_allowlist)
+    return tools
+
+
 def resolve_effective_agent_config(
     definition: AgentDefinition,
     config: AgentUserConfig | None = None,
@@ -441,7 +449,7 @@ def resolve_effective_agent_config(
                 for name in definition.tool_allowlist
                 if tool_available_to_agent(name, definition.id)
             ),
-            *AGENT_EXCLUSIVE_TOOLS.get(definition.id, ()),
+            *_exclusive_tools(definition),
             *REQUIRED_AGENT_TOOLS,
         ])))
 
@@ -522,7 +530,7 @@ def configurable_agent_tools(definition: AgentDefinition) -> list[str] | None:
                 for name in definition.tool_allowlist
                 if tool_available_to_agent(name, definition.id)
             ),
-            *sorted(AGENT_EXCLUSIVE_TOOLS.get(definition.id, ())),
+            *sorted(_exclusive_tools(definition)),
         ])
     )))
 

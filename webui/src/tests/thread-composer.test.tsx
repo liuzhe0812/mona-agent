@@ -2,8 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { ContextUsageIndicator, ThreadComposer } from "@/components/thread/ThreadComposer";
 import i18n from "@/i18n";
+import { MONA_BRAND_AVATAR } from "@/lib/brand-assets";
 import { SEND_MESSAGE_SHORTCUT_EVENT } from "@/lib/tauri";
 import type { RoomAgentInfo, SlashCommand } from "@/lib/types";
 
@@ -54,14 +55,14 @@ function rect(init: Partial<DOMRect>): DOMRect {
   };
 }
 
-function getMonaPeek(trigger: HTMLElement): SVGSVGElement {
-  const peek = trigger.querySelector<SVGSVGElement>("svg.mona-composer-peek");
-  expect(peek).toBeInTheDocument();
-  expect(peek).toHaveAttribute("aria-hidden", "true");
-  return peek!;
-}
-
 describe("ThreadComposer", () => {
+  it("shows the attachment tooltip on the plus button", async () => {
+    render(<ThreadComposer onSend={vi.fn()} />);
+    const label = i18n.t("thread.composer.attachFile");
+    fireEvent.focus(screen.getByRole("button", { name: label }));
+    expect(await screen.findByRole("tooltip", { name: label })).toBeInTheDocument();
+  });
+
   it("renders a readonly hero model composer when provided", () => {
     render(
       <ThreadComposer
@@ -81,35 +82,13 @@ describe("ThreadComposer", () => {
     expect(input).toBeInTheDocument();
     expect(input.className).toContain("min-h-[78px]");
     expect(input.parentElement?.className).toContain("max-w-[58rem]");
-    expect(screen.getByTestId("hero-composer-prelude")).toHaveClass(
-      "left-1/2",
-      "max-w-[58rem]",
-      "-translate-x-1/2",
-      "pointer-events-none",
-    );
-    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
-    expect(trigger).toBeInTheDocument();
-    expect(trigger).toHaveClass("w-12", "min-h-11", "items-end");
-    expect(trigger.parentElement).toHaveClass("mr-10", "translate-y-0.5");
-    expect(getMonaPeek(trigger)).toBeInTheDocument();
+    const prelude = screen.getByTestId("hero-composer-prelude");
+    const trigger = within(prelude).getByRole("button", { name: "Mona 快捷提示词" });
+    expect(within(trigger).getByRole("img", { name: "MONA" })).toBeInTheDocument();
+    expect(within(trigger).getByAltText("")).toHaveAttribute("src", MONA_BRAND_AVATAR);
+    expect(prelude.nextElementSibling).toContainElement(input);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
-  });
-
-  it("keeps the vector peek still while typing or opening quick prompts", async () => {
-    render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
-    const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
-    const peek = getMonaPeek(trigger);
-    expect(peek).toHaveAttribute("data-paused", "false");
-    fireEvent.change(screen.getByRole("textbox", { name: "Message input" }), { target: { value: "继续这项工作" } });
-    expect(peek).toHaveAttribute("data-paused", "true");
-    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
-    fireEvent.change(screen.getByRole("textbox", { name: "Message input" }), { target: { value: "" } });
-    expect(peek).toHaveAttribute("data-paused", "false");
-    fireEvent.click(trigger);
-    await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
-    expect(peek).toHaveAttribute("data-paused", "true");
-    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
   });
 
   it("can hide global hero prompt chips for a dedicated agent", () => {
@@ -132,11 +111,9 @@ describe("ThreadComposer", () => {
     render(<ThreadComposer onSend={onSend} variant="hero" autoFocus={false} />);
 
     const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
-    const peek = getMonaPeek(trigger);
     fireEvent.click(trigger);
 
     const dialog = await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
-    expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
     expect(dialog.textContent).toBe("网页生成笔记邮件整理今日待办帮我想想关于…");
     expect(within(dialog).getAllByRole("button")).toHaveLength(3);
     expect(within(dialog).getByRole("button", { name: "网页生成笔记" })).toBeInTheDocument();
@@ -152,7 +129,6 @@ describe("ThreadComposer", () => {
       expect(input).toHaveFocus();
       expect(input.selectionStart).toBe(expectedValue.indexOf("」"));
       expect(input.selectionEnd).toBe(expectedValue.indexOf("」"));
-      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(onSend).not.toHaveBeenCalled();
@@ -162,7 +138,6 @@ describe("ThreadComposer", () => {
     render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
 
     const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
-    const peek = getMonaPeek(trigger);
     fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Mona 快捷提示词" });
     fireEvent.keyDown(dialog, { key: "Escape" });
@@ -170,7 +145,6 @@ describe("ThreadComposer", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(trigger).toHaveFocus();
-      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
     });
   });
 
@@ -178,14 +152,12 @@ describe("ThreadComposer", () => {
     render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
 
     const trigger = screen.getByRole("button", { name: "Mona 快捷提示词" });
-    const peek = getMonaPeek(trigger);
     fireEvent.click(trigger);
     expect(await screen.findByRole("dialog", { name: "Mona 快捷提示词" })).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(trigger.querySelector(".mona-composer-peek")).toBe(peek);
     });
   });
 
@@ -276,6 +248,31 @@ describe("ThreadComposer", () => {
       },
     );
     expect(onClearQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the follow-up draft when the quoted image cannot be attached", async () => {
+    const fetchImage = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+    const onSend = vi.fn();
+    function QuotedComposer() {
+      const [quote, setQuote] = useState<import("@/lib/types").MessageQuoteDraft | null>({
+        author: "Mona", content: "Image attachment", image: { url: "/api/media/expired.png" },
+      });
+      return <ThreadComposer onSend={onSend} quote={quote} onClearQuote={() => setQuote(null)} />;
+    }
+    try {
+      render(<QuotedComposer />);
+      const input = screen.getByLabelText("Message input");
+      fireEvent.change(input, { target: { value: "Describe it" } });
+      await screen.findByText(/Could not attach the quoted image/);
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(onSend).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Remove reply" }));
+      expect(input).toHaveValue("Describe it");
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      expect(onSend).toHaveBeenCalledWith("Describe it", undefined, undefined);
+    } finally {
+      fetchImage.mockRestore();
+    }
   });
 
   it("switches live to Ctrl+Enter send while plain Enter keeps editing", () => {
@@ -656,7 +653,7 @@ describe("ThreadComposer", () => {
     );
 
     const indicator = screen.getByRole("img", {
-      name: "6.0% · 59.6K / 1.0M 上下文已使用",
+      name: "6.0% · 59.6K / 1.0M context used",
     });
     const model = screen.getByText("hy4-preview");
     expect(indicator.className).toContain("h-7");
@@ -666,8 +663,18 @@ describe("ThreadComposer", () => {
 
     fireEvent.focus(indicator);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "6.0% · 59.6K / 1.0M 上下文已使用",
+      "6.0% · 59.6K / 1.0M context used",
     );
+  });
+
+  it("shows usage against the working budget when the model window is unknown", async () => {
+    render(<ContextUsageIndicator usage={{ used: 49_700, total: 1_000_000, isBudget: true }} showPercentage />);
+
+    const indicator = screen.getByRole("img", { name: "5.0% · 49.7K / 1.0M work budget used" });
+    expect(indicator).toHaveTextContent("5%");
+    expect(indicator.querySelector("circle:nth-of-type(2)")).toHaveAttribute("stroke-dasharray", "4.97 100");
+    fireEvent.focus(indicator);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/^5\.0% · 49\.7K \/ 1\.0M$/);
   });
 
   it("keeps context usage limited to user-facing values", async () => {
@@ -680,11 +687,11 @@ describe("ThreadComposer", () => {
     );
 
     const indicator = screen.getByRole("img", {
-      name: "6.0% · 60.0K / 1.0M 上下文已使用",
+      name: "6.0% · 60.0K / 1.0M context used",
     });
     fireEvent.focus(indicator);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "6.0% · 60.0K / 1.0M 上下文已使用",
+      "6.0% · 60.0K / 1.0M context used",
     );
     expect(screen.queryByText(/配置回退|模型目录|模型探测/)).not.toBeInTheDocument();
   });
@@ -698,7 +705,7 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    const indicator = screen.getByRole("img", { name: "17.0% · 170.0K / 1.0M 上下文已使用" });
+    const indicator = screen.getByRole("img", { name: "17.0% · 170.0K / 1.0M context used" });
     const send = screen.getByRole("button", { name: "Send message" });
     expect(indicator.parentElement).toBe(send.parentElement);
   });
@@ -712,7 +719,7 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    expect(screen.getByRole("img", { name: "已使用 59.6K，模型上下文窗口未知" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "59.6K used. Context window unknown." })).toBeInTheDocument();
   });
 
   it("keeps the known window when measured usage exceeds capacity", () => {
@@ -724,13 +731,13 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    expect(screen.getByRole("img", { name: "5947.0% · 3.9M / 65.5K 上下文已使用" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "5,947.0% · 3.9M / 65.5K context used" })).toBeInTheDocument();
   });
 
   it("shows an empty context indicator without usage data", () => {
     render(<ThreadComposer onSend={vi.fn()} modelLabel="hy4-preview" />);
 
-    expect(screen.getByRole("img", { name: "暂无上下文用量" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "No context usage yet" })).toBeInTheDocument();
   });
 
   it("shows the active model label and supplying source on the shared model selector", () => {
@@ -801,6 +808,27 @@ describe("ThreadComposer", () => {
     view.rerender(<ThreadComposer {...props} value="" />);
     expect(input).toHaveValue("");
     expect(input.style.height).toBe("auto");
+  });
+
+  it("measures a controlled draft only once per input event", () => {
+    function ControlledComposer() {
+      const [value, setValue] = useState("");
+      return <ThreadComposer value={value} onValueChange={setValue} onSend={vi.fn()} autoFocus={false} />;
+    }
+
+    render(<ControlledComposer />);
+    const input = screen.getByLabelText("Message input") as HTMLTextAreaElement;
+    const measureHeight = vi.fn(() => 128);
+    Object.defineProperty(input, "scrollHeight", { configurable: true, get: measureHeight });
+
+    fireEvent.input(input, { target: { value: "first" } });
+    expect(input).toHaveValue("first");
+    expect(input.style.height).toBe("128px");
+    expect(measureHeight).toHaveBeenCalledTimes(1);
+
+    fireEvent.input(input, { target: { value: "first and second" } });
+    expect(input).toHaveValue("first and second");
+    expect(measureHeight).toHaveBeenCalledTimes(2);
   });
 
   it("restores the compact height after deleting or submitting a long draft", async () => {

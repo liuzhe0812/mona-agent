@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Square } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -18,10 +19,12 @@ import { SqlResultCard } from "./SqlResultCard";
 
 interface DbAgentPanelProps {
   collapsed?: boolean;
+  onOpenSettings?: (section?: string) => void;
 }
 
 export function DbAgentPanel({
   collapsed: collapsedProp,
+  onOpenSettings,
 }: DbAgentPanelProps) {
   const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
@@ -301,6 +304,9 @@ export function DbAgentPanel({
               <Send className="h-3 w-3" />
             )}
           </Button>
+        </div>
+        <div className="flex justify-end pt-1">
+          <WorkModelSelector disabled={isStreaming || creatingChat} onOpenSettings={onOpenSettings} />
         </div>
       </div>
     </aside>

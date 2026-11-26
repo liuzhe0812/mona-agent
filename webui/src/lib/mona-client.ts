@@ -6,6 +6,7 @@ import type {
   AgentUserConfigPayload,
   AgentJobSummary,
   ApprovalRequestedPayload,
+  BranchReplySource,
   ConnectionStatus,
   DiscussionLaunchOptions,
   InboundEvent,
@@ -647,6 +648,23 @@ export class MonaClient {
     })).then(() => undefined);
   }
 
+  async openPartnerConversation(agentId: string, create: boolean, copy = false) {
+    const result = await this.sendRoomCommandRaw("open_partner_conversation_result", (requestId) => ({
+      type: "open_partner_conversation",
+      agent_id: agentId,
+      create,
+      ...(copy ? { copy } : {}),
+      request_id: requestId,
+    }));
+    if (!result.chat_id && !create && !copy) return null;
+    if (!result.chat_id || result.conversation?.partnerConversation !== true
+      || Boolean(result.conversation.partnerConversationCopy) !== copy
+      || result.conversation.directAgentId !== agentId.trim().toLowerCase()) {
+      throw new Error("Invalid partner conversation response");
+    }
+    return { chatId: result.chat_id, conversation: result.conversation };
+  }
+
   updateAgentConfig(
     agentId: string,
     config: Record<string, unknown>,
@@ -1059,7 +1077,7 @@ export class MonaClient {
   /** Create an independent chat containing the source history through one assistant turn. */
   branchChat(
     sourceChatId: string,
-    assistantOrdinal: number,
+    source: BranchReplySource,
     sourceTaskId?: string,
     timeoutMs: number = 5_000,
   ): Promise<string> {
@@ -1084,7 +1102,10 @@ export class MonaClient {
       this.queueSend({
         type: "branch_chat",
         source_chat_id: sourceChatId,
-        assistant_ordinal: assistantOrdinal,
+        ...(typeof source === "number"
+          ? { assistant_ordinal: source }
+          : { source_image_reply: source.transcriptIndex === undefined
+              ? {} : { transcript_index: source.transcriptIndex } }),
         ...(sourceTaskId ? { source_task_id: sourceTaskId } : {}),
         request_id: requestId,
       });
@@ -1133,6 +1154,7 @@ export class MonaClient {
       dbCurrentSql?: string;
       dbLastError?: string;
       browserTabId?: string;
+      browserSidebar?: boolean;
       browserPageUrl?: string;
       browserPageTitle?: string;
       officeSessionId?: string;
@@ -1225,6 +1247,7 @@ export class MonaClient {
       ...(options?.dbCurrentSql ? { db_current_sql: options.dbCurrentSql } : {}),
       ...(options?.dbLastError ? { db_last_error: options.dbLastError } : {}),
       ...(options?.browserTabId ? { browser_tab_id: options.browserTabId } : {}),
+      ...(options?.browserSidebar ? { browser_sidebar: true } : {}),
       ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
       ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
       ...(options?.officeSessionId ? { office_session_id: options.officeSessionId } : {}),
@@ -1389,6 +1412,7 @@ export class MonaClient {
       parsed.event === "work_turn_stop_result" ||
       parsed.event === "create_room_result" ||
       parsed.event === "create_direct_conversation_result" ||
+      parsed.event === "open_partner_conversation_result" ||
       parsed.event === "update_room_result" ||
       parsed.event === "room_state_result" ||
       parsed.event === "cancel_agent_job_result" ||

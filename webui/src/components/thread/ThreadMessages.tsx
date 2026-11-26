@@ -14,34 +14,41 @@ import {
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
 import { StepActivityTrace } from "@/components/workflow/StepActivityTrace";
+import { projectStaticWidgetImages, type WidgetDisplayMessage } from "@/lib/static-widget-images";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
-import type { AgentSummary, UIMessage } from "@/lib/types";
+import type { AgentSummary, QuoteMessageHandler, UIMessage } from "@/lib/types";
+
+export type ThreadPartner = Pick<AgentSummary, "id" | "displayName" | "avatarUrl">;
 
 interface ThreadMessagesProps {
   messages: UIMessage[];
   /** When true, agent turn still in flight — keeps activity cluster expanded. */
   isStreaming?: boolean;
+  runActivityLabel?: string;
   runStartedAt?: number | null;
   focusMessage?: { id: string; requestId: number } | null;
   /** Rooms use group-chat bubbles and show every assistant author, including Mona. */
   isGroupChat?: boolean;
+  partner?: ThreadPartner;
   hiddenMessageCount?: number;
   hasMoreHistory?: boolean;
   loadingEarlier?: boolean;
   earlierError?: string | null;
   onLoadEarlier?: () => void;
-  onQuote?: (message: UIMessage, author: string) => void;
+  onQuote?: QuoteMessageHandler;
   onBranch?: (message: UIMessage, author: string) => void;
   onWidgetPrompt?: (text: string) => void;
+  onJumpToReplyStart?: (target: HTMLElement) => void;
 }
 
 export type DisplayUnit =
   | { type: "cluster"; messages: UIMessage[] }
-  | { type: "single"; message: UIMessage };
+  | { type: "single"; message: WidgetDisplayMessage };
 
 const GROUP_TIME_DIVIDER_GAP_MS = 5 * 60 * 1000;
 
-export function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
+export function buildDisplayUnits(input: UIMessage[]): DisplayUnit[] {
+  const messages = projectStaticWidgetImages(input);
   const out: DisplayUnit[] = [];
   let i = 0;
   while (i < messages.length) {
@@ -127,7 +134,7 @@ function assistantHasInlineReasoning(message: UIMessage): boolean {
   return (
     message.role === "assistant"
     && message.kind !== "trace"
-    && message.content.trim().length > 0
+    && Boolean(message.content.trim() || message.media?.length)
     && (!!message.reasoning?.trim() || !!message.reasoningStreaming)
   );
 }
@@ -222,9 +229,11 @@ function groupMessageTime(timestamp: number): string {
 export function ThreadMessages({
   messages,
   isStreaming = false,
+  runActivityLabel,
   runStartedAt,
   focusMessage,
   isGroupChat = false,
+  partner,
   hiddenMessageCount = 0,
   hasMoreHistory = false,
   loadingEarlier = false,
@@ -233,12 +242,14 @@ export function ThreadMessages({
   onQuote,
   onBranch,
   onWidgetPrompt,
+  onJumpToReplyStart,
 }: ThreadMessagesProps) {
   const { t } = useTranslation();
   // Tolerates bare renders (no ClientProvider in unit tests): agent names
   // then fall back to the derived display name from the agent id.
   const clientCtx = useClientContextOrNull();
   const agentsById = useAgents(clientCtx?.token ?? null);
+  const isPartnerChat = !!partner;
   const units = useMemo(() => buildDisplayUnits(messages), [messages]);
   const { timingHeaders, processTimings, taskTimings, latestTiming } = useMemo(() => {
     type Timing = {
@@ -249,6 +260,7 @@ export function ThreadMessages({
       hasActivity: boolean;
       indices: number[];
       finalAnswerIndex: number;
+      hasConfirmedFinalAnswer: boolean;
       hasProcess: boolean;
     };
     const headers = new Map<number, Timing>();
@@ -267,20 +279,24 @@ export function ThreadMessages({
       if (unit.type !== "cluster" && unit.message.role !== "assistant") continue;
       const rows = unit.type === "cluster" ? unit.messages : [unit.message];
       if (!current) {
-        current = { key: userMessageId ?? unitKey(unit, index), startedAt: rows[0].createdAt, isTurnStreaming: false, hasActivity: false, indices: [], finalAnswerIndex: -1, hasProcess: false };
+        current = { key: userMessageId ?? unitKey(unit, index), startedAt: rows[0].createdAt, isTurnStreaming: false, hasActivity: false, indices: [], finalAnswerIndex: -1, hasConfirmedFinalAnswer: false, hasProcess: false };
         headers.set(index, current);
       }
       current.indices.push(index);
       tasks.set(index, current);
       if (unit.type === "cluster") {
         current.hasActivity = true;
-        current.finalAnswerIndex = -1;
+        if (!current.hasConfirmedFinalAnswer) current.finalAnswerIndex = -1;
       }
       else if (
         unit.message.kind !== "widget"
         && (!unit.message.messageType || unit.message.messageType === "message")
         && (unit.message.content.trim() || unit.message.deliveredFiles?.length || unit.message.media?.length)
-      ) current.finalAnswerIndex = index;
+        && (unit.message.isFinalResponse || !current.hasConfirmedFinalAnswer)
+      ) {
+        current.finalAnswerIndex = index;
+        current.hasConfirmedFinalAnswer = !!unit.message.isFinalResponse;
+      }
       for (const row of rows) {
         if (row.latencyMs != null) current.latencyMs = row.latencyMs;
       }
@@ -330,14 +346,16 @@ export function ThreadMessages({
   }, [focusMessage?.id, focusMessage?.requestId, focusedProcessKey]);
   const showTimeDivider = useMemo(() => {
     let previousTime: number | null = null;
-    return units.map((unit) => {
+    return units.map((unit, index) => {
+      const process = processTimings.get(index);
+      if (isPartnerChat && process && !expandedProcesses.has(process.key)) return false;
       const currentTime = visibleMessageTime(unit);
       if (currentTime === null) return false;
       const show = previousTime === null || currentTime - previousTime >= GROUP_TIME_DIVIDER_GAP_MS;
       previousTime = currentTime;
       return show;
     });
-  }, [units]);
+  }, [units, isPartnerChat, processTimings, expandedProcesses]);
   const liveActivityClusterIndex = useMemo(
     () => isStreaming ? currentActivityClusterIndex(units) : -1,
     [isStreaming, units],
@@ -364,10 +382,9 @@ export function ThreadMessages({
       ) : null}
       {units.map((unit, index) => {
         const prev = units[index - 1];
-        const marginTop =
-          index > 0
-            ? marginAfterPrevUnit(prev, unit)
-            : "";
+        const marginTop = !prev ? "" : isPartnerChat && prev.type === "cluster"
+          && unit.type === "single" && unit.message.role === "assistant"
+          ? "mt-3" : marginAfterPrevUnit(prev, unit);
         const next = units[index + 1];
         const timing = timingHeaders.get(index);
         const process = processTimings.get(index);
@@ -389,14 +406,15 @@ export function ThreadMessages({
         const groupAuthorName = groupAuthorId
           ? groupAuthor?.displayName ?? resolveAgentDisplayName(agentsById, groupAuthorId)
           : "";
+        const timestamp = (isGroupChat || isPartnerChat) && showTimeDivider[index] && unit.type === "single"
+          ? groupMessageTime(unit.message.createdAt) : null;
+        const partnerIncoming = partner && (unit.type === "cluster" || unit.message.role === "assistant");
+        const showPartnerAvatar = partnerIncoming && (task?.indices[0] === index || !!timestamp);
 
-        return (
-          <div
-            key={unitKey(unit, index)}
-            id={unit.type === "single" ? `thread-message-${unit.message.id}` : undefined}
-            className={marginTop}
-          >
+        const content = (
+          <>
             {timing && <ActivityTimingHeader
+              inline={isPartnerChat}
               startedAt={timing.startedAt}
               latencyMs={timing.latencyMs}
               isTurnStreaming={timing.isTurnStreaming}
@@ -410,13 +428,13 @@ export function ThreadMessages({
               }) : undefined}
             />}
             {!processHidden && <>
-            {isGroupChat && showTimeDivider[index] && unit.type === "single" ? (
+            {isGroupChat && timestamp ? (
               <div
                 className="my-2 flex items-center gap-3 px-2 text-[10.5px] text-muted-foreground/55"
-                aria-label={groupMessageTime(unit.message.createdAt)}
+                aria-label={timestamp}
               >
                 <span className="h-px flex-1 bg-border/35" aria-hidden />
-                <span className="shrink-0">{groupMessageTime(unit.message.createdAt)}</span>
+                <span className="shrink-0">{timestamp}</span>
                 <span className="h-px flex-1 bg-border/35" aria-hidden />
               </div>
             ) : null}
@@ -424,6 +442,7 @@ export function ThreadMessages({
               <AgentActivityCluster
                 messages={unit.messages}
                 isTurnStreaming={index === liveActivityClusterIndex}
+                runActivityLabel={runActivityLabel}
                 hasBodyBelow={hasBodyBelow}
                 showTiming={false}
               />
@@ -444,6 +463,7 @@ export function ThreadMessages({
                   />
                   <MessageBubble
                     message={unit.message}
+                    widgetImages={unit.message.widgetImages}
                     isGroupChat={isGroupChat}
                     authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
                     onQuote={onQuote}
@@ -457,19 +477,23 @@ export function ThreadMessages({
               </div>
             ) : (
               <>
-                <AgentAuthorHeader
+                {!partner && <AgentAuthorHeader
                   message={unit.message}
                   agentsById={agentsById}
                   isGroupChat={isGroupChat}
-                />
+                />}
                 <MessageBubble
                   message={unit.message}
+                  widgetImages={unit.message.widgetImages}
                   isGroupChat={isGroupChat}
+                  partnerChat={isPartnerChat}
                   showTurnActions={!task?.isTurnStreaming && task?.finalAnswerIndex === index}
-                  authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
+                  authorName={partner && unit.message.role === "assistant"
+                    ? partner.displayName : quoteAuthorName(unit.message, agentsById, isGroupChat)}
                   onQuote={onQuote}
-                  onBranch={onBranch}
+                  onBranch={isPartnerChat ? undefined : onBranch}
                   onWidgetPrompt={onWidgetPrompt}
+                  onJumpToReplyStart={onJumpToReplyStart}
                 />
                 {showToolEvents && unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                   <StepActivityTrace events={unit.message.toolEvents} />
@@ -477,6 +501,32 @@ export function ThreadMessages({
               </>
             )}
             </>}
+          </>
+        );
+
+        return (
+          <div
+            key={unitKey(unit, index)}
+            id={unit.type === "single" ? `thread-message-${unit.message.id}` : undefined}
+            className={marginTop}
+          >
+            {partner && timestamp && unit.type === "single" ? (
+              <time dateTime={new Date(unit.message.createdAt).toISOString()} className="mb-3 block text-center text-micro tabular-nums text-muted-foreground">
+                {timestamp}
+              </time>
+            ) : null}
+            {partner && partnerIncoming ? (
+              <div className="flex min-w-0 items-start gap-2">
+                {showPartnerAvatar ? (
+                  <>
+                    <AgentAvatar agentId={partner.id} displayName={partner.displayName}
+                      avatarUrl={partner.avatarUrl} className="h-7 w-7" />
+                    <span className="sr-only">{partner.displayName}</span>
+                  </>
+                ) : <span className="w-7 shrink-0" aria-hidden />}
+                <div className="min-w-0 flex-1">{content}</div>
+              </div>
+            ) : content}
           </div>
         );
       })}

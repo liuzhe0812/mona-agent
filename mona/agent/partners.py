@@ -29,6 +29,7 @@ from mona.config.schema import Base
 
 # Reserved ID of the built-in main assistant. Package agents must not use it.
 MONA_AGENT_ID = "mona"
+STOCK_RESEARCH_AGENT_ID = "com.mona.a-share-analyst"
 RESERVED_AGENT_IDS = frozenset({MONA_AGENT_ID})
 
 # Session.metadata key holding the serialized ConversationMetadata.
@@ -175,6 +176,10 @@ class ConversationMetadata(Base):
     active_workflow_id: str | None = None
     active_workflow_revision: int | None = None
     archived: bool = False
+    # None lets an old direct chat be adopted. Explicit task branches use False.
+    partner_conversation: bool | None = None
+    # Additional conversations share the partner identity, but are not its fixed chat.
+    partner_conversation_copy: bool = False
     # Product visibility only (stock-module design §4.4): a hidden room is an
     # invisible execution container — excluded from the session list and
     # rejecting rename/delete from UI surfaces, while remaining fully
@@ -240,7 +245,12 @@ class ConversationMetadata(Base):
 
     def to_session_metadata(self) -> dict[str, Any]:
         """Serialize for storage under ``Session.metadata["conversation"]``."""
-        return self.model_dump(by_alias=True)
+        exclude = set()
+        if self.partner_conversation is None:
+            exclude.add("partner_conversation")
+        if not self.partner_conversation_copy:
+            exclude.add("partner_conversation_copy")
+        return self.model_dump(by_alias=True, exclude=exclude)
 
 
 def conversation_from_session_metadata(

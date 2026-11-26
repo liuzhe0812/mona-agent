@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -17,8 +18,15 @@ from packaging.version import InvalidVersion, Version
 from pydantic import Field
 
 from mona.agent.expert_catalog import ExpertCatalogClient, ExpertCatalogSnapshot
-from mona.agent.expert_installer import ExpertInstaller, ExpertInstallProgress
-from mona.agent.package_store import AgentPackageStore, ExpertCatalogEntry
+from mona.agent.expert_installer import (
+    ExpertCatalogVersionUnavailable,
+    ExpertInstaller,
+    ExpertInstallProgress,
+    is_retired_expert_package,
+)
+from mona.agent.jobs import is_retired_stock_agent
+from mona.agent.package_store import ExpertCatalogEntry
+from mona.agent.partners import STOCK_RESEARCH_AGENT_ID, normalize_agent_id
 from mona.config.schema import Base
 
 
@@ -37,6 +45,7 @@ class ExpertInstallJob(Base):
     total_bytes: int = Field(default=0, ge=0)
     detail: str = ""
     error: str | None = None
+    error_code: Literal["catalog_version_unavailable"] | None = None
     cached_download: bool | None = None
     installed_version: str | None = None
     created_at: int
@@ -51,14 +60,12 @@ class ExpertInstallJobManager:
         self,
         *,
         catalog_client: ExpertCatalogClient,
-        package_store: AgentPackageStore,
         state_path: Path,
         installer: ExpertInstaller | None,
-        installed_definition: Callable[[str], object | None] | None = None,
+        installed_definition: Callable[[str], object | None],
         unavailable_reason: str = "官方伙伴服务暂不可用",
     ) -> None:
         self.catalog_client = catalog_client
-        self.package_store = package_store
         self.state_path = state_path
         self.installer = installer
         self.installed_definition = installed_definition
@@ -81,38 +88,39 @@ class ExpertInstallJobManager:
                 self._start_catalog_refresh()
         else:
             self._start_catalog_refresh()
-        latest: dict[str, ExpertCatalogEntry] = {}
+        versions: dict[str, list[ExpertCatalogEntry]] = defaultdict(list)
         for entry in snapshot.catalog.experts:
-            current = latest.get(entry.id)
-            if current is None or self._newer(entry.version, current.version):
-                latest[entry.id] = entry
+            if not is_retired_expert_package(entry):
+                versions[entry.id].append(entry)
         experts: list[dict[str, object]] = []
-        for entry in sorted(latest.values(), key=lambda item: item.display_name.casefold()):
-            active = self.package_store.active(entry.id)
-            definition = self.installed_definition(entry.id) if self.installed_definition else None
-            installed_version = (
-                active[0].version if active else getattr(definition, "package_version", None)
+        for agent_id, entries in versions.items():
+            definition = self.installed_definition(agent_id)
+            installed_version = getattr(definition, "package_version", None) or None
+            compatible_entry = self.installer.select_compatible_entry(entries) if self.installer else None
+            if compatible_entry is None and definition is None:
+                continue
+            update_available = bool(
+                installed_version and compatible_entry and self._newer(compatible_entry.version, installed_version)
             )
-            compatibility_error = (
-                self.installer.compatibility_error(entry) if self.installer else None
+            entry = compatible_entry or next(
+                (item for item in entries if item.version == installed_version), entries[0]
             )
+            displayed_version = entry.version if update_available or not installed_version else installed_version
             experts.append(
                 {
                     "id": entry.id,
                     "displayName": entry.display_name,
                     "description": entry.description,
-                    "version": entry.version,
+                    "version": displayed_version,
                     "minMonaVersion": entry.min_mona_version,
                     "downloadBytes": entry.size,
                     "runtimePacks": entry.runtime_packs,
                     "requiredTools": entry.required_tools,
-                    "installed": installed_version is not None,
+                    "installed": definition is not None,
                     "installedVersion": installed_version,
-                    "updateAvailable": bool(
-                        installed_version and self._newer(entry.version, str(installed_version))
-                    ),
-                    "compatible": self.installer is not None and compatibility_error is None,
-                    "unavailableReason": compatibility_error,
+                    "updateAvailable": update_available,
+                    "compatible": compatible_entry is not None,
+                    "unavailableReason": None,
                 }
             )
         return {
@@ -122,7 +130,7 @@ class ExpertInstallJobManager:
             "stale": snapshot.stale,
             "installEnabled": self.installer is not None,
             "installUnavailableReason": None if self.installer else self.unavailable_reason,
-            "experts": experts,
+            "experts": sorted(experts, key=lambda item: str(item["displayName"]).casefold()),
         }
 
     def _start_catalog_refresh(self) -> None:
@@ -149,10 +157,12 @@ class ExpertInstallJobManager:
         expert_id = expert_id.strip()
         if not expert_id:
             raise ValueError("partner id is required")
+        expert_id = normalize_agent_id(expert_id)
+        if is_retired_stock_agent(expert_id) and expert_id != STOCK_RESEARCH_AGENT_ID:
+            raise ValueError("旧版股票伙伴已下架，请使用股票工作台。")
         for job in self._jobs.values():
             if (
                 job.expert_id == expert_id
-                and job.version == version
                 and job.state in {"queued", "running"}
             ):
                 return job.model_copy(deep=True)
@@ -230,6 +240,11 @@ class ExpertInstallJobManager:
             job.state = "failed"
             job.stage = "failed"
             job.error = str(exc)[:2_000]
+            if isinstance(exc, ExpertCatalogVersionUnavailable):
+                job.error_code = "catalog_version_unavailable"
+                cached = self.catalog_client.load_cached_snapshot()
+                if cached is not None:
+                    self._catalog_snapshot = cached
         finally:
             job.updated_at = _now_ms()
             job.finished_at = job.updated_at

@@ -16,9 +16,10 @@ const AI_PANEL_MAX_WIDTH = 480;
 
 interface MdFileViewProps {
   filePath: string;
+  onOpenSettings?: (section?: string) => void;
 }
 
-export function MdFileView({ filePath }: MdFileViewProps) {
+export function MdFileView({ filePath, onOpenSettings }: MdFileViewProps) {
   const tabs = useMdReaderStore((s) => s.tabs);
   const openFile = useMdReaderStore((s) => s.openFile);
   const updateTabContent = useMdReaderStore((s) => s.updateTabContent);
@@ -191,6 +192,7 @@ export function MdFileView({ filePath }: MdFileViewProps) {
           width={aiPanelWidth}
           onClose={() => setAiPanelOpen(false)}
           onStreamingChange={setAiStreaming}
+          onOpenSettings={onOpenSettings}
           onFileEdited={() => {
             if (tab) {
               reloadTab(tab.id);

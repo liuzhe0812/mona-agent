@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Shield, FileText } from "lucide-react";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { useWorkModelSelection } from "@/components/models/useWorkModelSelection";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -11,13 +12,15 @@ import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { MessageQuote, UIMessage } from "@/lib/types";
+import { draftMessageQuote } from "@/lib/message-quote";
+import type { MessageQuoteDraft, QuoteMessageHandler } from "@/lib/types";
 import type { SessionType } from "../types/terminal";
 
 interface Props {
   sessionId: string | null;
   sessionTypeOverride?: SessionType;
   onStreamingChange?: (streaming: boolean) => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 interface ReportInfo {
@@ -26,12 +29,12 @@ interface ReportInfo {
   fileName: string;
 }
 
-export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Props) {
+export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange, onOpenSettings }: Props) {
   const [creatingChat, setCreatingChat] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [reports, setReports] = useState<ReportInfo[]>([]);
-  const [quote, setQuote] = useState<MessageQuote | null>(null);
-  const { client } = useClient();
+  const [quote, setQuote] = useState<MessageQuoteDraft | null>(null);
+  const { client, token, modelName } = useClient();
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
@@ -39,6 +42,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   const chatId = useTerminalStore((s) =>
     s.aiChatIds[terminalAiChatKey(sessionId)] ?? null,
   );
+  const workModel = useWorkModelSelection({ token, modelName, enabled: Boolean(chatId) });
   const storedSessionType = useTerminalStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.type ?? null,
   );
@@ -219,14 +223,9 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
     [inject, pendingQueue],
   );
 
-  const handleQuote = useCallback((message: UIMessage, author: string) => {
-    const content = (
-      message.role === "user"
-        ? message.displayContent ?? message.content
-        : message.content
-    ).trim();
-    if (!content) return;
-    setQuote({ author, content });
+  const handleQuote = useCallback<QuoteMessageHandler>((message, author, image) => {
+    const draft = draftMessageQuote(message, author, image);
+    if (draft) setQuote(draft);
   }, []);
 
   const execModeSelector = canExec ? (
@@ -285,6 +284,12 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
           onStop={stop}
           placeholder="输入问题，AI 将基于终端上下文回答..."
           disabled={!chatId && creatingChat}
+          modelLabel={workModel.modelLabel ?? "选择模型"}
+          modelOptions={workModel.modelOptions}
+          onModelSelect={workModel.selectModel}
+          modelDisabled={isStreaming}
+          onOpenSettings={onOpenSettings}
+          imageInputEnabled={workModel.imageInputEnabled}
           leadingActions={execModeSelector}
           quote={quote}
           onClearQuote={() => setQuote(null)}

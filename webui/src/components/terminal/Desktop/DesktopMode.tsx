@@ -268,9 +268,10 @@ function MenuBar({
 interface DesktopModeProps {
   sessionId: string;
   aiEnabled: boolean;
+  onOpenSettings?: (section?: string) => void;
 }
 
-export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
+export function DesktopMode({ sessionId, aiEnabled, onOpenSettings }: DesktopModeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
@@ -449,7 +450,7 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
       case "taskManager":
         return <TaskManagerApp sessionId={effectiveSessionId} />;
       case "terminal":
-        return <TerminalApp sessionId={effectiveSessionId} aiEnabled={aiEnabled} />;
+        return <TerminalApp sessionId={effectiveSessionId} aiEnabled={aiEnabled} onOpenSettings={onOpenSettings} />;
       case "textEditor":
         return (
           <TextEditorApp

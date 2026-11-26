@@ -6,6 +6,13 @@ import type { PendingMessage } from "@/hooks/usePendingQueue";
 afterEach(cleanup);
 
 describe("PendingQueueStrip", () => {
+  it("shows the user's label for a queued request with extra execution context", () => {
+    const message: PendingMessage = { id: "pending-office", content: "第 8 页表格的内部选区和修改要求", options: { displayContent: "润色" } };
+    render(<PendingQueueStrip messages={[message]} onRemove={vi.fn()} onEdit={vi.fn()} isFull={false} />);
+    expect(screen.getByText("润色")).toBeInTheDocument();
+    expect(screen.queryByText(message.content)).not.toBeInTheDocument();
+  });
+
   it("does not show append when no append callback is provided", () => {
     const message: PendingMessage = { id: "pending-a", content: "Next task" };
     render(<PendingQueueStrip messages={[message]} onRemove={vi.fn()} onEdit={vi.fn()} isFull={false} />);

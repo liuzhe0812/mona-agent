@@ -23,8 +23,8 @@ const AI_PANEL_DEFAULT_WIDTH = 320;
 const AI_PANEL_MIN_WIDTH = 240;
 const AI_PANEL_MAX_WIDTH = 600;
 
-export function TerminalView({ onOpenSubscribe, embedded = false, visible = true }: {
-  onOpenSubscribe?: () => void; embedded?: boolean; visible?: boolean;
+export function TerminalView({ onOpenSubscribe, onOpenSettings, embedded = false, visible = true }: {
+  onOpenSubscribe?: () => void; onOpenSettings?: (section?: string) => void; embedded?: boolean; visible?: boolean;
 }) {
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
@@ -141,6 +141,7 @@ export function TerminalView({ onOpenSubscribe, embedded = false, visible = true
                       <DesktopMode
                         sessionId={session.id}
                         aiEnabled
+                        onOpenSettings={onOpenSettings}
                       />
                     </div>
                   );
@@ -235,7 +236,7 @@ export function TerminalView({ onOpenSubscribe, embedded = false, visible = true
                   className="h-full w-full"
                   style={{ display: session.id === activeSessionId ? "flex" : "none" }}
                 >
-                  <AIPanel sessionId={session.id} />
+                  <AIPanel sessionId={session.id} onOpenSettings={onOpenSettings} />
                 </div>
               ))}
           </div>

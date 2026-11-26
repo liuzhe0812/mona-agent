@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import re
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -169,6 +170,7 @@ class AgentRunSpec:
     session_key: str | None = None
     context_window_tokens: int | None = None
     context_window_verified: bool = True
+    context_window_limited: bool = False
     context_provider: str | None = None
     context_block_limit: int | None = None
     auto_compact_token_limit: int | None = None
@@ -441,9 +443,17 @@ class AgentRunner:
                 return result
             finally:
                 await provider.aclose()
-        return await self._run(spec)
+        from mona.providers.preset_transport import model_session_key
+
+        session_token = model_session_key.set(spec.session_key)
+        try:
+            return await self._run(spec)
+        finally:
+            model_session_key.reset(session_token)
 
     async def _run(self, spec: AgentRunSpec) -> AgentRunResult:
+        from mona.providers.native_work_provider import NativeWorkProvider
+
         hook = spec.hook or AgentHook()
         messages = list(spec.initial_messages)
         final_content: str | None = None
@@ -472,6 +482,7 @@ class AgentRunner:
         context_recovery_used = False
         force_context_compaction = False
         snipped_prefix_count = 0
+        history_recovery_start = 0
         # Indices belong to the append-only execution log, before any snipping.
         tool_image_offloads: dict[int, list[dict]] = {}
         rejected_context: list[dict] | None = None
@@ -492,7 +503,7 @@ class AgentRunner:
             tool_image_offloads.update(replacements)
             return bool(replacements)
 
-        async def image_context() -> list[dict]:
+        async def project_context() -> list[dict]:
             projected = project_tool_images(messages, tool_image_offloads)
             if spec.model_context_callback is None and spec.context_window_tokens:
                 threshold = min(
@@ -501,6 +512,11 @@ class AgentRunner:
                 )
                 if raw_usage.get("context_tokens", 0) >= threshold and await offload_images(projected):
                     projected = project_tool_images(messages, tool_image_offloads)
+            if history_recovery_start:
+                return [
+                    message for index, message in enumerate(projected)
+                    if index >= history_recovery_start or message.get("role") == "system"
+                ]
             return projected
 
         def reset_repeat_guard() -> None:
@@ -536,7 +552,7 @@ class AgentRunner:
                 # may repair or compact historical messages for the model, but
                 # those synthetic edits must not shift the append boundary used
                 # later when the caller saves only the new turn.
-                messages_for_model = prepared if prepared is not None else await image_context()
+                messages_for_model = prepared if prepared is not None else await project_context()
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 if prepared is None:
@@ -548,12 +564,13 @@ class AgentRunner:
                         messages_for_model = await asyncio.to_thread(self._apply_tool_result_budget, spec, messages_for_model)
                     else:
                         messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                    before_snip = messages_for_model
-                    messages_for_model = self._snip_history(spec, before_snip)
-                    snipped_prefix_count += self._snipped_prefix_delta(
-                        before_snip,
-                        messages_for_model,
-                    )
+                    if not history_recovery_start:
+                        before_snip = messages_for_model
+                        messages_for_model = self._snip_history(spec, before_snip)
+                        snipped_prefix_count += self._snipped_prefix_delta(
+                            before_snip,
+                            messages_for_model,
+                        )
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
@@ -571,7 +588,13 @@ class AgentRunner:
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
                     messages_for_model = fallback_messages
-            if messages_for_model == rejected_context or not self._fits_context_budget(spec, messages_for_model):
+            unchanged_context = messages_for_model == rejected_context
+            if history_recovery_start and rejected_context is not None:
+                unchanged_context = len(json.dumps(messages_for_model, default=str)) >= len(
+                    json.dumps(rejected_context, default=str)
+                )
+                rejected_context = None
+            if unchanged_context or not self._fits_context_budget(spec, messages_for_model):
                 final_content = "当前请求内容超出模型可用上下文，已保留已完成进度。请缩短输入或新开会话后重试。"
                 error = final_content
                 stop_reason = "context_limit"
@@ -592,7 +615,10 @@ class AgentRunner:
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, response_usage)
-            await self._publish_context_usage(spec, raw_usage)
+            request_stats = None
+            if not isinstance(self.provider, NativeWorkProvider):
+                request_stats = self._request_stats(response, context)
+            await self._publish_context_usage(spec, raw_usage, request_stats=request_stats)
 
             reasoning_text, cleaned_content = extract_reasoning(
                 response.reasoning_content,
@@ -823,7 +849,7 @@ class AgentRunner:
                     stop_reason = "loop_detected"
                     error = _TOOL_LOOP_STOP_MESSAGE
                     final_content, finalization_usage = await self._finalize_tool_loop(
-                        spec, await image_context(),
+                        spec, await project_context(),
                     )
                     self._accumulate_usage(usage, finalization_usage)
                     raw_usage = self._contextualize_usage(finalization_usage, spec)
@@ -850,7 +876,7 @@ class AgentRunner:
                 stop_reason = "loop_detected"
                 error = _TOOL_LOOP_STOP_MESSAGE
                 final_content, finalization_usage = await self._finalize_tool_loop(
-                    spec, await image_context(),
+                    spec, await project_context(),
                 )
                 self._accumulate_usage(usage, finalization_usage)
                 raw_usage = self._contextualize_usage(finalization_usage, spec)
@@ -983,7 +1009,17 @@ class AgentRunner:
                         and spec.context_limit_callback is not None
                         and await spec.context_limit_callback(detected_context_window_tokens)
                     )
-                    if await offload_images(project_tool_images(messages, tool_image_offloads)) or learned:
+                    offloaded = await offload_images(project_tool_images(messages, tool_image_offloads))
+                    if (
+                        not offloaded and not learned
+                        and detected_context_window_tokens is None
+                        and spec.context_limit_callback is not None
+                        and not isinstance(self.provider, NativeWorkProvider)
+                    ):
+                        history_recovery_start = self._context_recovery_history_start(spec.initial_messages)
+                    if offloaded or learned or history_recovery_start:
+                        if history_recovery_start:
+                            snipped_prefix_count = 0
                         context_recovery_used = True
                         rejected_context = copy.deepcopy(messages_for_model)
                         continue
@@ -1073,7 +1109,7 @@ class AgentRunner:
             )
             final_content, finalization_provider_usage = await self._finalize_without_tools(
                 spec,
-                await image_context(),
+                await project_context(),
             )
             self._accumulate_usage(usage, finalization_provider_usage)
             raw_usage = self._contextualize_usage(finalization_provider_usage, spec)
@@ -1290,12 +1326,15 @@ class AgentRunner:
         )
         if computer_timeout is not None:
             outer_timeout_s = min(outer_timeout_s, computer_timeout) if outer_timeout_s else computer_timeout
+        context.request_elapsed_ms = None
+        request_started = time.monotonic()
         try:
             response = (
                 await coro
                 if outer_timeout_s is None
                 else await asyncio.wait_for(coro, timeout=outer_timeout_s)
             )
+            context.request_elapsed_ms = max(1, round((time.monotonic() - request_started) * 1000))
             if live_file_edits is not None:
                 await live_file_edits.flush()
                 if response.should_execute_tools:
@@ -1444,13 +1483,13 @@ class AgentRunner:
             "context_tokens",
             usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
         )
-        if (
-            not usage.get("context_window_tokens")
-            and spec.context_window_verified
-            and spec.context_window_tokens
-            and spec.context_window_tokens > 0
-        ):
-            result["context_window_tokens"] = int(spec.context_window_tokens)
+        window = spec.context_window_tokens
+        if spec.context_window_limited and window is not None and window > 0:
+            measured = result.pop("context_window_tokens", None)
+            result["context_budget_tokens"] = min(measured, window) if measured and measured > 0 else window
+        elif (usage.get("context_window_tokens") or 0) <= 0 and window is not None and window > 0:
+            key = "context_window_tokens" if spec.context_window_verified else "context_budget_tokens"
+            result[key] = window
         result["context_model"] = spec.model
         if spec.context_provider:
             result["context_provider"] = spec.context_provider
@@ -1460,9 +1499,11 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         usage: dict[str, Any],
+        *,
+        request_stats: dict[str, int] | None = None,
     ) -> None:
         callback = spec.progress_callback
-        if "context_tokens" not in usage or callback is None:
+        if ("context_tokens" not in usage and request_stats is None) or callback is None:
             return
         try:
             signature = inspect.signature(callback)
@@ -1473,7 +1514,41 @@ class AgentRunner:
             for parameter in signature.parameters.values()
         )
         if accepts_usage:
-            await callback("", token_usage=dict(usage))
+            event_usage = dict(usage)
+            if request_stats is not None:
+                event_usage["request_stats"] = request_stats
+            await callback("", token_usage=event_usage)
+
+    @staticmethod
+    def _request_stats(response: LLMResponse, context: AgentHookContext) -> dict[str, int] | None:
+        """Project provider-reported request usage separately from billing totals."""
+        if (
+            response.finish_reason not in {"stop", "tool_calls", "function_call", "length"}
+            or response.error_status_code is not None
+            or response.error_code
+            or context.request_elapsed_ms is None
+        ):
+            return None
+        usage = response.usage or {}
+        output = usage.get("completion_tokens")
+        if not isinstance(output, int) or isinstance(output, bool) or output <= 0:
+            return None
+        result = {
+            "index": context.iteration,
+            "elapsed_ms": context.request_elapsed_ms,
+            "output_tokens": output,
+        }
+        for target, aliases in (
+            ("input_tokens", ("prompt_tokens",)),
+            ("cache_read_tokens", ("cached_tokens", "cache_read_input_tokens", "reported_cache_read_tokens")),
+            ("reasoning_tokens", ("reasoning_tokens",)),
+        ):
+            for key in aliases:
+                value = usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    result[target] = value
+                    break
+        return result
 
     @staticmethod
     def _structured_tool_receipt(result: Any) -> dict[str, Any] | None:
@@ -1580,16 +1655,20 @@ class AgentRunner:
             return {}
         result: dict[str, int] = {}
         for key, value in usage.items():
+            if key in {"reported_cache_read_tokens", "reasoning_tokens"}:
+                continue
             try:
                 result[key] = int(value or 0)
             except (TypeError, ValueError):
                 continue
+        if type(usage.get("reported_cache_read_tokens")) is int and usage["reported_cache_read_tokens"] == 0:
+            result.setdefault("cached_tokens", 0)
         return result
 
     @staticmethod
     def _accumulate_usage(target: dict[str, int], addition: dict[str, int]) -> None:
         for key, value in addition.items():
-            if key in {"context_tokens", "context_window_tokens"}:
+            if key in {"context_tokens", "context_window_tokens", "context_budget_tokens"}:
                 continue
             target[key] = target.get(key, 0) + value
 
@@ -2202,6 +2281,24 @@ class AgentRunner:
         before_count = sum(message.get("role") != "system" for message in before)
         after_count = sum(message.get("role") != "system" for message in after)
         return max(0, before_count - after_count)
+
+    @staticmethod
+    def _context_recovery_history_start(initial_messages: list[dict[str, Any]]) -> int:
+        """Find the current user turn without cutting into a tool exchange."""
+        start = next((
+            index for index in range(len(initial_messages) - 1, -1, -1)
+            if initial_messages[index].get("role") == "user"
+        ), 0)
+        earlier = initial_messages[:start]
+        if not any(message.get("role") == "assistant" for message in earlier):
+            return 0
+        for message in earlier:
+            content = message.get("content")
+            if isinstance(content, list) and any(
+                isinstance(block, dict) and block.get("type") != "text" for block in content
+            ):
+                return 0
+        return 0 if find_legal_message_start(initial_messages[start:]) else start
 
     def _snip_history(
         self,

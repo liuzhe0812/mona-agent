@@ -228,7 +228,9 @@ describe("SessionListPanel project actions", () => {
       onMarkAllRead: vi.fn(),
       onToggleArchived: vi.fn(),
       onRemoveProject,
+      onNewTask: vi.fn(),
       onStartDirect: vi.fn(),
+      onOpenExpertLibrary: vi.fn(),
       onNewRoom: vi.fn(),
     }));
 
@@ -239,10 +241,10 @@ describe("SessionListPanel project actions", () => {
   });
 });
 
-describe("SessionListPanel create menu", () => {
-  it("starts a Mona conversation and opens the new group flow", async () => {
+describe("SessionListPanel actions", () => {
+  it("starts a new task directly and keeps partner management available", async () => {
     const onStartDirect = vi.fn();
-    const onSelectAgent = vi.fn();
+    const onNewTask = vi.fn();
     const onOpenExpertLibrary = vi.fn();
     const onNewRoom = vi.fn();
     render(createElement(SessionListPanel, {
@@ -256,27 +258,23 @@ describe("SessionListPanel create menu", () => {
       onToggleArchive: vi.fn(),
       onMarkAllRead: vi.fn(),
       onToggleArchived: vi.fn(),
+      onNewTask,
       onStartDirect,
-      onSelectAgent,
       onOpenExpertLibrary,
       onNewRoom,
     }));
 
-    const createButton = screen.getByRole("button", { name: "Create conversation" });
-    fireEvent.keyDown(createButton, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("button", { name: "Partner settings: Mona" }));
-    expect(onSelectAgent).toHaveBeenCalledWith("mona");
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(onNewTask).toHaveBeenCalledOnce();
     expect(onStartDirect).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(createButton, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Mona" }));
-    expect(onStartDirect).toHaveBeenCalledWith("mona");
-
-    fireEvent.keyDown(createButton, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Summon a partner" }));
+    const partnerMenu = screen.getByRole("button", { name: "New partner or group chat" });
+    fireEvent.keyDown(partnerMenu, { key: "Enter" });
+    expect(await screen.findAllByRole("menuitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Summon partner" }));
     expect(onOpenExpertLibrary).toHaveBeenCalledOnce();
 
-    fireEvent.keyDown(createButton, { key: "Enter" });
+    fireEvent.keyDown(partnerMenu, { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "New group chat" }));
     expect(onNewRoom).toHaveBeenCalledOnce();
   });

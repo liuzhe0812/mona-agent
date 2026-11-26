@@ -41,7 +41,12 @@ from mona.api.hoard_handlers import (
 )
 from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
-from mona.email.imap_pool import ImapOperationDeferred, ImapOutcomeUnknown, imap_pool_manager
+from mona.email.imap_pool import (
+    ImapOperationDeferred,
+    ImapOutcomeUnknown,
+    imap_pool_manager,
+    validate_imap_port,
+)
 from mona.materials.api import (
     handle_materials_create_directory,
     handle_materials_create_library,
@@ -2452,6 +2457,45 @@ def _decode_imap_utf7(s: str) -> str:
     return "".join(result)
 
 
+def _parse_imap_folder_list(status: str, lines: list[Any] | None) -> list[dict[str, Any]]:
+    """Reject incomplete LIST responses instead of treating them as an empty mailbox."""
+    if status != "OK" or not lines:
+        raise RuntimeError("无法获取完整的邮箱文件夹列表，请检查邮箱连接后重试。")
+
+    folders = []
+    for line in lines:
+        if not isinstance(line, bytes):
+            raise RuntimeError("邮箱文件夹列表不完整，请稍后重试。")
+        try:
+            text = line.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise RuntimeError("邮箱文件夹列表无法解析，请稍后重试。") from e
+        match = re.fullmatch(
+            r'\((?P<flags>(?:\\?[^\x00-\x20\x7f(){%*"\\\]]+(?: \\?[^\x00-\x20\x7f(){%*"\\\]]+)*)?)\) '
+            r'(?P<delimiter>(?i:NIL)|"(?:[^"\\\x00-\x1f\x7f]|\\["\\])") '
+            r'(?:"(?P<quoted>(?:[^"\\\x00-\x1f\x7f]|\\["\\])*)"|(?P<atom>[^\x00-\x20\x7f(){%*"\\]+))',
+            text,
+        )
+        if not match:
+            raise RuntimeError("邮箱文件夹列表无法解析，请稍后重试。")
+        encoded = match.group("quoted")
+        name = re.sub(r'\\(["\\])', r'\1', encoded) if encoded is not None else match.group("atom")
+        decoded = _decode_imap_utf7(name)
+        if "&" in name and _encode_imap_utf7(decoded) != name:
+            raise RuntimeError("邮箱文件夹列表无法解析，请稍后重试。")
+        raw_delimiter = match.group("delimiter")
+        delimiter = "" if raw_delimiter.upper() == "NIL" else re.sub(r'\\(["\\])', r'\1', raw_delimiter[1:-1])
+        flags = match.group("flags").lower()
+        folders.append({
+            "name": decoded,
+            "delimiter": delimiter,
+            "hasChildren": "\\haschildren" in flags.split(),
+            "flags": flags,
+            "unreadCount": 0,
+        })
+    return folders
+
+
 def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
     """连接 IMAP 并列出所有文件夹。复用持久连接池。"""
     imap_host = str(body.get("imapHost", "") or "").strip()
@@ -2478,50 +2522,7 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
                 status,
                 len(folder_data) if folder_data else 0,
             )
-        if status != "OK" or not folder_data:
-            return []
-
-        folders: list[dict[str, Any]] = []
-        for raw_line in folder_data:
-            line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
-            # IMAP LIST 响应格式: (\HasChildren) "/" "INBOX"
-            parts = line.rsplit('"', 2)
-            if len(parts) >= 3:
-                name = parts[-2]
-                delimiter = parts[-3].strip().strip('"')
-            else:
-                # 没有引号包裹的简单格式
-                tokens = line.split()
-                name = tokens[-1].strip('"')
-                delimiter = "/"
-            original_name = name
-            # 解码 Modified UTF-7 编码的文件夹名（如中文文件夹）
-            name = _decode_imap_utf7(name)
-            if original_name != name:
-                logger.debug(
-                    "[imap-folder] decoded '%s' -> '%s'",
-                    original_name,
-                    name,
-                )
-            elif "&" in original_name:
-                logger.warning(
-                    "[imap-folder] failed to decode utf7 name '%s' (raw line: %s) for %s",
-                    original_name,
-                    line.strip(),
-                    imap_username,
-                )
-            flags = line.split(")")[0].lstrip("(").lower() if "(" in line else ""
-
-            # 不再用 STATUS UNSEEN 逐文件夹查询（N 次 IMAP 往返，是文件夹列表慢的根因）
-            # 未读数由前端从本地 SQLite 统一查询（email_unread_counts），IMAP 仅返回结构
-            folders.append({
-                "name": name,
-                "delimiter": delimiter,
-                "hasChildren": "\\haschildren" in flags.lower(),
-                "flags": flags,
-                "unreadCount": 0,
-            })
-        return folders
+        return _parse_imap_folder_list(status, folder_data)
 
     return imap_pool_manager.run(body, op)
 
@@ -2726,6 +2727,8 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         return web.json_response(result)
     except ImapOperationDeferred:
         return web.json_response({"deferred": True}, status=409)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=422)
     except Exception as e:
         err_msg = str(e)
         # IMAP SELECT 失败（如企业邮箱限制非 INBOX 文件夹访问），返回 422 而非 500
@@ -2736,6 +2739,8 @@ async def handle_email_sync(request: web.Request) -> web.Response:
                 status=422,
             )
         logger.exception("Email sync failed")
+        if not err_msg.strip() or err_msg.strip() == "None":
+            err_msg = "收件服务器未返回有效的 IMAP 响应，请检查收件地址、端口和加密方式。"
         return web.json_response({"error": err_msg}, status=500)
 
 
@@ -3368,6 +3373,7 @@ def _imap_test_connection(body: dict[str, Any]) -> dict[str, Any]:
     if not imap_host or not imap_username:
         raise ValueError("imapHost and imapUsername are required")
 
+    validate_imap_port(imap_port)
     _validate_mail_host(imap_host)
 
     # 重置连接池，清除可能的 failed 状态（用户修改配置后会先点测试连接）
@@ -3405,6 +3411,8 @@ async def handle_email_test_connection(request: web.Request) -> web.Response:
     try:
         result = await _run_imap_locked(body, _imap_test_connection)
         return web.json_response(result)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=422)
     except Exception as e:
         logger.exception("Email test connection failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -4746,6 +4754,29 @@ async def handle_email_delete(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+class _ImapFlagMailboxMissingError(RuntimeError):
+    """A failed flag update refers to a mailbox absent from the returned LIST."""
+
+
+class _ImapFlagUidValidityChangedError(RuntimeError):
+    """A failed flag update refers to a confirmed older UIDVALIDITY."""
+
+
+def _imap_flag_mailbox_missing(client: imaplib.IMAP4, mailbox: str) -> bool:
+    """Only trust a nonempty LIST if every returned mailbox can be parsed."""
+    try:
+        status, lines = client.list()
+        folders = _parse_imap_folder_list(status, lines)
+    except Exception:
+        return False
+    return not any(
+        folder["name"] == mailbox or (
+            folder["name"].isascii() and mailbox.isascii() and folder["name"].lower() == mailbox.lower() == "inbox"
+        )
+        for folder in folders
+    )
+
+
 def _imap_set_flag(body: dict[str, Any]) -> None:
     """连接 IMAP 并为指定 UID 设置或清除标志（\\Seen / \\Flagged 等）。复用持久连接池。"""
     imap_host = str(body.get("imapHost", "") or "").strip()
@@ -4768,15 +4799,33 @@ def _imap_set_flag(body: dict[str, Any]) -> None:
     op = "+FLAGS" if add else "-FLAGS"
 
     def _op(client: imaplib.IMAP4) -> None:
-        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        try:
+            status, select_data = client.select(_imap_quote_mailbox(mailbox))
+        except imaplib.IMAP4.readonly as e:
+            raise RuntimeError("邮箱文件夹为只读，无法同步邮件标记。") from e
         if status != "OK":
-            raise RuntimeError("Mailbox select failed while updating flags")
+            detail = " ".join(
+                item.decode("utf-8", errors="replace") if isinstance(item, bytes) else str(item)
+                for item in select_data or []
+            ).lower()
+            denied = any(marker in detail for marker in (
+                "permission", "noperm", "denied", "authoriz", "authoris", "authentication", "access", "forbidden",
+                "not allowed", "not permitted", "no rights", "read-only", "read only", "readonly",
+                "权限", "无权", "拒绝", "只读", "未授权",
+            ))
+            if status == "NO" and not denied and _imap_flag_mailbox_missing(client, mailbox):
+                raise _ImapFlagMailboxMissingError("该邮件文件夹当前不可用，请刷新文件夹后核对。")
+            raise RuntimeError("无法访问邮件文件夹，未能同步邮件标记；请检查邮箱权限或稍后重试。")
         known_validity = str(body.get("uidValidity") or "")
-        if known_validity and _imap_uid_validity(client) != known_validity:
-            raise RuntimeError("UIDVALIDITY changed while updating flags")
+        if known_validity:
+            current_validity = _imap_uid_validity(client)
+            if not current_validity:
+                raise RuntimeError("无法确认邮件文件夹版本，暂未同步邮件标记，请稍后重试。")
+            if current_validity != known_validity:
+                raise _ImapFlagUidValidityChangedError("邮件文件夹版本已变化，原邮件标识已失效，请核对邮件标记。")
         status, _ = client.uid("STORE", uid, op + ".SILENT", f"({flag})")
         if status != "OK":
-            raise RuntimeError("Mailbox flag update was rejected")
+            raise RuntimeError("邮箱未接受邮件标记，请检查邮箱权限或稍后重试。")
 
     imap_pool_manager.run(body, _op)
 
@@ -4793,7 +4842,11 @@ async def handle_email_set_flag(request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
     except Exception as e:
         logger.exception("Email set flag failed")
-        return web.json_response({"error": str(e), "uidValidityChanged": "UIDVALIDITY changed" in str(e)}, status=500)
+        return web.json_response({
+            "error": str(e),
+            "uidValidityChanged": isinstance(e, _ImapFlagUidValidityChangedError),
+            "mailboxMissing": isinstance(e, _ImapFlagMailboxMissingError),
+        }, status=500)
 
 
 def _imap_mark_all_read(body: dict[str, Any]) -> int:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +37,7 @@ def build_official_expert_jobs(
 ) -> ExpertInstallJobManager:
     settings = settings or DistributionSettings.load()
     packages_root = get_packages_dir()
-    known_tool_names = _known_partner_tools(
+    resolve_tool_names = _known_partner_tools(
         workspace,
         bus=bus,
         subagent_manager=subagent_manager,
@@ -85,13 +87,12 @@ def build_official_expert_jobs(
         downloader=VerifiedDownloader(),
         package_store=agent_store,
         download_cache_dir=packages_root / "downloads" / "agents",
-        known_tool_names=known_tool_names,
+        resolve_tool_names=resolve_tool_names,
         runtime_pack_installer=install_runtime_packs,
         registry_reload=registry.reload,
     )
     return ExpertInstallJobManager(
         catalog_client=catalog_client,
-        package_store=agent_store,
         state_path=packages_root / "jobs" / "expert-installs.json",
         installer=installer,
         installed_definition=registry.get,
@@ -105,7 +106,7 @@ def _known_partner_tools(
     bus: Any,
     subagent_manager: Any,
     sessions: Any,
-) -> set[str]:
+) -> Callable[[str], frozenset[str]]:
     from mona.agent.tools.context import ToolContext
     from mona.agent.tools.loader import ToolLoader
     from mona.agent.tools.registry import ToolRegistry
@@ -115,24 +116,32 @@ def _known_partner_tools(
     probe_tools = config.tools.model_copy(deep=True)
     probe_tools.image_generation.enabled = True
     probe_tools.video_generation.enabled = True
-    registry = ToolRegistry()
-    ToolLoader().load(
-        ToolContext(
-            config=probe_tools,
-            workspace=str(workspace),
-            bus=bus,
-            subagent_manager=subagent_manager,
-            cron_service=getattr(subagent_manager, "cron_service", None),
-            sessions=sessions,
-            image_generation_provider_configs=image_gen_provider_configs(config),
-            video_generation_provider_configs=video_gen_provider_configs(config),
-            timezone=config.agents.defaults.timezone,
-            agent_id="com.mona.package-probe",
-        ),
-        registry,
-        scope="subagent",
-    )
-    return set(registry.tool_names)
+    loader = ToolLoader()
+    image_configs = image_gen_provider_configs(config)
+    video_configs = video_gen_provider_configs(config)
+
+    @lru_cache(maxsize=64)
+    def resolve(agent_id: str) -> frozenset[str]:
+        registry = ToolRegistry()
+        loader.load(
+            ToolContext(
+                config=probe_tools,
+                workspace=str(workspace),
+                bus=bus,
+                subagent_manager=subagent_manager,
+                cron_service=getattr(subagent_manager, "cron_service", None),
+                sessions=sessions,
+                image_generation_provider_configs=image_configs,
+                video_generation_provider_configs=video_configs,
+                timezone=config.agents.defaults.timezone,
+                agent_id=agent_id,
+            ),
+            registry,
+            scope="subagent",
+        )
+        return frozenset(registry.tool_names)
+
+    return resolve
 
 
 __all__ = ["build_official_expert_jobs"]

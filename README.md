@@ -72,7 +72,8 @@ Mona 使用 **Tauri 2 + React + TypeScript** 构建桌面界面，由 **Python**
 在仓库根目录安装依赖：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 npm --prefix webui install
 npm --prefix webui/office-editor install
 cargo install tauri-cli --version "^2" --locked
@@ -84,7 +85,7 @@ cargo install tauri-cli --version "^2" --locked
 npm run dev
 ```
 
-Tauri 会启动界面开发服务，并按客户端配置管理本地后端。开发模式使用系统 Python，请确保依赖安装在桌面进程能够找到的 Python 环境中。
+Tauri 会启动界面开发服务，并按客户端配置管理本地后端。开发模式优先使用仓库 `.venv` 中的 Python，依赖须安装到该环境。`dev` 已包含内置浏览器所需的 Playwright 驱动，补装后重新启动桌面开发进程。
 
 开发构建自动跳过仅安装包需要的后端资源，新 worktree 无需预先打包 Gateway，也无需额外配置参数。直接使用 Cargo 时，在 `src-tauri` 目录运行 `cargo tauri dev --no-watch`。正式构建继续校验并打包配套后端资源。
 

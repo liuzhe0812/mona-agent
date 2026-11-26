@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
@@ -14,6 +14,9 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+
+if TYPE_CHECKING:
+    from mona.agent.tools.browser import BrowserToolsConfig
 
 CAPABILITY_TOOL_GROUPS: dict[str, frozenset[str]] = {
     "diagnostics": frozenset({"my"}),
@@ -219,10 +222,12 @@ class LoadCapabilityTool(Tool):
         workspace: str | Path,
         agent_id: str,
         registry: Any | None = None,
+        browser_config: BrowserToolsConfig | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._agent_id = agent_id
         self._registry = registry
+        self._browser_config = browser_config
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -230,6 +235,7 @@ class LoadCapabilityTool(Tool):
             workspace=ctx.workspace,
             agent_id=getattr(ctx, "agent_id", "mona"),
             registry=getattr(ctx, "registry", None),
+            browser_config=getattr(getattr(ctx, "config", None), "browser", None),
         )
 
     @property
@@ -268,10 +274,26 @@ class LoadCapabilityTool(Tool):
             )
 
         parts = [
-            f"Loaded capabilities: {', '.join(sorted(requested))}.",
+            f"{'Loaded' if available_tools else 'Requested'} capabilities: {', '.join(sorted(requested))}.",
             "Available tools: "
             + (", ".join(available_tools) if available_tools else "none in this configuration"),
         ]
+        browser_tools = CAPABILITY_TOOL_GROUPS["browser"]
+        if "browser" in requested and browser_tools.isdisjoint(available_tools):
+            reason = "its tools are unavailable in this conversation"
+            if self._browser_config is not None and self._registry is not None and not any(
+                self._registry.has(name) for name in browser_tools
+            ):
+                from mona.agent.tools.browser import BrowserTool
+
+                reason = BrowserTool.unavailable_reason(self._browser_config) or reason
+            parts.append(
+                f"Mona's built-in browser cannot be used for this request because {reason}. "
+                "Reload the capability only after the environment or access changes. "
+                "For ordinary research, use web_search or web_fetch and disclose inaccessible pages. "
+                "An external browser is appropriate when the task requires the user's external window "
+                "or asks to open that application."
+            )
         from mona.utils.prompt_templates import render_template
 
         newly_loaded_tools = {

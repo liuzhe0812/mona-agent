@@ -482,10 +482,11 @@ export function NoteRow({
               <span className="note-processing-dot inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
               AI 处理中
             </span>
-          ) : null}
-          <span className="shrink-0 text-micro tabular-nums text-muted-foreground/70">
-            {formatRelativeTime(note.updatedAt)}
-          </span>
+          ) : (
+            <span className="shrink-0 text-micro tabular-nums text-muted-foreground/70">
+              {formatRelativeTime(note.updatedAt)}
+            </span>
+          )}
         </Button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">

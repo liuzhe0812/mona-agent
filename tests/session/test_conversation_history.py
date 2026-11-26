@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mona.agent.partners import ConversationMetadata
+from mona.config.paths import get_agent_output_dir
 from mona.session.conversation_history import ConversationHistoryStore
 from mona.session.manager import Session, SessionManager
 from mona.webui.thread_disk import delete_webui_thread
@@ -29,7 +30,8 @@ def _save_direct_session(
 
 def _store(tmp_path, manager: SessionManager, agent_id: str = "mona"):
     return ConversationHistoryStore(
-        tmp_path / "workspace",
+        tmp_path / "workspace" if agent_id == "mona"
+        else get_agent_output_dir(manager.workspace, agent_id),
         agent_id,
         manager,
         index_path=tmp_path / "indexes" / f"{agent_id}.sqlite3",

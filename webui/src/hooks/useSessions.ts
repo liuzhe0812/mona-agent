@@ -13,8 +13,11 @@ import {
 import { deriveTitle } from "@/lib/format";
 import { resolveUIImageUrls, resolveMediaAttachmentUrls } from "@/lib/media";
 import type {
+  BranchReplySource,
   ChatSummary,
   ConversationListStatus,
+  ConversationMeta,
+  SessionUsageSummary,
   UIMessage,
   WebuiThreadPagination,
   WebuiThreadPersistedPayload,
@@ -51,7 +54,8 @@ export function useSessions(): {
   error: string | null;
   refresh: () => Promise<void>;
   createChat: (workspace?: string | null) => Promise<string>;
-  branchChat: (sourceChatId: string, assistantOrdinal: number, sourceTaskId?: string) => Promise<string>;
+  openPartnerChat: (agentId: string, create: boolean, copy?: boolean) => Promise<string | null>;
+  branchChat: (sourceChatId: string, source: BranchReplySource, sourceTaskId?: string) => Promise<string>;
   deleteChat: (key: string) => Promise<void>;
   updateWorkspace: (key: string, workspace: string | null) => Promise<void>;
 } {
@@ -62,6 +66,7 @@ export function useSessions(): {
   const [error, setError] = useState<string | null>(null);
   const tokenRef = useRef(token);
   const optimisticKeysRef = useRef<Set<string>>(new Set());
+  const pendingPartnerMetadata = useRef(new Map<string, ConversationMeta>());
   const refreshingRef = useRef(false);
   const refreshPendingRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,7 +126,16 @@ export function useSessions(): {
           if (!mountedRef.current) return;
           try {
             const rows = filterVisibleSessions(await listSessions(tokenRef.current))
-              .filter((row) => !row.key.startsWith("websocket:") || !client.isChatDeleted(row.chatId));
+              .filter((row) => !row.key.startsWith("websocket:") || !client.isChatDeleted(row.chatId))
+              .map((row) => {
+                const conversation = pendingPartnerMetadata.current.get(row.key);
+                if (!conversation) return row;
+                if (row.conversation?.partnerConversation) {
+                  pendingPartnerMetadata.current.delete(row.key);
+                  return row;
+                }
+                return { ...row, conversation };
+              });
             if (!mountedRef.current) return;
             const serverKeys = new Set(rows.map((row) => row.key));
             setSessions((prev) => [
@@ -173,6 +187,7 @@ export function useSessions(): {
     return client.onSessionDeleted((chatId) => {
       const key = `websocket:${chatId}`;
       optimisticKeysRef.current.delete(key);
+      pendingPartnerMetadata.current.delete(key);
       setSessions((previous) => previous.filter((session) => session.key !== key));
     });
   }, [client]);
@@ -218,14 +233,33 @@ export function useSessions(): {
     return chatId;
   }, [client]);
 
+  const openPartnerChat = useCallback(async (agentId: string, create: boolean, copy?: boolean) => {
+    if (!client) throw new Error("runtime not ready");
+    const opened = await client.openPartnerConversation(agentId, create, copy);
+    if (!opened) return null;
+    const { chatId, conversation } = opened;
+    if (client.isChatDeleted(chatId)) throw new Error("partner conversation deleted");
+    const key = `websocket:${chatId}`;
+    pendingPartnerMetadata.current.set(key, conversation);
+    optimisticKeysRef.current.add(key);
+    setSessions((previous) => {
+      if (previous.some((row) => row.key === key)) {
+        return previous.map((row) => row.key === key ? { ...row, conversation } : row);
+      }
+      return [{ key, channel: "websocket", chatId, createdAt: null, updatedAt: null, preview: "", conversation }, ...previous];
+    });
+    void refresh();
+    return chatId;
+  }, [client, refresh]);
+
   const branchChat = useCallback(async (
     sourceChatId: string,
-    assistantOrdinal: number,
+    source: BranchReplySource,
     sourceTaskId?: string,
   ): Promise<string> => {
     if (!client) throw new Error("runtime not ready");
-    const chatId = await client.branchChat(sourceChatId, assistantOrdinal, sourceTaskId);
-    const source = sessions.find((item) => item.chatId === sourceChatId);
+    const chatId = await client.branchChat(sourceChatId, source, sourceTaskId);
+    const sourceSession = sessions.find((item) => item.chatId === sourceChatId);
     const key = `websocket:${chatId}`;
     optimisticKeysRef.current.add(key);
     setSessions((prev) => [
@@ -235,10 +269,11 @@ export function useSessions(): {
         chatId,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        title: source?.title ? `${source.title} · 分支` : "",
-        preview: source?.preview ?? "",
-        workspace: source?.workspace ?? null,
-        conversation: source?.conversation,
+        title: sourceSession?.title ? `${sourceSession.title} · 分支` : "",
+        preview: sourceSession?.preview ?? "",
+        workspace: sourceSession?.workspace ?? null,
+        conversation: sourceSession?.conversation?.partnerConversation
+          ? { ...sourceSession.conversation, partnerConversation: false, partnerConversationCopy: undefined } : sourceSession?.conversation,
       },
       ...prev.filter((item) => item.key !== key),
     ]);
@@ -250,6 +285,7 @@ export function useSessions(): {
       await apiDeleteSession(tokenRef.current, key);
       if (key.startsWith("websocket:")) client?.forgetDeletedChat(key.slice("websocket:".length));
       optimisticKeysRef.current.delete(key);
+      pendingPartnerMetadata.current.delete(key);
       setSessions((prev) => prev.filter((s) => s.key !== key));
     },
     [client],
@@ -267,7 +303,7 @@ export function useSessions(): {
     [],
   );
 
-  return { sessions, loading, loaded, error, refresh, createChat, branchChat, deleteChat, updateWorkspace };
+  return { sessions, loading, loaded, error, refresh, createChat, openPartnerChat, branchChat, deleteChat, updateWorkspace };
 }
 
 function normalizeHistoryMessages(
@@ -493,6 +529,7 @@ export function assistantOrdinalForMessage(
 interface SessionHistoryState {
   key: string | null;
   messages: UIMessage[];
+  sessionUsage: SessionUsageSummary | null;
   loading: boolean;
   error: string | null;
   missing: boolean;
@@ -511,6 +548,7 @@ function emptySessionHistory(key: string | null, loading = false): SessionHistor
   return {
     key,
     messages: [],
+    sessionUsage: null,
     loading,
     error: null,
     missing: false,
@@ -529,11 +567,13 @@ function emptySessionHistory(key: string | null, loading = false): SessionHistor
 /** Lazy-load a session's on-disk messages. Pass a page size only for paged UIs. */
 export function useSessionHistory(key: string | null, pageSize?: number): {
   messages: UIMessage[];
+  sessionUsage: SessionUsageSummary | null;
   loading: boolean;
   error: string | null;
   /** True when the history endpoint reports that no WebUI transcript exists. */
   missing: boolean;
   refresh: () => void;
+  refreshUsage: () => Promise<void>;
   version: number;
   revision: string | null;
   updateKind: "latest" | "earlier" | "full" | null;
@@ -565,6 +605,8 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   stateRef.current = state;
   const keyRef = useRef(key);
   keyRef.current = key;
+  const usageRequestRef = useRef<AbortController | null>(null);
+  const usageEpochRef = useRef(0);
   const controllersRef = useRef(new Set<AbortController>());
   const loadingEarlierRef = useRef(false);
   const fullHistoryRequestRef = useRef<{
@@ -582,11 +624,42 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     controllersRef.current.delete(controller);
   }, []);
 
+  const refreshUsage = useCallback(async () => {
+    if (!key || isDeleted(key)) return;
+    usageRequestRef.current?.abort();
+    const controller = new AbortController();
+    usageRequestRef.current = controller;
+    const epoch = ++usageEpochRef.current;
+    try {
+      const body = await fetchWebuiThread(token, key, undefined, { limit: 1, signal: controller.signal });
+      if (controller.signal.aborted || keyRef.current !== key || isDeleted(key) || epoch !== usageEpochRef.current) return;
+      if (!body) {
+        console.warn("[useSessionHistory] Session usage refresh returned no transcript");
+        return;
+      }
+      setState((prev) => prev.key === key ? { ...prev, sessionUsage: body.sessionUsage ?? null } : prev);
+    } catch (error) {
+      if (!controller.signal.aborted && keyRef.current === key) {
+        const reason = error instanceof ApiError ? `HTTP ${error.status}` : error instanceof Error ? error.name : "UnknownError";
+        console.warn("[useSessionHistory] Session usage refresh failed:", reason);
+      }
+    } finally {
+      if (usageRequestRef.current === controller) usageRequestRef.current = null;
+    }
+  }, [isDeleted, key, token]);
+
+  useEffect(() => () => {
+    usageRequestRef.current?.abort();
+    usageRequestRef.current = null;
+  }, [key, token]);
+
   useEffect(() => {
     if (!client) return;
     return client.onSessionDeleted((chatId) => {
       const deletedKey = `websocket:${chatId}`;
       if (keyRef.current !== deletedKey) return;
+      usageRequestRef.current?.abort();
+      usageRequestRef.current = null;
       for (const controller of controllersRef.current) controller.abort();
       controllersRef.current.clear();
       loadingEarlierRef.current = false;
@@ -604,6 +677,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     }
     let cancelled = false;
     const controller = trackController();
+    const usageEpoch = ++usageEpochRef.current;
     // Mark the new key as loading immediately so callers never see stale
     // messages from the previous session during the render right after a switch.
     setState((prev) => ({
@@ -663,6 +737,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
             ...base,
             key,
             messages,
+            sessionUsage: usageEpoch === usageEpochRef.current ? body?.sessionUsage ?? null : base.sessionUsage,
             loading: false,
             error: null,
             missing: body === null,
@@ -690,6 +765,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
             version: (prev.key === key ? prev.version : 0) + 1,
             updateKind: "latest",
             pagination: null,
+            sessionUsage: usageEpoch === usageEpochRef.current ? null : prev.sessionUsage,
             fullHistoryReady: true,
           }));
         } else {
@@ -769,6 +845,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
       if (!isCurrent()) return false;
       if (error instanceof ApiError && error.status === 409) {
         try {
+          const usageEpoch = ++usageEpochRef.current;
           const latest = await fetchWebuiThread(token, key, undefined, {
             limit: pageSize,
             signal: controller.signal,
@@ -785,6 +862,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
                   ? []
                   : replaceHistoryRevision(prev.messages, latestMessages),
                 pagination: latest?.pagination ?? null,
+                sessionUsage: usageEpoch === usageEpochRef.current ? latest?.sessionUsage ?? null : prev.sessionUsage,
                 missing: latest === null,
                 hasPendingToolCalls: false,
                 version: prev.version + 1,
@@ -823,6 +901,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
     if (pending?.key === key) return pending.promise;
 
     const controller = trackController();
+    const usageEpoch = ++usageEpochRef.current;
     setState((prev) => prev.key === key
       ? { ...prev, fullHistoryLoading: true, fullHistoryError: null }
       : prev);
@@ -845,6 +924,7 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
           return {
             ...prev,
             messages: result,
+            sessionUsage: usageEpoch === usageEpochRef.current ? body?.sessionUsage ?? null : prev.sessionUsage,
             pagination: body?.pagination
               ? { ...body.pagination, hasMore: false, before: null }
               : null,
@@ -884,10 +964,12 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   if (!key) {
     return {
       messages: EMPTY_MESSAGES,
+      sessionUsage: null,
       loading: false,
       error: null,
       missing: false,
       refresh,
+      refreshUsage,
       version: 0,
       revision: null,
       updateKind: null,
@@ -907,10 +989,12 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
   if (state.key !== key) {
     return {
       messages: EMPTY_MESSAGES,
+      sessionUsage: null,
       loading: true,
       error: null,
       missing: false,
       refresh,
+      refreshUsage,
       version: 0,
       revision: null,
       updateKind: null,
@@ -927,10 +1011,12 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
 
   return {
     messages: state.messages,
+    sessionUsage: state.sessionUsage,
     loading: state.loading,
     error: state.error,
     missing: state.missing,
     refresh,
+    refreshUsage,
     version: state.version,
     revision: state.pagination?.revision ?? null,
     updateKind: state.updateKind,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import platform
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,18 +14,30 @@ from packaging.version import InvalidVersion, Version
 
 import mona
 from mona.agent.expert_catalog import ExpertCatalogClient
+from mona.agent.jobs import is_retired_stock_agent
 from mona.agent.package_store import (
     ActiveAgentPackage,
     AgentPackageStore,
     ExpertCatalogEntry,
     InstalledAgentPackage,
 )
+from mona.agent.partners import MONA_AGENT_ID, STOCK_RESEARCH_AGENT_ID
 from mona.config.paths import get_agent_deletion_marker
 from mona.runtime.download import ProgressCallback, VerifiedDownloader
 
 
 class ExpertInstallError(RuntimeError):
     """Raised when an expert cannot safely become active."""
+
+
+class ExpertCatalogVersionUnavailable(ExpertInstallError):
+    """The selected package is absent from the refreshed catalog."""
+
+
+def is_retired_expert_package(entry: ExpertCatalogEntry) -> bool:
+    return is_retired_stock_agent(entry.id) and (
+        entry.id != STOCK_RESEARCH_AGENT_ID or "stock_vibe_task" not in entry.required_tools
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +67,21 @@ def _current_architecture() -> str:
     )
 
 
+def _deletion_marker_revision(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        marker = path.stat()
+    except FileNotFoundError:
+        return None
+    return marker.st_dev, marker.st_ino, marker.st_ctime_ns, marker.st_mtime_ns
+
+
+def _version_order(entry: ExpertCatalogEntry) -> tuple[bool, Version]:
+    try:
+        return True, Version(entry.version)
+    except InvalidVersion:
+        return False, Version("0")
+
+
 class ExpertInstaller:
     """Install one official expert without exposing incomplete packages."""
 
@@ -65,7 +92,7 @@ class ExpertInstaller:
         downloader: VerifiedDownloader,
         package_store: AgentPackageStore,
         download_cache_dir: Path,
-        known_tool_names: set[str],
+        resolve_tool_names: Callable[[str], Collection[str]],
         runtime_pack_installer: RuntimePackInstaller | None = None,
         registry_reload: Callable[[], object] | None = None,
         mona_version: str = mona.__version__,
@@ -76,7 +103,7 @@ class ExpertInstaller:
         self.downloader = downloader
         self.package_store = package_store
         self.download_cache_dir = download_cache_dir
-        self.known_tool_names = known_tool_names
+        self.resolve_tool_names = resolve_tool_names
         self.runtime_pack_installer = runtime_pack_installer
         self.registry_reload = registry_reload
         self.mona_version = mona_version
@@ -91,7 +118,7 @@ class ExpertInstaller:
         progress: ProgressReporter | None = None,
     ) -> ExpertInstallResult:
         deletion_marker = get_agent_deletion_marker(expert_id)
-        reinstalling = deletion_marker.exists()
+        deletion_revision = _deletion_marker_revision(deletion_marker)
         self._report(progress, "catalog")
         snapshot = await self.catalog_client.fetch()
         entry = self._select_entry(snapshot.catalog.experts, expert_id, version)
@@ -137,7 +164,7 @@ class ExpertInstaller:
                 result = self.registry_reload()
                 if inspect.isawaitable(result):
                     await result
-            if reinstalling:
+            if deletion_revision is not None and _deletion_marker_revision(deletion_marker) == deletion_revision:
                 deletion_marker.unlink(missing_ok=True)
         except Exception as exc:
             await self._rollback_activation(entry, previous_active)
@@ -171,16 +198,17 @@ class ExpertInstaller:
                 pass
 
     def _validate_compatibility(self, entry: ExpertCatalogEntry) -> None:
+        if is_retired_expert_package(entry):
+            raise ExpertInstallError("旧版股票伙伴已下架，请使用股票工作台。")
+        if entry.id == MONA_AGENT_ID:
+            raise ExpertInstallError("主助手不能通过伙伴列表安装。")
+        if not _version_order(entry)[0]:
+            raise ExpertInstallError("伙伴目录中的版本信息无效。")
         if entry.platforms and self.current_platform not in entry.platforms:
             raise ExpertInstallError(f"partner does not support platform {self.current_platform}")
         if entry.architectures and self.current_architecture not in entry.architectures:
             raise ExpertInstallError(
                 f"partner does not support architecture {self.current_architecture}"
-            )
-        missing_tools = sorted(set(entry.required_tools) - self.known_tool_names)
-        if missing_tools:
-            raise ExpertInstallError(
-                "partner requires a newer Mona tool set: " + ", ".join(missing_tools)
             )
         if entry.min_mona_version:
             try:
@@ -190,6 +218,13 @@ class ExpertInstaller:
                     )
             except InvalidVersion as exc:
                 raise ExpertInstallError("partner or client version metadata is invalid") from exc
+        if entry.runtime_packs and self.runtime_pack_installer is None:
+            raise ExpertInstallError("当前 Mona 无法准备此伙伴需要的运行组件。")
+        if entry.required_tools:
+            missing_tools = sorted(set(entry.required_tools).difference(self.resolve_tool_names(entry.id)))
+            if missing_tools:
+                logger.debug("Expert {}@{} requires unavailable tools: {}", entry.id, entry.version, missing_tools)
+                raise ExpertInstallError("此伙伴版本要求的能力不可用。")
 
     def compatibility_error(self, entry: ExpertCatalogEntry) -> str | None:
         try:
@@ -198,8 +233,14 @@ class ExpertInstaller:
             return str(exc)
         return None
 
-    @staticmethod
+    def select_compatible_entry(self, entries: list[ExpertCatalogEntry]) -> ExpertCatalogEntry | None:
+        for entry in sorted(entries, key=_version_order, reverse=True):
+            if self.compatibility_error(entry) is None:
+                return entry
+        return None
+
     def _select_entry(
+        self,
         entries: list[ExpertCatalogEntry],
         expert_id: str,
         version: str | None,
@@ -210,13 +251,10 @@ class ExpertInstaller:
             if entry.id == expert_id and (version is None or entry.version == version)
         ]
         if not candidates:
-            raise ExpertInstallError(f"partner {expert_id!r} is not in the catalog")
+            raise ExpertCatalogVersionUnavailable("所选伙伴版本已不在目录中，请刷新伙伴列表后重试。")
         if version is not None:
             return candidates[0]
-        try:
-            return max(candidates, key=lambda entry: Version(entry.version))
-        except InvalidVersion as exc:
-            raise ExpertInstallError("partner catalog contains an invalid version") from exc
+        return self.select_compatible_entry(candidates) or max(candidates, key=_version_order)
 
     @staticmethod
     def _report(

@@ -16,7 +16,7 @@ from mona.bus.queue import MessageBus
 from mona.channels.interaction import InteractionChannel
 from mona.channels.manager import ChannelManager
 from mona.config.schema import Config, InteractionChannelConfig
-from mona.providers.base import LLMProvider, LLMResponse
+from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 SESSION = "terminal_session"
 MESSAGE = "input_1"
@@ -147,6 +147,48 @@ async def test_full_turn_returns_text_and_performance_without_raw_json(bridge):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("after_tool", [False, True])
+async def test_provider_failure_is_not_spoken_or_replayed(bridge, monkeypatch, after_tool):
+    _, _, model, _, _, terminal = bridge
+    diagnostic = "Error calling LLM: Connection error."
+
+    async def chat(messages, **kwargs):
+        model.calls.append(messages)
+        if after_tool and len(model.calls) == 1:
+            return LLMResponse(content=None, tool_calls=[
+                ToolCallRequest(id="call_1", name="list_dir", arguments={"path": "."}),
+            ])
+        return LLMResponse(content=diagnostic, finish_reason="error", error_should_retry=False)
+
+    monkeypatch.setattr(model, "chat", chat)
+    async with terminal.ws_connect("/ws") as ws:
+        await ws.send_json(command("input.text"))
+        events = await turn(ws)
+        assert not any(event["type"] == "reply.completed" for event in events)
+        code = "result_unknown" if after_tool else "reply_failed"
+        assert [e["payload"]["code"] for e in events if e["type"] == "error"] == [code]
+        await ws.send_json(command("input.text"))
+        snapshot = await receive(ws)
+    assert snapshot["type"] == "session.snapshot"
+    assert snapshot["payload"]["records"][0]["state"] == ("unknown" if after_tool else "failed")
+    assert diagnostic not in str([events, snapshot])
+    assert len(model.calls) == (2 if after_tool else 1)
+
+
+@pytest.mark.asyncio
+async def test_normal_reply_can_quote_a_provider_diagnostic(bridge, monkeypatch):
+    _, _, model, _, _, terminal = bridge
+    diagnostic = "Error calling LLM: Connection error."
+
+    async def chat(messages, **kwargs):
+        return LLMResponse(content=diagnostic, finish_reason="stop")
+
+    monkeypatch.setattr(model, "chat", chat)
+    _, reply = await complete(terminal)
+    assert reply["payload"]["text"] == diagnostic
+
+
+@pytest.mark.asyncio
 async def test_recreated_terminal_sync_restores_text_and_performance(bridge):
     _, _, model, _, connector, terminal = bridge
     await complete(terminal)
@@ -190,6 +232,75 @@ async def test_recreated_terminal_watches_an_already_accepted_turn(bridge):
     assert reply["payload"]["text"] == TEXT
     assert reply["payload"]["performance"] == PERFORMANCE
     assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_redispatch_if_request_disappears_between_snapshots(bridge, monkeypatch):
+    channel, bus, model, _, connector, terminal = bridge
+    original_lookup = connector.lookup
+    calls = 0
+
+    async def racing_lookup(session_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # The first synchronization observed an accepted request.  Its
+            # record is absent from the real channel by the next snapshot.
+            return [{"message_id": MESSAGE, "text": INPUT, "status": "accepted", "parts": []}]
+        return await original_lookup(session_id)
+
+    monkeypatch.setattr(connector, "lookup", racing_lookup)
+    async with terminal.ws_connect("/ws") as ws:
+        await ws.send_json(command("session.sync", "sync_racing"))
+        events = await turn(ws)
+        errors = [event for event in events if event["type"] == "error"]
+        assert [event["payload"]["code"] for event in errors] == ["result_unknown"]
+        assert not any(event["type"] == "reply.completed" for event in events)
+        assert not model.calls
+        assert bus.inbound.empty()
+        assert channel.store.snapshot(channel._store_session(SESSION)) == []
+
+        # A later synchronization must not erase the local warning merely
+        # because the upstream record is still missing.
+        await ws.send_json(command("session.sync", "sync_after_race"))
+        snapshot = await receive(ws)
+        assert snapshot["type"] == "session.snapshot"
+        assert snapshot["payload"]["records"][0]["message_id"] == MESSAGE
+        assert snapshot["payload"]["records"][0]["state"] == "unknown"
+        assert not model.calls
+
+        # A user can end the review explicitly even if the source record is
+        # still absent; that acknowledgement is not a success or cancellation.
+        await ws.send_json({
+            "version": 1, "type": "input.resolve", "session_id": SESSION,
+            "message_id": "resolve_race",
+            "payload": {"message_id": MESSAGE, "acknowledged": True},
+        })
+        resolved = await receive(ws)
+        assert resolved["type"] == "session.snapshot"
+        assert resolved["payload"]["records"][0]["state"] == "closed_unknown"
+        assert not model.calls
+
+        await ws.send_json(command("input.text"))
+        replay = await receive(ws)
+        assert replay["type"] == "session.snapshot"
+        assert replay["payload"]["records"][0]["state"] == "closed_unknown"
+        assert not model.calls
+
+        async def authoritative_lookup(_session_id):
+            return [{"message_id": MESSAGE, "text": INPUT, "status": "completed", "parts": [MODEL_REPLY]}]
+
+        monkeypatch.setattr(connector, "lookup", authoritative_lookup)
+        await ws.send_json(command("session.sync", "sync_reappeared"))
+        authoritative = await receive(ws)
+        assert authoritative["payload"]["records"][0]["state"] == "completed"
+        assert authoritative["payload"]["records"][0]["reply"] == TEXT
+        assert not model.calls
+
+        await ws.send_json(command("input.text", "after_review", "继续新的任务"))
+        fresh = await turn(ws)
+        assert any(event["type"] == "reply.completed" for event in fresh)
+        assert len(model.calls) == 1
 
 
 @pytest.mark.asyncio

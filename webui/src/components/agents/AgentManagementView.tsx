@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ImagePlus,
   LoaderCircle,
-  MessageSquarePlus,
   Pencil,
   Pin,
   PinOff,
@@ -92,12 +91,6 @@ const INHERIT_MODEL = "__inherit__";
 
 function modelBindingValue(binding: Pick<AgentModelBinding, "executor" | "model" | "provider">): string {
   return `binding:${JSON.stringify([binding.executor, binding.model, binding.provider])}`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 type ToolGroupId = "notes" | "knowledge" | "research" | "database" | "media" | "planning" | "automation" | "web" | "connections" | "files" | "office" | "communication" | "terminal" | "memory" | "skills" | "collaboration" | "system" | "other";
@@ -984,11 +977,9 @@ function SkillEditorDialog({
 export function AgentManagementView({
   agentId,
   onBack,
-  onStartDirect,
 }: {
   agentId: string;
   onBack: () => void;
-  onStartDirect: () => void;
 }) {
   const context = useClientContextOrNull();
   const [tab, setTab] = useState<Tab>("overview");
@@ -1253,13 +1244,26 @@ export function AgentManagementView({
         <Button variant="ghost" size="icon" aria-label="返回会话" onClick={onBack}><ChevronLeft className="h-4 w-4" /></Button>
         <AgentAvatar agentId={detail.agent.id} displayName={detail.agent.displayName} avatarUrl={detail.agent.avatarUrl ?? (detail.agent.id === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : null)} className="h-9 w-9" />
         <div className="min-w-0 flex-1"><h1 className="truncate text-title-sm">{detail.agent.displayName}</h1></div>
-        <Button size="sm" className="gap-1.5" onClick={onStartDirect} disabled={!detail.agent.enabled}><MessageSquarePlus className="h-4 w-4" />新建对话</Button>
+        {detail.agent.id !== MONA_AGENT_ID ? (
+          <Button size="sm" variant="destructive" className="shrink-0 gap-1.5" onClick={() => setDeleteDialogOpen(true)}>
+            <Trash2 className="h-4 w-4" />永久删除
+          </Button>
+        ) : null}
       </header>
       {visibleError ? <div className="mx-5 mt-3 flex items-center justify-between rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-caption text-destructive"><span>{visibleError}</span><button type="button" onClick={() => { setError(null); setModelExecutorsError(null); }} aria-label="关闭"><X className="h-3.5 w-3.5" /></button></div> : null}
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="flex min-h-0 flex-1 flex-col">
          <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8 !bg-transparent p-0"><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="overview">概览</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="identity">个性化</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="knowledge">知识</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="permissions">工具</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="skills">技能</TabsTrigger></TabsList></div>
         <TabsContent value="overview" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；人设和长期记忆可在“个性化”中查看、编辑和恢复上一版。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section>{detail.agent.id !== MONA_AGENT_ID ? <section className="mt-8 flex items-center justify-between gap-4 border-t border-border/60 pt-4"><div><h2 className="text-ui font-medium">删除 Agent</h2><p className="mt-1 text-caption text-muted-foreground">{purgesPrivateData ? "删除会永久清除配置、私有知识、记忆和技能；历史会话与已交付文件保留，历史会话只读。" : "配置、私有知识、记忆和技能会保留以便重新安装恢复；历史会话与已交付文件保留，历史会话只读。"}</p></div><Button variant="destructive" className="gap-1.5" onClick={() => setDeleteDialogOpen(true)}><Trash2 className="h-4 w-4" />删除 Agent</Button></section> : null}</div>
+          <div className="mx-auto max-w-3xl">
+            <ConfigFields
+              key={`${agentId}:${detail.config.revision}`}
+              detail={detail}
+              modelPresets={modelPresets}
+              modelExecutors={modelExecutors}
+              modelExecutorsLoading={modelExecutorsLoading}
+              onSave={saveConfig}
+            />
+          </div>
         </TabsContent>
         <TabsContent value="identity" className="m-0 min-h-0 flex-1 overflow-auto p-6">
           <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as InstructionKey[]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">保存时自动保留上一版。</p></div><div className="flex items-center gap-2">{selected?.hasPrevious ? <Button size="sm" variant="ghost" onClick={() => void restoreInstruction()}>恢复上一版</Button> : null}<Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /></div></div>

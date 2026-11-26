@@ -7,6 +7,8 @@ import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 
 const chatMock = vi.hoisted(() => ({
   newChat: vi.fn(),
+  isChatDeleted: () => false,
+  onSessionDeleted: () => () => {},
 }));
 
 const streamMock = vi.hoisted(() => ({ send: vi.fn() }));
@@ -46,6 +48,10 @@ vi.mock("@/hooks/useMonaStream", () => ({
     stop: vi.fn(),
     setMessages: vi.fn(),
   }),
+}));
+
+vi.mock("@/components/models/useWorkModelSelection", () => ({
+  useWorkModelSelection: () => ({ modelOptions: [], modelLabel: null, imageInputEnabled: true, selectModel: vi.fn() }),
 }));
 
 vi.mock("@/components/thread/ThreadComposer", () => ({

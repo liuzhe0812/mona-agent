@@ -12,11 +12,12 @@ import type { SessionType } from "../types/terminal";
 interface Props {
   sessionId: string | null;
   sessionType?: SessionType;
+  onOpenSettings?: (section?: string) => void;
 }
 
 type PanelTab = "task" | "history";
 
-export function AIPanel({ sessionId, sessionType }: Props) {
+export function AIPanel({ sessionId, sessionType, onOpenSettings }: Props) {
   const [tab, setTab] = useState<PanelTab>("task");
   const [messageKey, setMessageKey] = useState(0);
   const [activeTaskLoadFailed, setActiveTaskLoadFailed] = useState(false);
@@ -119,6 +120,7 @@ export function AIPanel({ sessionId, sessionType }: Props) {
                 sessionId={sessionId}
                 sessionTypeOverride={sessionType}
                 onStreamingChange={handleStreamingChange}
+                onOpenSettings={onOpenSettings}
               />
             </div>
           </>

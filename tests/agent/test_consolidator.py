@@ -173,6 +173,29 @@ class TestConsolidatorTokenBudget:
         await consolidator.maybe_consolidate_by_tokens(session)
         consolidator.archive.assert_not_called()
 
+    @pytest.mark.parametrize("summary", ["Earlier task handoff.", None])
+    async def test_manual_compaction_summarizes_early_turns_below_threshold(self, consolidator, summary):
+        session = Session(key="websocket:manual-compaction")
+        for speaker, text in (
+            ("user", "First question"), ("assistant", "First answer"),
+            ("user", "Second question"), ("assistant", "Second answer"),
+        ):
+            session.add_message(speaker, text)
+        consolidator.sessions._session_cache[session.key] = session
+        consolidator.estimate_session_prompt_tokens = MagicMock(side_effect=[(100, "test"), (45, "test")])
+        consolidator.archive = AsyncMock(return_value=summary)
+
+        await consolidator.maybe_consolidate_by_tokens(session, force=True)
+
+        assert len(session.messages) == 4
+        assert session.last_consolidated == (2 if summary else 0)
+        if summary:
+            assert session.metadata["_last_summary"]["text"] == summary
+            assert session.metadata["_manual_compaction"]["tokens"] == 45
+            assert session.get_history()[0]["content"] == "Second question"
+        else:
+            assert "_manual_compaction" not in session.metadata
+
     async def test_estimate_uses_full_unconsolidated_tail(self, consolidator):
         """Consolidation pressure must see messages hidden by the replay window."""
         session = Session(key="test:full-tail")

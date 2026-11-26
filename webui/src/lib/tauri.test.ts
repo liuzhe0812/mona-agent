@@ -68,6 +68,14 @@ describe("createNoteFromChat", () => {
     window.removeEventListener("mona:notes-changed", changed);
   });
 
+  it("passes an image to the same note creation operation", async () => {
+    const image = { data: "data:image/png;base64,aGVsbG8=", extension: "png" };
+    await expect(createNoteFromChat("图片", "", undefined, image)).resolves.toBe("note-1");
+    expect(mocks.invoke).toHaveBeenCalledWith("notes_create_from_chat", {
+      title: "图片", contentMarkdown: "", notebookId: null, image,
+    });
+  });
+
   it("saves base64 image data through the notes command", async () => {
     mocks.invoke.mockResolvedValueOnce("assets/frame.png");
     await expect(saveNoteImageData("data:image/png;base64,aGVsbG8=", "frame.png"))

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { HardDrive, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { MessageBubble } from "@/components/MessageBubble";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { WorkModelSelector } from "@/components/models/WorkModelSelector";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { buildStorageAnalysisContext, buildStorageDirectoryAnalysisContext, buildStorageFileAnalysisContext, requestStorageAnalysis, type StorageAnalysisContext, type StorageAssessment, type SystemAnalysisRequest } from "./systemAgentApi";
@@ -12,6 +14,7 @@ interface Turn {
   id: string;
   role: "user" | "assistant";
   content: string;
+  createdAt: number;
   assessment?: StorageAssessment;
   scanId?: string;
   drive?: string;
@@ -32,11 +35,12 @@ function findDirectoryById(directories: DirectorySize[], id: string): DirectoryS
   return null;
 }
 
-export function StorageConversation({ storage, selection, analysisRequest, onFileAnalysisChange }: {
+export function StorageConversation({ storage, selection, analysisRequest, onFileAnalysisChange, onOpenSettings }: {
   storage: ReturnType<typeof useStorageScan>;
   selection: DirectorySize | null;
   analysisRequest?: SystemAnalysisRequest | null;
   onFileAnalysisChange?: (fileId: string | null) => void;
+  onOpenSettings?: (section?: string) => void;
 }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [pending, setPending] = useState(false);
@@ -55,7 +59,7 @@ export function StorageConversation({ storage, selection, analysisRequest, onFil
   }, [onFileAnalysisChange]);
   useEffect(() => { bottomRef.current?.scrollIntoView?.({ block: "nearest" }); }, [turns, pending]);
 
-  const reply = (content: string, extra: Partial<Turn> = {}) => setTurns((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content, ...extra }]);
+  const reply = (content: string, extra: Partial<Turn> = {}) => setTurns((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content, createdAt: Date.now(), ...extra }]);
   const send = async (goal: string, requested?: SystemAnalysisRequest) => {
     if (!goal.trim() || requestRef.current) return;
     const controller = new AbortController();
@@ -82,7 +86,7 @@ export function StorageConversation({ storage, selection, analysisRequest, onFil
       const history = (requested ? [] : turns.filter((turn) => turn.fileId === targetContext?.fileId && turn.directoryId === targetContext?.directoryId && (!targetContext || turn.scanId === targetContext.scanId)))
         .map(({ role, content }) => ({ role, content }));
       setTurns((current) => [...current, {
-        id: crypto.randomUUID(), role: "user",
+        id: crypto.randomUUID(), role: "user", createdAt: Date.now(),
         content: requested?.fileId ? `分析文件「${targetContext!.context.scopeName}」的用途及是否可以清理` : requested?.directoryId ? `分析目录「${targetContext!.context.evidence.selectedDirectory!.name}」的作用、占用和清理办法` : goal,
         ...(targetContext ? { fileId: targetContext.fileId, directoryId: targetContext.directoryId, scanId: targetContext.scanId, drive: targetContext.drive } : {}),
       }]);
@@ -164,16 +168,18 @@ export function StorageConversation({ storage, selection, analysisRequest, onFil
     <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4 scrollbar-hover">
       {!turns.length && <p className="py-3 text-caption leading-relaxed text-muted-foreground">可以问 Mona 空间用在哪里，或直接告诉我想清理什么。</p>}
       <div role="log" aria-label="存储空间对话" className="space-y-5">
-        {turns.map((turn) => {
+        {turns.map((turn, index) => {
           const displayContent = Object.entries(turn.labels ?? {}).reduce((text, [id, label]) => text.replaceAll(id, label), turn.content);
           const directoryId = turn.assessment?.findings.find((finding) => finding.action === "inspect_directory")?.targetIds.find((id) => turn.directories?.[id]);
           const targets = (storage.result?.cleanupItems ?? []).filter((item) => item.id !== "trash" && item.cleanable && item.sizeGb > 0 && turn.assessment?.findings.some((finding) => finding.action === "plan_cleanup" && finding.targetIds.includes(item.id)));
           const eligible = turn.scanId === storage.result?.scanId && turn.drive === storage.selectedDrive && (turn.fileId || turn.directoryId || turn.scopeId === (selection?.id ?? `storage-root-${storage.result?.scanId}`));
           const busy = targets.some((item) => storage.cleaningIds.has(item.id));
-          return <div key={turn.id} className={turn.role === "user" ? "ml-8 rounded-lg bg-muted/50 px-3 py-2 text-caption" : "text-caption leading-relaxed"}>
-            {turn.role === "assistant" && <p className="mb-1 font-medium">Mona</p>}
+          return <div key={turn.id} className="min-w-0">
             {turn.scanId && !eligible && <p className="mb-1 text-micro text-muted-foreground">以下回答基于 {turn.drive} 的先前扫描范围。</p>}
-            <p className="whitespace-pre-wrap break-words">{displayContent}</p>
+            <MessageBubble
+              message={{ id: turn.id, role: turn.role, content: displayContent, createdAt: turn.createdAt }}
+              showTurnActions={turns[index + 1]?.role !== "assistant" && !(pending && index === turns.length - 1)}
+            />
             {directoryId && <Button variant="text" size="sm" className="mt-2 px-0" disabled={!eligible} onClick={() => void invoke("system_open_in_explorer", { path: turn.directories![directoryId] }).catch((error) => setFailure({ title: "无法打开目录", detail: String(error) }))}>打开{turn.labels?.[directoryId] ?? "目录"}</Button>}
             {targets.length > 0 && <Button variant="text" size="sm" className="mt-2 px-0" disabled={!eligible || busy || turn.consumed} aria-busy={busy} onClick={() => setConfirmation({ turnId: turn.id, targets, drive: turn.drive!, scanId: turn.scanId! })}>{busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{busy ? "清理中" : turn.consumed ? "已发起清理" : `清理${targets.map((item) => item.name).join("、")}`}</Button>}
             {turn.assessment?.findings.some((finding) => finding.action === "review_files") && <Button variant="text" size="sm" className="mt-2 px-0" disabled={!eligible} onClick={() => document.getElementById("storage-large-files")?.click()}>查看大文件</Button>}
@@ -184,7 +190,7 @@ export function StorageConversation({ storage, selection, analysisRequest, onFil
         <div ref={bottomRef} />
       </div>
     </div>
-    <div className="shrink-0 p-3"><ThreadComposer onSend={(content) => send(content)} placeholder="继续提问，或告诉 Mona 接下来做什么…" inputLabel="存储空间问题" sendLabel="发送给 Mona" stopLabel="停止任务" isStreaming={pending} sendDisabled={pending} onStop={stop} attachmentsEnabled={false} /></div>
+    <div className="shrink-0 p-3"><WorkModelSelector disabled={pending} onOpenSettings={onOpenSettings} /><ThreadComposer onSend={(content) => send(content)} placeholder="继续提问，或告诉 Mona 接下来做什么…" inputLabel="存储空间问题" sendLabel="发送给 Mona" stopLabel="停止任务" isStreaming={pending} sendDisabled={pending} onStop={stop} attachmentsEnabled={false} /></div>
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open) setConfirmation(null); }}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认清理</AlertDialogTitle><AlertDialogDescription>将直接删除{confirmation?.targets.map((item) => item.name).join("、")}，预计释放 {formatStorage(confirmation?.targets.reduce((sum, item) => sum + item.sizeGb, 0) ?? 0)}，不经过回收站。正在使用的文件会自动跳过。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><Button variant="destructive" onClick={() => void clean()}>确认清理</Button></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>

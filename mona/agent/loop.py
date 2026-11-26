@@ -46,6 +46,7 @@ from mona.session.checkpoint_recovery import checkpoint_message_key, restore_che
 from mona.session.goal_state import runner_wall_llm_timeout_s
 from mona.session.manager import (
     Session,
+    SessionContextError,
     SessionManager,
     SessionSaveError,
     _sanitize_native_work,
@@ -144,6 +145,7 @@ class TurnContext:
     initial_messages: list[dict[str, Any]] = field(default_factory=list)
 
     final_content: str | None = None
+    final_content_streamed: bool = False
     tools_used: list[str] = field(default_factory=list)
     all_messages: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
@@ -168,6 +170,12 @@ class TurnContext:
 
     delivered_files: list[dict[str, Any]] = field(default_factory=list)
     trace: list[StateTraceEntry] = field(default_factory=list)
+
+    @property
+    def channel_failure_status(self) -> str | None:
+        if self.msg.metadata.get("_wants_channel_turn_end") is True and self.stop_reason in {"error", "tool_error"}:
+            return "unknown" if self.tools_used else "failed"
+        return None
 
 
 class AgentLoop:
@@ -487,7 +495,7 @@ class AgentLoop:
                 context_preset = resolved.model_copy(update={"model": model})
                 resolved_window = resolve_model_context_window_details(config, context_preset)
                 context_window_tokens = resolved_window.tokens
-                context_window_verified = resolved_window.source != "default"
+                context_window_verified = resolved_window.verified
                 context_provider = config.get_provider_name(model, preset=context_preset)
             else:
                 context_window_tokens = DEFAULT_CONTEXT_WINDOW_TOKENS
@@ -1054,6 +1062,9 @@ class AgentLoop:
             runtime_config_loader=self._runtime_config_loader,
             webui_turns=self._webui_turns,
         )
+        # The parent sends turn_end for a partner's delegated turn.
+        loop._pending_turn_latency_ms = self._pending_turn_latency_ms
+        loop._pending_turn_usage = self._pending_turn_usage
         self._partner_loops[agent_id] = loop
         logger.info("PartnerAgentLoop({}) initialized for direct chat", agent_id)
         return loop
@@ -1575,17 +1586,90 @@ class AgentLoop:
             return UNIFIED_SESSION_KEY
         return msg.session_key
 
-    def _replay_token_budget(self) -> int:
+    def _session_context_window(self, session: Session | None) -> int:
+        window = session.context_window_override if session else None
+        return min(window, self.context_window_tokens) if window else self.context_window_tokens
+
+    async def manage_session_context(self, key: str, action: str, window: int | None) -> dict[str, Any]:
+        """Read or adjust a direct chat, serializing mutations with its normal turns."""
+        lock = self._session_locks.setdefault(key, asyncio.Lock())
+        if action != "read" and (lock.locked() or any(not task.done() for task in self._active_tasks.get(key, []))):
+            raise SessionContextError("请等待当前任务结束后再调整上下文。")
+        session = self.sessions.get_existing(key)
+        if session is None:
+            raise SessionContextError("找不到此对话。")
+        if action == "read":
+            loop = self._context_session_loop(session)
+            return loop._context_settings_payload(session)
+        async with lock:
+            loop = self._context_session_loop(session)
+            loop._refresh_provider_snapshot()
+            if (loop.context_provider or "").startswith("native:"):
+                raise SessionContextError("当前模型来源由原生执行器管理上下文。")
+            if action == "window":
+                if window is not None and (window < 4096 or window > loop.context_window_tokens):
+                    raise SessionContextError(f"窗口需在 4096 到 {loop.context_window_tokens} Token 之间。")
+                previous = dict(session.metadata)
+                if window is None:
+                    session.metadata.pop("context_window_override", None)
+                else:
+                    session.metadata["context_window_override"] = window
+                try:
+                    self.sessions.save(session)
+                except BaseException:
+                    session.metadata = previous
+                    raise
+            if action == "compact":
+                cursor = session.last_consolidated
+                if loop.consolidator.pick_consolidation_boundary(session, 1) is None:
+                    raise SessionContextError("目前没有可压缩的早期对话。")
+                async with self._concurrency_gate or nullcontext():
+                    await loop.consolidator.maybe_consolidate_by_tokens(session, force=True)
+                if session.last_consolidated <= cursor:
+                    raise SessionContextError("上下文压缩未完成，请稍后重试。")
+            return loop._context_settings_payload(session)
+
+    def _context_settings_payload(self, session: Session) -> dict[str, Any]:
+        result = {
+            "windowTokens": session.context_window_override,
+            "effectiveWindowTokens": self._session_context_window(session),
+            "isBudget": session.context_window_override is not None or not self.context_window_verified,
+        }
+        measured = session.metadata.get("_manual_compaction")
+        if isinstance(measured, dict) and measured.get("messages") == len(session.messages) and measured.get("cursor") == session.last_consolidated:
+            result["compacted"] = True
+            if type(measured.get("tokens")) is int:
+                result["contextTokens"] = measured["tokens"]
+        return result
+
+    def _context_session_loop(self, session: Session) -> "AgentLoop":
+        from mona.agent.partners import MONA_AGENT_ID
+
+        conversation = session.conversation_metadata
+        if conversation.type == "room":
+            raise SessionContextError("请在单独的对话中调整上下文。")
+        agent_id = conversation.direct_agent_id
+        if not agent_id or agent_id == MONA_AGENT_ID:
+            return self
+        partner = self._ensure_partner_loop(agent_id)
+        if partner is None:
+            raise SessionContextError("此对话的伙伴当前不可用。")
+        return partner
+
+    def _replay_token_budget(self, session: Session | None = None) -> int:
         """Derive a token budget for session history replay from the context window."""
-        if self.context_window_tokens <= 0:
+        window = self._session_context_window(session)
+        if window <= 0:
             return 0
         max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
         try:
             reserved_output = int(max_output)
         except (TypeError, ValueError):
             reserved_output = 4096
-        budget = self.context_window_tokens - max(1, reserved_output) - 1024
-        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+        if session and session.context_window_override:
+            reserved_output = min(reserved_output, window // 2)
+        budget = window - max(1, reserved_output) - 1024
+        return budget if budget > 0 else max(128, window // 2)
 
     async def _run_agent_loop(
         self,
@@ -1794,6 +1878,8 @@ class AgentLoop:
         effective_ws = get_current_workspace(self.workspace)
         try:
             temperature, max_tokens, reasoning_effort = self._mona_generation_overrides
+            if session and session.context_window_override:
+                max_tokens = min(max_tokens or self.provider.generation.max_tokens, self._session_context_window(session) // 2)
             from mona.providers.native_work_provider import NativeWorkProvider
 
             if isinstance(self.provider, NativeWorkProvider):
@@ -1814,8 +1900,9 @@ class AgentLoop:
                     max_parallel_tool_calls=self.max_parallel_tool_calls,
                     workspace=effective_ws,
                     session_key=session.key if session else None,
-                    context_window_tokens=self.context_window_tokens,
-                    context_window_verified=self.context_window_verified,
+                    context_window_tokens=self._session_context_window(session),
+                    context_window_verified=self.context_window_verified and not (session and session.context_window_override),
+                    context_window_limited=bool(session and session.context_window_override),
                     context_provider=self.context_provider,
                     context_block_limit=self.context_block_limit,
                     auto_compact_token_limit=self.auto_compact_token_limit,
@@ -1851,6 +1938,7 @@ class AgentLoop:
         for key in (
             "context_tokens",
             "context_window_tokens",
+            "context_budget_tokens",
             "context_model",
             "context_provider",
         ):
@@ -2027,6 +2115,7 @@ class AgentLoop:
                     self._pending_queues[session_key] = pending
                     registered = True
                     on_stream = on_stream_end = None
+                    last_stream_id: str | None = None
                     if msg.metadata.get("_wants_stream"):
                         # Split one answer into distinct stream segments.
                         stream_base_id = f"{msg.session_key}:{time.time_ns()}"
@@ -2036,9 +2125,11 @@ class AgentLoop:
                             return f"{stream_base_id}:{stream_segment}"
 
                         async def on_stream(delta: str) -> None:
+                            nonlocal last_stream_id
+                            last_stream_id = _current_stream_id()
                             meta = dict(msg.metadata or {})
                             meta["_stream_delta"] = True
-                            meta["_stream_id"] = _current_stream_id()
+                            meta["_stream_id"] = last_stream_id
                             await self.bus.publish_outbound(
                                 OutboundMessage(
                                     channel=msg.channel,
@@ -2070,8 +2161,19 @@ class AgentLoop:
                         on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
+                    channel_turn_status = "completed"
+                    final_stream_id = None
                     if response is not None:
-                        await self.bus.publish_outbound(response)
+                        status = response.metadata.get("_channel_turn_status")
+                        if msg.metadata.get("_wants_channel_turn_end") is True and status in ("failed", "unknown"):
+                            channel_turn_status = status
+                        else:
+                            if msg.channel == "websocket" and response.content.strip():
+                                if response.metadata.get("_streamed"):
+                                    final_stream_id = last_stream_id
+                                else:
+                                    response.metadata["_final_response"] = True
+                            await self.bus.publish_outbound(response)
                     elif msg.channel == "cli":
                         await self.bus.publish_outbound(
                             OutboundMessage(
@@ -2081,7 +2183,6 @@ class AgentLoop:
                                 metadata=msg.metadata or {},
                             )
                         )
-                    channel_turn_status = "completed"
                     if msg.channel == "websocket":
                         turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
                         turn_usage = self._pending_turn_usage.pop(session_key, None)
@@ -2090,6 +2191,7 @@ class AgentLoop:
                             session_key=session_key,
                             latency_ms=turn_lat,
                             token_usage=turn_usage,
+                            final_stream_id=final_stream_id,
                         )
                 except asyncio.CancelledError:
                     channel_turn_status = "interrupted"
@@ -2119,7 +2221,8 @@ class AgentLoop:
                         )
                     raise
                 except Exception as exc:
-                    channel_turn_status = "failed"
+                    # An exception can occur after a tool has already run.
+                    channel_turn_status = "unknown"
                     if work_turn is not None and work_turn.state == "stopping":
                         work_turn.cleanup_failed = True
                     logger.exception("Error processing message for session {}", session_key)
@@ -2437,7 +2540,7 @@ class AgentLoop:
             session=session,
         )
         _hist_kwargs: dict[str, Any] = {
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(session),
             "include_timestamps": True,
         }
         history = self._build_model_history(session, **_hist_kwargs)
@@ -2680,7 +2783,7 @@ class AgentLoop:
         all_msgs: list[dict[str, Any]],
         stop_reason: str,
         had_injections: bool,
-        on_stream: Callable[[str], Awaitable[None]] | None,
+        final_content_streamed: bool,
         *,
         turn_latency_ms: int | None = None,
         token_usage: dict[str, Any] | None = None,
@@ -2700,7 +2803,7 @@ class AgentLoop:
 
         meta = dict(msg.metadata or {})
         meta.pop(DELIVER_FILES_PENDING_META, None)
-        if on_stream is not None and stop_reason not in {"error", "tool_error"}:
+        if final_content_streamed and stop_reason not in {"error", "tool_error"}:
             meta["_streamed"] = True
         if turn_latency_ms is not None:
             meta["latency_ms"] = int(turn_latency_ms)
@@ -2832,8 +2935,10 @@ class AgentLoop:
         if tokens is None or ctx.msg.channel != "websocket" or ctx.on_progress is None:
             return
         usage: dict[str, Any] = {"context_tokens": tokens, "context_model": self.model}
-        if self.context_window_verified:
-            usage["context_window_tokens"] = self.context_window_tokens
+        window = self._session_context_window(ctx.session)
+        if window > 0:
+            key = "context_window_tokens" if self.context_window_verified and not ctx.session.context_window_override else "context_budget_tokens"
+            usage[key] = window
         if self.context_provider:
             usage["context_provider"] = self.context_provider
         await ctx.on_progress("", token_usage=usage)
@@ -2883,7 +2988,7 @@ class AgentLoop:
                 message_tool.start_turn()
 
         _hist_kwargs: dict[str, Any] = {
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(ctx.session),
             "include_timestamps": True,
         }
         ctx.history = self._build_model_history(ctx.session, **_hist_kwargs)
@@ -2961,11 +3066,26 @@ class AgentLoop:
 
     async def _state_run(self, ctx: TurnContext) -> str:
         await self._webui_turns.publish_run_status(ctx.msg, "running")
+        streamed_parts: list[str] = []
+        last_stream = ""
+
+        async def record_delta(delta: str) -> None:
+            if ctx.on_stream is not None:
+                await ctx.on_stream(delta)
+                streamed_parts.append(delta)
+
+        async def close_segment(*, resuming: bool = False) -> None:
+            nonlocal last_stream
+            if ctx.on_stream_end is not None:
+                await ctx.on_stream_end(resuming=resuming)
+            last_stream = "" if resuming else "".join(streamed_parts)
+            streamed_parts.clear()
+
         result = await self._run_agent_loop(
             ctx.initial_messages,
             on_progress=ctx.on_progress,
-            on_stream=ctx.on_stream,
-            on_stream_end=ctx.on_stream_end,
+            on_stream=record_delta if ctx.on_stream is not None else None,
+            on_stream_end=close_segment if (ctx.on_stream or ctx.on_stream_end) else None,
             on_retry_wait=ctx.on_retry_wait,
             session=ctx.session,
             channel=ctx.msg.channel,
@@ -2983,6 +3103,9 @@ class AgentLoop:
             had_injections,
         ) = result
         ctx.final_content = final_content
+        # Earlier tool narration and reasoning do not prove the final text was sent.
+        streamed_text = ("".join(streamed_parts) if streamed_parts else last_stream).strip()
+        ctx.final_content_streamed = bool(streamed_text) and streamed_text == (final_content or "").strip()
         ctx.turn_usage = dict(self._last_usage)
         ctx.tools_used = tools_used
         ctx.all_messages = all_msgs
@@ -3024,7 +3147,8 @@ class AgentLoop:
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)
-        self._record_completed_turn_history(ctx.msg.content, ctx.final_content)
+        if ctx.channel_failure_status is None:
+            self._record_completed_turn_history(ctx.msg.content, ctx.final_content)
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
@@ -3052,13 +3176,21 @@ class AgentLoop:
             )
 
     async def _state_respond(self, ctx: TurnContext) -> str:
+        if status := ctx.channel_failure_status:
+            # The client acts on the receipt. Provider diagnostics are never a
+            # spoken reply, and prior tool execution may require reconciliation.
+            ctx.outbound = OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id, content="",
+                metadata={"_channel_turn_status": status},
+            )
+            return "ok"
         ctx.outbound = self._assemble_outbound(
             ctx.msg,
             ctx.final_content,
             ctx.all_messages,
             ctx.stop_reason,
             ctx.had_injections,
-            ctx.on_stream,
+            ctx.final_content_streamed,
             turn_latency_ms=ctx.turn_latency_ms,
             token_usage=ctx.turn_usage,
             delivered_files=ctx.delivered_files,

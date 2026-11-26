@@ -10,12 +10,27 @@ const chatMock = vi.hoisted(() => ({
   isStreaming: false,
   stopping: false,
   onDocUploadResult: vi.fn(() => () => {}),
+  onSessionDeleted: vi.fn(() => () => {}),
+  isChatDeleted: vi.fn(() => false),
   newChat: vi.fn(() => Promise.resolve("system-agent-chat")),
+  selectModel: vi.fn(),
+}));
+
+vi.mock("@/components/models/useWorkModelSelection", () => ({
+  useWorkModelSelection: () => ({
+    modelLabel: "API Shared",
+    modelOptions: [
+      { provider: "example", providerLabel: "Example API", model: "shared", label: "API Shared", active: true },
+      { provider: "native:codex", providerLabel: "OpenAI", model: "native-model", label: "原生 Codex", executor: "codex" },
+    ],
+    imageInputEnabled: true,
+    selectModel: chatMock.selectModel,
+  }),
 }));
 
 vi.mock("@/providers/ClientProvider", () => ({
   useClientOptional: () => ({ client: { newChat: chatMock.newChat }, token: "test" }),
-  useClientContextOrNull: () => ({ client: { newChat: chatMock.newChat, onDocUploadResult: chatMock.onDocUploadResult }, token: "test" }),
+  useClientContextOrNull: () => ({ client: { newChat: chatMock.newChat, onDocUploadResult: chatMock.onDocUploadResult, onSessionDeleted: chatMock.onSessionDeleted, isChatDeleted: chatMock.isChatDeleted }, token: "test" }),
 }));
 
 vi.mock("@/hooks/useSessions", () => ({
@@ -74,6 +89,16 @@ describe("SystemAgentChat", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送给 Mona" }));
     expect(chatMock.send).toHaveBeenCalledWith("先检查\n不要删除文件", undefined, undefined);
     expect(input).toHaveValue("");
+  });
+
+  it("offers the ordinary Work model selector including native engines", async () => {
+    render(<SystemAgentChat chatId="system-agent-chat" task={null} onChatCreated={vi.fn()} onTaskHandled={vi.fn()} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "API Shared" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "OpenAI · 原生 Codex" }));
+    await waitFor(() => expect(chatMock.selectModel).toHaveBeenCalledWith(
+      expect.objectContaining({ executor: "codex", model: "native-model" }), null,
+    ));
+    expect(chatMock.send).not.toHaveBeenCalled();
   });
 
   it("keeps stop available with an empty draft and prevents a second stop while confirming", () => {

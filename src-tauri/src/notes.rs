@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri_plugin_dialog::DialogExt;
 
@@ -1757,22 +1758,88 @@ pub(crate) fn read_legacy_canvas_notes() -> Result<Vec<OperationNote>, String> {
         .collect())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChatNoteImage {
+    pub data: String,
+    pub extension: String,
+}
+
 #[tauri::command]
 pub async fn notes_create_from_chat(
     title: String,
     content_markdown: String,
     notebook_id: Option<String>,
+    image: Option<ChatNoteImage>,
 ) -> Result<String, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let vault = read_vault_path()
         .ok_or_else(|| "Notes vault is not configured".to_string())?;
+    create_note_from_chat_at(&vault, title, content_markdown, notebook_id, image)
+}
 
-    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
+fn write_new_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    if let Err(error) = file.write_all(content) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn write_chat_note(path: &Path, content: &str, image_path: Option<&Path>) -> Result<(), String> {
+    if let Err(error) = write_new_file(path, content.as_bytes()) {
+        if let Some(image_path) = image_path {
+            if fs::remove_file(image_path).is_err() {
+                log::warn!("Failed to remove image after chat note creation failed");
+            }
+        }
+        return Err(format!("Failed to write note: {}", error));
+    }
+    Ok(())
+}
+
+fn create_note_from_chat_at(
+    vault: &Path,
+    title: String,
+    mut content_markdown: String,
+    notebook_id: Option<String>,
+    image: Option<ChatNoteImage>,
+) -> Result<String, String> {
+    let image_data = image.map(|image| {
+        let extension = image.extension.to_ascii_lowercase();
+        if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "avif") {
+            return Err("Image format is not supported".to_string());
+        }
+        Ok((decode_note_image_data(&image.data)?, extension))
+    }).transpose()?;
 
     // Chat-saved notes default to a dedicated notebook; explicit user choices win.
     let folder_name = chat_notebook_name(notebook_id);
     let notebook_dir = vault.join(&folder_name);
     fs::create_dir_all(&notebook_dir)
         .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
+
+    let image_path = if let Some((bytes, extension)) = image_data {
+        let assets_dir = vault.join("assets");
+        fs::create_dir_all(&assets_dir)
+            .map_err(|e| format!("Failed to create notes assets dir: {}", e))?;
+        let resolved_vault = vault.canonicalize().map_err(|_| "Notes vault is unavailable")?;
+        let resolved_assets = assets_dir.canonicalize().map_err(|_| "Notes assets directory is unavailable")?;
+        if !resolved_assets.starts_with(resolved_vault) {
+            return Err("Notes assets directory is outside the vault".to_string());
+        }
+        let file_name = format!("chat-image-{}.{}", uuid::Uuid::new_v4(), extension);
+        let path = resolved_assets.join(&file_name);
+        write_new_file(&path, &bytes).map_err(|e| format!("Failed to write image to assets: {}", e))?;
+        if !content_markdown.is_empty() {
+            content_markdown.push_str("\n\n");
+        }
+        content_markdown.push_str(&format!("![](assets/{})", file_name));
+        Some(path)
+    } else {
+        None
+    };
 
     let note_id = format!("note-{}", uuid::Uuid::new_v4());
     let now_iso = chrono::Utc::now().to_rfc3339();
@@ -1810,8 +1877,7 @@ pub async fn notes_create_from_chat(
         counter += 1;
     }
 
-    fs::write(&file_path, serialize_note_to_file(&note))
-        .map_err(|e| format!("Failed to write note: {}", e))?;
+    write_chat_note(&file_path, &serialize_note_to_file(&note), image_path.as_deref())?;
 
     Ok(note_id)
 }
@@ -2412,6 +2478,56 @@ mod tests {
             super::chat_notebook_name(Some("指定分类".to_string())),
             "指定分类"
         );
+    }
+
+    #[test]
+    fn chat_image_note_keeps_image_in_vault_and_references_it() {
+        let vault = tempdir().unwrap();
+        let image = super::ChatNoteImage {
+            data: "data:image/png;base64,aGVsbG8=".to_string(),
+            extension: "png".to_string(),
+        };
+        let id = super::create_note_from_chat_at(
+            vault.path(), "封面".to_string(), String::new(), None, Some(image),
+        ).unwrap();
+
+        let notes = super::scan_vault_notes(vault.path()).unwrap();
+        let note = notes.iter().find(|note| note.id == id).unwrap();
+        let image_name = note.content_markdown
+            .strip_prefix("![](assets/").unwrap()
+            .strip_suffix(')').unwrap();
+        assert!(image_name.starts_with("chat-image-"));
+        assert!(image_name.ends_with(".png"));
+        assert_eq!(fs::read(vault.path().join("assets").join(image_name)).unwrap(), b"hello");
+
+        super::cleanup_orphaned_assets_vault(vault.path(), &notes).unwrap();
+        assert!(vault.path().join("assets").join(image_name).exists());
+    }
+
+    #[test]
+    fn chat_note_write_failure_removes_new_image() {
+        let vault = tempdir().unwrap();
+        let image = vault.path().join("image.png");
+        fs::write(&image, b"image").unwrap();
+        let note = vault.path().join("note.md");
+        fs::create_dir(&note).unwrap();
+
+        assert!(super::write_chat_note(&note, "content", Some(&image)).is_err());
+        assert!(!image.exists());
+        assert!(note.is_dir());
+    }
+
+    #[test]
+    fn chat_image_note_rejects_invalid_extension_before_writing() {
+        let vault = tempdir().unwrap();
+        let image = super::ChatNoteImage {
+            data: "data:image/png;base64,aGVsbG8=".to_string(),
+            extension: "../png".to_string(),
+        };
+        assert!(super::create_note_from_chat_at(
+            vault.path(), "封面".to_string(), String::new(), None, Some(image),
+        ).is_err());
+        assert_eq!(fs::read_dir(vault.path()).unwrap().count(), 0);
     }
 
     #[test]

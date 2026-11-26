@@ -15,6 +15,71 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
 
 @pytest.mark.asyncio
+async def test_runner_publishes_request_stats_without_changing_billing_usage():
+    from mona.agent.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(side_effect=[
+        LLMResponse(
+            content="working",
+            tool_calls=[ToolCallRequest(id="call_1", name="read_file", arguments={})],
+            usage={"prompt_tokens": 100, "completion_tokens": 10, "reported_cache_read_tokens": 0},
+        ),
+        LLMResponse(content="done", usage={"completion_tokens": 20, "reasoning_tokens": 4}),
+    ])
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="result")
+    events = []
+
+    async def on_progress(_content: str, *, token_usage=None):
+        if token_usage:
+            events.append(token_usage)
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "work"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        progress_callback=on_progress,
+    ))
+
+    assert len(events) == 2
+    first, second = (event["request_stats"] for event in events)
+    assert first == {
+        "index": 0,
+        "elapsed_ms": first["elapsed_ms"],
+        "output_tokens": 10,
+        "input_tokens": 100,
+        "cache_read_tokens": 0,
+    }
+    assert second == {
+        "index": 1,
+        "elapsed_ms": second["elapsed_ms"],
+        "output_tokens": 20,
+        "reasoning_tokens": 4,
+    }
+    assert first["elapsed_ms"] >= 1 and second["elapsed_ms"] >= 1
+    assert "context_tokens" not in events[1]
+    assert "request_stats" not in result.usage
+    assert "request_stats" not in result.final_usage
+    assert result.usage["completion_tokens"] == 30
+    assert result.usage["cached_tokens"] == 0
+
+
+def test_runner_request_stats_ignore_failed_or_unreported_usage():
+    from mona.agent.hook import AgentHookContext
+    from mona.agent.runner import AgentRunner
+
+    context = AgentHookContext(iteration=0, messages=[], request_elapsed_ms=500)
+    assert AgentRunner._request_stats(LLMResponse(content="failed", finish_reason="error", usage={"completion_tokens": 10}), context) is None
+    assert AgentRunner._request_stats(LLMResponse(content="failed", error_code="insufficient_credits", usage={"completion_tokens": 10}), context) is None
+    assert AgentRunner._request_stats(LLMResponse(content="unknown", usage={"prompt_tokens": 20}), context) is None
+    assert AgentRunner._request_stats(LLMResponse(content="unknown", usage={"completion_tokens": 0}), context) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status,code", [(402, None), (None, "insufficient_credits")])
 async def test_balance_error_preserves_queued_inputs_without_another_model_call(status, code):
     from mona.agent.runner import AgentRunner, AgentRunSpec

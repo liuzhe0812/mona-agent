@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -29,9 +30,11 @@ vi.mock("@/lib/api", () => ({
   fetchExpertCatalog: mocks.fetchCatalog,
   fetchExpertInstallJob: mocks.fetchJob,
   startExpertInstall: mocks.startInstall,
+  cancelExpertInstall: vi.fn(),
 }));
 
 import { SessionListPanel } from "./SessionListPanel";
+import { ExpertLibraryDialog } from "@/components/experts/ExpertLibraryDialog";
 
 const update = {
   id: "com.mona.musician",
@@ -87,8 +90,10 @@ describe("SessionListPanel expert updates", () => {
     });
   });
 
-  it("shows and runs an available update beside the matching Agent", async () => {
-    render(
+  it("offers existing partner updates through the new partner menu", async () => {
+    function SidebarWithPartnerLibrary() {
+      const [open, setOpen] = useState(false);
+      return <>
       <SessionListPanel
         sessions={[]}
         activeKey={null}
@@ -100,22 +105,22 @@ describe("SessionListPanel expert updates", () => {
         onToggleArchive={vi.fn()}
         onMarkAllRead={vi.fn()}
         onToggleArchived={vi.fn()}
+        onNewTask={vi.fn()}
         onStartDirect={vi.fn()}
-        onSelectAgent={vi.fn()}
-        onOpenExpertLibrary={vi.fn()}
+        onOpenExpertLibrary={() => setOpen(true)}
         onNewRoom={vi.fn()}
-      />,
-    );
+      />
+      <ExpertLibraryDialog open={open} token="tok" onOpenChange={setOpen} onStartDirect={vi.fn()} />
+      </>;
+    }
+    render(<SidebarWithPartnerLibrary />);
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "Create conversation" }), { key: "Enter" });
-    const updateButton = await screen.findByRole("button", { name: "Update Musician" });
-    expect(updateButton).toHaveClass("h-7", "w-7");
-    expect(updateButton).not.toHaveTextContent("Update");
-    expect(updateButton.querySelector("svg")).not.toBeNull();
-    fireEvent.click(updateButton);
+    fireEvent.keyDown(screen.getByRole("button", { name: "New partner or group chat" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Summon partner" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update" }));
 
     await waitFor(() => expect(mocks.invalidateAgents).toHaveBeenCalledOnce());
     expect(mocks.startInstall).toHaveBeenCalledWith("tok", update.id, update.version);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Update Musician" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument());
   });
 });

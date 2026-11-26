@@ -31,6 +31,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -48,15 +49,17 @@ import { AppTitleBar } from "@/components/workspace/AppTitleBar";
 import { BrowserTabView } from "@/components/browser/BrowserTabView";
 import { HistoryPage } from "@/components/browser/HistoryPage";
 import { DownloadsPage } from "@/components/browser/DownloadsPage";
-import { useBrowserTabs } from "@/hooks/useBrowserTabs";
-import { listenForBrowserUrls } from "@/lib/browser-ipc";
+import { createBrowserTabId, useBrowserTabs, type Tab } from "@/hooks/useBrowserTabs";
+import { browserCloseTab, listenForBrowserUrls, openConversationBrowser } from "@/lib/browser-ipc";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 import { useDbStore } from "@/components/db/store/dbStore";
 import { useMdReaderStore } from "@/components/md-reader/mdReaderStore";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
+import { useDesktopUnreadBadge } from "@/hooks/useDesktopUnreadBadge";
 import {
+  countUnreadAiConversations,
   isSessionUnread,
   markAllSessionsRead,
   markSessionRead,
@@ -82,11 +85,11 @@ import {
 import { ApiError, removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
-import { MonaClient } from "@/lib/mona-client";
+import { MonaClient, RoomCommandError } from "@/lib/mona-client";
 import { warmNativeProviderConnections } from "@/lib/native-provider-bootstrap";
 import type { ProfileArtifact, ProfileStartRequest } from "@/lib/profile-api";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
-import type { ArtifactRef, ChatSummary, DeliveredFile } from "@/lib/types";
+import type { ArtifactRef, BranchReplySource, ChatSummary, DeliveredFile } from "@/lib/types";
 import { isTauri, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,6 +109,14 @@ type BootState =
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
 type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile" | "stock" | "development";
+
+const EMPTY_SIDEBAR_BROWSER: Tab = {
+  id: "sidebar-browser-empty",
+  type: "browser",
+  title: "新标签页",
+  isAiControlled: false,
+  webviewCreated: false,
+};
 
 export function openNewBrowserTab(
   setView: (view: ShellView) => void,
@@ -525,6 +536,7 @@ function Shell({
     error: sessionError,
     refresh,
     createChat,
+    openPartnerChat,
     branchChat,
     deleteChat,
   } = useSessions();
@@ -548,6 +560,8 @@ function Shell({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingDirectAgentId, setPendingDirectAgentId] = useState<string | null>(null);
   const [pendingDirectAgentName, setPendingDirectAgentName] = useState<string | null>(null);
+  const [openingPartnerId, setOpeningPartnerId] = useState<string | null>(null);
+  const partnerOpenRequest = useRef<symbol | null>(null);
   const [managedAgentId, setManagedAgentId] = useState<string | null>(null);
   const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
@@ -588,6 +602,7 @@ function Shell({
   const [settingsInitialSection, setSettingsInitialSection] = useState<string | undefined>(undefined);
   const {
     tabs: browserTabs,
+    conversationBrowserOpens,
     activeTabId: activeBrowserTabId,
     activeTab: activeBrowserTab,
     addEmptyTab,
@@ -637,8 +652,7 @@ function Shell({
       unlisten?.();
     };
   }, []);
-  const [sidebarBrowserTabId, setSidebarBrowserTabId] = useState<string | null>(null);
-  const [sidebarBrowserVisible, setSidebarBrowserVisible] = useState(false);
+  const [visibleSidebarBrowserId, setVisibleSidebarBrowserId] = useState<string | null>(null);
   const [developmentBrowserIds, setDevelopmentBrowserIds] = useState<string[]>([]);
   const [developmentBrowserVisibleId, setDevelopmentBrowserVisibleId] = useState<string | null>(null);
   const createDevelopmentBrowser = useCallback(() => {
@@ -654,59 +668,10 @@ function Shell({
     reload: (id: string) => { void reload(id); }, updateUrl: updateTabUrl,
     openDevtools: (id: string) => { void openDevtools(id); }, setVisible: setDevelopmentBrowserVisibleId,
   }), [browserTabs, createDevelopmentBrowser, navigateToUrl, goBack, goForward, reload, updateTabUrl, openDevtools]);
-  const sidebarBrowserTab = browserTabs.find((tab) => tab.id === sidebarBrowserTabId) ?? null;
-  const ensureSidebarBrowser = useCallback(() => {
-    if (sidebarBrowserTabId && browserTabs.some((tab) => tab.id === sidebarBrowserTabId)) return;
-    setSidebarBrowserTabId(addEmptyTab({ activate: false }));
-  }, [addEmptyTab, browserTabs, sidebarBrowserTabId]);
-  useEffect(() => {
-    if (sidebarBrowserVisible && !sidebarBrowserTab) ensureSidebarBrowser();
-  }, [ensureSidebarBrowser, sidebarBrowserTab, sidebarBrowserVisible]);
   const titleBarBrowserTabs = useMemo(
-    () => browserTabs.filter((tab) => tab.id !== sidebarBrowserTabId && !developmentBrowserIds.includes(tab.id)),
-    [browserTabs, sidebarBrowserTabId, developmentBrowserIds],
+    () => browserTabs.filter((tab) => !tab.conversationId && !developmentBrowserIds.includes(tab.id)),
+    [browserTabs, developmentBrowserIds],
   );
-  const sidebarBrowserController = useMemo(() => ({
-    tab: sidebarBrowserTab,
-    navigate: (url: string) => {
-      if (sidebarBrowserTab) void navigateToUrl(sidebarBrowserTab.id, url);
-    },
-    goBack: () => {
-      if (sidebarBrowserTab) void goBack(sidebarBrowserTab.id);
-    },
-    goForward: () => {
-      if (sidebarBrowserTab) void goForward(sidebarBrowserTab.id);
-    },
-    reload: () => {
-      if (sidebarBrowserTab) void reload(sidebarBrowserTab.id);
-    },
-    updateUrl: (url: string) => {
-      if (sidebarBrowserTab) updateTabUrl(sidebarBrowserTab.id, url);
-    },
-    toggleMute: () => {
-      if (sidebarBrowserTab) void toggleMute(sidebarBrowserTab.id);
-    },
-    toggleAdBlock: () => {
-      if (sidebarBrowserTab) void toggleAdBlock(sidebarBrowserTab.id);
-    },
-    toggleDarkMode: () => {
-      if (sidebarBrowserTab) void toggleDarkMode(sidebarBrowserTab.id);
-    },
-    openDevtools: () => {
-      if (sidebarBrowserTab) void openDevtools(sidebarBrowserTab.id);
-    },
-  }), [
-    goBack,
-    goForward,
-    navigateToUrl,
-    openDevtools,
-    reload,
-    sidebarBrowserTab,
-    toggleAdBlock,
-    toggleDarkMode,
-    toggleMute,
-    updateTabUrl,
-  ]);
   const mdReaderTabs = useMdReaderStore((s) => s.tabs);
   const saveMdAsNote = useCallback((tabId: string) => {
     const tab = browserTabs.find((t) => t.id === tabId);
@@ -736,15 +701,19 @@ function Shell({
   const [mobileSidebarContainer, setMobileSidebarContainer] = useState<HTMLElement | null>(null);
   const [rightWorkspaceMaximized, setRightWorkspaceMaximized] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<{
-    keys: string[];
-    label: string;
-  } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<
+    { keys: string[]; label: string; partnerCopy?: boolean } | { agentId: string; label: string } | null
+  >(null);
   const [deletingSessions, setDeletingSessions] = useState(false);
+  const [pendingArchive, setPendingArchive] = useState<string[] | null>(null);
+  const deleteInProgress = useRef(false);
+  const copyPartnerInProgress = useRef(false);
+  const [copyingPartner, setCopyingPartner] = useState(false);
   const [sessionActionError, setSessionActionError] = useState<{ title: string; description: string } | null>(null);
   const [pendingRename, setPendingRename] = useState<{
     key: string;
     label: string;
+    partnerAlias?: boolean;
   } | null>(null);
   const restartSawDisconnectRef = useRef(false);
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -1039,6 +1008,50 @@ function Shell({
       preview: "",
     };
   }, [sessions, activeKey]);
+  const sidebarBrowserChatId = isTauri() && activeSession?.channel === "websocket"
+    && activeSession.conversation?.type !== "room" ? activeSession.chatId : null;
+  const sidebarBrowserTab = sidebarBrowserChatId
+    ? browserTabs.find((tab) => tab.conversationId === sidebarBrowserChatId) : undefined;
+  const sidebarBrowserOpen = sidebarBrowserChatId
+    ? conversationBrowserOpens.get(sidebarBrowserChatId) : undefined;
+  const openSidebarBrowser = useCallback((url: string) => {
+    if (!sidebarBrowserChatId || client?.isChatDeleted(sidebarBrowserChatId)) return;
+    void openConversationBrowser(createBrowserTabId(), sidebarBrowserChatId, url).catch((error) => {
+      console.error("[browser] conversation page open failed:", error);
+      setSessionActionError({ title: "打开网页失败", description: "右侧栏未能打开此网页，请重试。" });
+    });
+  }, [client, sidebarBrowserChatId]);
+  const closeSidebarBrowser = useCallback(async () => {
+    if (!sidebarBrowserTab) return true;
+    try {
+      await browserCloseTab(sidebarBrowserTab.id);
+      return true;
+    } catch (error) {
+      console.error("[browser] conversation page close failed:", error);
+      setSessionActionError({ title: "关闭网页失败", description: "右侧栏中的网页未关闭，请重试。" });
+      return false;
+    }
+  }, [sidebarBrowserTab]);
+  const sidebarBrowserController = useMemo(() => ({
+    tab: sidebarBrowserTab ?? EMPTY_SIDEBAR_BROWSER,
+    navigate: openSidebarBrowser,
+    goBack: () => { if (sidebarBrowserTab) void goBack(sidebarBrowserTab.id); },
+    goForward: () => { if (sidebarBrowserTab) void goForward(sidebarBrowserTab.id); },
+    reload: () => { if (sidebarBrowserTab) void reload(sidebarBrowserTab.id); },
+    updateUrl: (url: string) => { if (sidebarBrowserTab) updateTabUrl(sidebarBrowserTab.id, url); },
+    toggleMute: () => { if (sidebarBrowserTab) void toggleMute(sidebarBrowserTab.id); },
+    toggleAdBlock: () => { if (sidebarBrowserTab) void toggleAdBlock(sidebarBrowserTab.id); },
+    toggleDarkMode: () => { if (sidebarBrowserTab) void toggleDarkMode(sidebarBrowserTab.id); },
+    openDevtools: () => { if (sidebarBrowserTab) void openDevtools(sidebarBrowserTab.id); },
+  }), [goBack, goForward, openDevtools, openSidebarBrowser, reload, sidebarBrowserTab,
+    toggleAdBlock, toggleDarkMode, toggleMute, updateTabUrl]);
+  useEffect(() => {
+    for (const tab of browserTabs) {
+      if (tab.conversationId && client?.isChatDeleted(tab.conversationId)) {
+        void browserCloseTab(tab.id).catch((error) => console.error("[browser] deleted conversation page cleanup failed:", error));
+      }
+    }
+  }, [browserTabs, client]);
   const runningChatIdList = useMemo(() => Array.from(runningChatIds), [runningChatIds]);
   const unreadSessionKeys = useMemo(
     () => sessions
@@ -1052,7 +1065,11 @@ function Shell({
   const onMarkAllRead = useCallback(() => {
     void updateSidebarState((current) => markAllSessionsRead(current, sessions));
   }, [sessions, updateSidebarState]);
-  const visibleSession = view === "chat" ? activeSession : view === "doc" && visibleDocumentChatId ? sessions.find((session) => session.chatId === visibleDocumentChatId) ?? null : null;
+  const visibleSession = view === "chat" && !managedAgentId
+    ? activeSession
+    : view === "doc" && visibleDocumentChatId
+      ? sessions.find((session) => session.chatId === visibleDocumentChatId) ?? null
+      : null;
   const messageAttentionCount = useMemo(() => {
     const attentionKeys = new Set(unreadSessionKeys);
     for (const session of sessions) {
@@ -1096,6 +1113,14 @@ function Shell({
     updateSidebarState,
     view,
   ]);
+
+  const desktopUnreadCount = useMemo(() =>
+    sessionsLoaded && !sidebarStateLoading
+      ? countUnreadAiConversations(sessions, sidebarState.last_read_at_by_key)
+      : 0,
+    [sessions, sessionsLoaded, sidebarState.last_read_at_by_key, sidebarStateLoading],
+  );
+  useDesktopUnreadBadge(desktopUnreadCount);
 
   useEffect(() => {
     if (loading) return;
@@ -1309,11 +1334,11 @@ function Shell({
 
   const onBranchChat = useCallback(async (
     sourceChatId: string,
-    assistantOrdinal: number,
+    source: BranchReplySource,
     sourceTaskId?: string,
   ) => {
     try {
-      const chatId = await branchChat(sourceChatId, assistantOrdinal, sourceTaskId);
+      const chatId = await branchChat(sourceChatId, source, sourceTaskId);
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
       switchToMonaTab();
@@ -1371,7 +1396,13 @@ function Shell({
     [createChat, switchToMonaTab],
   );
 
+  const cancelPartnerOpen = useCallback(() => {
+    partnerOpenRequest.current = null;
+    setOpeningPartnerId(null);
+  }, []);
+
   const onNewChat = useCallback(() => {
+    cancelPartnerOpen();
     setManagedAgentId(null);
     setPendingDirectAgentId(null);
     setPendingDirectAgentName(null);
@@ -1379,36 +1410,16 @@ function Shell({
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
-
-  /** Open a direct-agent draft. The actual chat is created on first send. */
-  const onStartDirect = useCallback(
-    (agentId: string, displayName?: string) => {
-      if (creatingConversation) return;
-      if (agentId === MONA_AGENT_ID) {
-        onNewChat();
-        return;
-      }
-      setManagedAgentId(null);
-      setPendingDirectAgentId(agentId);
-      setPendingDirectAgentName(displayName ?? null);
-      setActiveKey(null);
-      setView("chat");
-      switchToMonaTab();
-      setMobileSidebarOpen(false);
-    },
-    [creatingConversation, onNewChat, switchToMonaTab],
-  );
+  }, [cancelPartnerOpen, switchToMonaTab]);
 
   const onCreateDirectChat = useCallback(
-    async (agentId: string, workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
+    async (agentId: string, _workspace?: string | null, beforeActivate?: (chatId: string) => boolean) => {
       if (creatingConversation || !client) return null;
       setCreatingConversation(true);
       const navigation = creationNavigationRef.current;
       try {
-        const chatId = await createChat(workspace);
-        await client.createDirectConversation(chatId, agentId);
-        await refresh();
+        const chatId = await openPartnerChat(agentId, true);
+        if (!chatId) return null;
         if (beforeActivate && (creationNavigationRef.current !== navigation || !beforeActivate(chatId))) return chatId;
         setActiveKey(`websocket:${chatId}`);
         setView("chat");
@@ -1419,13 +1430,13 @@ function Shell({
         setManagedAgentId(null);
         return chatId;
       } catch (e) {
-        console.error("Failed to create direct conversation", e);
+        console.error("Failed to open partner conversation for first message", e);
         return null;
       } finally {
         setCreatingConversation(false);
       }
     },
-    [client, creatingConversation, createChat, refresh, switchToMonaTab],
+    [client, creatingConversation, openPartnerChat, switchToMonaTab],
   );
 
   /** 创建协作房间：新建会话后调用 createRoom 命令。 */
@@ -1449,33 +1460,19 @@ function Shell({
   );
 
   const onOpenNewRoom = useCallback((agentId?: string) => {
+    cancelPartnerOpen();
     setRoomInitialAgents(agentId ? [agentId] : undefined);
     setRoomDialogOpen(true);
-  }, []);
+  }, [cancelPartnerOpen]);
 
-  const onSelectAgent = useCallback((agentId: string) => {
+  const onOpenAgentSettings = useCallback((agentId: string) => {
+    cancelPartnerOpen();
     setManagedAgentId(agentId);
-    setPendingDirectAgentId(null);
-    setPendingDirectAgentName(null);
-    setActiveKey(null);
-    setView("chat");
-    switchToMonaTab();
-    setMobileSidebarOpen(false);
-  }, [switchToMonaTab]);
-
-  const onCreateCustomExpert = useCallback(async (input: CustomExpertInput) => {
-    if (!client) throw new Error(t("experts.customCreateError"));
-    const agent = await client.createCustomAgent(
-      input.displayName,
-      "",
-      input.instructions,
-    );
-    invalidateAgents();
-    await onStartDirect(agent.id, agent.displayName);
-  }, [client, onStartDirect, t]);
+  }, [cancelPartnerOpen]);
 
   const onSelectChat = useCallback(
     (key: string) => {
+      cancelPartnerOpen();
       const selectedSession = sessions.find((session) => session.key === key);
       const selectedChatId = selectedSession?.chatId ?? (key.startsWith("websocket:") ? key.slice("websocket:".length) : undefined);
       if (selectedChatId) {
@@ -1500,8 +1497,76 @@ function Shell({
       switchToMonaTab();
       setMobileSidebarOpen(false);
     },
-    [sessions, switchToMonaTab],
+    [cancelPartnerOpen, sessions, switchToMonaTab],
   );
+
+  const onStartDirect = useCallback(async (agentId: string, displayName?: string) => {
+    if (agentId === MONA_AGENT_ID) {
+      onNewChat();
+      return;
+    }
+    const existing = sessions.find((session) => session.conversation?.partnerConversation
+      && !session.conversation.partnerConversationCopy
+      && session.conversation.directAgentId === agentId && !client?.isChatDeleted(session.chatId));
+    if (existing) {
+      onSelectChat(existing.key);
+      return;
+    }
+    const request = Symbol();
+    partnerOpenRequest.current = request;
+    const navigation = { ...creationNavigationRef.current };
+    creationNavigationRef.current = navigation;
+    setOpeningPartnerId(agentId);
+    try {
+      const chatId = await openPartnerChat(agentId, false);
+      if (partnerOpenRequest.current !== request || creationNavigationRef.current !== navigation) return;
+      if (chatId) {
+        onSelectChat(`websocket:${chatId}`);
+        return;
+      }
+      setManagedAgentId(null);
+      setPendingDirectAgentId(agentId);
+      setPendingDirectAgentName(displayName ?? null);
+      setActiveKey(null);
+      setView("chat");
+      switchToMonaTab();
+      setMobileSidebarOpen(false);
+    } catch (error) {
+      if (partnerOpenRequest.current !== request || creationNavigationRef.current !== navigation) return;
+      console.error("Failed to open partner conversation", error);
+      setSessionActionError({ title: t("chat.openPartnerFailed"), description: t("chat.openPartnerFailedDescription") });
+    } finally {
+      if (partnerOpenRequest.current === request) cancelPartnerOpen();
+    }
+  }, [cancelPartnerOpen, client, onNewChat, onSelectChat, openPartnerChat, sessions, switchToMonaTab, t]);
+
+  const onCopyPartner = useCallback(async (agentId: string) => {
+    if (copyPartnerInProgress.current) return;
+    copyPartnerInProgress.current = true;
+    setCopyingPartner(true);
+    cancelPartnerOpen();
+    const navigation = creationNavigationRef.current;
+    try {
+      const chatId = await openPartnerChat(agentId, true, true);
+      if (chatId && creationNavigationRef.current === navigation) onSelectChat(`websocket:${chatId}`);
+    } catch {
+      void refresh();
+      setSessionActionError({
+        title: t("sidebar.copyPartnerFailed"),
+        description: t("sidebar.copyPartnerFailedDescription"),
+      });
+    } finally {
+      copyPartnerInProgress.current = false;
+      setCopyingPartner(false);
+    }
+  }, [cancelPartnerOpen, openPartnerChat, onSelectChat, refresh, t]);
+
+  const onCreateCustomExpert = useCallback(async (input: CustomExpertInput) => {
+    if (!client) throw new Error(t("experts.customCreateError"));
+    const agent = await client.createCustomAgent(input.displayName, "", input.instructions);
+    invalidateAgents();
+    await onStartDirect(agent.id, agent.displayName);
+  }, [client, onStartDirect, t]);
 
   const onOpenProfileArtifact = useCallback(
     (artifact: ProfileArtifact) => {
@@ -1555,6 +1620,19 @@ function Shell({
     [updateSidebarState],
   );
 
+  const onTogglePartnerPreference = useCallback(async (field: "partner_pinned_keys" | "partner_hidden_keys", key: string) => {
+    const saved = await updateSidebarState((state) => {
+      const keys = new Set(state[field]);
+      if (keys.has(key)) keys.delete(key);
+      else keys.add(key);
+      return { ...state, [field]: [...keys] };
+    }, { rollbackOnFailure: true });
+    if (!saved) setSessionActionError({
+      title: t("sidebar.partnerPreferenceFailed"),
+      description: t("chat.batchSaveFailedDescription"),
+    });
+  }, [t, updateSidebarState]);
+
   const onBatchPin = useCallback(async (keys: string[], shouldPin: boolean) => {
     const saved = await updateSidebarState((current) => {
       const pinned = new Set(current.pinned_keys);
@@ -1581,7 +1659,7 @@ function Shell({
   const onConfirmRename = useCallback(
     (title: string) => {
       if (!pendingRename) return;
-      const key = pendingRename.key;
+      const { key, partnerAlias } = pendingRename;
       setPendingRename(null);
       const cleaned = title.trim();
       if (key.startsWith("project:")) {
@@ -1605,37 +1683,17 @@ function Shell({
           ...current,
           title_overrides: titleOverrides,
         };
+      }, { rollbackOnFailure: partnerAlias }).then((saved) => {
+        if (!saved && partnerAlias) setSessionActionError({
+          title: t("sidebar.partnerPreferenceFailed"),
+          description: t("chat.batchSaveFailedDescription"),
+        });
       });
     },
-    [pendingRename, updateSidebarState],
+    [pendingRename, t, updateSidebarState],
   );
 
-  const onToggleArchive = useCallback(
-    (key: string) => {
-      void updateSidebarState((current) => {
-        const archived = new Set(current.archived_keys);
-        const pinned = current.pinned_keys.filter((item) => item !== key);
-        if (archived.has(key)) {
-          archived.delete(key);
-        } else {
-          archived.add(key);
-        }
-        return {
-          ...current,
-          pinned_keys: pinned,
-          archived_keys: Array.from(archived),
-        };
-      });
-      if (activeKey === key && !sidebarState.archived_keys.includes(key)) {
-        const archived = new Set([...sidebarState.archived_keys, key]);
-        const next = sessions.find((session) => !archived.has(session.key));
-        setActiveKey(next?.key ?? null);
-      }
-    },
-    [activeKey, sessions, sidebarState.archived_keys, updateSidebarState],
-  );
-
-  const onBatchArchive = useCallback(async (keys: string[], shouldArchive: boolean) => {
+  const applyArchive = useCallback(async (keys: string[], shouldArchive: boolean) => {
     const selected = new Set(keys);
     const saved = await updateSidebarState((current) => {
       const archived = new Set(current.archived_keys);
@@ -1663,6 +1721,19 @@ function Shell({
         : current);
     }
   }, [sessions, sidebarState.archived_keys, t, updateSidebarState]);
+
+  const onBatchArchive = useCallback((keys: string[], shouldArchive: boolean) => {
+    if (shouldArchive) {
+      setMobileSidebarOpen(false);
+      setPendingArchive(keys);
+    } else {
+      void applyArchive(keys, false);
+    }
+  }, [applyArchive]);
+
+  const onToggleArchive = useCallback((key: string) => {
+    onBatchArchive([key], !sidebarState.archived_keys.includes(key));
+  }, [onBatchArchive, sidebarState.archived_keys]);
 
   const onToggleArchived = useCallback(() => {
     void updateSidebarState((current) => ({
@@ -1967,6 +2038,10 @@ function Shell({
   useEffect(() => {
     if (!client) return;
     return client.onSessionDeleted((chatId) => {
+      const browser = browserTabs.find((tab) => tab.conversationId === chatId);
+      if (browser) {
+        void browserCloseTab(browser.id).catch((error) => console.error("[browser] deleted conversation page cleanup failed:", error));
+      }
       const key = `websocket:${chatId}`;
       const nextRunning = new Set(runningChatIdsRef.current);
       nextRunning.delete(chatId);
@@ -1986,7 +2061,7 @@ function Shell({
           && !sidebarState.archived_keys.includes(session.key))?.key ?? null;
       });
     });
-  }, [client, sessions, sidebarState.archived_keys]);
+  }, [browserTabs, client, sessions, sidebarState.archived_keys]);
 
   useEffect(() => {
     if (!client) return;
@@ -2048,8 +2123,30 @@ function Shell({
   const onTurnEnd = useDeferredTitleRefresh(activeSession, refresh);
 
   const onConfirmDelete = useCallback(async () => {
-    if (!pendingDelete || deletingSessions) return;
+    if (!pendingDelete || deleteInProgress.current) return;
+    deleteInProgress.current = true;
     setDeletingSessions(true);
+    if ("agentId" in pendingDelete) {
+      try {
+        if (!client) throw new Error("runtime not ready");
+        await client.deleteAgent(pendingDelete.agentId);
+        invalidateAgents();
+        if (pendingDirectAgentId === pendingDelete.agentId) onNewChat();
+        setPendingDelete(null);
+      } catch (error) {
+        invalidateAgents();
+        setPendingDelete(null);
+        setSessionActionError({
+          title: t("sidebar.deletePartnerFailed"),
+          description: error instanceof RoomCommandError && !error.code
+            ? error.message : t("sidebar.deletePartnerFailedDescription"),
+        });
+      } finally {
+        deleteInProgress.current = false;
+        setDeletingSessions(false);
+      }
+      return;
+    }
     const deleted = new Set<string>();
     for (const key of pendingDelete.keys) {
       try {
@@ -2067,9 +2164,16 @@ function Shell({
       if (!current || !deleted.has(current)) return current;
       const currentIndex = sessions.findIndex((session) => session.key === current);
       const remaining = [...sessions.slice(currentIndex + 1), ...sessions.slice(0, currentIndex).reverse()];
-      return remaining.find((session) => !deleted.has(session.key) && !sidebarState.archived_keys.includes(session.key))?.key ?? null;
+      return remaining.find((session) => {
+        const conversation = session.conversation;
+        const partnerKey = conversation?.partnerConversationCopy ? session.key : conversation?.directAgentId;
+        return !deleted.has(session.key)
+          && !sidebarState.archived_keys.includes(session.key)
+          && (!conversation?.partnerConversation || !partnerKey || !sidebarState.partner_hidden_keys?.includes(partnerKey));
+      })?.key ?? null;
     });
     setPendingDelete(null);
+    deleteInProgress.current = false;
     setDeletingSessions(false);
     const failed = pendingDelete.keys.length - deleted.size;
     if (failed) {
@@ -2079,9 +2183,17 @@ function Shell({
         description: t("chat.deleteSessionsFailedDescription", { completed: deleted.size, failed }),
       });
     }
-  }, [pendingDelete, deletingSessions, deleteChat, sessions, sidebarState.archived_keys, refresh, t]);
+  }, [pendingDelete, client, pendingDirectAgentId, onNewChat, deleteChat, sessions, sidebarState.archived_keys, sidebarState.partner_hidden_keys, refresh, t]);
 
-  const headerTitle = activeSession
+  const activePartner = activeSession?.conversation?.partnerConversation ? activeSession.conversation : null;
+  const activePartnerName = activePartner?.directAgentId
+    ? agentsById.get(activePartner.directAgentId)?.displayName || activePartner.title || activePartner.directAgentId
+    : null;
+  const headerTitle = activePartnerName
+    ? activePartner?.partnerConversationCopy
+      ? (activeSession && sidebarState.title_overrides[activeSession.key]) || t("sidebar.partnerCopyName", { name: activePartnerName })
+      : activePartnerName
+    : activeSession
     ? sidebarState.title_overrides[activeSession.key] ||
       activeSession.title ||
       deriveTitle(activeSession.preview, t("chat.newChat"))
@@ -2112,13 +2224,12 @@ function Shell({
     }
   }, [runtimeStatus, startupSceneHostVisible, startupSceneVisible]);
   const browserSurfaceVisible =
-    view === "chat" && activeBrowserTab.type === "browser" && !loginDialogOpen;
+    view === "chat" && activeBrowserTab.type === "browser" && !loginDialogOpen && !pendingArchive;
   const sidebarBrowserSurfaceVisible =
     view === "chat"
     && activeBrowserTab.type === "mona"
-    && sidebarBrowserVisible
-    && !!sidebarBrowserTab
-    && !loginDialogOpen;
+    && !!sidebarBrowserTab && visibleSidebarBrowserId === sidebarBrowserTab.id
+    && !managedAgentId && !loginDialogOpen && !sessionActionError && !pendingArchive;
   const developmentBrowserSurfaceVisible = view === "development" && !isBrowserTabActive && !loginDialogOpen
     && !!developmentBrowserVisibleId && developmentBrowserIds.includes(developmentBrowserVisibleId);
   // 主内容表面：非浏览器原生 WebView 模式时启用圆角裁切与画布边缘。
@@ -2131,12 +2242,12 @@ function Shell({
       developmentBrowserSurfaceVisible
         ? developmentBrowserVisibleId!
         : sidebarBrowserSurfaceVisible
-        ? sidebarBrowserTab.id
+        ? visibleSidebarBrowserId!
         : browserSurfaceVisible
           ? activeBrowserTab.id
           : undefined,
     ).catch(() => {});
-  }, [activeBrowserTab.id, browserSurfaceVisible, sidebarBrowserSurfaceVisible, sidebarBrowserTab, developmentBrowserSurfaceVisible, developmentBrowserVisibleId]);
+  }, [activeBrowserTab.id, browserSurfaceVisible, sidebarBrowserSurfaceVisible, visibleSidebarBrowserId, developmentBrowserSurfaceVisible, developmentBrowserVisibleId]);
 
   useEffect(() => {
     if (view === "settings") {
@@ -2161,6 +2272,10 @@ function Shell({
       setPendingDelete({ keys: [key], label }),
     onTogglePin,
     onRequestRename,
+    onRequestPartnerAlias: (key: string, alias: string) => {
+      setMobileSidebarOpen(false);
+      setPendingRename({ key, label: alias, partnerAlias: true });
+    },
     onToggleArchive,
     onBatchPin,
     onBatchArchive,
@@ -2179,7 +2294,19 @@ function Shell({
     projectNames: sidebarState.project_names,
     onRequestProjectRename,
     onOpenProjectFolder,
-    onSelectAgent,
+    onNewTask: onNewChat,
+    openingPartnerId,
+    pendingPartnerId: pendingDirectAgentId,
+    partnerPinnedKeys: sidebarState.partner_pinned_keys,
+    partnerHiddenKeys: sidebarState.partner_hidden_keys,
+    onTogglePartnerPin: (key: string) => { void onTogglePartnerPreference("partner_pinned_keys", key); },
+    onTogglePartnerHidden: (key: string) => { void onTogglePartnerPreference("partner_hidden_keys", key); },
+    onCopyPartner: (agentId: string) => { void onCopyPartner(agentId); },
+    copyingPartner,
+    onRequestDeletePartner: (agentId: string, label: string, copyKey?: string) => {
+      setMobileSidebarOpen(false);
+      setPendingDelete(copyKey ? { keys: [copyKey], label, partnerCopy: true } : { agentId, label });
+    },
     onStartDirect: (agentId: string) => {
       setMobileSidebarOpen(false);
       void onStartDirect(agentId);
@@ -2284,7 +2411,7 @@ function Shell({
 
           {/* 消息会话列表列 */}
 
-          {!browserFullscreen && showSessionList && !rightWorkspaceMaximized ? (
+          {!browserFullscreen && showSessionList && (!rightWorkspaceMaximized || !!managedAgentId) ? (
             <Sheet
               open={mobileSidebarOpen}
               onOpenChange={(open) => setMobileSidebarOpen(open)}
@@ -2311,7 +2438,7 @@ function Shell({
               )}
             >
               {/* 消息 Tab 的会话列表列（仅 chat 视图显示，包在圆角卡片内） */}
-              {!browserFullscreen && showSessionList && view === "chat" && desktopSidebarOpen && !rightWorkspaceMaximized ? (
+              {!browserFullscreen && showSessionList && view === "chat" && desktopSidebarOpen && (!rightWorkspaceMaximized || !!managedAgentId) ? (
                 <SessionListPanel
                   {...sessionListProps}
                   className="hidden md:flex"
@@ -2334,9 +2461,14 @@ function Shell({
                   <AgentManagementView
                     agentId={managedAgentId}
                     onBack={() => setManagedAgentId(null)}
-                    onStartDirect={() => void onStartDirect(managedAgentId)}
                   />
-                ) : client ? (
+                ) : null}
+                {client ? (
+                  <div
+                    className={cn("flex h-full min-h-0 flex-col", managedAgentId && "hidden")}
+                    aria-hidden={!!managedAgentId}
+                    inert={!!managedAgentId}
+                  >
                   <ThreadShell
                     session={activeSession}
                     title={headerTitle}
@@ -2360,13 +2492,16 @@ function Shell({
                     onModelNameChange={onModelNameChange}
                     onOpenSettings={onOpenSettings}
                     onOpenExpertLibrary={() => setExpertLibraryOpen(true)}
-                    sidebarBrowser={sidebarBrowserController}
-                    onEnsureSidebarBrowser={ensureSidebarBrowser}
-                    browserHostVisible={view === "chat" && activeBrowserTab.type === "mona" && !loginDialogOpen}
-                    onSidebarBrowserVisibilityChange={setSidebarBrowserVisible}
+                    onOpenAgentSettings={onOpenAgentSettings}
+                    sidebarBrowser={sidebarBrowserChatId ? sidebarBrowserController : undefined}
+                    sidebarBrowserOpen={sidebarBrowserOpen}
+                    onCloseSidebarBrowser={closeSidebarBrowser}
+                    browserHostVisible={view === "chat" && activeBrowserTab.type === "mona" && !managedAgentId && !loginDialogOpen && !sessionActionError && !pendingArchive}
+                    onSidebarBrowserVisibilityChange={setVisibleSidebarBrowserId}
                     onRightWorkspaceMaximizedChange={setRightWorkspaceMaximized}
                   />
-                ) : (
+                  </div>
+                ) : !managedAgentId ? (
                   <div className="flex h-full min-h-0 flex-col">
                     <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/40 px-3 md:hidden">
                       <Button
@@ -2386,7 +2521,7 @@ function Shell({
                       onRetry={onRetryConnection}
                     />
                   </div>
-                )}
+                ) : null}
               </div>
               {noteMounted && (
                 <div className={cn(
@@ -2395,6 +2530,7 @@ function Shell({
                 )}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView
+                      onOpenSettings={onOpenSettings}
                       onOpenSubscribe={onOpenSubscribe}
                       initialNoteId={new URLSearchParams(window.location.search).get("noteId") ?? undefined}
                       createOnOpen={createNoteOnOpen}
@@ -2424,7 +2560,7 @@ function Shell({
                 <div className={cn("absolute inset-0 flex min-h-0 flex-col overflow-hidden", (!operationsVisible || isBrowserTabActive) && "invisible pointer-events-none")}
                   aria-hidden={!operationsVisible || isBrowserTabActive} inert={!operationsVisible || isBrowserTabActive}>
                   <Suspense fallback={<ModuleLoading title="正在打开运维" />}>
-                    <DbClientView visible={operationsVisible && !isBrowserTabActive} preferTerminal={view === "ssh"} onOpenSubscribe={onOpenSubscribe} />
+                    <DbClientView visible={operationsVisible && !isBrowserTabActive} preferTerminal={view === "ssh"} onOpenSubscribe={onOpenSubscribe} onOpenSettings={onOpenSettings} />
                   </Suspense>
                 </div>
               )}
@@ -2432,7 +2568,7 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开邮件" />}>
-                      <EmailClientView onOpenSubscribe={onOpenSubscribe} onOpenEmailExtraction={onOpenEmailExtraction} />
+                      <EmailClientView onOpenSubscribe={onOpenSubscribe} onOpenEmailExtraction={onOpenEmailExtraction} onOpenSettings={onOpenSettings} />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -2497,7 +2633,7 @@ function Shell({
                   (view !== "system" || isBrowserTabActive) && "invisible pointer-events-none",
                 )}>
                   <Suspense fallback={<ModuleLoading title="正在打开系统" />}>
-                    <SystemView />
+                    <SystemView onOpenSettings={onOpenSettings} />
                   </Suspense>
                 </div>
               )}
@@ -2505,6 +2641,8 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col bg-background", (view !== "doc" || isBrowserTabActive) && "invisible pointer-events-none")}>
                   <Suspense fallback={<ModuleLoading title="正在打开文档" />}>
                     <DocMakerView visible={view === "doc" && !isBrowserTabActive}
+                      onOpenSettings={onOpenSettings}
+                      onModelNameChange={onModelNameChange}
                       videoConversationRequest={videoConversationRequest}
                       onVideoConversationHandled={handleVideoConversationHandled}
                       onVisibleConversationChange={setVisibleDocumentChatId}
@@ -2522,7 +2660,7 @@ function Shell({
                     style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
                   >
                     <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
-                      <MdFileView filePath={tab.mdFilePath!} />
+                      <MdFileView filePath={tab.mdFilePath!} onOpenSettings={onOpenSettings} />
                     </Suspense>
                   </div>
                 ))}
@@ -2573,7 +2711,7 @@ function Shell({
                   </div>
                 ))}
               {browserTabs
-                .filter((t) => t.type === "browser" && t.id !== sidebarBrowserTabId)
+                .filter((t) => t.type === "browser" && !t.conversationId)
                 .map((tab) => (
                   <div
                     key={tab.id}
@@ -2581,6 +2719,7 @@ function Shell({
                     style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
                   >
                     <BrowserTabView
+                      onOpenSettings={onOpenSettings}
                       tab={tab}
                       isVisible={tab.id === activeBrowserTabId && browserSurfaceVisible}
                       layoutVersion={desktopSidebarOpen}
@@ -2653,12 +2792,34 @@ function Shell({
           openTrigger={updateDialogTrigger}
         />
 
+        <AlertDialog open={pendingArchive !== null} onOpenChange={(open) => { if (!open) setPendingArchive(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("chat.archiveConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("chat.archiveConfirmDescription")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("deleteConfirm.cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => {
+                if (pendingArchive) void applyArchive(pendingArchive, true);
+              }}>{t("chat.archive")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <DeleteConfirm
           open={!!pendingDelete}
           title={pendingDelete?.label ?? ""}
-          titleText={pendingDelete && pendingDelete.keys.length > 1
-            ? t("deleteConfirm.multipleTitle", { count: pendingDelete.keys.length })
-            : undefined}
+          titleText={pendingDelete && "agentId" in pendingDelete
+            ? t("sidebar.deletePartnerTitle", { name: pendingDelete.label })
+            : pendingDelete?.partnerCopy
+              ? t("sidebar.deletePartnerCopyTitle", { name: pendingDelete.label })
+              : pendingDelete && pendingDelete.keys.length > 1
+                ? t("deleteConfirm.multipleTitle", { count: pendingDelete.keys.length })
+                : undefined}
+          descriptionText={pendingDelete && "agentId" in pendingDelete
+            ? t("sidebar.deletePartnerDescription") : undefined}
+          confirmText={pendingDelete && ("agentId" in pendingDelete || pendingDelete.partnerCopy)
+            ? t("sidebar.deletePartner") : undefined}
           busy={deletingSessions}
           onCancel={() => { if (!deletingSessions) setPendingDelete(null); }}
           onConfirm={onConfirmDelete}
@@ -2677,6 +2838,7 @@ function Shell({
         <RenameChatDialog
           open={!!pendingRename}
           title={pendingRename?.label ?? ""}
+          partnerAlias={pendingRename?.partnerAlias}
           onCancel={() => setPendingRename(null)}
           onConfirm={onConfirmRename}
         />

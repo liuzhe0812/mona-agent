@@ -284,6 +284,12 @@ class Session:
     last_consolidated: int = 0  # Number of messages already consolidated to files
 
     @property
+    def context_window_override(self) -> int | None:
+        """Conversation-level working limit, in tokens."""
+        value = self.metadata.get("context_window_override")
+        return value if type(value) is int and value >= 4096 else None
+
+    @property
     def conversation_metadata(self) -> ConversationMetadata:
         """Conversation shape for this session (multi-agent phase 0, guide 5.2).
 
@@ -557,6 +563,10 @@ class Session:
         )
 
 
+class SessionContextError(ValueError):
+    """A user-facing refusal to modify conversation context."""
+
+
 class SessionDeletedError(RuntimeError):
     """A late write attempted to recreate a permanently deleted conversation."""
 
@@ -728,6 +738,73 @@ class SessionManager:
         session = self._load(key)
         if session is not None:
             self._cache[key] = session
+        return session
+
+    def open_partner_conversation(
+        self,
+        agent_id: str,
+        title: str,
+        *,
+        create: bool,
+        archived_keys: set[str],
+        copy: bool = False,
+    ) -> Session | None:
+        """Resolve the fixed partner conversation or create an independent copy."""
+        from uuid import uuid4
+
+        from mona.agent.partners import CONVERSATION_METADATA_KEY, ConversationMetadata
+
+        legacy_session = None
+        rows = [] if copy else self.list_sessions()
+        for row in rows:
+            key = row["key"]
+            if not isinstance(key, str) or not key.startswith("websocket:") or key.startswith("websocket:ephemeral:"):
+                continue
+            stored = row.get("conversation")
+            if (not isinstance(stored, dict) or stored.get("type") != "direct" or stored.get("hidden")
+                    or (stored.get("directAgentId") or stored.get("direct_agent_id")) != agent_id):
+                continue
+            if stored.get("partnerConversationCopy", stored.get("partner_conversation_copy")) is True:
+                continue
+            partner_conversation = stored.get("partnerConversation", stored.get("partner_conversation"))
+            if partner_conversation is True:
+                session = self.get_existing(key)
+                if (session is not None and session.conversation_metadata.partner_conversation
+                        and not session.conversation_metadata.partner_conversation_copy):
+                    return session
+            elif (
+                legacy_session is None
+                and partner_conversation is None
+                and not stored.get("archived")
+                and not row.get("workspace")
+                and not row.get("agent_kind")
+                and key not in archived_keys
+            ):
+                session = self.get_existing(key)
+                if session is not None and session.conversation_metadata.direct_agent_id == agent_id:
+                    legacy_session = session
+
+        if legacy_session is None and not create:
+            return None
+        if legacy_session is None:
+            session = Session(key=f"websocket:{uuid4()}", metadata={"webui": True})
+            conversation = ConversationMetadata.direct(agent_id, title=title)
+        else:
+            session = legacy_session
+            conversation = session.conversation_metadata
+
+        previous = session.metadata.get(CONVERSATION_METADATA_KEY)
+        conversation.partner_conversation = True
+        conversation.partner_conversation_copy = copy
+        session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
+        try:
+            self.save(session)
+        except (OSError, SessionDeletedError):
+            if previous is None:
+                session.metadata.pop(CONVERSATION_METADATA_KEY, None)
+            else:
+                session.metadata[CONVERSATION_METADATA_KEY] = previous
+            raise
         return session
 
     def get_or_create(self, key: str) -> Session:

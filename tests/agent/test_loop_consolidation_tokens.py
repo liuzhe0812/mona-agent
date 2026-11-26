@@ -58,6 +58,38 @@ async def test_preflight_publishes_current_occupancy_without_billing_tokens(tmp_
 
 
 @pytest.mark.asyncio
+async def test_session_context_window_and_manual_summary_reach_the_next_turn(tmp_path, monkeypatch):
+    loop = _make_loop(tmp_path, estimated_tokens=31_000, context_window_tokens=128_000)
+    session = loop.sessions.get_or_create("websocket:test")
+    session.add_message("user", "first question")
+    session.add_message("assistant", "first answer")
+    session.add_message("user", "second question")
+    session.add_message("assistant", "second answer")
+    loop.sessions.save(session)
+    loop._schedule_background = lambda coro: coro.close()
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _message: 100)
+    loop.consolidator.archive = AsyncMock(return_value="Earlier task handoff.")
+
+    saved = await loop.manage_session_context(session.key, "window", 64_000)
+    assert saved["windowTokens"] == saved["effectiveWindowTokens"] == 64_000
+    await loop.manage_session_context(session.key, "compact", None)
+    assert session.last_consolidated == 2
+    assert len(session.messages) == 4
+    assert (await loop.manage_session_context(session.key, "read", None))["compacted"]
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="user", chat_id="test", content="continue"))
+
+    sent = loop.provider.chat_stream_with_retry.await_args or loop.provider.chat_with_retry.await_args
+    assert "Earlier task handoff." in str(sent.kwargs["messages"])
+    assert "first question" not in str(sent.kwargs["messages"])
+    assert not (await loop.manage_session_context(session.key, "read", None)).get("compacted")
+    published = []
+    while loop.bus.outbound_size:
+        published.append(await loop.bus.consume_outbound())
+    assert any(msg.metadata.get("token_usage", {}).get("context_budget_tokens") == 64_000 for msg in published)
+
+
+@pytest.mark.asyncio
 async def test_prompt_below_threshold_does_not_consolidate(tmp_path) -> None:
     loop = _make_loop(tmp_path, estimated_tokens=100, context_window_tokens=200)
     loop.consolidator.archive = AsyncMock(return_value=True)  # type: ignore[method-assign]

@@ -280,12 +280,73 @@ impl log::Log for NativeFailureLog {
 }
 static NATIVE_FAILURE_LOG: NativeFailureLog = NativeFailureLog;
 
+async fn wait_for_browser_error_document(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    let browser = app.state::<BrowserState>();
+    let probe = "location.protocol === 'chrome-error:' && document.body !== null && !document.querySelector('#draft')";
+    let mut last = None;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let result = browser.eval_script_result(app, id, probe).await;
+            if matches!(result, Ok(Value::Bool(true))) {
+                return;
+            }
+            last = Some(result);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }).await.map_err(|_| format!("Native error document did not initialize for {id}: {last:?}"))
+}
+
+async fn exercise_conversation_browser(app: &tauri::AppHandle, checks: &mut Vec<String>) -> Result<(), String> {
+    let browser = app.state::<BrowserState>();
+    // Chromium reserves port 1. Use its native error document as a test fixture without network access.
+    let url_a = "http://127.0.0.1:1/a";
+    let url_b = "http://127.0.0.1:1/b";
+    let url_next = "http://127.0.0.1:1/a-next";
+    let a = browser.open_conversation_tab(app, "conversation-a", url_a, "chat-a", false).await?;
+    let b = browser.open_conversation_tab(app, "conversation-b", url_b, "chat-b", false).await?;
+    wait_for_browser_error_document(app, &a.id).await?;
+    wait_for_browser_error_document(app, &b.id).await?;
+    checked(checks, "conversation_pages_have_distinct_native_tabs", a.id != b.id && browser.list_tabs().len() == 2)?;
+    for (id, draft) in [(&a.id, "unsaved A"), (&b.id, "unsaved B")] {
+        let script = format!("document.body.innerHTML = '<input id=draft>'; document.querySelector('#draft').value = {}", json!(draft));
+        browser.eval_script_result(app, id, &script).await?;
+    }
+
+    let reopened = browser.open_conversation_tab(app, "conversation-a-duplicate", url_a, "chat-a", false).await?;
+    checked(checks, "same_url_reuses_conversation_tab_and_preserves_form",
+        reopened.id == a.id && browser.list_tabs().len() == 2
+        && browser.eval_script_result(app, &a.id, "document.querySelector('#draft').value").await? == json!("unsaved A"))?;
+
+    let next = browser.open_conversation_tab(app, "conversation-a-next", url_next, "chat-a", false).await?;
+    wait_for_browser_error_document(app, &a.id).await?;
+    let tabs = browser.list_tabs();
+    checked(checks, "conversation_navigation_reuses_a_and_preserves_b",
+        next.id == a.id && tabs.len() == 2 && tabs.iter().any(|tab| tab.id == a.id && tab.url == url_next)
+        && browser.eval_script_result(app, &b.id, "document.querySelector('#draft').value").await? == json!("unsaved B"))?;
+    browser.close_tab(app, &a.id).await?;
+    browser.close_tab(app, &b.id).await?;
+    checked(checks, "conversation_webviews_close_without_orphans",
+        browser.list_tabs().is_empty()
+        && app.get_webview("browser-conversation-a").is_none()
+        && app.get_webview("browser-conversation-b").is_none())
+}
+
 #[path = "journey_native_tests.rs"]
 mod journey_native_tests;
 
 #[test]
 #[ignore = "requires explicit isolated output and an installed Windows WebView2 runtime"]
 fn development_native_lifecycle() {
+    run_native_lifecycle(false);
+}
+
+#[test]
+#[ignore = "requires explicit isolated output and an installed Windows WebView2 runtime"]
+fn conversation_browser_native_lifecycle() {
+    run_native_lifecycle(true);
+}
+
+fn run_native_lifecycle(conversation_browser_only: bool) {
     if log::set_logger(&NATIVE_FAILURE_LOG).is_ok() { log::set_max_level(log::LevelFilter::Warn); }
     let output = PathBuf::from(std::env::var_os("MONA_LIFECYCLE_OUTPUT").expect("explicit test output"));
     let permitted = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("output").canonicalize().unwrap();
@@ -310,10 +371,19 @@ fn development_native_lifecycle() {
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External("about:blank".parse()?))
                 .title("Mona isolated lifecycle verification")
                 .inner_size(1200.0, 850.0).visible(false).focused(false).build()?;
+            if conversation_browser_only {
+                // The browser has different WebView2 options from main and needs its own profile.
+                let browser_profile = output.join("browser-profile");
+                std::fs::create_dir(&browser_profile)?;
+                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", browser_profile);
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut checks = Vec::new();
                 let outcome = tokio::time::timeout(Duration::from_secs(180), async {
+                    if conversation_browser_only {
+                        return exercise_conversation_browser(&handle, &mut checks).await;
+                    }
                     checked(&mut checks, "failed_creation_leaves_no_reservation", missing_host_clean)?;
                     handle.state::<BrowserState>().create_tab(&handle, "startup-retry", "about:blank", false, false).await?;
                     handle.state::<BrowserState>().close_tab(&handle, "startup-retry").await?;
@@ -331,7 +401,11 @@ fn development_native_lifecycle() {
                 let report = json!({"status": if outcome.is_ok() { "passed" } else { "failed" },
                     "checks": checks, "error": outcome.as_ref().err(), "cleanupErrors": cleanup_errors,
                     "elapsedSeconds": started.elapsed().as_secs_f64(),
-                    "scope": "Production BrowserState, shell commands, Wry WebView2 and Windows ConPTY in an isolated hidden native host; not a full logged-in Mona UI run"});
+                    "scope": if conversation_browser_only {
+                        "Production conversation browsing in an isolated hidden Wry WebView2 host using native error documents without network access"
+                    } else {
+                        "Production BrowserState, shell commands, Wry WebView2 and Windows ConPTY in an isolated hidden native host; not a full logged-in Mona UI run"
+                    }});
                 let write = std::fs::write(output.join("native-report.json"), serde_json::to_vec_pretty(&report).unwrap());
                 *completed.lock().unwrap() = Some(outcome.and_then(|_| write.map_err(|error| error.to_string())));
                 handle.exit(0);

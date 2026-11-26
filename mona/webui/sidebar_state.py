@@ -39,6 +39,8 @@ def default_webui_sidebar_state() -> dict[str, Any]:
         "schema_version": WEBUI_SIDEBAR_STATE_SCHEMA_VERSION,
         "pinned_keys": [],
         "archived_keys": [],
+        "partner_pinned_keys": [],
+        "partner_hidden_keys": [],
         "title_overrides": {},
         "project_names": {},
         # IM unread derivation (IM plan 12.4): last-read marker per session key,
@@ -164,6 +166,8 @@ def normalize_webui_sidebar_state(
     state = default_webui_sidebar_state()
     state["pinned_keys"] = _clean_string_list(raw.get("pinned_keys"))
     state["archived_keys"] = _clean_string_list(raw.get("archived_keys"))
+    state["partner_pinned_keys"] = _clean_string_list(raw.get("partner_pinned_keys"))
+    state["partner_hidden_keys"] = _clean_string_list(raw.get("partner_hidden_keys"))
     state["title_overrides"] = _clean_title_overrides(raw.get("title_overrides"))
     state["project_names"] = _clean_title_overrides(raw.get("project_names"))
     state["tags_by_key"] = _clean_tags_by_key(raw.get("tags_by_key"))
@@ -230,7 +234,7 @@ def remove_webui_sidebar_session(session_key: str) -> None:
         return
     state = read_webui_sidebar_state()
     changed = False
-    for list_name in ("pinned_keys", "archived_keys"):
+    for list_name in ("pinned_keys", "archived_keys", "partner_pinned_keys", "partner_hidden_keys"):
         items = state[list_name]
         if cleaned in items:
             items.remove(cleaned)

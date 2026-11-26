@@ -454,9 +454,15 @@ def test_delegated_partner_loop_shares_the_turn_coordinator(
     )
     monkeypatch.setattr(partner_loop, "PartnerAgentLoop", _FakePartnerLoop)
 
-    parent._ensure_partner_loop("com.mona.probe")
+    delegated = parent._ensure_partner_loop("com.mona.probe")
 
     assert forwarded["webui_turns"] is parent._webui_turns
+    assert delegated is not None
+    key = "websocket:partner-chat"
+    delegated._pending_turn_latency_ms[key] = 1_500
+    delegated._pending_turn_usage[key] = {"context_tokens": 48_212}
+    assert parent._pending_turn_latency_ms.pop(key) == 1_500
+    assert parent._pending_turn_usage.pop(key) == {"context_tokens": 48_212}
 
 
 def test_save_turn_skips_multimodal_user_when_only_runtime_context() -> None:

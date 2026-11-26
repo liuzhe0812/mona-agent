@@ -2018,7 +2018,7 @@ pub fn cancel_storage_scan(state: State<'_, SystemState>) -> Result<(), String> 
 #[cfg(windows)]
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-fn prepare_terminal_command(path: &Path) -> Result<std::process::Command, String> {
+fn resolve_local_directory(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!("项目目录必须是绝对路径: {}", path.display()));
     }
@@ -2027,7 +2027,11 @@ fn prepare_terminal_command(path: &Path) -> Result<std::process::Command, String
     if !project_dir.is_dir() {
         return Err(format!("项目路径不是目录: {}", project_dir.display()));
     }
+    Ok(project_dir)
+}
 
+fn prepare_terminal_command(path: &Path) -> Result<std::process::Command, String> {
+    let project_dir = resolve_local_directory(path)?;
     #[cfg(windows)]
     {
         let system_root = std::env::var_os("SystemRoot")
@@ -2081,9 +2085,18 @@ pub async fn system_open_in_terminal(path: String) -> Result<bool, String> {
 
 /// 在 Windows 资源管理器中打开指定目录（绕过 Tauri opener 权限限制）
 #[tauri::command]
-pub async fn system_open_in_explorer(path: String) -> Result<bool, String> {
+pub async fn system_open_in_explorer(
+    path: String,
+    directory_only: Option<bool>,
+) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let target = PathBuf::from(&path);
+        if directory_only == Some(true) {
+            let directory = resolve_local_directory(&target)?;
+            tauri_plugin_opener::open_path(directory, None::<&str>)
+                .map_err(|error| format!("打开目录失败: {error}"))?;
+            return Ok(true);
+        }
         if path != "shell:RecycleBinFolder" && !target.exists() {
             return Err(format!("路径不存在: {path}"));
         }

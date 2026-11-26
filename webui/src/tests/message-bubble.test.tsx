@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MessageBubble, TraceGroup } from "@/components/MessageBubble";
@@ -633,7 +633,7 @@ describe("MessageBubble", () => {
     }
   });
 
-  it("renders assistant image media as a larger generated result", () => {
+  it("fits a single assistant image into the fixed preview frame", () => {
     const message: UIMessage = {
       id: "a-image",
       role: "assistant",
@@ -648,15 +648,16 @@ describe("MessageBubble", () => {
       ],
     };
 
-    const { container } = render(<MessageBubble message={message} />);
+    render(<MessageBubble message={message} />);
 
     const imageButton = screen.getByRole("button", { name: /view image/i });
-    expect(imageButton).toHaveClass("w-[min(100%,34rem)]", "rounded-2xl");
-    expect(imageButton).not.toHaveAttribute("title");
-    expect(container.querySelector("img")).toHaveClass("h-auto", "w-full", "object-contain");
+    expect(imageButton).toHaveClass("h-60", "w-full");
+    expect(imageButton).not.toHaveClass("border");
+    expect(within(imageButton).getByRole("img")).toHaveClass("h-full", "w-full", "object-contain");
+    expect(screen.queryByRole("group", { name: "Image thumbnails" })).not.toBeInTheDocument();
   });
 
-  it("groups generated images into a collapsible gallery and opens the lightbox", () => {
+  it("switches images in the same frame and opens the selected image in the lightbox", () => {
     const message: UIMessage = {
       id: "a-image-gallery",
       role: "assistant",
@@ -669,20 +670,19 @@ describe("MessageBubble", () => {
       })),
     };
 
-    const { container } = render(<MessageBubble message={message} />);
-    const gallery = container.querySelector('[data-image-gallery="true"]');
+    render(<MessageBubble message={message} />);
+    const thumbnails = within(screen.getByRole("group", { name: "Image thumbnails" })).getAllByRole("button");
+    expect(thumbnails).toHaveLength(6);
+    expect(thumbnails[0]).toHaveAttribute("aria-pressed", "true");
+    const frame = screen.getByRole("button", { name: "View image: generated-1.png" });
 
-    expect(gallery).toBeInTheDocument();
-    expect(gallery?.querySelectorAll("img")).toHaveLength(4);
-    const expand = screen.getByRole("button", { name: "Show all (+2)" });
-    fireEvent.click(expand);
-
-    expect(gallery?.querySelectorAll("img")).toHaveLength(6);
-    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
-    expect(gallery?.querySelectorAll("img")).toHaveLength(4);
-    expect(screen.getByRole("button", { name: "Show all (+2)" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "View image: generated-1.png" }));
-    expect(screen.getByRole("dialog", { name: "generated-1.png" })).toBeInTheDocument();
+    fireEvent.click(thumbnails[5]);
+    expect(thumbnails[0]).toHaveAttribute("aria-pressed", "false");
+    expect(thumbnails[5]).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "View image: generated-6.png" })).toBe(frame);
+    expect(within(frame).getByRole("img")).toHaveAttribute("src", message.media![5].url);
+    fireEvent.click(frame);
+    const lightbox = within(screen.getByRole("dialog", { name: "generated-6.png" }));
+    expect(lightbox.getByText("6 / 6")).toBeInTheDocument();
   });
 });

@@ -46,6 +46,23 @@ def test_contiguous_deltas_keep_complete_content_and_latest_task_id() -> None:
     ]
 
 
+def test_turn_end_marks_the_confirmed_stream_before_late_activity() -> None:
+    messages = replay_transcript_to_ui_messages([
+        {"event": "user", "text": "question", "task_id": "task"},
+        {"event": "delta", "text": "final answer", "stream_id": "answer", "task_id": "task"},
+        {"event": "stream_end", "stream_id": "answer"},
+        {"event": "message", "text": "late tool update", "kind": "progress"},
+        {"event": "message", "text": "background update", "job_id": "other-job"},
+        {"event": "turn_end", "latency_ms": 2400, "task_id": "task", "final_stream_id": "answer"},
+    ])
+
+    confirmed = [message for message in messages if message.get("isFinalResponse")]
+    assert len(confirmed) == 1
+    assert confirmed[0]["content"] == "final answer"
+    assert confirmed[0]["latencyMs"] == 2400
+    assert "latencyMs" not in messages[-1]
+
+
 def test_delta_files_tools_reasoning_and_final_message_match_replay_contract() -> None:
     lines = [
         {"event": "user", "text": "question"},

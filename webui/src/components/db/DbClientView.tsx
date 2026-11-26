@@ -34,8 +34,8 @@ import { useTerminalStore } from "../terminal/store/terminalStore";
 import { OperationsConnectionList } from "../operations/OperationsConnectionList";
 import { OperationsCreateMenu } from "../operations/OperationsCreateMenu";
 
-export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal = false }: {
-  onOpenSubscribe?: () => void; visible?: boolean; preferTerminal?: boolean;
+export function DbClientView({ onOpenSubscribe, onOpenSettings, visible = true, preferTerminal = false }: {
+  onOpenSubscribe?: () => void; onOpenSettings?: (section?: string) => void; visible?: boolean; preferTerminal?: boolean;
 }) {
   const tabs = useDbStore((s) => s.queryTabs);
   const activeId = useDbStore((s) => s.activeTabId);
@@ -178,7 +178,7 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
               </div>)}
               {AdminView && <div className={cn("absolute inset-0 overflow-auto", terminalActive && "hidden")}><AdminView /></div>}
               <div className={cn("absolute inset-0", !terminalActive && "invisible pointer-events-none")} aria-hidden={!terminalActive} inert={!terminalActive}>
-                <TerminalView embedded visible={visible && terminalActive} onOpenSubscribe={onOpenSubscribe} />
+                <TerminalView embedded visible={visible && terminalActive} onOpenSubscribe={onOpenSubscribe} onOpenSettings={onOpenSettings} />
               </div>
             </div>
           </div>
@@ -186,7 +186,7 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
         {agentOpen && !terminalActive && <>
           <ResizableHandle aria-label="调整 Mona 侧栏宽度" />
           <ResizablePanel id="db-agent" defaultSize="320px" minSize="260px" maxSize="600px" className="min-h-0 min-w-0 overflow-hidden">
-            <DbAgentPanel />
+            <DbAgentPanel onOpenSettings={onOpenSettings} />
           </ResizablePanel>
         </>}
       </ResizablePanelGroup>

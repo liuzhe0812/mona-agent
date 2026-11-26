@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
 import { getHostedPlatform } from "@/lib/hosted-platform";
+import { LiveTokenSampler } from "@/lib/live-token-speed";
+import { appendWorkRequest, summarizeWorkRequests, type WorkRequestSeries } from "@/lib/work-run-progress";
 import { isMessageAdmissionRejectionReason } from "@/lib/mona-client";
 import type { MessageAdmission, MessageAdmissionReason, MonaClient, StreamError } from "@/lib/mona-client";
 import type {
@@ -392,23 +394,6 @@ function pruneReasoningOnlyPlaceholders(prev: UIMessage[]): UIMessage[] {
   });
 }
 
-function stampLastAssistantLatency(prev: UIMessage[], latencyMs: number): UIMessage[] {
-  let fallbackIndex = -1;
-  for (let i = prev.length - 1; i >= 0; i -= 1) {
-    const m = prev[i];
-    if (m.role === "user") break;
-    if (m.role !== "assistant" || m.kind === "trace") continue;
-    if (fallbackIndex < 0) fallbackIndex = i;
-    if (m.content.trim().length > 0) {
-      fallbackIndex = i;
-      break;
-    }
-  }
-  if (fallbackIndex < 0) return prev;
-  const merged: UIMessage = { ...prev[fallbackIndex], latencyMs, isStreaming: false };
-  return [...prev.slice(0, fallbackIndex), merged, ...prev.slice(fallbackIndex + 1)];
-}
-
 function absorbCompleteAssistantMessage(
   prev: UIMessage[],
   message: Omit<UIMessage, "id" | "role" | "createdAt">,
@@ -540,6 +525,7 @@ export interface SendOptions {
   dbCurrentSql?: string;
   dbLastError?: string;
   browserTabId?: string;
+  browserSidebar?: boolean;
   browserPageUrl?: string;
   browserPageTitle?: string;
   officeSessionId?: string;
@@ -569,49 +555,60 @@ function normalizedTokenUsage(value: import("@/lib/types").RawTokenUsage | undef
     0,
     Math.round(value.total_tokens ?? promptTokens + completionTokens),
   );
-  if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0 && value.context_tokens === undefined) return undefined;
-  const contextTokens = Math.max(0, Math.round(value.context_tokens ?? 0));
+  const contextTokens = typeof value.context_tokens === "number"
+    && Number.isSafeInteger(value.context_tokens) && value.context_tokens >= 0 ? value.context_tokens : undefined;
+  if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0 && contextTokens === undefined) return undefined;
   return {
     promptTokens,
     completionTokens,
     cachedTokens,
     totalTokens,
-    ...(value.context_tokens !== undefined ? { contextTokens } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...((value.context_window_tokens ?? 0) > 0 ? { contextWindowTokens: value.context_window_tokens } : {}),
+    ...((value.context_budget_tokens ?? 0) > 0 ? { contextBudgetTokens: value.context_budget_tokens } : {}),
     ...(typeof value.context_model === "string" ? { contextModel: value.context_model } : {}),
     ...(typeof value.context_provider === "string" ? { contextProvider: value.context_provider } : {}),
   };
 }
 
-function stampLastAssistantTurnMetadata(
+function stampAssistantTurnEnd(
   prev: UIMessage[],
-  tokenUsage: UIMessage["tokenUsage"],
-  taskId?: string,
+  { tokenUsage, taskId, latencyMs, finalStreamId }: {
+    tokenUsage?: UIMessage["tokenUsage"];
+    taskId?: string;
+    latencyMs?: number;
+    finalStreamId?: string;
+  },
 ): UIMessage[] {
-  if (!tokenUsage && !taskId) return prev;
+  if (!tokenUsage && !taskId && latencyMs === undefined && !finalStreamId) return prev;
+  const finalStreamIndex = finalStreamId
+    ? prev.findIndex((message) => message.role === "assistant" && message.streamId === finalStreamId)
+    : -1;
+  let answerIndex = finalStreamIndex;
   let fallbackIndex = -1;
-  for (let i = prev.length - 1; i >= 0; i -= 1) {
+  for (let i = prev.length - 1; answerIndex < 0 && i >= 0; i -= 1) {
     const message = prev[i];
-    if (message.role === "user") break;
-    if (message.role !== "assistant" || message.kind === "trace") continue;
-    if (fallbackIndex < 0 && (!taskId || !message.taskId || message.taskId === taskId)) {
-      fallbackIndex = i;
-    }
+    if (message.role === "user" && !message.isInjected) break;
     if (
-      message.content.trim().length > 0
-      && (!taskId || !message.taskId || message.taskId === taskId)
-    ) {
-      fallbackIndex = i;
+      message.role !== "assistant" || message.kind === "trace"
+      || (taskId && message.taskId && message.taskId !== taskId)
+    ) continue;
+    if (message.isFinalResponse) {
+      answerIndex = i;
       break;
     }
+    if (fallbackIndex < 0 || (!prev[fallbackIndex].content.trim() && message.content.trim())) fallbackIndex = i;
   }
-  if (fallbackIndex < 0) return prev;
+  if (answerIndex < 0) answerIndex = fallbackIndex;
+  if (answerIndex < 0) return prev;
   return prev.map((message, index) => {
-    if (index === fallbackIndex) {
+    if (index === answerIndex) {
       return {
         ...message,
         ...(tokenUsage ? { tokenUsage } : {}),
         ...(taskId ? { taskId } : {}),
+        ...(latencyMs !== undefined ? { latencyMs } : {}),
+        ...(index === finalStreamIndex ? { isFinalResponse: true } : {}),
       };
     }
     if (
@@ -658,6 +655,8 @@ export function useMonaStream(
 ): {
   messages: UIMessage[];
   liveTokenUsage?: UIMessage["tokenUsage"];
+  runMetrics?: ReturnType<typeof summarizeWorkRequests>;
+  liveTokenRate?: number;
   isStreaming: boolean;
   /** True after sending a turn until Mona emits its first visible activity. */
   isAwaitingModelResponse: boolean;
@@ -706,6 +705,22 @@ export function useMonaStream(
   const [taskPlan, setTaskPlan] = useState<TaskPlanWsPayload | undefined>(undefined);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
+  const [workRequests, setWorkRequests] = useState<WorkRequestSeries | null>(null);
+  const runMetrics = useMemo(() => isStreaming ? summarizeWorkRequests(workRequests) : undefined, [isStreaming, workRequests]);
+  const liveTokenSampler = useMemo(() => new LiveTokenSampler(), []);
+  const [liveTokenRate, setLiveTokenRate] = useState<number>();
+  const resetLiveTokenRate = useCallback(() => {
+    liveTokenSampler.reset();
+    setLiveTokenRate(undefined);
+  }, [liveTokenSampler]);
+  useEffect(() => {
+    if (!isStreaming) {
+      resetLiveTokenRate();
+      return;
+    }
+    const timer = window.setInterval(() => setLiveTokenRate(liveTokenSampler.rate(performance.now())), 500);
+    return () => window.clearInterval(timer);
+  }, [isStreaming, liveTokenSampler, resetLiveTokenRate]);
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const [messageRejection, setMessageRejection] = useState<MessageRejection | null>(null);
@@ -1099,6 +1114,8 @@ export function useMonaStream(
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     setTaskPlan(restoredTaskPlan);
     setLiveTokenUsage(undefined);
+    setWorkRequests(null);
+    resetLiveTokenRate();
     stopTargetWaitRef.current?.();
     stopTargetWaitRef.current = null;
     stoppingRef.current = false;
@@ -1120,7 +1137,7 @@ export function useMonaStream(
       streamEndTimerRef.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, client, clearActivitySegment, clearPendingStreamWork, deletionVersion]);
+  }, [chatId, client, clearActivitySegment, clearPendingStreamWork, deletionVersion, resetLiveTokenRate]);
 
   useEffect(() => {
     if (!chatId || !client) return;
@@ -1184,10 +1201,21 @@ export function useMonaStream(
         return;
       }
       if (ev.event === "context_usage") {
-        if (ev.chat_id === chatId && !ev.job_id) setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
+        if (ev.chat_id !== chatId || ev.job_id) return;
+        const usage = normalizedTokenUsage(ev.token_usage);
+        if (usage?.contextTokens !== undefined) setLiveTokenUsage(usage);
+        const turnKey = ev.turn_id ?? ev.input_id;
+        const currentTurnId = client.getWorkTurn?.(chatId)?.turnId;
+        const sample = ev.token_usage?.request_stats;
+        if (turnKey && sample && (!ev.turn_id || !currentTurnId || ev.turn_id === currentTurnId)) {
+          setWorkRequests((current) => appendWorkRequest(current, turnKey, sample));
+        }
         return;
       }
       const identity = eventIdentity(ev);
+      const primaryStream = !identity.jobId && !identity.workflowRunId && (
+        !identity.taskId || !currentTaskIdRef.current || identity.taskId === currentTaskIdRef.current
+      );
       const acceptPendingMessage = () => {
         const pending = pendingMessageRef.current;
         if (!pending) return;
@@ -1208,6 +1236,7 @@ export function useMonaStream(
         if (suppressStreamUntilTurnEndRef.current) return;
         const chunk = typeof ev.text === "string" ? ev.text : "";
         if (!chunk) return;
+        if (primaryStream) liveTokenSampler.push(chunk, performance.now());
         clearActivitySegment();
         setIsAwaitingModelResponse(false);
         setIsStreaming(true);
@@ -1227,6 +1256,7 @@ export function useMonaStream(
         if (suppressStreamUntilTurnEndRef.current) return;
         const chunk = ev.text;
         if (!chunk) return;
+        if (primaryStream) liveTokenSampler.push(chunk, performance.now());
         if (fileEditSegmentRef.current) clearActivitySegment();
         setIsAwaitingModelResponse(false);
         setIsStreaming(true);
@@ -1245,6 +1275,7 @@ export function useMonaStream(
       if (ev.event === "stream_end") {
         flushPendingStreamEvents({ closeAnswerSegment: true, streamKey: identity.streamKey });
         if (suppressStreamUntilTurnEndRef.current) return;
+        if (primaryStream) resetLiveTokenRate();
         // stream_end only means the text segment finished — the model may
         // still be executing tools.  Do NOT reset isStreaming here; the
         // definitive "turn is complete" signal is ``turn_end``.
@@ -1306,6 +1337,8 @@ export function useMonaStream(
 
       if (ev.event === "goal_status") {
         if (ev.status === "running") {
+          const turnKey = ev.turn_id ?? ev.input_id;
+          if (turnKey) setWorkRequests((current) => current?.turnKey === turnKey ? current : null);
           if (ev.turn_id && stopRequestRef.current?.turnId && ev.turn_id !== stopRequestRef.current.turnId) {
             stopRequestRef.current = null;
             unresolvedStopRef.current = null;
@@ -1413,7 +1446,14 @@ export function useMonaStream(
         if (ev.stop_confirmed === true) confirmStop(ev.turn_id);
         acceptPendingMessage();
         setMessages((previous) => finishPendingWidgets(previous));
-        setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
+        const usage = normalizedTokenUsage(ev.token_usage);
+        if (usage?.contextTokens !== undefined) setLiveTokenUsage(usage);
+        const finishedKey = ev.turn_id ?? ev.input_id;
+        if (finishedKey) {
+          setWorkRequests((current) => current?.turnKey === finishedKey
+            ? { ...current, finished: true } : current);
+        }
+        resetLiveTokenRate();
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
           setGoalState(ev.goal_state);
         }
@@ -1437,14 +1477,12 @@ export function useMonaStream(
           if (files.length > 0) {
             finalized = appendDeliveredFilesToLastAssistant(finalized, files, media);
           }
-          if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
-            finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
-          }
-          finalized = stampLastAssistantTurnMetadata(
-            finalized,
-            normalizedTokenUsage(ev.token_usage),
-            ev.task_id,
-          );
+          finalized = stampAssistantTurnEnd(finalized, {
+            tokenUsage: usage,
+            taskId: ev.task_id,
+            latencyMs: typeof ev.latency_ms === "number" && ev.latency_ms >= 0 ? Math.round(ev.latency_ms) : undefined,
+            finalStreamId: ev.final_stream_id,
+          });
           buffer.current = null;
           activeAssistantRef.current = null;
           streamMessageIdsRef.current.clear();
@@ -1460,6 +1498,10 @@ export function useMonaStream(
       if (ev.event === "message") {
         if (typeof ev.context_compacting === "boolean") {
           setIsCompacting(ev.context_compacting);
+          if (ev.context_compacting) {
+            setLiveTokenUsage(undefined);
+            resetLiveTokenRate();
+          }
           return;
         }
         if (
@@ -1485,6 +1527,7 @@ export function useMonaStream(
         // Attach them to the last trace row if it was the last emitted item
         // so a sequence of calls collapses into one compact trace group.
         if (ev.kind === "tool_hint" || ev.kind === "progress") {
+          if (primaryStream && ev.tool_events?.some((event) => event.phase === "start")) resetLiveTokenRate();
           const structuredLines = toolTraceLinesFromEvents(ev.tool_events);
           const lines = structuredLines.length > 0
             ? structuredLines
@@ -1512,7 +1555,8 @@ export function useMonaStream(
               const mergedLines = structuredLines.length > 0
                 ? mergeUniqueToolTraceLines(previousTraces, structuredLines)
                 : null;
-              if (mergedLines && !mergedLines.added) return prev;
+              const toolEvents = boundedToolEvents(last.toolEvents, ev.tool_events);
+              if (mergedLines && !mergedLines.added && !ev.tool_events?.length) return prev;
               const merged: UIMessage = {
                 ...last,
                 traces: boundedTraceLines(mergedLines ? mergedLines.traces : [...previousTraces, ...lines]),
@@ -1521,9 +1565,7 @@ export function useMonaStream(
                   : lines[lines.length - 1],
                 activitySegmentId: last.activitySegmentId ?? segmentId,
                 ...(identity.taskId ? { taskId: identity.taskId } : {}),
-                ...(boundedToolEvents(last.toolEvents, ev.tool_events)
-                  ? { toolEvents: boundedToolEvents(last.toolEvents, ev.tool_events) }
-                  : {}),
+                ...(toolEvents ? { toolEvents } : {}),
               };
               const next = prev.slice();
               next[next.length - 1] = merged;
@@ -1621,6 +1663,7 @@ export function useMonaStream(
           const tokenUsage = normalizedTokenUsage(ev.token_usage);
           const completeMessage: Omit<UIMessage, "id" | "role" | "createdAt"> = {
             content,
+            ...(ev.final_response === true ? { isFinalResponse: true } : {}),
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
             ...(tokenUsage ? { tokenUsage } : {}),
@@ -1808,7 +1851,9 @@ export function useMonaStream(
     detachedActivitySegmentId,
     ensureActivitySegmentId,
     flushPendingStreamEvents,
+    liveTokenSampler,
     onTurnEnd,
+    resetLiveTokenRate,
     schedulePendingStreamFlush,
   ]);
 
@@ -1855,6 +1900,8 @@ export function useMonaStream(
         awaitingAdmission: true,
       };
       setMessageRejection(null);
+      setWorkRequests(null);
+      resetLiveTokenRate();
 
       flushPendingStreamEvents();
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
@@ -1952,6 +1999,7 @@ export function useMonaStream(
           dbCurrentSql: options.dbCurrentSql,
           dbLastError: options.dbLastError,
           browserTabId: options.browserTabId,
+          browserSidebar: options.browserSidebar,
           browserPageUrl: options.browserPageUrl,
           browserPageTitle: options.browserPageTitle,
           officeSessionId: options.officeSessionId,
@@ -1972,7 +2020,7 @@ export function useMonaStream(
         client.sendMessage(chatId, content, wireMedia, { taskId, inputId: messageId, onAdmission });
       }
     },
-    [chatId, clearActivitySegment, client, flushPendingStreamEvents, goalState?.active],
+    [chatId, clearActivitySegment, client, flushPendingStreamEvents, goalState?.active, resetLiveTokenRate],
   );
 
   const inject = useCallback(
@@ -2127,6 +2175,8 @@ export function useMonaStream(
   return {
     messages,
     liveTokenUsage,
+    runMetrics,
+    liveTokenRate: isStreaming ? liveTokenRate : undefined,
     isStreaming,
     isAwaitingModelResponse,
     isCompacting,

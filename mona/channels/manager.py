@@ -48,6 +48,7 @@ class ChannelManager:
         webui_runtime_model_name: Callable[[], str | None] | None = None,
         subagent_manager: Any | None = None,
         runtime_tool_registry: Any | None = None,
+        session_context_handler: Any | None = None,
     ):
         self.config = config
         self.bus = bus
@@ -55,6 +56,7 @@ class ChannelManager:
         self._webui_runtime_model_name = webui_runtime_model_name
         self._subagent_manager = subagent_manager
         self._runtime_tool_registry = runtime_tool_registry
+        self._session_context_handler = session_context_handler
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
@@ -106,6 +108,8 @@ class ChannelManager:
                         kwargs["subagent_manager"] = self._subagent_manager
                     if self._runtime_tool_registry is not None:
                         kwargs["runtime_tool_registry"] = self._runtime_tool_registry
+                    if self._session_context_handler is not None:
+                        kwargs["session_context_handler"] = self._session_context_handler
                 channel = cls(section, self.bus, **kwargs)
                 channel.transcription_provider = transcription_provider
                 channel.transcription_api_key = transcription_key
