@@ -292,7 +292,7 @@ async def run_turn(config: HostedWorkConfig, payload: dict, sandbox, provider, e
             preserve_injection_identity=True,
             context_provider=context_provider(selection), request_snapshot_callback=runtime.request_snapshot_callback,
             context_limit_callback=runtime.context_limit_callback,
-            context_window_tokens=window.tokens, context_window_verified=window.source != "default",
+            context_window_tokens=window.tokens, context_window_verified=window.verified,
             context_block_limit=selection.context_window_tokens, provider_retry_mode="standard",
             concurrent_tools=True, max_parallel_tool_calls=AgentDefaults().max_parallel_tool_calls, fail_on_tool_error=False,
             session_key=runtime.session.key,

@@ -176,6 +176,7 @@ class DesktopAPI:
                 model_window = model_context_window(item, self.service.config, catalog=catalog)
                 row = {"id": key, "name": item.label, "type": "chat", "enabled": True,
                        "recommended": not rows, "context_window": model_window.tokens if model_window.source != "default" else None,
+                       "context_window_source": model_window.source,
                        "billing_type": "token"}
                 if item.source == "codex" and (metadata := catalog.get(item.model)) is not None:
                     row.update(reasoning_efforts=list(metadata.efforts), default_reasoning_effort=metadata.default_effort,

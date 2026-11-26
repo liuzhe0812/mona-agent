@@ -110,6 +110,8 @@ async def test_finish_displays_final_context_usage_without_mutating_cumulative_u
     assert wire.service.store.run(OWNER, RID)["result"]["usage"] == cumulative
     assert next(item for item, _ in state.records(OWNER, SID) if item["event"] == "turn_end")["token_usage"] == (
         final if has_final else cumulative)
+    assert state.history(OWNER, SID)["sessionUsage"]["promptTokens"] == 5000
+    assert state.history(OWNER, SID)["sessionUsage"]["completionTokens"] == 500
 
 
 async def test_plan_and_goal_snapshots_restore_latest_without_replaying_transcript(bound_wire):

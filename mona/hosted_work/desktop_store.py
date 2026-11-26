@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from mona.hosted_work.contracts import WorkError, identifier
 from mona.hosted_work.model_policy import model_available
 from mona.hosted_work.store import encoded
-from mona.webui.transcript import replay_transcript_to_ui_messages
+from mona.webui.session_usage import summarize_session_usage
+from mona.webui.transcript import _ui_token_usage, replay_transcript_to_ui_messages
 
 
 def request_id(value: str, namespace: str = "") -> str:
@@ -143,15 +144,39 @@ class DesktopStore:
             if message.get("role") == "assistant" and message.get("kind") != "trace":
                 ordinal += 1
                 message["assistantOrdinal"] = ordinal
+        session_usage = self._session_usage(owner, sid) if before is None else None
         if before is None:
             before = len(messages)
         if not 1 <= limit <= 200 or not 0 <= before <= len(messages):
             raise WorkError("invalid_cursor", "历史位置无效。")
         start = max(0, before - limit)
-        return {"schemaVersion": 3, "sessionKey": "websocket:" + sid,
+        return {"schemaVersion": 3, "sessionKey": "websocket:" + sid, "sessionUsage": session_usage,
                 "messages": messages[start:before], "pagination": {
                     "hasMore": start > 0, "before": start if start else None,
                     "revision": current_revision, "total": len(messages)}}
+
+    def _session_usage(self, owner: str, sid: str):
+        # The desktop events keep the last request's occupancy, while the run
+        # result records the cumulative input and output for the entire turn.
+        rows = self.service.store.db.execute(
+            "SELECT result, created, updated FROM runs WHERE owner=? AND session_id=? "
+            "AND status IN ('completed', 'failed', 'cancelled') ORDER BY created",
+            (owner, sid),
+        )
+        turns = []
+        for raw_result, created, updated in rows:
+            result = json.loads(raw_result)
+            usage = result.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            final_usage = result.get("final_usage")
+            if isinstance(final_usage, dict) and isinstance(final_usage.get("context_model"), str):
+                usage = {**usage, "context_model": final_usage["context_model"]}
+            turns.append((
+                _ui_token_usage(usage),
+                round(max(0, updated - created) * 1000),
+            ))
+        return summarize_session_usage(turns)
 
     def sidebar(self, owner: str):
         return self.get(owner, "sidebar", {"schema_version": 5, "pinned_keys": [], "archived_keys": [],

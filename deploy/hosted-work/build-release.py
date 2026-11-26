@@ -18,6 +18,8 @@ def main() -> None:
     if not (frontend / "hosted-work.html").is_file():
         raise SystemExit("Build the independent Work frontend first.")
     files = set((root / "mona").rglob("*.py"))
+    files.add(root / "mona/providers/catalog/model-capabilities.json")
+    files.update(root / "mona/development" / name for name in ("CINDY-NOTICE", "CINDY-LICENSE"))
     files.update((root / "mona/templates").rglob("*.md"))
     skills = root / "mona/skills"
     for path in skills.rglob("*"):

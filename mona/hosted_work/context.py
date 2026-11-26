@@ -304,8 +304,8 @@ class HostedTurnContext:
         if estimate is not None:
             usage = {"context_tokens": estimate, "context_model": self.payload["model_id"],
                      "context_provider": context_provider(self.selection)}
-            if self.window.source != "default":
-                usage["context_window_tokens"] = self.window.tokens
+            window_key = "context_window_tokens" if self.window.verified else "context_budget_tokens"
+            usage[window_key] = self.window.tokens
             await self.emit("progress", {"kind": "context_usage", "token_usage": usage})
         return self
 

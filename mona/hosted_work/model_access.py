@@ -35,8 +35,9 @@ def model_context_window(selection: HostedWorkModel, config: HostedWorkConfig | 
 
     entry = next((item for item in CINDY_CHAT_PROVIDERS
                   if item.api_base.rstrip("/") == selection.api_base.rstrip("/")), None)
+    connection = SimpleNamespace(api_base=selection.api_base) if selection.source != "codex" else None
     return resolve_model_context_window_details(
-        SimpleNamespace(get_provider=lambda *_args, **_kwargs: None),
+        SimpleNamespace(get_provider=lambda *_args, **_kwargs: connection),
         SimpleNamespace(model=selection.model), provider_name=entry.id if entry else "hosted_work_api",
         managed_catalog={"models": []},
     )

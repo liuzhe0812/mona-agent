@@ -19,9 +19,10 @@ def test_actual_platform_model_uses_the_shared_catalog_without_private_config(mo
     selection = config().models["qwen"]
     window = model_context_window(selection)
     assert selection.context_window_tokens is None
-    assert (window.tokens, window.source) == (1_000_000, "catalog")
+    assert (window.tokens, window.source) == (983_616, "catalog")
     selection.api_base = "https://unlisted.example.invalid/v1"
-    assert model_context_window(selection).source == "default"
+    assert model_context_window(selection).source == "reference"
+    assert not model_context_window(selection).verified
 
 
 @pytest.mark.asyncio
@@ -32,7 +33,7 @@ async def test_request_larger_than_old_32k_cap_reaches_the_existing_runner():
     result = await run_turn(config(), {"model_id": "qwen", "run_id": "c" * 32,
         "history": [{"role": "user", "content": "mona context " * 20000}]}, sandbox, model, emit)
     assert result["status"] == "completed" and len(model.requests) == 3 and len(sandbox.calls) == 1
-    assert result["diagnostic"]["context_window_tokens"] == 1_000_000
+    assert result["diagnostic"]["context_window_tokens"] == 983_616
     assert result["diagnostic"]["context_window_source"] == "catalog"
 
 

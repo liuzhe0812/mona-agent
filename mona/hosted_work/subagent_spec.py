@@ -126,7 +126,7 @@ def build_subagent_factory(ctx, payload, sandbox, provider, emit, authorize, edi
             hook=CompositeHook([_AuthorizationHook(authorize), hook]), checkpoint_callback=checkpoint,
             progress_callback=progress_callback,
             context_provider=context_provider(selection), context_window_tokens=window.tokens,
-            context_window_verified=window.source != "default", context_block_limit=selection.context_window_tokens,
+            context_window_verified=window.verified, context_block_limit=selection.context_window_tokens,
             provider_retry_mode="standard", concurrent_tools=True, max_parallel_tool_calls=AgentDefaults().max_parallel_tool_calls,
             fail_on_tool_error=False, session_key=ctx.session.key,
             error_message=None, max_iterations_message="本轮达到执行步数上限，已有进度已保留。",
